@@ -247,7 +247,6 @@ digraph {
     "koan::builtins" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::parse" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::scheduler" [label="uses", style="dashed"];
-    "koan::builtins" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -880,7 +879,6 @@ digraph {
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
-    "koan::machine::model::values::kobject" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model" [label="uses", style="dashed"];

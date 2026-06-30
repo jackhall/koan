@@ -175,10 +175,7 @@ else holds. The **externally-witnessed** form carries *no* bundled witness; the
 holder already pins the backing and supplies it at the access, read through a
 **consuming, externally-witnessed `open`** — the witness handed in at the call and the
 carrier moved into the same rank-2 `for<'b>` brand, so a non-`Copy` carrier (a continuation)
-passes and nothing branded escapes. (A borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>`,
-re-anchoring capped at the witness borrow, is the accessor the **frame-side** scope reads route
-through — the decide channel reads its scope from the step `open` instead; folding the frame-side reads
-onto `open` too is tracked in [Open work](#open-work).) Bundling a witness the carrier does
+passes and nothing branded escapes. Bundling a witness the carrier does
 not need would be a redundant second owner — and, when the witness is
 reference-counted, an extra count the holder's own uniqueness checks must subtract.
 `yoke`, which moves `W` into the bundle, builds the self-witnessed form; the
@@ -308,8 +305,8 @@ opened scope's own region through the substrate (the erasing `alloc_object`, whi
 lifetime, for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the
 captured-scope region) before binding it — so the value lands at the brand and the seed fabricates no
 free `&'a`. With every frame-side and
-seed-side read on `open`, the borrow-bounded `attach<'w>(&'w self, &'w W) -> Live<'w>` accessor is
-**callerless** — kept only for the follow-up that collapses the access surface to `open` alone.
+seed-side read on `open`, the access surface is `open` alone — the borrow-bounded `attach` accessor is
+deleted.
 
 ## Storage choice belongs to the workload
 
@@ -333,14 +330,14 @@ nest under the rank-2 `open`: two driver accessors copy out inside the brand —
 ([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
 three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
 self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
-binds alike — now folds onto `open` too, leaving the borrow-bounded `attach` callerless. The witnessed
+binds alike — fold onto `open` too, and the borrow-bounded `attach` is deleted. The witnessed
 alloc surface has landed — region allocation hands back a foreign-reach-only
 [`Witnessed`](../src/witnessed.rs) with the active frame folded in at close, and the frame builder's
 child scope is born externally-witnessed — and every object- and type-channel construction *terminal*
 builds through it, a seal folding the already-witnessed carrier's reach rather than re-anchoring a
-separately-built value, so what the per-node-memory roadmap project below still tracks is confining the
-build leaf behind a branded region handle and collapsing the access surface to `open` alone (deleting
-the callerless `attach`).
+separately-built value. Allocation is reachable only through the branded
+[`RegionBrand`](../src/machine/core/arena.rs) handle — a bare `&KoanRegion` exposes no `alloc_*`, so
+"always witnessed" is compile-enforced for allocation.
 
 ## Open work
 
@@ -359,22 +356,22 @@ self-witnessed `read` is deleted — have all landed (see
 [Region lifetime erasure](memory-model.md#region-lifetime-erasure)).
 
 What remains carries one goal to its end: an object allocated in a region is **always witnessed** —
-the Witnessed/Sealed wrapper covers its whole lifetime, with no bare `&'a` reattach hole. The witnessed
-alloc surface that opens this has landed: region allocation hands back a `Witnessed<T, FrameSet>` whose
-set is the value's *foreign* reach, the active frame excluded and folded in only at close (the
-scope-reach seal), so a region-resident value never strong-owns its own frame — the `region → object →
-frame` cycle that would leak and defeat the `Rc::get_mut` TCO gate — and the frame builder's per-call
-child scope is born externally-witnessed. Every object- and type-channel construction **terminal**
-builds through that surface, and a seal folds the already-witnessed carrier's reach via `reseal_under`
-([`Scope::seal_value`](../src/machine/core/scope.rs) / `seal_type` / `seal_module`) rather than
-re-anchoring a separately-built value — so the only bare `alloc_* -> &'a` calls are the
-build-at-a-brand leaf inside a `yoke` and the structural binds / registrations / relocations that
-never hold a terminal. What is left is **enforcement**: confining that build leaf behind a branded
-region handle, so a bare `&KoanRegion` cannot allocate at all and "always witnessed" is
-compile-enforced. (The scope-pointer collapse has already landed, leaving the borrow-bounded `attach`
-callerless for that same item to delete.) One item carries this:
+the Witnessed/Sealed wrapper covers its whole lifetime, with no bare `&'a` reattach hole. For
+*allocation* this is a type rule: every construction terminal is born witnessed (the foreign-reach
+`Witnessed<T, FrameSet>`, the active frame folded in only at close — the scope-reach seal — so a
+region-resident value never strong-owns its own frame, the `region → object → frame` cycle that would
+leak and defeat the `Rc::get_mut` TCO gate), a seal folds the carrier's reach via `reseal_under`
+([`Scope::seal_value`](../src/machine/core/scope.rs) / `seal_type` / `seal_module`), and allocation is
+reachable only through the branded [`RegionBrand`](../src/machine/core/arena.rs) handle — a bare
+`&KoanRegion` exposes no `alloc_*`. The one retype still outside Witnessed/Sealed is the
+**construction-time scope re-anchor**: a per-call child scope's lexical parent / root, content-shortened
+into the child's fresh region under `Scope`'s invariance, routed through `recouple_scope` /
+`reattach_ref_with`. Closing it — the same-region children coupling at the resident `&'a`, the
+cross-region frame child building through an externally-witnessed construction door — deletes both, and
+"always witnessed" becomes a closed type rule. One item carries this:
 
-- [One region handle, one access verb](../roadmap/per-node-memory/single-open-verb.md) — the build
-  leaf moves behind a branded region handle (no bare-`&KoanRegion` alloc), the access surface
-  collapses to `open`, and `attach` / `reattach_ref_with` / `recouple_scope` — the last retypes
+- [One region handle, one access verb](../roadmap/per-node-memory/single-open-verb.md) — the
+  construction-time scope re-anchor folds into the substrate: the same-region child constructors thread
+  the resident `&'a` and the cross-region frame child builds through an externally-witnessed
+  construction door, so `recouple_scope` and the `reattach_ref_with` it routes — the last retypes
   outside Witnessed/Sealed — are deleted.

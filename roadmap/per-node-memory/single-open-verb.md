@@ -4,22 +4,22 @@ Confine the build-at-a-brand leaf behind a branded region handle — so a bare `
 `alloc` and "every object is witnessed" is compile-enforced — and collapse the access surface to
 `open`, deleting the last retypes outside Witnessed/Sealed.
 
-**Problem.** Now that every object- and type-channel construction terminal is
-[born witnessed](../../design/per-node-memory.md), the build leaf
-`region.alloc_object(…) -> &'b` is still reachable on any `&KoanRegion` — the bare reference scopes
-expose — even though its only legitimate callers are inside a `yoke` brand. Nothing compile-prevents a
-fresh bare-`&'a` alloc from reopening the hole. Two read-side retypes also survive outside the
-abstraction: the scope-pointer collapse left
-[`SealedExtern::attach`](../../src/machine/core/scope_ptr.rs) — a borrow-bounded `&'w Scope<'b>`
-re-anchor (routing [`reattach_ref_with`](../../src/witnessed.rs)) — callerless, and
-[`recouple_scope`](../../src/machine/core/scope_ptr.rs) still re-couples a per-call child's lexical
-parent / root through the same `reattach_ref_with`.
+**Problem.** The witnessed memory model is compile-enforced for allocation: every `alloc_*` lives on
+the branded [`RegionBrand`](../../src/machine/core/arena.rs) handle, a bare `&KoanRegion` exposes none
+(a `compile_fail` doctest pins it, arena.rs:90), `alloc_resident` is the tight in-module leaf, and
+`SealedExtern::attach` is deleted. One retype still survives outside Witnessed/Sealed:
+[`recouple_scope`](../../src/machine/core/scope_ptr.rs) re-anchors a per-call child scope's lexical
+parent / root at construction (scope.rs:287, 327–328; kfunction.rs:85), routing the free-`'b`
+[`reattach_ref_with`](../../src/witnessed.rs). While that re-anchor sits outside the abstraction, "an
+allocated object is always witnessed" stays an audited convention at the scope seam rather than a
+closed type rule.
 
 **Acceptance criteria.**
 
-- Region allocation is reachable only through a branded region handle that `yoke` / `merge` /
-  `transfer_into` hand their closure; a bare `&KoanRegion` exposes no `alloc_*`, so a value cannot be
-  allocated outside the Witnessed/Sealed abstraction — the memory model is compile-enforced.
+- Region allocation is reachable only through a branded region handle; a bare `&KoanRegion` exposes no
+  `alloc_*` (a `compile_fail` doctest pins it). Structural allocations still yield co-located `&'a`
+  residents — but through the handle, not a bare reference — so no bare `&KoanRegion` can mint an
+  un-witnessed terminal, and "always witnessed" is compile-enforced.
 - `Sealed` / `SealedExtern` expose a single access verb — `open` (plus its consuming
   externally-witnessed twin); `attach` and the `reattach_ref_with` witness-borrow read path are
   deleted.
@@ -30,14 +30,27 @@ parent / root through the same `reattach_ref_with`.
 
 **Directions.**
 
-- *Compile-enforce the memory model — decided.* The leaf moves onto a branded region handle so "an
+- *Compile-enforce the memory model — decided.* The leaf moves onto a **frame-lifetime** branded
+  handle (`RegionBrand<'a>`, minted at region-open and threaded to the allocation sites) so "an
   allocated object is always witnessed" is a type rule, not an audited convention — no bare
-  `&KoanRegion` alloc to slip through.
+  `&KoanRegion` alloc to slip through. Frame-lifetime, *not* a per-alloc `for<'b>` brand: a structural
+  resident (a binding entry, a `Module`'s child `&Scope`) must outlive any one brand window, so it
+  needs a real `&'a` — which only a frame-lifetime handle hands back. The residents stay co-located
+  `&'a` (borrow == content == the region's lifetime); nothing escapes its backing.
 - *Open-only is the destination — decided.* A single access verb is the substrate's target surface;
   `attach` is already callerless, deleted here with the `reattach_ref_with` read path it routes.
-- *`recouple_scope` folds in here — decided.* Deleting `reattach_ref_with` entirely requires its
-  construction-time scope re-anchor to go too; the per-call child's parent / root couple onto the
-  brand (or the whole scope is built witnessed) so no `reattach_ref_with` caller remains.
+- *The scope re-anchor folds into a construction door — decided.* `recouple_scope`'s sites split by
+  what they re-anchor. The same-region children (`child_inheriting`, scope.rs:287) and the functor
+  capture (`with_binder_and_functor`, kfunction.rs:85) only **lengthen a borrow** of an already-`'a`-
+  content scope — the callers hold the resident `&'a Scope<'a>` (the builtin ctx, builtins.rs:79/102/116),
+  so tightening the constructor signatures to `&'a Scope<'a>` makes the store a plain coercion, no
+  retype. The one genuine retype is the per-call frame child (`child_for_frame`, scope.rs:327–328), which
+  **content-shortens** a longer-lived lexical parent into the fresh region's `'a` under `Scope`'s
+  invariance; it builds through an **externally-witnessed construction door** — the dual of `yoke` that
+  brands the fresh region and re-anchors the foreign parent at one `for<'b>`, then seals the child
+  witness-less as its `SealedExtern<ScopeRefFamily>`. The surviving retype then routes the substrate's
+  existing `for<'b>` brand — the same contract `open` rests on — so `recouple_scope` deletes and
+  `reattach_ref_with` goes callerless.
 
 ## Dependencies
 
