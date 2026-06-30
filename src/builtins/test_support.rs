@@ -13,29 +13,34 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
-use crate::witnessed::reattach_with;
+use crate::witnessed::reattach_ref_with;
 
 use super::default_scope;
 
 /// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
-/// and re-anchored to `'a` — a safe `reattach_with` witnessed by the `scope.region` borrow — inside
-/// the open. A returned closure / module rides a bare borrow into its per-call region, so (like the
-/// production drain) fold the slot's witness onto `scope`'s reach-set: the caller drops the scheduler
-/// right after this returns, and `scope` outlives it, so its reach-set keeps every region the result
-/// reaches alive. Test-only — production code reads inside the open without a fixed escape lifetime.
+/// and its inner reference re-anchored to `'a` — a safe `reattach_ref_with` witnessed by the
+/// `scope.region` borrow — inside the open. A returned closure / module rides a bare borrow into its
+/// per-call region, so (like the production drain) fold the slot's witness onto `scope`'s reach-set:
+/// the caller drops the scheduler right after this returns, and `scope` outlives it, so its reach-set
+/// keeps every region the result reaches alive. Test-only — production code reads inside the open
+/// without a fixed escape lifetime.
 pub(crate) fn extract_terminal<'a>(
     sched: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
     let value = sched
-        .read_result_with(id, |live| {
-            reattach_with::<CarriedFamily, _>(live, scope.region)
+        .read_result_with(id, |live| match live {
+            Carried::Object(obj) => {
+                Carried::Object(reattach_ref_with::<KObject<'static>, _>(obj, scope.region))
+            }
+            Carried::Type(kt) => {
+                Carried::Type(reattach_ref_with::<KType<'static>, _>(kt, scope.region))
+            }
         })
         .expect("terminal should be a value, not an error");
     scope.fold_reach(&sched.dep_witness(id));

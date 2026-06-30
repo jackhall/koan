@@ -101,12 +101,11 @@ fn with_scope_opens_child_scope_at_brand() {
 }
 
 /// The seed-side re-anchor: a caller-lifetime value relocated into the frame brand region through the
-/// substrate (`reattach_with` witnessed by the opened scope's own region — a shortening of the caller
-/// lifetime), then bound. The MATCH / TRY `it`-bind and the user-fn param-bind take this shape; pins
-/// the relocate-into-the-brand-and-bind aliasing under tree borrows.
+/// substrate (the erasing `alloc_object`, which forgets the caller lifetime and re-homes the value at
+/// the opened scope's own region), then bound. The MATCH / TRY `it`-bind and the user-fn param-bind
+/// take this shape; pins the relocate-into-the-brand-and-bind aliasing under tree borrows.
 #[test]
 fn with_scope_relocates_seed_value_into_brand() {
-    use crate::witnessed::reattach_with;
     // The caller value is a deep clone of a value resident in its own, longer-lived region —
     // mirroring the matched `it` / a bound arg.
     let caller_region = KoanRegion::new();
@@ -117,8 +116,9 @@ fn with_scope_relocates_seed_value_into_brand() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     frame.with_scope(|child| {
-        let relocated = reattach_with::<KObject<'static>, _>(it_value, child.region);
-        let it_obj = child.region.alloc_object(relocated);
+        // `alloc_object` erases the caller-`'a` input and re-homes it at the frame region, so no
+        // pre-shortening is needed.
+        let it_obj = child.region.alloc_object(it_value);
         child
             .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
             .unwrap();

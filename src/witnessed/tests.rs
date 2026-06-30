@@ -125,16 +125,13 @@ fn read_borrow_bounded_witness_only() {
     assert_eq!(*w.read(), 7);
 }
 
-/// `reattach_with` / `reattach_ref_with`: re-anchor a live value and a reference-to-an-erased-store
-/// to a borrowed witness's lifetime — the witness-explicit transient re-anchors. `reattach_ref_with`
-/// mirrors the production region-store flow: erase a borrow to the `'static` store, then re-hand a
-/// reference to it bounded by the witness pin.
+/// `reattach_ref_with`: re-anchor a reference-to-an-erased-store to a borrowed witness's lifetime —
+/// the witness-explicit transient re-anchor. Mirrors the production region-store flow: erase a borrow
+/// to the `'static` store, then re-hand a reference to it bounded by the witness pin.
 #[test]
-fn reattach_with_live_value_and_ref() {
+fn reattach_ref_to_erased_store() {
     let frame: Rc<u32> = Rc::new(0);
     let backing = [11u32, 22, 33];
-    let one: &u32 = reattach_with::<RefFamily, _>(&backing[0], &frame);
-    assert_eq!(*one, 11);
     // Erase a borrow to the `'static` store, then re-anchor a *reference* to it under the witness —
     // the shape the region's store-side re-anchor and the scope pointer's `recouple_scope` route.
     let stored: <RefFamily as Reattachable>::At<'static> =

@@ -766,7 +766,7 @@ impl<'a> Scope<'a> {
                     .lookup_value(name, scope.binding_cutoff(chain))?
                 {
                     Resolution::Value(obj) => Some(ValueCarrierResolution::Value(
-                        scope.bound_value_carrier(obj),
+                        scope.resident_object_carrier(obj),
                     )),
                     Resolution::Placeholder(producer) => {
                         Some(ValueCarrierResolution::Placeholder(producer))
@@ -779,15 +779,23 @@ impl<'a> Scope<'a> {
             .unwrap_or(ValueCarrierResolution::UnboundName)
     }
 
-    /// Wrap a bound value resolved **in this scope** as a carrier witnessed by this scope's home
-    /// frame: the [`Self::seal_value`] case with no embedded lhs, since a bound name's reach is fully
-    /// pinned by its binding scope (its value lives in this region and its foreign reach is in this
-    /// scope's sealed reach-set).
-    fn bound_value_carrier(&self, obj: &'a KObject<'a>) -> Witnessed<CarriedFamily, FrameSet> {
-        // `obj` already lives in this scope's region with its foreign reach in this scope's reach-set,
-        // so wrap it under the empty (foreign-reach-only) set; `seal_value` folds the home frame that
-        // pins both the value and that reach.
-        self.seal_value(Witnessed::resident(Carried::Object(obj)), None)
+    /// Wrap a value living **in this scope's region** as a carrier witnessed by this scope's home
+    /// frame, asserting co-location: the value's foreign reach is in this scope's sealed reach-set,
+    /// which the home frame pins, so a single-frame witness names its full reach. The transitional
+    /// asserted-co-location path ([`Witnessed::new`]) for reading an *already-built* region-resident
+    /// reference into a carrier — a bound name, an `ATTR` value member, a defined FN object. Unlike a
+    /// fresh construction (born witnessed through the region alloc surface), the value pre-exists, so it
+    /// cannot be built inside an alloc brand; `new` is retired when the bind/read paths deliver each
+    /// value's carrier structurally from its bind site.
+    pub(crate) fn resident_object_carrier(
+        &self,
+        obj: &'a KObject<'a>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        let home = self
+            .region_owner()
+            .upgrade()
+            .expect("the sealing scope's region owner is held while its value is read");
+        Witnessed::new(Carried::Object(obj), FrameSet::singleton(home))
     }
 
     /// Fold this scope's home frame onto an already-witnessed `carrier` whose value lives **in this
@@ -799,7 +807,7 @@ impl<'a> Scope<'a> {
     /// read-site frame may not pin (an attr field of a delivered `Wrapped`, a FROM record's shared
     /// backing) — folds its foreign reach on top, omitting any frame the home already pins (see
     /// [`FrameSet::fold_foreign`]). Folds onto the received carrier via [`Witnessed::reseal_under`], so
-    /// it carries no `reattach_with` re-anchor of an externally-built value.
+    /// it carries no re-anchor of an externally-built value.
     pub(crate) fn seal_value(
         &self,
         carrier: Witnessed<CarriedFamily, FrameSet>,

@@ -41,7 +41,7 @@ reattachable!(RegionRefFamily => &'r KoanRegion);
 /// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. This is
 /// the only sound route to the unbounded `'b`: a value opened in-band rides the audited
 /// [`Erased::reattach`](crate::witnessed) the open already owns, where a witness-bounded reattach
-/// (`reattach_with`) cannot — capping the produced lifetime at the witness borrow, it would demand the
+/// (the `reattach_ref_with` shape) cannot — capping the produced lifetime at the witness borrow, it would demand the
 /// step pin outlive a *universally* quantified `'b`, i.e. be `'static`. The held step witness keeps the
 /// sources alive across the open; the brand confines the values to it. Each cell is a
 /// [`DepTerminal`](super::outcome::DepTerminal) — the resolved value plus its `reach` set — so the

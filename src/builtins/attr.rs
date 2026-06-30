@@ -15,7 +15,6 @@
 use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
-use crate::machine::model::values::Carried;
 use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{FrameSet, KError, KErrorKind, Resolution, Scope};
@@ -204,7 +203,7 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             if let Some(Resolution::Value(obj)) = decl.bindings().lookup_value(field, None) {
-                return Ok(decl.seal_value(Witnessed::resident(Carried::Object(obj)), None));
+                return Ok(decl.resident_object_carrier(obj));
             }
             if let Some(kt) = decl.resolve_type(field) {
                 return Ok(decl.seal_type(decl.region.alloc_ktype_witnessed(kt.clone())));
@@ -312,7 +311,7 @@ fn access_module_member<'a>(
                 });
             return Ok(module_scope.seal_value(carrier, None));
         }
-        return Ok(module_scope.seal_value(Witnessed::resident(Carried::Object(obj)), None));
+        return Ok(module_scope.resident_object_carrier(obj));
     }
     if let Some(kt) = module_scope.resolve_type(field) {
         return Ok(module_scope.seal_type(module_scope.region.alloc_ktype_witnessed(kt.clone())));

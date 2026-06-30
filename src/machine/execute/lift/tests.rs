@@ -18,11 +18,11 @@ use std::rc::Rc;
 fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
     use crate::machine::{Body, KFunction};
-    use crate::witnessed::reattach_with;
-    // Capture the home frame's child scope (read at the brand), build the function there, then
-    // relocate it to `home`'s region lifetime — witnessed by that region, where the captured scope
-    // genuinely lives — and alloc it. Mirrors a closure capturing its defining scope in its own region.
-    let kf = home.with_scope(|child| {
+    // Capture the home frame's child scope (read at the brand), build the function there, and alloc it
+    // into `home`'s region — where the captured scope genuinely lives — inside the open, so the re-homed
+    // `&KFunction` escapes at `home`'s lifetime without a fixed-lifetime reattach. Mirrors a closure
+    // capturing its defining scope in its own region.
+    home.with_scope(|child| {
         let kf = KFunction::new(
             ExpressionSignature {
                 return_type: ReturnType::Resolved(KType::Null),
@@ -35,9 +35,8 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             }),
             child,
         );
-        reattach_with::<KFunction<'static>, _>(kf, home.region())
-    });
-    home.region().alloc_function(kf)
+        home.region().alloc_function(kf)
+    })
 }
 
 /// The top node of a relocated `Carried::Object` is a fresh allocation owned by `dest`, not the

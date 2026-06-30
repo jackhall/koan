@@ -506,8 +506,8 @@ pub struct KExpression<'a> {
 // other part is owned (keywords, identifiers, literals, boxed sub-expressions). The layout is
 // therefore identical for every `'a` (a splice rides the layout-invariant `Carried` carrier), so the
 // family routes the single audited lifetime-retype. A splice-free expression — raw, unevaluated AST —
-// binds no live borrow at all, the precondition `alloc_witnessed_embedding` re-anchors under (see
-// [`KExpression::is_splice_free`]).
+// binds no live borrow at all, so an AST-embedding object is region-pure and allocs through the
+// witnessed object surface (see [`KExpression::is_splice_free`]).
 reattachable! { KExpression<'static> => KExpression<'r> }
 
 impl<'a> KExpression<'a> {
@@ -540,10 +540,11 @@ impl<'a> KExpression<'a> {
     /// True when no part anywhere in the tree is a `Spliced(Carried)`, i.e. the expression is
     /// borrow-free owned data — its `'a` parameter is a phantom that binds nothing. Raw, unevaluated
     /// AST (a quoted expression, an FN body) is splice-free: splices appear only when the scheduler
-    /// folds a resolved dep value into a parent's parts. This is the precondition
-    /// [`alloc_witnessed_embedding`](crate::machine::core::KoanRegion::alloc_witnessed_embedding)
-    /// re-anchors a moved-in expression under — a splice-free expression re-anchored to a fresh
-    /// lifetime fabricates no borrow.
+    /// folds a resolved dep value into a parent's parts. This is the precondition that lets an
+    /// AST-embedding object alloc through the **region-pure** witnessed surface
+    /// ([`alloc_object_witnessed`](crate::machine::core::KoanRegion::alloc_object_witnessed)): a
+    /// splice-free expression contributes no foreign region, so the embedding object's reach is the
+    /// empty (foreign-reach-only) set.
     pub fn is_splice_free(&self) -> bool {
         self.parts.iter().all(|p| p.value.is_splice_free())
     }

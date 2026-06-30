@@ -126,7 +126,7 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 /// Generic owner of an erased carrier: a one-lifetime-family value with its lifetime forgotten to
 /// `'static` for storage on a lifetime-free node slot. [`Self::erase`] stores; the value is
 /// re-anchored either through a [`Witnessed`] that bundles its witness, or transiently through
-/// [`reattach_with`] against a borrowed witness. The single audited home for the carrier families;
+/// [`reattach_ref_with`] against a borrowed witness. The single audited home for the carrier families;
 /// see the module docs.
 pub(crate) struct Erased<T: Reattachable> {
     inner: T::At<'static>,
@@ -144,7 +144,7 @@ impl<T: Reattachable> Erased<T> {
 
     /// Re-anchor the carrier to a caller-chosen `'r` without a bundled witness — the raw fabrication
     /// the witnessed accessors wrap. Migrating off this in favour of [`Witnessed::with`] /
-    /// [`reattach_with`] is what removes the open-coded reattach call sites.
+    /// [`reattach_ref_with`] is what removes the open-coded reattach call sites.
     ///
     /// # Safety
     ///
@@ -170,7 +170,7 @@ where
 
 impl<T: Reattachable> Copy for Erased<T> where T::At<'static>: Copy {}
 
-/// A liveness witness bundled into a [`Witnessed`] (or borrowed by [`reattach_with`]): holding it
+/// A liveness witness bundled into a [`Witnessed`] (or borrowed by [`reattach_ref_with`]): holding it
 /// keeps the carrier's lifetime-erased pointee at a fixed address, so a re-anchor that borrows the
 /// witness cannot dangle. This is what lets [`Witnessed::with`] / [`Witnessed::map`] be **safe**
 /// methods over an erased carrier — the pin is a bound the type system checks, not prose at the
@@ -844,38 +844,14 @@ unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
     type At<'r> = Option<T::At<'r>>;
 }
 
-/// Re-anchor a **live** single-lifetime-family value to the `'w` a borrowed [`Witness`] pins — the
-/// witness-explicit replacement for a bare transient reattach. The value is erased and immediately
-/// re-anchored at `'w`; the witness borrow bounds `'w`, so the caller cannot pick a `'w` outliving
-/// the storage the witness pins.
-///
-/// The **signature is safe**: the caller supplies a witness whose region the value genuinely lives
-/// in (the call-site co-location invariant), and the target `'w` is bounded by the witness borrow
-/// `'b` (`'b: 'w`), so the re-anchored view cannot outrun the pin. `'w` is left free of `'b` so the
-/// caller can re-anchor to a lifetime *shorter* than the witness borrow (e.g. a step lifetime under a
-/// longer-held cart `Rc`). Call sites carry no `unsafe` of their own.
-pub(crate) fn reattach_with<'b, 'w, T: Reattachable, W: Witness>(
-    value: T::At<'_>,
-    _witness: &'b W,
-) -> T::At<'w>
-where
-    'b: 'w,
-{
-    // SAFETY: `'w` is bounded by the `witness` borrow `'b` (`'b: 'w`), which pins the value's region
-    // (the call-site co-location invariant), so the re-anchored view cannot escape the pin. Erase for
-    // storage then re-anchor at `'w`; lifetime-only retype of a single-lifetime family.
-    let erased = erase_to_static::<T>(value);
-    unsafe { retype::<T::At<'static>, T::At<'w>>(erased) }
-}
-
-/// Reference twin of [`reattach_with`]: re-anchor a single-lifetime-family reference to the lifetime a
-/// borrowed [`Witness`] pins, content `'b` left free (`'b: 'w`). The input reference is unconstrained
+/// Re-anchor a single-lifetime-family reference to the lifetime a borrowed [`Witness`] pins, content
+/// `'b` left free (`'b: 'w`) — the witness-explicit transient reattach. The input reference is unconstrained
 /// in both borrow (`'i`) and content (`'s`) — it may be an erased `&'static` store read back in place
 /// (the run-region store re-anchor), or a *live* region-resident reference held at a short reader
 /// borrow (a holder re-coupling its captured scope). Either way the output borrow is capped at the
 /// witness `'w`, so a reference cannot be cashed past the pin.
 ///
-/// The **signature is safe** for the same reason as [`reattach_with`]: the caller supplies a witness
+/// The **signature is safe**: the caller supplies a witness
 /// whose pin keeps the referent's region live (the call-site co-location invariant), and the result
 /// borrow `'w` is bounded by the witness borrow, so the re-anchored reference cannot outrun the pin —
 /// regardless of the input reference's own borrow / content. The free content `'b` is the

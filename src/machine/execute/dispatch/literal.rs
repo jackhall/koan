@@ -303,12 +303,19 @@ impl<'step> KoanRuntime<'step> {
             match resolve_name_part(s, &part_b, &self.sched, active_chain, None) {
                 // A first-class **type** resolved into the cell rides the type channel sealed under the
                 // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
-                // chain — `seal_type` yokes it (a `KType::Module` folds its child reach), co-located by
-                // the brand, never an asserted bundle. The value case is handled above via the
-                // binding-scope carrier, so this is reached only for a `Type` carrier.
-                NameOutcome::Resolved(c) => Some(Slot::Static(Sealed::seal(
-                    s.seal_type(Witnessed::resident(c)),
-                ))),
+                // chain. The resolved leaf is cloned into the region-pure witnessed surface (sharing its
+                // `Rc` payload, identity preserved) and sealed — a `KType::Module` folds its child reach.
+                // The value case is handled above via the binding-scope carrier, so the `Object` arm is
+                // defensive: an existing value reference wraps via the asserted-co-location read path.
+                NameOutcome::Resolved(c) => {
+                    let carrier = match c {
+                        Carried::Type(kt) => {
+                            s.seal_type(s.region.alloc_ktype_witnessed(kt.clone()))
+                        }
+                        Carried::Object(obj) => s.resident_object_carrier(obj),
+                    };
+                    Some(Slot::Static(Sealed::seal(carrier)))
+                }
                 NameOutcome::Parked(producer) => {
                     let pos = park_producers.len();
                     park_producers.push(producer);

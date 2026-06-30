@@ -11,19 +11,22 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, scope_frame, Action};
-    use crate::machine::core::KoanRegion;
-    use crate::machine::model::Carried;
-    use crate::machine::FrameSet;
+    use crate::machine::core::kfunction::action::{require_kexpression, Action};
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    // A quoted expression is raw, unevaluated AST — splice-free, so borrow-free owned data. It embeds
-    // into the `KObject::KExpression` through the yoke's `for<'b>` brand: the object is alloc'd into
-    // this scope's region natively, co-located by construction (its sole reach is that region's
-    // frame), rather than asserted over an already-built value via `Witnessed::new`.
-    let witness = FrameSet::singleton(scope_frame(ctx.scope));
-    let carrier = KoanRegion::alloc_witnessed_embedding(witness, expr, move |region, expr_at| {
-        Carried::Object(region.alloc_object(KObject::KExpression(expr_at)))
-    });
+    // A quoted expression is raw, unevaluated AST — splice-free, so borrow-free owned data that
+    // references no other region. It is therefore region-pure: the `KObject::KExpression` allocs
+    // through the witnessed object surface born under the empty (foreign-reach-only) set, the active
+    // frame folded in at close. A `Spliced(Carried)` part would hold a live region reference the
+    // empty set could not name, so the splice-free precondition is asserted.
+    debug_assert!(
+        expr.is_splice_free(),
+        "QUOTE expr must be splice-free raw AST: a Spliced(Carried) part holds a live region \
+         reference the region-pure witnessed alloc would mis-witness as empty reach"
+    );
+    let carrier = ctx
+        .scope
+        .region
+        .alloc_object_witnessed(KObject::KExpression(expr));
     Action::DoneWitnessed(carrier)
 }
 

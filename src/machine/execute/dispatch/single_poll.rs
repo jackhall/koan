@@ -15,7 +15,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{FrameSet, KError, KErrorKind, Resolution, ValueCarrierResolution};
 use crate::source::Spanned;
-use crate::witnessed::Witnessed;
 
 use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -76,7 +75,11 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // folds its child-scope reach via `seal_type`, every owned / ancestor-pinned variant rides
         // `s`'s home frame — born co-located rather than bare-reattached to the step region.
         TypeLeafCarrier::Resolved(kt) => {
-            Outcome::DoneWitnessed(s.seal_type(Witnessed::resident(Carried::Type(kt))))
+            // A resolved leaf is an existing region-resident `&KType`; clone it (sharing its `Rc`
+            // payload, so identity holds) and re-home through the region-pure witnessed surface, then
+            // seal — a `KType::Module` folds its child reach. The clone stays inside `Region`'s
+            // `resident`, so no asserted wrap is needed.
+            Outcome::DoneWitnessed(s.seal_type(s.region.alloc_ktype_witnessed(kt.clone())))
         }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS

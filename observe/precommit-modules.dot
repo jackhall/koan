@@ -482,7 +482,6 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
-    "koan::machine::core::arena" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -719,7 +718,6 @@ digraph {
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::single_poll" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
@@ -741,7 +739,6 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::machine::execute::lift" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::machine::core" [label="uses", style="dashed"];

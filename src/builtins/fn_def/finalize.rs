@@ -12,7 +12,7 @@
 //! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
 //! record-schema binder) skips registration. No closure plumbing.
 
-use crate::machine::core::kfunction::action::{scope_frame, Action};
+use crate::machine::core::kfunction::action::Action;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
@@ -20,7 +20,7 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::{BindingIndex, Body, FrameSet, KError, KErrorKind, NodeId, Scope};
-use crate::witnessed::{reattach_with, Witnessed};
+use crate::witnessed::Witnessed;
 
 use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
@@ -261,17 +261,13 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         };
         scope.register_function(name, f, obj, bind_index)?;
     }
-    // Witness the FN value by its defining scope's frame: the `KFunction` is co-located in that
-    // frame's region (owned signature / body, a `&Scope` capture), and the captured scope —
-    // region-resident under the frame — transitively keeps every foreign region its bindings reach
-    // alive through the scope's sealed reach-set. `yoke` + `reattach_with` re-anchor the already-built,
-    // co-located object onto the carrier, so the FN value names its reach by construction — never an
-    // asserted `Witnessed::new`. `LET f = (FN ...)` still captures the callable via this carrier.
-    let frame = scope_frame(scope);
-    Ok(Witnessed::<CarriedFamily, FrameSet>::yoke(
-        FrameSet::singleton(frame),
-        |region| reattach_with::<CarriedFamily, _>(Carried::Object(obj), region),
-    ))
+    // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
+    // capture), and the captured scope — region-resident under that frame — transitively keeps every
+    // foreign region its bindings reach alive through the scope's sealed reach-set. So the already-built
+    // object is wrapped as a carrier witnessed by that scope's home frame (the asserted-co-location read
+    // path), the single-frame witness naming its full reach. `LET f = (FN ...)` still captures the
+    // callable via this carrier.
+    Ok(scope.resident_object_carrier(obj))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

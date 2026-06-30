@@ -68,7 +68,7 @@ where
 /// [`SealedExtern`] over [`ScopeRefFamily`] (a `&'static Scope`, erased once through the safe
 /// `erase_to_static`), read through its rank-2 [`SealedExtern::open`] (the frame's `with_scope`).
 /// [`Self::attach`] — the borrow-bounded re-anchor, the scope-pointer twin of
-/// [`reattach_with`](crate::witnessed) — is now **callerless**: the frame-side reads and the
+/// [`reattach_ref_with`](crate::witnessed) — is now **callerless**: the frame-side reads and the
 /// seed-side `it` / param binds all fold onto `open`. It hands back a free content `'b` the
 /// `for<'b>`-branded `open` cannot, but no caller needs that now, so it survives only for the
 /// `single-open-verb` follow-up to delete.
