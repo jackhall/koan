@@ -128,14 +128,17 @@ impl<W: StorageProfile> Region<W> {
         with_branded_ref::<K, R>(self.store::<K>(value), project)
     }
 
-    /// The transitional bare-`&'a` allocation: store `value`, then re-anchor the store to the caller's
-    /// `'a` through the witness-bounded [`reattach_ref_with`], with `self` (the region the value now
-    /// lives in) as the pin. The surface the not-yet-witnessed callers route; the brand-confined
+    /// The transitional bare-`&'a` allocation: store `value` — its input lifetime forgotten by
+    /// [`store`](Self::store) — then re-anchor the store to the caller's `'a` through the
+    /// witness-bounded [`reattach_ref_with`], with `self` (the region the value now lives in) as the
+    /// pin. Because the store erases the input, `value` is accepted at **any** lifetime, so a caller
+    /// relocating a longer-lived value into this region hands it straight in rather than pre-shortening
+    /// it to the region borrow. The surface the not-yet-witnessed callers route; the brand-confined
     /// [`alloc`](Self::alloc) is its witnessed replacement, and confining this leaf behind a branded
     /// region handle (so a bare `&Region` cannot reach it) is the access-verb item's close. Carries no
     /// `unsafe`: the result borrow is capped at `&'a self`, so no `'static`-claiming reference escapes
     /// the frame's own borrow.
-    pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'a>) -> &'a K::At<'a> {
+    pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
         reattach_ref_with::<K, _>(self.store::<K>(value), self)
     }
 }

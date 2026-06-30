@@ -9,7 +9,6 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope, TypeIdentifierResolution};
-use crate::witnessed::reattach_with;
 use std::rc::Rc;
 
 /// Read the MATCH / TRY `-> :T` slot from `ctx.args` (resolving a forward-referenced bare name
@@ -62,12 +61,10 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
     frame.with_scope(|child| {
-        // Relocate the matched `it` value into the frame brand `'b` — a shortening of the caller `'a`,
-        // witnessed by the frame's own region (the value outlives the synchronous brand) — then bind
-        // it. Its reach rides the matched value's enclosing chain, pinned by `outer_frame`.
-        let it_at =
-            reattach_with::<crate::machine::model::KObject<'static>, _>(it_value, child.region);
-        let it_obj = child.region.alloc_object(it_at);
+        // Bind the matched `it` value into the frame: `alloc_object` erases the caller-`'a` input and
+        // re-homes it at the frame region, so no pre-shortening is needed. Its reach rides the matched
+        // value's enclosing chain, pinned by `outer_frame`.
+        let it_obj = child.region.alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
     let arm_scope_id = frame.scope_id();

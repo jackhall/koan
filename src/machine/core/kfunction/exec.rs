@@ -33,7 +33,6 @@ use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
 };
 use crate::machine::model::values::{Carried, Held, KObject};
-use crate::witnessed::reattach_with;
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -118,11 +117,10 @@ pub(crate) fn home_return_type<'a>(
                 .to_string(),
         )));
     }
-    // Re-anchor the (non-module) clone from the elaboration brand to `'a` — the caller's contract
-    // lifetime — witnessed by `region`, through the safe-signature `reattach_with`, so the home carries
-    // no `unsafe` of its own beyond the substrate's single retype.
-    let relocated: KType<'a> = reattach_with::<KType<'static>, _>(kt.clone(), region);
-    Ok(region.alloc_ktype(relocated))
+    // Re-home the (non-module) clone into `region` at the caller's contract lifetime `'a`:
+    // `alloc_ktype` erases the clone's elaboration-brand lifetime and re-anchors it to the region, so
+    // the home carries no `unsafe` of its own beyond the substrate's single store retype.
+    Ok(region.alloc_ktype(kt.clone()))
 }
 
 /// The new `invoke` for a user-defined function: bind `args` into `ctx`'s scope (a frame/scope
@@ -150,15 +148,13 @@ where
     // Materialize the bound args as a record value **in the frame**, then bind each parameter to a
     // reference into the record's cell — one deep-clone per field (`Carried` → owned `Held`), and
     // the record carries its per-field type record. The record's cells double as the parameter
-    // bindings (scope bindings store `&KObject`). Built at the frame brand: the deep-cloned record is
-    // relocated into the brand region — a shortening of the caller `'step`, witnessed by the frame's
-    // own region (the value outlives the synchronous brand) — so the seed fabricates no `&'a`. Its
-    // foreign reach is pinned by the call scope's reach-set, folded at the bind seam before this runs.
+    // bindings (scope bindings store `&KObject`). Built at the frame brand: `alloc_object` erases the
+    // record's caller-`'step` lifetime and re-homes it in the brand region, so the seed fabricates no
+    // `&'a`. Its foreign reach is pinned by the call scope's reach-set, folded at the bind seam before
+    // this runs.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
         let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
-        let args_value =
-            reattach_with::<KObject<'static>, _>(KObject::record_of_held(cells), child.region);
-        let args_record = child.region.alloc_object(args_value);
+        let args_record = child.region.alloc_object(KObject::record_of_held(cells));
         if let KObject::Record(cells, _types) = args_record {
             for (name, cell) in cells.iter() {
                 match cell {

@@ -150,13 +150,13 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
 impl Region<KoanStorageProfile> {
     /// Store a [`KObject`] into the run-lifetime region; the value lands in this region (no value
     /// holds an owning `Rc` back to a region, so the store forms no back-edge).
-    pub fn alloc_object<'a>(&'a self, o: KObject<'a>) -> &'a KObject<'a> {
+    pub fn alloc_object<'a>(&'a self, o: KObject<'_>) -> &'a KObject<'a> {
         self.alloc_resident::<KObject<'static>>(o)
     }
 
     /// Store a [`KType`] into the run-lifetime region (a `Module` rides a bare borrow into its
     /// child scope's region — held alive by the carrier's witness set, not an embedded anchor).
-    pub fn alloc_ktype<'a>(&'a self, t: KType<'a>) -> &'a KType<'a> {
+    pub fn alloc_ktype<'a>(&'a self, t: KType<'_>) -> &'a KType<'a> {
         self.alloc_resident::<KType<'static>>(t)
     }
 
@@ -166,7 +166,7 @@ impl Region<KoanStorageProfile> {
     /// `captured_scope` in this region," and the path silently drops regions out from under
     /// live `&KFunction` references. The `debug_assert!` catches violations at the
     /// allocation site rather than later as use-after-free.
-    pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
+    pub fn alloc_function<'a>(&'a self, f: KFunction<'_>) -> &'a KFunction<'a> {
         debug_assert!(
             std::ptr::eq(
                 self as *const KoanRegion,
@@ -265,15 +265,15 @@ impl Region<KoanStorageProfile> {
         self.alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
     }
 
-    pub fn alloc_scope<'a>(&'a self, s: Scope<'a>) -> &'a Scope<'a> {
+    pub fn alloc_scope<'a>(&'a self, s: Scope<'_>) -> &'a Scope<'a> {
         self.alloc_resident::<Scope<'static>>(s)
     }
 
-    pub fn alloc_module<'a>(&'a self, m: Module<'a>) -> &'a Module<'a> {
+    pub fn alloc_module<'a>(&'a self, m: Module<'_>) -> &'a Module<'a> {
         self.alloc_resident::<Module<'static>>(m)
     }
 
-    pub fn alloc_signature<'a>(&'a self, s: ModuleSignature<'a>) -> &'a ModuleSignature<'a> {
+    pub fn alloc_signature<'a>(&'a self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
         self.alloc_resident::<ModuleSignature<'static>>(s)
     }
 
