@@ -79,8 +79,8 @@ pub fn body<'a>(
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
 
-    // Defense-in-depth: abstract-type members must use `LET`, not `VAL`.
-    if super::ascribe::is_abstract_type_name(&name) {
+    // Defense-in-depth: abstract-type members (Type-class names) must use `LET`, not `VAL`.
+    if crate::parse::is_type_name(&name) {
         return done_err(KError::new(KErrorKind::ShapeError(format!(
             "VAL slot name `{name}` classifies as a Type token; abstract-type members \
              must use `LET {name} = <Type>` instead of `VAL`",

@@ -98,7 +98,7 @@ pub fn body_opaque<'a>(
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType<'a>)> = Vec::new();
         for (slot_name, kt) in s.decl_scope().bindings().iter_types() {
-            if is_abstract_type_name(&slot_name) {
+            if crate::parse::is_type_name(&slot_name) {
                 continue;
             }
             if let KType::AbstractType {
@@ -241,21 +241,8 @@ pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> V
         .iter_types()
         .into_iter()
         .map(|(n, _)| n)
-        .filter(|n| is_abstract_type_name(n))
+        .filter(|n| crate::parse::is_type_name(n))
         .collect()
-}
-
-/// True iff `name` classifies as a Type token (first char uppercase + at least one
-/// lowercase elsewhere). See [design/typing/tokens.md](../../design/typing/tokens.md).
-pub(super) fn is_abstract_type_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() {
-        return false;
-    }
-    chars.any(|c| c.is_ascii_lowercase())
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -118,8 +118,12 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
     Ok(ExpressionPart::Identifier(tok.to_string()))
 }
 
-/// First char ASCII-uppercase plus at least one ASCII-lowercase elsewhere.
-fn is_type_name(tok: &str) -> bool {
+/// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
+/// ASCII-lowercase elsewhere (`IntOrd`, `OrderedSig`, `Carrier`). The single canonical
+/// predicate for "this name classifies as a Type token" — the parser uses it to tag a
+/// `Type` part, and the type-language partition (abstract-type members vs value slots in a
+/// SIG type table) reuses it. See [design/typing/tokens.md](../../design/typing/tokens.md).
+pub(crate) fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
     let Some(first) = chars.next() else {
         return false;
