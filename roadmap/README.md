@@ -481,3 +481,16 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   `summarize() == summarize()` string comparison (`Parseable::equal`, and the dict-key
   `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
   field order, and type parameters right.
+
+### Per-node memory — [per-node-memory/](per-node-memory/)
+
+Substrate follow-up the per-node-memory project left behind — closing the last asserted
+witnesses so co-location is computed by the type system, not stated in prose:
+
+- [Structural witnesses](per-node-memory/structural-witnesses.md) — retire `Witnessed::new`
+  (the asserted-co-location constructor still backing the object resident read, the bare-`Done`
+  terminal, and the `RegionTypeFamily` operand bundles), make every witness structural via
+  `yoke` / `merge` / a retained carrier, split off a single-region yoke witness so
+  `WitnessRegion for FrameSet` stops narrowing-and-panicking on a multi-region set, delete the
+  unused `Option<W>: Witness`, and add the multi-region Miri cases that would flag an
+  under-counting witness.

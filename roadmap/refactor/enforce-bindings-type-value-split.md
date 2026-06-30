@@ -59,4 +59,6 @@ binding/partition vocabulary it names changes.
 
 **Requires:** none — engine-internal.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+- [Structural witnesses](../per-node-memory/structural-witnesses.md) — the classified binding entry
+  this lands is where structural-witnesses hangs each value binding's retained carrier.

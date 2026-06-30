@@ -345,3 +345,13 @@ door [`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands
 the foreign parent at one `for<'b>` and erases the child witness-less. No scope re-anchor survives
 outside the witnessed substrate and the access surface is `open` alone, so "always witnessed" is a
 closed type rule.
+
+## Open work
+
+- [Structural witnesses](../roadmap/per-node-memory/structural-witnesses.md) — the construction
+  terminals this doc describes as born witnessed (the FN-def `yoke`, the object resident read) still
+  route the asserted [`Witnessed::new`](../src/witnessed.rs) at the object resident read, the
+  bare-`Done` terminal, and the `RegionTypeFamily` operand bundles; the single-region `yoke` witness
+  is only narrowingly satisfied by `WitnessRegion for FrameSet`; and `Option<W>: Witness` is an unused
+  pre-`FrameSet` residue. The item makes every witness structural and adds the multi-region tests that
+  would flag an under-counting one.
