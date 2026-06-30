@@ -48,9 +48,12 @@ closed type rule.
   **content-shortens** a longer-lived lexical parent into the fresh region's `'a` under `Scope`'s
   invariance; it builds through an **externally-witnessed construction door** — the dual of `yoke` that
   brands the fresh region and re-anchors the foreign parent at one `for<'b>`, then seals the child
-  witness-less as its `SealedExtern<ScopeRefFamily>`. The surviving retype then routes the substrate's
-  existing `for<'b>` brand — the same contract `open` rests on — so `recouple_scope` deletes and
-  `reattach_ref_with` goes callerless.
+  witness-less as its `SealedExtern<ScopeRefFamily>`. Both halves share one enabler — threading the
+  active scope **co-lifetimed** (`&'a Scope<'a>`), which it already is at its source (`current_scope`,
+  `with_scope`) — and the door is the two-ref `with_branded_pair`, routing the substrate's existing
+  `for<'b>` brand (the same contract `open` rests on), which typechecks against the real invariant
+  `Scope<'b>` with no new unsafe primitive. So `recouple_scope` deletes and `reattach_ref_with` goes
+  callerless.
 
 ## Dependencies
 

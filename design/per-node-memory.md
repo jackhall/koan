@@ -371,7 +371,8 @@ cross-region frame child building through an externally-witnessed construction d
 "always witnessed" becomes a closed type rule. One item carries this:
 
 - [One region handle, one access verb](../roadmap/per-node-memory/single-open-verb.md) — the
-  construction-time scope re-anchor folds into the substrate: the same-region child constructors thread
-  the resident `&'a` and the cross-region frame child builds through an externally-witnessed
-  construction door, so `recouple_scope` and the `reattach_ref_with` it routes — the last retypes
-  outside Witnessed/Sealed — are deleted.
+  construction-time scope re-anchor folds into the substrate, both halves reducing to threading the
+  active scope **co-lifetimed** (`&'a Scope<'a>`, which it already is at its source): the same-region
+  child constructors then store it by plain coercion, and the cross-region frame child builds through an
+  externally-witnessed construction door, so `recouple_scope` and the `reattach_ref_with` it routes —
+  the last retypes outside Witnessed/Sealed — are deleted.
