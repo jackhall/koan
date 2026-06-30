@@ -100,7 +100,6 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
-    use crate::machine::model::Carried;
 
     let group_name =
         crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));
@@ -116,7 +115,7 @@ pub fn body<'a>(
     ));
     let child = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&set)));
     for (index, (name, _)) in members.iter().enumerate() {
         child.preinstall_identity(
@@ -159,9 +158,10 @@ pub fn body<'a>(
             .scope
             .register_type_upsert(group_name.clone(), handle, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.region.alloc_ktype(kt_ref.clone()),
-            ))),
+            Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
+                fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
+                None,
+            )),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });

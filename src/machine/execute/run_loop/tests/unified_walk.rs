@@ -9,8 +9,9 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 struct Sink;
@@ -41,7 +42,7 @@ impl Write for SharedBuf {
 /// separate path.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
     let mut sched = KoanRuntime::new();
@@ -49,9 +50,9 @@ fn self_referential_let_surfaces_unbound_name() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(ids[0]) {
+    let err = match sched.result_error(ids[0]) {
         Err(e) => e.clone(),
-        Ok(_) => panic!("self-referential LET should surface UnboundName"),
+        Ok(()) => panic!("self-referential LET should surface UnboundName"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n.contains("Ty")),
@@ -64,7 +65,7 @@ fn self_referential_let_surfaces_unbound_name() {
 /// combined park, and on wake the rebuilt cache resolves and dispatch commits.
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let buf: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(&region, Box::new(SharedBuf(Rc::clone(&buf))));
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible

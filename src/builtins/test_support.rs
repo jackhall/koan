@@ -7,29 +7,41 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KoanRegion, Scope};
+use crate::machine::{KError, Scope};
 use crate::parse::parse;
-use crate::scheduler::{reattach_with, NodeId};
+use crate::scheduler::NodeId;
 
 use super::default_scope;
 
-/// Extract a top-level terminal at the scope lifetime `'a`. The scheduler reads at its own `&self`
-/// borrow; a top-level result is a frameless terminal living in `scope`'s region `'a`, which outlives
-/// the local scheduler, so re-anchoring the read to `'a` — a safe `reattach_with` witnessed by the
-/// `scope.region` borrow — is sound. Test-only — production code reads at the scheduler borrow.
+/// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
+/// and its value **copied out** into `scope`'s region through the brand — a deep clone re-homed at
+/// `'a` (the same relocation [`relocate_carried`](crate::machine::execute) does across a dep edge),
+/// so nothing branded escapes the open. A returned closure / module's deep clone preserves the bare
+/// borrow into its per-call region, so (like the production drain) fold the slot's witness onto
+/// `scope`'s reach-set: the caller drops the scheduler right after this returns, and `scope` outlives
+/// it, so its reach-set keeps every region the result reaches alive. Test-only — production code reads
+/// inside the open without a fixed escape lifetime.
 pub(crate) fn extract_terminal<'a>(
     sched: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
-    reattach_with::<CarriedFamily, _>(sched.read(id), scope.region)
+    let brand = scope.brand();
+    let value = sched
+        .read_result_with(id, |live| match live {
+            Carried::Object(obj) => Carried::Object(brand.alloc_object(obj.deep_clone())),
+            Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
+        })
+        .expect("terminal should be a value, not an error");
+    scope.fold_reach(&sched.dep_witness(id));
+    value
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
@@ -46,21 +58,27 @@ impl Write for SharedBuf {
 }
 
 pub(crate) fn run_root_with_buf<'a>(
-    region: &'a KoanRegion,
+    run_storage: &'a Rc<FrameStorage>,
 ) -> (&'a Scope<'a>, Rc<RefCell<Vec<u8>>>) {
     let buf = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(buf.clone())));
+    let scope = default_scope(run_storage, Box::new(SharedBuf(buf.clone())));
     (scope, buf)
 }
 
-pub(crate) fn run_root_silent<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
-    default_scope(region, Box::new(std::io::sink()))
+pub(crate) fn run_root_silent<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+    default_scope(run_storage, Box::new(std::io::sink()))
 }
 
 /// Run-root scope with no builtins registered, for tests that exercise scope machinery
-/// directly.
-pub(crate) fn run_root_bare<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
-    region.alloc_scope(Scope::run_root(region, None, Box::new(std::io::sink())))
+/// directly. Built inside `run_storage` like every run root, so its `region_owner` resolves —
+/// tests that drive dispatch (establishing a run frame via `ensure_run_frame`) work the same as
+/// pure scope-machinery tests that never reach the escape path.
+pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
+    run_storage.brand().alloc_scope(Scope::run_root(
+        run_storage,
+        None,
+        Box::new(std::io::sink()),
+    ))
 }
 
 /// Parse a source string expected to contain exactly one top-level expression.
@@ -99,8 +117,8 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.read_result(id) {
-        Ok(_) => panic!("expected error"),
+    match sched.result_error(id) {
+        Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }
 }
@@ -159,7 +177,7 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 /// Allocate a labeled marker object on `scope`'s region. Dispatch tests register builtins
 /// whose bodies return distinct markers so the test can assert which overload won.
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
-    scope.region.alloc_object(KObject::KString(label.into()))
+    scope.brand().alloc_object(KObject::KString(label.into()))
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

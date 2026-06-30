@@ -3,14 +3,14 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{KObject, SignatureElement};
-use crate::machine::KoanRegion;
 
 use super::capture_program_output;
 
 #[test]
 fn fn_registers_user_function_under_keyword_signature() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
@@ -23,7 +23,7 @@ fn fn_registers_user_function_under_keyword_signature() {
 
 #[test]
 fn fn_call_dispatches_body_at_call_time() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
@@ -36,7 +36,7 @@ fn fn_call_dispatches_body_at_call_time() {
 
 #[test]
 fn fn_rejects_non_keyword_name() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
     assert!(!fn_is_registered(scope, "greet"));
@@ -45,7 +45,7 @@ fn fn_rejects_non_keyword_name() {
 
 #[test]
 fn fn_call_runs_body_each_time() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET x = 7\nFN (GETX) -> Number = (x)");
 
@@ -133,7 +133,7 @@ fn fn_param_resolves_inside_nested_subexpression() {
 
 #[test]
 fn fn_returns_param_value_directly() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (ECHO v :Number) -> Number = (v)");
 
@@ -143,7 +143,7 @@ fn fn_returns_param_value_directly() {
 
 #[test]
 fn fn_signature_with_no_keyword_is_rejected() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (x :Number) -> Null = (PRINT \"oops\")");
     assert!(!fn_is_registered(scope, "x"));
@@ -153,11 +153,11 @@ fn fn_signature_with_no_keyword_is_rejected() {
 /// callable handle via `LET f = (FN ...)`.
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
-        matches!(result, KObject::KFunction(_, _)),
+        matches!(result, KObject::KFunction(_)),
         "FN should return its registered KFunction",
     );
 }

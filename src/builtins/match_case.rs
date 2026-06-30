@@ -85,10 +85,11 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::{KErrorKind, KoanRegion};
+    use crate::machine::core::FrameStorage;
+    use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
@@ -127,7 +128,7 @@ mod tests {
 
     #[test]
     fn match_inexhaustive_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -145,7 +146,7 @@ mod tests {
 
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn match_on_bool_inexhaustive_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(
             scope,

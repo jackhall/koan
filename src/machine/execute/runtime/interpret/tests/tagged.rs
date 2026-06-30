@@ -9,7 +9,7 @@ use super::run;
 
 #[test]
 fn tagged_union_full_program_via_type_token() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Outcome = (Ok :Str Err :Str)\n\
@@ -23,7 +23,7 @@ fn tagged_union_full_program_via_type_token() {
 
 #[test]
 fn tagged_union_full_program_constructs_and_matches() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Outcome = (Ok :Str Err :Str)\n\
@@ -37,7 +37,7 @@ fn tagged_union_full_program_constructs_and_matches() {
 
 #[test]
 fn tagged_union_none_branch_runs() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
@@ -53,7 +53,7 @@ fn tagged_union_none_branch_runs() {
 /// `:(Maybe None)` select by the value's variant identity, the criterion-1/3 headline.
 #[test]
 fn variant_typed_overloads_dispatch_by_variant() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
@@ -92,7 +92,7 @@ fn variant_typed_slot_rejects_other_variant() {
 /// even though that value's `ktype()` is now the `None` variant refinement.
 #[test]
 fn union_typed_slot_admits_any_variant() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\
@@ -108,7 +108,7 @@ fn union_typed_slot_admits_any_variant() {
 /// back to its union-qualified surface.
 #[test]
 fn variant_type_value_renders_union_qualified() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
         "UNION Maybe = (Some :Number None :Null)\n\

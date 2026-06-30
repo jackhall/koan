@@ -219,23 +219,23 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::KFunction { params, ret } => match obj {
-                KObject::KFunction(f, _) => {
+                KObject::KFunction(f) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                KObject::KFuture(_, _) => true,
+                KObject::KFuture(_) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match obj {
-                KObject::KFunction(f, _) => {
+                KObject::KFunction(f) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                KObject::KFuture(_, _) => true,
+                KObject::KFuture(_) => true,
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a *module*, which
@@ -351,7 +351,14 @@ impl<'a> KType<'a> {
     /// containers compare their memoized carried type against the slot via
     /// `satisfied_by` — pure type-level, no element walk. Non-satisfying containers
     /// fall through the scope walk rather than failing the bind.
-    pub fn accepts_part(&self, part: &ExpressionPart<'a>) -> bool {
+    pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
+        // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
+        // layout (the lifetime is phantom for a structural match); `part` is only read to compare
+        // against `self` — never mutated, no borrow escapes. Coercing once here lets the body's
+        // same-lifetime comparisons (`== self`, `satisfied_by`, `Rc::ptr_eq`) stand unchanged.
+        // Removal tracked by the structural-value-equality roadmap item (a lifetime-agnostic
+        // `KType` / part comparison).
+        let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
         match self {
             KType::Any => true,
             KType::Number => matches!(
@@ -402,23 +409,23 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::KFunction { params, ret } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
                     if f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f, _))) => {
+                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
                     if !f.is_functor {
                         return false;
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_, _))) => true,
+                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),

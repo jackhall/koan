@@ -21,7 +21,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
-    use crate::machine::model::Carried;
 
     let done_err = |e: KError| Action::Done(Err(e));
     let s = match arg_type(ctx.args, "sig") {
@@ -71,23 +70,23 @@ pub fn body<'a>(
             }
         }
     }
-    let kt = ctx.scope.region.alloc_ktype(KType::Signature {
+    let carrier = ctx.scope.brand().alloc_ktype_witnessed(KType::Signature {
         sig: s,
         pinned_slots: pinned,
     });
-    Action::Done(Ok(Carried::Type(kt)))
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::KType;
-    use crate::machine::KoanRegion;
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -113,7 +112,7 @@ mod tests {
     /// Pins land in record-literal order — `pinned_slots` is an ordered `Vec`.
     #[test]
     fn with_two_slots_preserve_order() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -137,7 +136,7 @@ mod tests {
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -165,7 +164,7 @@ mod tests {
 
     #[test]
     fn with_rejects_unknown_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -176,18 +175,18 @@ mod tests {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected unknown-slot rejection, got {e}",
             ),
-            Ok(_) => panic!("WITH on unknown slot must err"),
+            Ok(()) => panic!("WITH on unknown slot must err"),
         }
     }
 
     #[test]
     fn with_rejects_lowercase_slot_name() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -198,12 +197,12 @@ mod tests {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected lowercase-slot rejection, got {e}",
             ),
-            Ok(_) => panic!("WITH with lowercase slot must err"),
+            Ok(()) => panic!("WITH with lowercase slot must err"),
         }
     }
 }

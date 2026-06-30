@@ -37,15 +37,17 @@ pub fn body<'a>(
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "TRY", "branches"));
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
-    let body_scope: &'a Scope<'a> = ctx.scope.region.alloc_scope(Scope::child_under(ctx.scope));
+    let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
     let outer_frame = ctx.frame.map(|f| f.storage_rc());
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
         // unwrapped from `KError::to_tagged`'s Tagged carrier.
+        // TRY-WITH reads the watched value (relocated into the consumer region) to bind `it` and
+        // tail-replaces into the matched branch; it builds no object, so it ignores `ok.carrier`.
         let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
-            Ok(v) => ("Ok".to_string(), v.deep_clone(), None),
+            Ok(ok) => ("Ok".to_string(), ok.value.object().deep_clone(), None),
             Err(e) => {
-                let tagged: KObject<'a> = e.to_tagged(fctx.scope.region);
+                let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand());
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),

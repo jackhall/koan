@@ -23,6 +23,8 @@ pub(super) fn initial<'step>(
     };
     let chain = ctx.chain_deref();
     match ctx.current_scope().resolve_with_chain(&head, chain) {
+        // `obj` resolves against the cart scope at `'step` directly — the cart pins its storage for
+        // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
         Resolution::Value(obj) => dispatch_callable_value(ctx, expr, obj),
         // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
         // producer has *already* finalized splits two ways:
@@ -33,9 +35,9 @@ pub(super) fn initial<'step>(
         //   never `Placeholder`. Reaching here means that invariant broke.
         Resolution::Placeholder(producer) => {
             if ctx.is_result_ready(producer) {
-                match ctx.read_result(producer) {
+                match ctx.result_error(producer) {
                     Err(e) => Outcome::Done(Err(e.clone_for_propagation())),
-                    Ok(_) => unreachable!(
+                    Ok(()) => unreachable!(
                         "head placeholder `{head}` producer finalized Ok without registering the \
                          name — a binder's successful finalize always binds its name, so a \
                          ready-Ok producer must resolve to a Value, not a Placeholder",
@@ -61,7 +63,7 @@ fn dispatch_callable_value<'step>(
     head_obj: &'step KObject<'step>,
 ) -> Outcome<'step> {
     let callable = match head_obj {
-        KObject::KFunction(f, _) => ResolvedCallable::Function(f),
+        KObject::KFunction(f) => ResolvedCallable::Function(f),
         other => {
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),

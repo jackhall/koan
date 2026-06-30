@@ -39,9 +39,9 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.region.alloc_ktype(ret_kt),
+        ret: ctx.scope.brand().alloc_ktype(ret_kt),
         kind,
-        region: ctx.scope.region,
+        region: ctx.scope.brand(),
     })
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn resolve_arm_contract<'a>(
 /// tail-replacing into the arm body's last statement (the harness parks on the leading statements
 /// as owned deps, running them before the tail continues) carrying `contract`.
 pub(crate) fn arm_tail<'a>(
-    root: &Scope<'a>,
+    root: &'a Scope<'a>,
     outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_value: crate::machine::model::KObject<'a>,
     body_expr: KExpression<'a>,
@@ -60,11 +60,14 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::core::kfunction::body::split_body_statements;
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
-    frame.with_frame_interior(|region, child| {
-        let it_obj = region.alloc_object(it_value);
+    frame.with_scope(|child| {
+        // Bind the matched `it` value into the frame: `alloc_object` erases the caller-`'a` input and
+        // re-homes it at the frame region, so no pre-shortening is needed. Its reach rides the matched
+        // value's enclosing chain, pinned by `outer_frame`.
+        let it_obj = child.brand().alloc_object(it_value);
         let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
     });
-    let arm_scope_id = frame.scope_for_bind().id;
+    let arm_scope_id = frame.scope_id();
     let mut statements = split_body_statements(body_expr);
     let tail = statements
         .pop()

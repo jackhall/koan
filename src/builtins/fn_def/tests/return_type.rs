@@ -3,14 +3,15 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, ReturnType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 #[test]
 fn fn_parses_declared_return_type_onto_signature() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
@@ -23,7 +24,7 @@ fn fn_parses_declared_return_type_onto_signature() {
 /// load-bearing assertion is that `DOUBLE` isn't registered.
 #[test]
 fn fn_without_return_type_annotation_does_not_register() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
     let mut sched = KoanRuntime::new();
@@ -39,16 +40,16 @@ fn fn_without_return_type_annotation_does_not_register() {
 
 #[test]
 fn fn_with_unknown_return_type_name_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("unknown type name should error"),
+        Ok(()) => panic!("unknown type name should error"),
     };
     assert!(
         matches!(err.kind, KErrorKind::ShapeError(ref msg) if msg.contains("Bogus")),
@@ -58,7 +59,7 @@ fn fn_with_unknown_return_type_name_errors() {
 
 #[test]
 fn user_fn_return_type_mismatch_surfaces_as_kerror() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (LIE) -> Number = (\"oops\")");
     let mut sched = KoanRuntime::new();
@@ -66,9 +67,9 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("LIE should fail return-type check"),
+        Ok(()) => panic!("LIE should fail return-type check"),
     };
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, got } => {
@@ -114,16 +115,16 @@ fn fn_with_forward_user_bound_return_type_works() {
 /// see [ktype/slots-and-signatures.md § TypeNameRef](../../../../design/typing/ktype/slots-and-signatures.md#ktypeunresolved--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("unknown type name should error"),
+        Ok(()) => panic!("unknown type name should error"),
     };
     assert!(
         matches!(err.kind, KErrorKind::ShapeError(ref msg) if msg.contains("SomeWeirdName")),
@@ -133,7 +134,7 @@ fn fn_return_type_surface_name_preserved_in_error() {
 
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (PURE) -> Any = (\"a string\")");
     let result = run_one(scope, parse_one("PURE"));

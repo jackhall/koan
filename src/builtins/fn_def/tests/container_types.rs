@@ -2,10 +2,10 @@
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::core::KErrorKind;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::KType;
-use crate::machine::KoanRegion;
 
 use super::capture_program_output;
 
@@ -14,7 +14,7 @@ use super::capture_program_output;
 /// `List<Any>`, the contract, not the body's incidental `List<Number>` precision.
 #[test]
 fn fn_return_coarsens_list_carrier_to_declared() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
@@ -24,7 +24,7 @@ fn fn_return_coarsens_list_carrier_to_declared() {
 /// Without an annotation, a list keeps its precise memoized join type.
 #[test]
 fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
@@ -35,20 +35,20 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
 /// declared element type.
 #[test]
 fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
-    assert!(sched.read_result(id).is_err());
+    assert!(sched.result_error(id).is_err());
 }
 
 /// Empty container through an annotated return boundary: the vacuous `matches_value`
 /// passes and the declared element type is stamped.
 #[test]
 fn fn_return_empty_list_stamps_declared_element_type() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (EMPTY) -> :(LIST OF Number) = ([])");
     let result = run_one(scope, parse_one("EMPTY"));
@@ -74,16 +74,16 @@ fn fn_returning_typed_list_accepts_matching_value() {
 }
 
 /// The scheduler stores the return-type-check error in the result slot rather than
-/// failing `execute`, so we read the slot via `read_result` to assert the failure.
+/// failing `execute`, so we read the slot via `result_error` to assert the failure.
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
-    let res = sched.read_result(id);
+    let res = sched.result_error(id);
     assert!(
         res.is_err(),
         "expected return-type mismatch when body produces :(LIST OF Any) for declared :(LIST OF Number)"
@@ -115,7 +115,7 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 /// `DispatchFailed` rather than binding the structurally-similar function.
 #[test]
 fn fn_with_typed_function_param_rejects_name_mismatch() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -130,9 +130,8 @@ fn fn_with_typed_function_param_rejects_name_mismatch() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a function with param name `n` must not fill a `(x :Number)` slot");
+        .result_error(root)
+        .expect_err("a function with param name `n` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on parameter-name mismatch, got {error:?}",
@@ -179,7 +178,7 @@ fn fn_with_typed_function_param_admits_width_drop() {
 /// other overload the call surfaces `DispatchFailed`.
 #[test]
 fn fn_with_typed_function_param_rejects_width_extra() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -194,9 +193,8 @@ fn fn_with_typed_function_param_rejects_width_extra() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
+        .result_error(root)
+        .expect_err("a value declaring an extra param `y` must not fill a `(x :Number)` slot");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed on width-extra value param, got {error:?}",
@@ -228,7 +226,7 @@ fn fn_typed_function_param_contravariant_tiebreak() {
 /// are mutually incomparable, so neither wins → `AmbiguousDispatch`.
 #[test]
 fn fn_typed_function_param_incomparable_is_ambiguous() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -241,9 +239,8 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("an `Any`-param value matching two incomparable slots must be ambiguous");
+        .result_error(root)
+        .expect_err("an `Any`-param value matching two incomparable slots must be ambiguous");
     assert!(
         matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
         "expected AmbiguousDispatch across incomparable function slots, got {error:?}",
@@ -337,7 +334,7 @@ fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
 /// generic `DispatchFailed`.
 #[test]
 fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -353,9 +350,8 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("an unbound name across tied overloads must error");
+        .result_error(root)
+        .expect_err("an unbound name across tied overloads must error");
     assert!(
         matches!(error.kind, KErrorKind::UnboundName(ref n) if n == "nope"),
         "expected UnboundName(\"nope\"), got {error:?}",
@@ -367,7 +363,7 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
 /// than tying as ambiguous.
 #[test]
 fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -383,9 +379,8 @@ fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("heterogeneous List<Any> must match no concrete-element overload");
+        .result_error(root)
+        .expect_err("heterogeneous List<Any> must match no concrete-element overload");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed, got {error:?}",
@@ -440,7 +435,7 @@ fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
 /// no other overload to fall through to, the call surfaces no match.
 #[test]
 fn fn_typed_list_param_wrong_element_type_finds_no_match() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = KoanRuntime::new();
@@ -449,9 +444,8 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let error = sched
-        .read_result(root)
-        .err()
-        .expect("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
+        .result_error(root)
+        .expect_err("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed (no matching overload), got {error:?}",
@@ -463,7 +457,7 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
 /// contract.
 #[test]
 fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -476,7 +470,7 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
 /// A correct-element call into a precise slot keeps the precise element type.
 #[test]
 fn fn_typed_list_param_accepts_matching_element_at_call() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,

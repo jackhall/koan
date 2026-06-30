@@ -15,6 +15,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::*;
+use crate::machine::core::FrameStorage;
 use crate::machine::Scope;
 
 pub(super) struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -33,7 +34,7 @@ impl Write for SharedBuf {
 /// PRINT output lands in `captured`.
 pub(super) fn run<'run>(
     source: &str,
-    region: &'run KoanRegion,
+    region: &'run Rc<FrameStorage>,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> &'run Scope<'run> {
     let exprs = parse(source).expect("parse should succeed");

@@ -12,13 +12,17 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{KoanRegion, KoanRuntime, Scope};
+use koan::machine::{FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh region + default scope, run `source` end-to-end through
 /// the scheduler, and return both the captured PRINT output and the root scope so tests
 /// can assert on bindings post-run.
-fn run<'a>(region: &'a KoanRegion, captured: Rc<RefCell<Vec<u8>>>, source: &str) -> &'a Scope<'a> {
+fn run<'a>(
+    region: &'a Rc<FrameStorage>,
+    captured: Rc<RefCell<Vec<u8>>>,
+    source: &str,
+) -> &'a Scope<'a> {
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuf {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -40,7 +44,7 @@ fn run<'a>(region: &'a KoanRegion, captured: Rc<RefCell<Vec<u8>>>, source: &str)
 /// Run `source`, returning the first errored top-level slot's error (or `None` if every
 /// slot succeeded). Pairs with the new `UnboundName`-surfacing tests below.
 fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     struct Sink;
     impl std::io::Write for Sink {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -58,7 +62,7 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = sched.read_result(id) {
+        if let Err(e) = sched.result_error(id) {
             return Some(e.clone());
         }
     }
@@ -86,7 +90,7 @@ fn forward_value_let_at_same_level_is_unbound() {
 /// directly or parks on the live placeholder, and the slot wakes when `LET z` finalizes.
 #[test]
 fn backward_value_let_at_same_level_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&region, captured, "LET z = 1\nLET y = z");
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
@@ -110,15 +114,12 @@ fn module_body_forward_value_reference_is_unbound() {
 /// resolution succeeds normally.
 #[test]
 fn module_body_backward_value_reference_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&region, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
     // MODULE is type-only — the `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("Mod should be a module identity in types"),
     };
     let y = m.child_scope().lookup("y");
@@ -152,7 +153,7 @@ fn multi_name_forward_reference_is_unbound() {
 /// references visible under the gate and the call resolves normally.
 #[test]
 fn multi_name_backward_reference_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
@@ -215,7 +216,7 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
 /// earlier index than `v`, so both references resolve.
 #[test]
 fn backward_attr_lookup_resolves_after_struct_binding() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
@@ -250,7 +251,7 @@ fn forward_let_type_alias_is_unbound() {
 #[test]
 fn backward_let_type_alias_resolves_to_number() {
     use koan::machine::model::KType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&region, captured, "LET Un = Number\nLET Ty = Un");
     assert!(
@@ -269,7 +270,7 @@ fn backward_let_type_alias_resolves_to_number() {
 #[test]
 fn let_alias_via_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
@@ -288,7 +289,7 @@ fn let_alias_via_module_qualified_type_resolves() {
 /// carve-out so it's visible to the sibling `LET MyList`.
 #[test]
 fn type_frame_with_module_qualified_element_resolves() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
@@ -307,7 +308,7 @@ fn type_frame_with_module_qualified_element_resolves() {
 #[test]
 fn chained_module_qualified_type_resolves() {
     use koan::machine::model::KType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
@@ -330,7 +331,7 @@ fn chained_module_qualified_type_resolves() {
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
     use koan::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl std::io::Write for SharedBuf {
@@ -357,15 +358,14 @@ fn producer_error_propagates_to_parked_consumer() {
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
     let err = sched
-        .read_result(ids[0])
-        .err()
-        .expect("execute should surface UNDEFINED_FN's dispatch failure");
+        .result_error(ids[0])
+        .expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
     assert!(
-        sched.read_result(ids[1]).is_err(),
+        sched.result_error(ids[1]).is_err(),
         "y must inherit its dependency's error",
     );
 }

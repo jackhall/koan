@@ -3,37 +3,34 @@
 use crate::builtins::test_support::{
     lookup_fn, parse_one, run, run_one, run_one_type, run_root_silent,
 };
+use crate::machine::core::FrameStorage;
 use crate::machine::model::{KObject, KType};
-use crate::machine::KoanRegion;
 
-/// Bare parameter-name return type: the body `(Er)` returns the bound module
-/// via `BareTypeLeaf`; per-call elaboration resolves `Er` to the carried
-/// module's identity through `Scope::resolve_type`.
+/// Bare parameter-name return type: `-> Er` resolves per-call to the carried type via
+/// `Scope::resolve_type`. The parameter is `:Signature`-kind, so `Er` resolves to a *signature* — a
+/// valid return type (a concrete module identity is not; see
+/// [`home_return_type`](crate::machine::execute)). The body returns a module ascribed to that
+/// per-call signature (`IntOrd :| Er`), which the per-call return contract admits.
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
-    );
-    run(scope, "FN (USE_ID Er :OrderedSig) -> Er = (Er)");
+    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    run(scope, "MODULE IntOrd = (LET compare = 7)");
+    run(scope, "FN (USE_ID Er :Signature) -> Er = (IntOrd :| Er)");
     let f = lookup_fn(scope, "USE_ID");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = run_one_type(scope, parse_one("USE_ID IntOrdView"));
+    let result = run_one_type(scope, parse_one("USE_ID OrderedSig"));
     match result {
-        KType::Module {
-            module: _,
-            frame: _,
-        } => {}
-        other => panic!("expected KModule from USE_ID, got {other:?}"),
+        KType::Module { module: _ } => {}
+        other => {
+            panic!("expected the IntOrd view satisfying the per-call signature, got {other:?}")
+        }
     }
 }
 
@@ -44,7 +41,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 #[test]
 fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -55,10 +52,7 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     assert!(
         matches!(
             scope.resolve_type("IntOrdView"),
-            Some(KType::Module {
-                module: _,
-                frame: _
-            })
+            Some(KType::Module { module: _ })
         ),
         "IntOrdView should be an opaquely-ascribed module (type-only) satisfying WithZero's \
          VAL zero slot",
@@ -81,7 +75,7 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
 /// carrier yields the underlying `Number(0)`.
 #[test]
 fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -128,7 +122,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
 #[test]
 fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     use crate::machine::model::ReturnType;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -157,7 +151,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
 /// incidental `Number` element type would leak through.
 #[test]
 fn functor_deferred_return_coarsens_list_carrier() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -188,28 +182,30 @@ fn functor_deferred_return_coarsens_list_carrier() {
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
     use crate::machine::execute::KoanRuntime;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
+    // `Er` is `:Signature`-kind, so the deferred `-> Er` return resolves per-call to a signature (a
+    // valid return type, unlike a concrete module identity); each body returns a module ascribed to
+    // that per-call signature, which the contract admits.
     run(
         scope,
-        "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
-         MODULE Ints = ((LET Carrier = Number) (LET v = 1))\n\
-         LET View = (Ints :! Seq)",
+        "SIG Seq = (VAL v :Number)\n\
+         MODULE Ints = (LET v = 1)",
     );
     run(
         scope,
-        "FN (BB Er :Seq) -> Er = (Er)\n\
-         FN (AA Er :Seq) -> Er = (BB Er)",
+        "FN (BB Er :Signature) -> Er = (Ints :| Er)\n\
+         FN (AA Er :Signature) -> Er = (BB Er)",
     );
     let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
+    let id = sched.dispatch_in_scope(parse_one("AA Seq"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.read_result(id).is_ok(),
-        "AA V should succeed: {:?}",
-        sched.read_result(id).err(),
+        sched.result_error(id).is_ok(),
+        "AA Seq should succeed: {:?}",
+        sched.result_error(id).err(),
     );
     assert_eq!(
         sched.len(),
@@ -227,7 +223,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
 #[test]
 fn deferred_expression_return_tail_chain_reuses_frames() {
     use crate::machine::execute::KoanRuntime;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -248,9 +244,9 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.read_result(id).is_ok(),
+        sched.result_error(id).is_ok(),
         "AA should succeed: {:?}",
-        sched.read_result(id).err(),
+        sched.result_error(id).err(),
     );
     // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a dep-finish.
     assert!(
@@ -268,7 +264,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -282,9 +278,9 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("BAD should fail per-call return-type check"),
+        Ok(()) => panic!("BAD should fail per-call return-type check"),
     };
     match &err.kind {
         KErrorKind::TypeMismatch { arg, expected, .. } => {

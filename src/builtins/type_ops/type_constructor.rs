@@ -16,7 +16,7 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
     use crate::machine::model::values::Held;
-    use crate::machine::model::Carried;
+
     use crate::machine::{KError, KErrorKind};
 
     let param_kt = match arg_type(ctx.args, "param") {
@@ -46,20 +46,21 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let kt = ctx
+    let carrier = ctx
         .scope
-        .region
-        .alloc_ktype(KType::SetRef { set, index: 0 });
-    Action::Done(Ok(Carried::Type(kt)))
+        .brand()
+        .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KoanRegion, ScopeId};
+    use crate::machine::{BindingIndex, ScopeId};
 
     /// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
     /// `expected`; returns the member's name.
@@ -84,7 +85,7 @@ mod tests {
     /// Pins the template shape the builtin returns before opaque ascription re-mints it.
     #[test]
     fn type_constructor_builtin_returns_ktype_value() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one("TEMPLATE Type"));
         match result {
@@ -100,7 +101,7 @@ mod tests {
     /// Pins the LET-routing + `register_type` path for a higher-kinded SIG slot.
     #[test]
     fn sig_declares_higher_kinded_slot() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "SIG Monad = ((LET Wrap = (TEMPLATE Type)))");
         let s = match scope.resolve_type("Monad") {
@@ -116,7 +117,7 @@ mod tests {
     /// `ConstructorApply` carrier.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         scope.register_type(
             "Wrap".into(),
@@ -129,13 +130,13 @@ mod tests {
             scope,
         );
         sched.execute().expect("scheduler should run");
-        match sched.read_result(id) {
-            Ok(_) => {}
+        match sched.result_error(id) {
+            Ok(()) => {}
             Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
         }
         let pure = scope.bindings().expect_value("pure");
         let f = match pure {
-            KObject::KFunction(f, _) => *f,
+            KObject::KFunction(f) => *f,
             other => panic!("pure not KFunction: {:?}", other.ktype()),
         };
         use crate::machine::model::ReturnType;
@@ -153,7 +154,7 @@ mod tests {
     #[test]
     fn monad_signature_smoke() {
         use crate::parse::parse;
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
@@ -168,7 +169,7 @@ mod tests {
             Err(e) => panic!("scheduler errored: {}", e),
         }
         for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = sched.read_result(*id) {
+            if let Err(e) = sched.result_error(*id) {
                 panic!("expr {} errored: {}", i, e);
             }
         }
@@ -204,7 +205,7 @@ mod tests {
     /// `type_members` to the per-call-minted constructor variant.
     #[test]
     fn module_attr_access_returns_type_constructor() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,

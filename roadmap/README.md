@@ -54,32 +54,52 @@ What's shipped that the open items below build on:
   arms (one [`check_declared_return`](../src/machine/execute/finalize.rs)
   parameterized over the lifted carrier's `matches_value`/`matches_type` predicate).
 - *Region unsafe consolidation.* Every captured/defining-scope re-attach is funnelled behind two
-  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles; `KoanRegion::escape` is `NonNull`.
+  audited [`scope_ptr`](../src/machine/core/scope_ptr.rs) handles, and the cycle-gate redirect
+  recovers its target *from the value being stored* (the self-anchoring closure's captured scope
+  names its defining region, so the redirect region is reached by walking that scope's `outer` chain)
+  — so `Region` stores no escape owner, no allocation back-edge can form, and
+  [`region.rs`](../src/witnessed/region.rs) carries no `unsafe`.
   The store-side erasure lives behind one `Stored` trait: all region-stored
   families route the scheduler's single audited `erase_to_static` (the safe direction of the
   one `retype` primitive the read-side re-anchor shares) and one gated `alloc` engine,
   replacing the per-type `T<'a> → T<'static>` transmute pairs with one. The scope-pointer surface
-  split on whether the carrier can brand the scope's `'a`: the safe `BoundedScopePtr<'a>` makes
-  `Module::child_scope`, `Signature::decl_scope`, `KFunction::captured` and a `Scope`'s `outer`
-  reader-bounded re-hands carrying no `unsafe`, while the two lifetime-free carriers (`CallFrame`'s
-  per-call child scope and a node's `NodeScope::YokedChild`) collapse to the single audited
-  `unsafe ErasedScopePtr::reattach` — the FrameStorage region↔child-scope self-reference proved
-  irreducible (its `Scope<'a>` single-lifetime construction `pin_deref` and outer-link re-attach
-  remain, tracked by [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)),
-  so the work consolidated rather than eliminated it. The `unsafe impl Reattachable` obligation is
-  discharged once through a shared `reattachable!` macro instead of per-carrier.
+  then collapsed onto the substrate: every region-resident holder (`Module::child_scope`,
+  `Signature::decl_scope`, `KFunction::captured`, and a `Scope`'s `outer` / `root`) holds its
+  captured / defining / parent scope **outright** as a plain `&'a Scope<'a>`, re-anchored to `'a` with
+  the rest of the value when the holder is read out of its region — one `Reattachable` retype over the
+  whole value, so each accessor is a bare field read and the scope / module / function path carries no
+  `unsafe` of its own (no per-handle `NonNull` deref). The two scope-specialized handles, their
+  brand-shortening helpers, and the bare `reattach_ref` are deleted. `CallFrame`'s per-call child scope
+  and a node's `NodeScope::YokedChild` additionally ride the substrate's externally-witnessed
+  `SealedExtern<ScopeRefFamily>` carrier (a `&'static Scope` erased once through the safe
+  `erase_to_static::<ScopeRefFamily>`), read through its rank-2 `open` — the single access verb, with
+  the borrow-bounded `attach` deleted. At construction a same-region child stores its already-`'a`
+  parent by plain coercion, and the per-call frame child builds through an externally-witnessed
+  construction door ([`build_frame_child_witnessed`](../src/machine/core/arena.rs)), so no scope
+  re-anchor survives outside the witnessed substrate and the per-call child builds at real lifetimes,
+  touching no `unsafe` at all. The
+  `unsafe impl Reattachable` obligation is discharged once through a shared `reattachable!` macro
+  instead of per-carrier.
   Honest slot storage landed for per-call frame scopes: a frame scope rides its slot as a
   payload-less [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the
   slot's own `Node.frame` cart — no fabricated run-length `&'a` persists across a TCO reset.
   The frame re-anchor then landed in full: the free `&'run` scope fabrication at the read
   boundary is deleted, a within-step frame lifetime `'step` (`'a: 'step`) threads
-  `run_dispatch`/`SchedulerView`/`BuiltinFn`, and a slot's scope is now read on demand via
-  [`Scheduler::current_scope`](../src/machine/execute/run_loop.rs) through the witness-bounded
-  [`CallFrame::scope_bounded`](../src/machine/core/arena.rs) brand (the post-step loop reads it
-  through a `PostStep` token off the slot's returned frame). The sole surviving free re-exposure
-  is the region half of [`CallFrame::with_frame_interior`](../src/machine/core/arena.rs), the
-  C0-irreducible seed bind, and `KFunction::captured` now rides a `BoundedScopePtr`
+  `run_dispatch`/`SchedulerView`/`BuiltinFn`, and the frame-side, decide-channel, and seed-side scope
+  reads then all folded onto the brand `open`. The active scope's carrier is zipped into the run-loop
+  step's [`SealedExtern::open`](../src/witnessed.rs) alongside the continuation, contract, and deps, so
+  the dispatch decide reads `&Scope<'b>` at the step brand and the consumer `dest` is the opened
+  scope's own region (the separate region carrier dissolves); a frame's own child scope opens through
+  [`CallFrame::with_scope`](../src/machine/core/arena.rs); and the seed-side `it` / param binds and the
+  deferred-return-type elaboration relocate their caller value into the opened scope's own region
+  through the substrate before binding. The full Miri-slate confirmation has landed — the slate is
+  green
   (see [design/per-call-region/scope-handles.md § Slot-table scope handle](../design/per-call-region/scope-handles.md#slot-table-scope-handle)).
+  And [`KExpression`](../src/machine/model/ast.rs) joined the layout-invariant carrier families (its
+  lifetime borne only by a `Spliced(Carried)` part), so a splice-free quoted expression is region-pure
+  and `QUOTE` allocs it through the witnessed object surface
+  ([`KoanRegion::alloc_object_witnessed`](../src/machine/core/arena.rs)) — the object born under the
+  empty foreign-reach set — rather than asserting it via `Witnessed::new`.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -137,13 +157,52 @@ What's shipped that the open items below build on:
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Witnessed value carrier.* The scattered `Reattachable` / `Erased` / `retype` machinery now lives
   in the top-level [`witnessed`](../src/witnessed.rs) module (a sibling of `machine` / `scheduler`),
-  and a node's value slot stores a single [`Witnessed<Carried, Option<Rc<Cart>>>`](../src/witnessed.rs)
-  bundling the erased value with the producer frame `Rc` that pins it — the witness-pins-the-value
+  and a node's value slot stores a single [`Sealed<Carried, FrameSet>`](../src/witnessed.rs)
+  bundling the erased value with the producer-frame witness set that pins it — the witness-pins-the-value
   relationship is a type invariant, not a co-stored pair. Reads go through the safe `with` / `map` /
   `read` accessors (the first two rank-2 `for<'b>` branded against escape, all three `compile_fail`-
   and Miri-tested), retiring the open-coded `read_result` reattaches and `pin_carried_to_run`. The
-  one irreducible audited `unsafe` reattach left in the value path is `lift`'s value-relocation
-  re-anchor (no borrowed witness for a value about to be copied out). See
+  consumer-pull lift is now a borrow-checked relocation (`relocate_carried`, a safe `deep_clone` +
+  `alloc` at the step brand, wrapped as the `Sealed::transfer_into` `merge`), so **no value-path
+  `unsafe` reattach remains**. The co-location-enforcing
+  constructor `yoke` (sourcing a carrier from the witness's own region behind a `for<'b>` brand, so
+  the witness-pins-the-value invariant holds by construction) and the `merge` composition law
+  (combining two carriers under one brand, re-sealed under the union of their witness sets, with
+  `outer`-chain subsumption dropping a member another already pins) have also landed. The keystone
+  run-loop restructure and its consuming `open`, the production witness impls, the unified `FrameSet`
+  set-witness (result slot and scope handle on one region-owner type), and the per-value frame
+  anchor's removal — a stored value now holds no owning `Rc` back to a region, so the allocation
+  engine needs no cycle gate, and an escaping closure / module is kept alive by its carrier's witness
+  set while it rides a slot and by the consumer scope's reach-set once bound out; this closed the
+  lift-relocation `unsafe` and cleared the process-exit leak — have since landed too. The
+  `alloc`-side carrier adoption has begun: the consumer-pull lift now hands each construction finish
+  its deps as their producer slots' own `Sealed` carriers (`Sealed::duplicate` / `Scheduler::dep_carrier`,
+  the `DepTerminal` carrier), and the object family's region-pure leaves and aggregates are born
+  witnessed by `yoke` / `transfer_into` — a single-part literal, a static aggregate cell, and the
+  dep-carrier-fed list / dict / record fold, no longer paired with an asserted `Witnessed::new`. The
+  carrier-self-building object constructions then joined them: the newtype / tagged-union constructors
+  and `catch` fold their dep carriers via `transfer_into` / `merge` (the nominal type identity crossing
+  the build brand as a non-object `RegionTypeFamily` operand), and FN def `yoke`s its co-located
+  `KObject::KFunction` onto a carrier witnessed by the defining scope's frame. The bare-arg
+  value-embedding object sites (`attr` / `FROM` / the literal Resolved arm) and the **type family** have
+  since followed — every type construction terminal seals via `seal_value` / `seal_type` / `seal_module`,
+  so a `KType::Module` names its child-scope reach on its own carrier, retiring the single-frame
+  `reached_frame` reconstruction and the per-frame `FrameStorage.retained` field. The **value-read
+  migration** has since followed — the result-slot value reads nest under the rank-2 `Sealed::open` (a
+  value copy-out and a borrow-free error probe), and the three ride-up-stack dispatch sites resolve at
+  the cart `'step`, retiring the transitional self-witnessed `read`. The **frame-side scope reads** have
+  since folded onto `open` as well — a frame's child scope opens at a `for<'b>` brand via
+  [`CallFrame::with_scope`](../src/machine/core/arena.rs). The **scope-pointer collapse** (a
+  region-resident value's captured / defining / parent scope held outright as a plain `&Scope`, leaving
+  the borrow-bounded `attach` callerless) and the **witnessed alloc surface** (region allocation hands
+  back a foreign-reach-only `Witnessed<T, FrameSet>`, the active frame folded in at close, the frame
+  builder's child scope born externally-witnessed) have since landed too, and every object- and
+  type-channel construction *terminal* now builds through that surface — a seal folds the
+  already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. The build
+  leaf is now confined behind a branded region handle (a bare `&KoanRegion` cannot allocate), the
+  access surface is collapsed to `open` — the borrow-bounded `attach`, the witness-borrow read path
+  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted —
+  closing the per-node-memory project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -296,13 +355,11 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
-- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the two argument binders](refactor/unify-argument-binders.md)
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
-- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
@@ -400,14 +457,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Witnessed carrier module for value lifetime-erasure](refactor/witnessed-carrier.md) — consolidate
-  the scattered `Reattachable` / `Erased` / `retype` reattach machinery into one top-level `witnessed`
-  module whose `unsafe` is two rank-2 branded accessors (`with` / `map`), bundling each erased value
-  with its liveness witness.
-- [Split Scope into region and outer lifetimes](refactor/scope-region-outer-lifetimes.md) — give
-  `Scope` separate region/content and lexical-parent lifetimes so the per-call child scope is built
-  at real lifetimes and erased once through the safe `ErasedScopePtr::erase`, retiring the
-  construction-time region `pin_deref` and outer-link `reattach_ref`.
 - [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
   dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
   instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).
@@ -432,3 +481,16 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   `summarize() == summarize()` string comparison (`Parseable::equal`, and the dict-key
   `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
   field order, and type parameters right.
+
+### Per-node memory — [per-node-memory/](per-node-memory/)
+
+Substrate follow-up the per-node-memory project left behind — closing the last asserted
+witnesses so co-location is computed by the type system, not stated in prose:
+
+- [Structural witnesses](per-node-memory/structural-witnesses.md) — retire `Witnessed::new`
+  (the asserted-co-location constructor still backing the object resident read, the bare-`Done`
+  terminal, and the `RegionTypeFamily` operand bundles), make every witness structural via
+  `yoke` / `merge` / a retained carrier, split off a single-region yoke witness so
+  `WitnessRegion for FrameSet` stops narrowing-and-panicking on a multi-region set, delete the
+  unused `Option<W>: Witness`, and add the multi-region Miri cases that would flag an
+  under-counting witness.

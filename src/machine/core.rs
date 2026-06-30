@@ -8,8 +8,6 @@ mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
 mod pending;
-mod reattach;
-mod region;
 mod scope;
 mod scope_id;
 mod scope_ptr;
@@ -17,7 +15,7 @@ mod scope_ptr;
 #[cfg(test)]
 mod tests;
 
-pub use arena::{CallFrame, FrameStorage, KoanRegion};
+pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily};
 pub use bindings::{
     ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
     Resolution,
@@ -25,6 +23,7 @@ pub use bindings::{
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
+pub(crate) use scope::ValueCarrierResolution;
 pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;
-pub use scope_ptr::{BoundedScopePtr, ErasedScopePtr};
+pub use scope_ptr::ScopeRefFamily;

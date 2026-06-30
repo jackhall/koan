@@ -12,12 +12,15 @@
 //! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
 //! record-schema binder) skips registration. No closure plumbing.
 
+use crate::machine::core::kfunction::action::Action;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
-use crate::machine::{BindingIndex, Body, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{BindingIndex, Body, FrameSet, KError, KErrorKind, NodeId, Scope};
+use crate::witnessed::Witnessed;
 
 use super::return_type::{
     make_capture, resolve_capture_at_finish, ReturnTypeCapture, ReturnTypeState,
@@ -195,13 +198,13 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// deferred carrier that resolves non-admissibly later. `Anonymous` skips
 /// registration entirely — the value it returns is the function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
-    scope: &Scope<'a>,
+    scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
     // return slot resolved at dep-finish time rather than synchronously.
@@ -231,7 +234,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         elements,
     };
 
-    let region = scope.region;
+    let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
@@ -242,7 +245,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
-    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
     // An anonymous FN registers nothing — its only handle is the returned value
     // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
     // registers under its lead keyword.
@@ -258,9 +261,24 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         };
         scope.register_function(name, f, obj, bind_index)?;
     }
-    // Return the function reference so `LET f = (FN ...)` captures a callable
-    // handle for the identifier-bound dispatch fallback.
-    Ok(Carried::Object(obj))
+    // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
+    // capture), and the captured scope — region-resident under that frame — transitively keeps every
+    // foreign region its bindings reach alive through the scope's sealed reach-set. So the already-built
+    // object is wrapped as a carrier witnessed by that scope's home frame (the asserted-co-location read
+    // path), the single-frame witness naming its full reach. `LET f = (FN ...)` still captures the
+    // callable via this carrier.
+    Ok(scope.resident_object_carrier(obj))
+}
+
+/// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
+/// (it names its captured scope's frame), so success seals as [`Action::DoneWitnessed`].
+pub(crate) fn fn_action<'a>(
+    result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
+) -> Action<'a> {
+    match result {
+        Ok(witnessed) => Action::DoneWitnessed(witnessed),
+        Err(e) => Action::Done(Err(e)),
+    }
 }
 
 /// Schedule a `AwaitDeps` over `park_producers` plus any newly scheduled
@@ -344,7 +362,7 @@ pub(crate) fn defer<'a>(
                 }
             }
         };
-        Action::Done(finalize_fn_with_kind(
+        fn_action(finalize_fn_with_kind(
             fctx.scope,
             elements,
             return_type,

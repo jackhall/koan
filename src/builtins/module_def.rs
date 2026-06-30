@@ -24,25 +24,29 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
     };
-    use crate::machine::model::Carried;
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let child_scope = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
-    let active_frame = ctx.frame.map(|f| f.storage_rc());
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
+        // The body's binds into `child_scope` are all resolved (AwaitDeps), and nothing below binds
+        // into it (the mirror reads it; `register_type_upsert` writes the outer scope) — so seal its
+        // reach-set here, before the module captures it: the sealed foreign reach rides the escaping
+        // module value.
+        child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits.
         if let Some(kt) = fctx.scope.bindings().lookup_type(&name_for_finish, None) {
-            return Action::Done(Ok(Carried::Type(fctx.scope.region.alloc_ktype(kt.clone()))));
+            let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt.clone());
+            return Action::DoneWitnessed(fctx.scope.seal_module(carrier));
         }
         let module: &'a Module<'a> = fctx
             .scope
-            .region
+            .brand()
             .alloc_module(Module::new(name_for_finish.clone(), child_scope));
         // Mirror pure type-side bindings into the module's `type_members`.
         {
@@ -57,17 +61,15 @@ pub fn body<'a>(
                 tm.insert(member, kt.clone());
             }
         }
-        let identity = KType::Module {
-            module,
-            frame: active_frame.clone(),
-        };
+        let identity = KType::Module { module };
         match fctx
             .scope
             .register_type_upsert(name_for_finish.clone(), identity, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(Carried::Type(
-                fctx.scope.region.alloc_ktype(kt_ref.clone()),
-            ))),
+            Ok(kt_ref) => {
+                let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone());
+                Action::DoneWitnessed(fctx.scope.seal_module(carrier))
+            }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",
                 format!("MODULE {} body", name_for_finish),
@@ -107,9 +109,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, KoanRegion, Scope};
+    use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
     /// `bindings.types`. Recover it for inspection.
@@ -129,7 +132,7 @@ mod tests {
 
     #[test]
     fn module_binds_under_name_in_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         assert!(matches!(
@@ -144,7 +147,7 @@ mod tests {
 
     #[test]
     fn module_member_access_via_attr() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         let result = run_one(scope, parse_one("Foo.x"));
@@ -153,7 +156,7 @@ mod tests {
 
     #[test]
     fn module_with_multiple_statements_in_parens() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = ((LET x = 1) (LET y = 2))");
         assert!(matches!(run_one(scope, parse_one("Foo.x")), KObject::Number(n) if *n == 1.0));
@@ -164,7 +167,7 @@ mod tests {
     fn module_member_function_via_let_fn() {
         // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
         // its signature key and isn't reachable as `Foo.<name>` via ATTR.
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -176,7 +179,7 @@ mod tests {
 
     #[test]
     fn module_unknown_member_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
         let err = run_one_err(scope, parse_one("Foo.bogus"));
@@ -189,7 +192,7 @@ mod tests {
 
     #[test]
     fn nested_module_accessible_via_chained_attr() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Outer =\n  MODULE Inner = (LET x = 7)");
         let result = run_one(scope, parse_one("Outer.Inner.x"));
@@ -200,7 +203,7 @@ mod tests {
     /// reference instead of erroring as `UnboundName`.
     #[test]
     fn module_body_parks_on_outer_placeholder() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "LET y = 7\nMODULE Foo = (LET x = y)");
         let result = run_one(scope, parse_one("Foo.x"));
@@ -210,7 +213,7 @@ mod tests {
     /// A failing body statement must not bind `Foo` in the parent scope.
     #[test]
     fn module_body_error_short_circuits_finalize() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = nonexistent_name)");
         assert!(
@@ -224,17 +227,18 @@ mod tests {
     /// the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
-        let child = region.alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "Foo".into(),
-        ));
-        let module: &Module<'_> = region.alloc_module(Module::new("Foo".into(), child));
-        let identity = KType::Module {
-            module,
-            frame: None,
-        };
+        let child = region
+            .brand()
+            .alloc_scope(crate::machine::Scope::child_under_module(
+                scope,
+                "Foo".into(),
+            ));
+        let module: &Module<'_> = region
+            .brand()
+            .alloc_module(Module::new("Foo".into(), child));
+        let identity = KType::Module { module };
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.
@@ -248,7 +252,7 @@ mod tests {
     /// `child_scope: &'a Scope<'a>` and finalize writes under tree borrows.
     #[test]
     fn module_body_dispatch_does_not_dangle() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let foo = resolve_module(scope, "Foo");

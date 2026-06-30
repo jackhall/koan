@@ -1,10 +1,10 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
-use crate::machine::core::KoanRegion;
+use crate::machine::core::FrameStorage;
 
 #[test]
 fn resolve_type_expr_builtin_leaf_caches() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None) {
@@ -24,7 +24,7 @@ fn resolve_type_expr_builtin_leaf_caches() {
 
 #[test]
 fn resolve_type_expr_unbound_returns_unbound() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("NotABuiltin".into());
     match scope.resolve_type_identifier(&te, None) {
@@ -38,7 +38,7 @@ fn resolve_type_expr_unbound_returns_unbound() {
 #[test]
 fn resolve_type_expr_user_struct_caches_after_finalize() {
     use crate::builtins::test_support::run;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let te = TypeIdentifier::leaf("Point".into());
@@ -117,13 +117,13 @@ mod resolve_type_leaf_carrier {
     use super::super::{resolve_type_leaf_carrier, TypeLeafCarrier};
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::BindingIndex;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::KType;
-    use crate::machine::KoanRegion;
 
     #[test]
     fn builtin_synthesizes_type_carrier() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_bare(&region);
         scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
         let leaf = TypeIdentifier::leaf("Number".to_string());
@@ -135,7 +135,7 @@ mod resolve_type_leaf_carrier {
 
     #[test]
     fn unbound_returns_unbound() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_bare(&region);
         let leaf = TypeIdentifier::leaf("Missing".to_string());
         match resolve_type_leaf_carrier(scope, &leaf, None) {
@@ -164,7 +164,7 @@ mod resolve_type_leaf_carrier {
         use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
         use crate::machine::model::Record;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_bare(&region);
         // Pre-install a singleton set whose one member is still `pending` (schema
         // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the

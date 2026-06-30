@@ -16,9 +16,10 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{KType, Record};
-use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::witnessed::Witnessed;
 
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::super::DepFinish;
@@ -33,13 +34,14 @@ pub(crate) type FieldListFinalize<'step> = Box<
         + 'step,
 >;
 
-/// `Action`-path twin of [`FieldListFinalize`], returning `Result<Carried, KError>` — used by
-/// [`defer_field_list_action`], whose finish wraps the result in `Action::Done`.
+/// `Action`-path twin of [`FieldListFinalize`], returning a witnessed carrier — used by
+/// [`defer_field_list_action`], whose finish lifts the result through
+/// [`Action::done_witnessed`](crate::machine::core::kfunction::action::Action::done_witnessed).
 pub(crate) type FieldListFinalizeAction<'step> = Box<
     dyn for<'view> FnOnce(
             &'view Scope<'step>,
             Vec<(String, KType<'step>)>,
-        ) -> Result<Carried<'step>, KError>
+        ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
         + 'step,
 >;
 
@@ -62,7 +64,7 @@ pub(crate) fn defer_field_list<'step>(
     finalize: FieldListFinalize<'step>,
 ) -> Outcome<'step> {
     let park_count = park_producers.len();
-    let finish: DepFinish<'step> = Box::new(move |view, results| {
+    let finish: DepFinish<'step> = Box::new(move |view, results, _carriers| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
@@ -154,7 +156,7 @@ pub(crate) fn defer_field_list_action<'a>(
             &mut elaborator,
             Some(&mut feed),
         ) {
-            FieldListOutcome::Done(fields) => Action::Done(finalize(fctx.scope, fields)),
+            FieldListOutcome::Done(fields) => Action::done_witnessed(finalize(fctx.scope, fields)),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
                 Action::Done(Err(match error_frame {
@@ -184,8 +186,10 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
 ) -> Outcome<'step> {
     fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        let kt = scope.region.alloc_ktype(KType::Record(Box::new(record)));
-        Outcome::Done(Ok(Carried::Type(kt)))
+        let carrier = scope
+            .brand()
+            .alloc_ktype_witnessed(KType::Record(Box::new(record)));
+        Outcome::DoneWitnessed(scope.seal_value(carrier, None))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(

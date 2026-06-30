@@ -2,15 +2,16 @@
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KType, ReturnType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.
 #[test]
 fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -24,7 +25,7 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
 /// must defer.
 #[test]
 fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -38,7 +39,7 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
 /// in a value position must defer.
 #[test]
 fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
@@ -54,7 +55,7 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
 /// into `ReturnType::Deferred(_)` once the SIG terminalizes.
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -75,7 +76,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 /// the lifted `KTypeValue` out of `&[&KObject]`.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -94,7 +95,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
 /// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`).
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -114,16 +115,16 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
 /// rejection to the right signature slot rather than an opaque elaborator failure.
 #[test]
 fn fn_def_parens_param_type_non_type_value_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("non-type param type expression should error"),
+        Ok(()) => panic!("non-type param type expression should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("expected a type expression")),
@@ -137,16 +138,16 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 /// `ReturnTypeCapture::ReturnTypeExpr` arm of the dep-finish).
 #[test]
 fn fn_def_sigil_return_type_non_type_value_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("non-type return-type expression should error"),
+        Ok(()) => panic!("non-type return-type expression should error"),
     };
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("return-type slot sub-Dispatch")),

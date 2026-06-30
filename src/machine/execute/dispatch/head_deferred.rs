@@ -67,11 +67,19 @@ fn park_on_head<'step>(
     head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(move |ctx, results| {
+    let finish: DepFinish<'step> = Box::new(move |ctx, results, carriers| {
         let callable = match classify_head(results[0], type_only) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
+        // The head resolved to a computed callable (a functor / closure) whose captured region is
+        // foreign to this scope and held only on the producer's now-resolving node. Fold its carrier
+        // reach into the consumer scope so the captured environment outlives the application: the head
+        // value is applied (not embedded in a witnessed result), so its reach rides the bind fold here,
+        // read straight off the delivered carrier.
+        if let Some(carrier) = carriers.first() {
+            ctx.current_scope().fold_reach(carrier.witness());
+        }
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
@@ -100,8 +108,8 @@ fn classify_head<'step>(
         // function arm. A plain function is admitted only in the non-type mode; under
         // `TypeHeadDeferred` it is the pruned arm and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
-            KObject::KFunction(f, _) if f.is_functor => Ok(ResolvedCallable::Function(f)),
-            KObject::KFunction(f, _) if !type_only => Ok(ResolvedCallable::Function(f)),
+            KObject::KFunction(f) if f.is_functor => Ok(ResolvedCallable::Function(f)),
+            KObject::KFunction(f) if !type_only => Ok(ResolvedCallable::Function(f)),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),

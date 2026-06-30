@@ -32,7 +32,6 @@ use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
     POSITIONAL_ONLY,
 };
-use crate::machine::model::Carried;
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
@@ -122,9 +121,9 @@ fn apply_constructor<'step>(
                     index: *index,
                     tag,
                 };
-                return Outcome::Done(Ok(Carried::Type(
-                    ctx.current_scope().region.alloc_ktype(variant),
-                )));
+                let scope = ctx.current_scope();
+                let carrier = scope.brand().alloc_ktype_witnessed(variant);
+                return Outcome::DoneWitnessed(scope.seal_type(carrier));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.
@@ -193,5 +192,8 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    ctx.install_eager_subs(working_expr, staged_subs, Some(picked))
+    // The FunctionValueCall path stages every bare-name value slot as a sub-dispatch (so each rides
+    // `bare_identifier`'s reach carrier through the eager-subs finish) — no slots resolve inline here,
+    // so there are no inline carriers to seed.
+    ctx.install_eager_subs(working_expr, staged_subs, Some(picked), Vec::new())
 }

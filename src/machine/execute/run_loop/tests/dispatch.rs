@@ -13,7 +13,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
-use crate::machine::KoanRegion;
+use crate::machine::FrameStorage;
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
@@ -47,7 +47,7 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 /// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -69,7 +69,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         BindingIndex::value(1),
     );
 
-    let inner = region.alloc_scope(outer.child_for_call());
+    let inner = region.brand().alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
@@ -89,11 +89,19 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, inner);
     sched.execute().unwrap();
-    let result = sched.read(id).object();
+    let (matched, summary) = sched
+        .read_result_with(id, |v| {
+            let obj = v.object();
+            (
+                matches!(obj, KObject::KString(s) if s == "inner_any"),
+                summarize_marker(obj),
+            )
+        })
+        .expect("value");
     assert!(
-        matches!(result, KObject::KString(s) if s == "inner_any"),
+        matched,
         "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
-        summarize_marker(result),
+        summary,
     );
 }
 
@@ -103,7 +111,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     register_builtin(
         scope,
@@ -124,12 +132,12 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
-    let err = match sched.read_result(id) {
+    let err = match sched.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.clone(),
-        Ok(v) => panic!(
+        Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
              got value {}",
-            v.summarize(),
+            summary,
         ),
     };
     assert!(
@@ -143,7 +151,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
 /// function. (Once monadic effects exist, this should also produce a warning effect.)
 #[test]
 fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -164,6 +172,10 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let mut sched = KoanRuntime::new();
     let id = sched.dispatch_in_scope(expr, scope);
     sched.execute().unwrap();
-    let result = sched.read(id).object();
-    assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
+    assert!(sched
+        .read_result_with(
+            id,
+            |v| matches!(v.object(), KObject::KString(s) if s == "lowercase")
+        )
+        .expect("value"));
 }

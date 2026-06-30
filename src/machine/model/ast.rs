@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::machine::model::{
     ArgValue, Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
+use crate::witnessed::reattachable;
 
 #[cfg(test)]
 mod tests;
@@ -19,6 +20,24 @@ pub enum KLiteral {
     String(String),
     Boolean(bool),
     Null,
+}
+
+impl KLiteral {
+    /// The owned [`KObject`] this literal denotes — region-pure (no borrow), so a construction site can
+    /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure rather than resolving
+    /// it at the ambient lifetime and bundling it via `Witnessed::new`. Generic in `'a` (rather than
+    /// `'static`) because [`KObject`] is invariant in its lifetime: every arm owns its data (a copied
+    /// `f64` / `bool`, a cloned `String`, `Null`), so the value is constructible at *any* lifetime — in
+    /// particular the `yoke` brand the caller hands it to. The region-pure peer of
+    /// [`ExpressionPart::resolve`]'s `Literal` arms, which carry the enclosing `resolve`'s `'a`.
+    pub fn to_kobject<'a>(&self) -> KObject<'a> {
+        match self {
+            KLiteral::Number(n) => KObject::Number(*n),
+            KLiteral::String(s) => KObject::KString(s.clone()),
+            KLiteral::Boolean(b) => KObject::Bool(*b),
+            KLiteral::Null => KObject::Null,
+        }
+    }
 }
 
 /// A bare type identifier as written in source (`Number`, `Point`, `T`, `Mo.Ty`) — a single
@@ -116,6 +135,26 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression::new(
             parts.into_iter().map(Spanned::bare).collect(),
         )))
+    }
+
+    /// True when neither this part nor any part nested beneath it is a `Spliced(Carried)` — the only
+    /// variant carrying a live `'a` borrow. See [`KExpression::is_splice_free`].
+    fn is_splice_free(&self) -> bool {
+        match self {
+            ExpressionPart::Spliced(_) => false,
+            ExpressionPart::Expression(e)
+            | ExpressionPart::SigiledTypeExpr(e)
+            | ExpressionPart::RecordType(e) => e.is_splice_free(),
+            ExpressionPart::ListLiteral(items) => items.iter().all(ExpressionPart::is_splice_free),
+            ExpressionPart::DictLiteral(pairs) => pairs
+                .iter()
+                .all(|(k, v)| k.is_splice_free() && v.is_splice_free()),
+            ExpressionPart::RecordLiteral(pairs) => pairs.iter().all(|(_, v)| v.is_splice_free()),
+            ExpressionPart::Keyword(_)
+            | ExpressionPart::Identifier(_)
+            | ExpressionPart::Type(_)
+            | ExpressionPart::Literal(_) => true,
+        }
     }
 
     /// Per-part subset of `KExpression::summarize`.
@@ -233,6 +272,35 @@ impl<'a> ExpressionPart<'a> {
             // materialize back to its structured form. A value-position Spliced is the
             // `Object` arm; a type arm never reaches `resolve` (it flows the type channel).
             ExpressionPart::Spliced(c) => c.object().deep_clone(),
+        }
+    }
+
+    /// The owned [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic
+    /// peer of [`resolve`](Self::resolve) for the aggregate static-cell sites that `yoke` (build the
+    /// value inside the witness closure rather than bundling it via `Witnessed::new`). The borrow-free
+    /// variants (keyword, bare identifier, type name, literal) own their data, so the value is
+    /// constructible at the caller's `yoke` brand — where [`resolve`]'s `KObject<'a>` cannot go, the
+    /// type being invariant in `'a`. The borrow-bearing variants (`Expression`, `Spliced`, the
+    /// structured literals) carry the ambient `'a` and are classified to owned sub-dispatches *before*
+    /// any static cell, so they never reach here.
+    pub fn resolve_region_pure<'b>(&self) -> KObject<'b> {
+        match self {
+            ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
+                KObject::KString(s.clone())
+            }
+            ExpressionPart::Type(t) => KObject::KString(t.render()),
+            ExpressionPart::Literal(lit) => lit.to_kobject(),
+            ExpressionPart::Expression(_)
+            | ExpressionPart::SigiledTypeExpr(_)
+            | ExpressionPart::RecordType(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_)
+            | ExpressionPart::Spliced(_) => unreachable!(
+                "resolve_region_pure is only called on a region-pure static-cell part \
+                 (keyword / bare identifier / type name / literal); borrow-bearing parts are \
+                 classified to owned sub-dispatches before any static cell"
+            ),
         }
     }
 }
@@ -434,6 +502,14 @@ pub struct KExpression<'a> {
     operator_probe: Option<String>,
 }
 
+// The `'a` of a `KExpression` is borne **only** by `ExpressionPart::Spliced(Carried<'a>)` — every
+// other part is owned (keywords, identifiers, literals, boxed sub-expressions). The layout is
+// therefore identical for every `'a` (a splice rides the layout-invariant `Carried` carrier), so the
+// family routes the single audited lifetime-retype. A splice-free expression — raw, unevaluated AST —
+// binds no live borrow at all, so an AST-embedding object is region-pure and allocs through the
+// witnessed object surface (see [`KExpression::is_splice_free`]).
+reattachable! { KExpression<'static> => KExpression<'r> }
+
 impl<'a> KExpression<'a> {
     /// Spanless constructor; `span`/`file` populated by later phases. Fills the
     /// structural cache from `parts`.
@@ -459,6 +535,18 @@ impl<'a> KExpression<'a> {
         };
         expr.fill_cache();
         expr
+    }
+
+    /// True when no part anywhere in the tree is a `Spliced(Carried)`, i.e. the expression is
+    /// borrow-free owned data — its `'a` parameter is a phantom that binds nothing. Raw, unevaluated
+    /// AST (a quoted expression, an FN body) is splice-free: splices appear only when the scheduler
+    /// folds a resolved dep value into a parent's parts. This is the precondition that lets an
+    /// AST-embedding object alloc through the **region-pure** witnessed surface
+    /// ([`alloc_object_witnessed`](crate::machine::core::KoanRegion::alloc_object_witnessed)): a
+    /// splice-free expression contributes no foreign region, so the embedding object's reach is the
+    /// empty (foreign-reach-only) set.
+    pub fn is_splice_free(&self) -> bool {
+        self.parts.iter().all(|p| p.value.is_splice_free())
     }
 
     /// Recompute the structural cache from the current `parts`. Called by every

@@ -5,9 +5,10 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
 
@@ -20,7 +21,7 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
@@ -48,7 +49,9 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => {
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
+        }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -111,11 +114,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Carried;
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::values::Carried;
     use crate::machine::model::KType;
-    use crate::machine::{BindingIndex, KErrorKind, KoanRegion, Scope};
+    use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// The projected (`SetLocal`s resolved) variant schema of a UNION member, by name.
     fn tagged_schema<'a>(
@@ -141,7 +145,7 @@ mod tests {
 
     #[test]
     fn union_named_registers_type_in_scope() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         // UNION is type-only: the declaration yields a `SetRef` type whose Tagged
         // member carries the variant schema, registered into `types`.
@@ -171,7 +175,7 @@ mod tests {
     fn anonymous_union_fails_dispatch() {
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
@@ -179,9 +183,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched
-            .read_result(root)
-            .err()
-            .expect("a bare anonymous UNION (...) must fail dispatch");
+            .result_error(root)
+            .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on bare UNION (...) (matches no UNION overload); got {err}",
@@ -190,7 +193,7 @@ mod tests {
 
     #[test]
     fn union_rejects_unknown_type_name() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
@@ -201,7 +204,7 @@ mod tests {
 
     #[test]
     fn union_rejects_empty_schema() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Empty = ()"));
         assert!(
@@ -212,7 +215,7 @@ mod tests {
 
     #[test]
     fn union_rejects_duplicate_tag() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
@@ -226,7 +229,7 @@ mod tests {
     /// (no value-side carrier) idempotency net.
     #[test]
     fn finalize_union_idempotent_after_seal_pre_install() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let scope_id = scope.id;
         // Pre-install a `SetRef` to a pending (unfilled) member, as the RECURSIVE TYPES
@@ -259,10 +262,16 @@ mod tests {
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
         );
-        match second {
-            Ok(Carried::Type(KType::SetRef { set, index })) => {
-                assert_eq!(set.member(*index).name, "Maybe");
-            }
+        let member_name = second.as_ref().map(|carrier| {
+            carrier.with(|c| match c {
+                Carried::Type(KType::SetRef { set, index }) => {
+                    Some(set.member(*index).name.clone())
+                }
+                _ => None,
+            })
+        });
+        match member_name {
+            Ok(Some(name)) => assert_eq!(name, "Maybe"),
             _ => panic!("expected short-circuit Ok(Type(SetRef)) from finalize_union"),
         }
         assert!(
@@ -275,7 +284,7 @@ mod tests {
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are
         // rejected by the pair-list walker.
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("UNION Pair = (Some :Number None)"));
         assert!(

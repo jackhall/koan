@@ -6,9 +6,9 @@
 
 use super::KoanRuntime;
 use crate::builtins::default_scope;
-use crate::machine::execute::lift::NodeLift;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{KError, KErrorKind, KoanRegion, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
@@ -34,8 +34,12 @@ pub fn interpret_with_writer_path(
         Some(p) => parse_with_path(source, p)?,
         None => parse(source)?,
     };
-    let region = KoanRegion::new();
-    let root = default_scope(&region, out);
+    // The run region lives inside an `Rc<FrameStorage>` so the run-root scope's region has an
+    // owning handle: top-level-defined FNs resolve their captured-region owner to it (via
+    // `Scope::region_owner`), and an escaping value bound at top level retains its per-call region on
+    // this run-root frame (the drain below). `run_storage` outlives `root`, which borrows it.
+    let run_storage = FrameStorage::run_root();
+    let root = default_scope(&run_storage, out);
     let mut runtime = KoanRuntime::new();
     runtime.run_program(root, exprs)
 }
@@ -59,33 +63,50 @@ impl<'run> KoanRuntime<'run> {
         // the root lives run-long and its per-call frame is released. A frameless / run-region or
         // errored terminal needs no lift.
         for &id in &top_level {
-            if let Ok((value, Some(frame))) = self.sched.read_result_with_frame(id) {
-                // The scheduler hands back the value re-anchored to this `&self` borrow. A
-                // consumer-less root has no pull-lift to node-scale it, so this `'run` re-home copies
-                // it into the run-global root region via `lift` (which owns the read's re-anchor). The
-                // lifted root is handed back live — the scheduler re-erases it for storage.
-                let lifted = self.lift(value, &frame, root.region);
-                self.sched.rehome_terminal(id, Ok(lifted));
+            // A root that reaches a per-call region (a non-empty witness set) is relocated into the
+            // run-global root region carrying exactly those sources, so the root lives run-long and its
+            // per-call frame is released. A fully-surviving root (empty witness) — already in a region
+            // that outlives the run — and an errored terminal need no re-home.
+            let pin = self.sched.dep_witness(id);
+            if !pin.is_empty() {
+                // Relocate into the surviving run region via the merge-form transfer: the spine is
+                // copied there and the result re-sealed under the root's own reached sources (the run
+                // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
+                // dropping the per-call frame the producer kept the terminal in.
+                if let Ok(witnessed) = self.relocate_terminal(id, root.brand(), FrameSet::empty()) {
+                    // Deposit the rehomed terminal's reach (a returned closure's / module's captured
+                    // regions, named on the carrier with the producer frame already dropped by the
+                    // relocate) onto the run-root scope's reach-set. The run root lives in the run
+                    // region that outlives the scheduler, so its reach-set keeps every such region
+                    // alive past teardown — multi-region correct, read straight off the carrier for
+                    // both channels (the type-channel module included now that it is witnessed).
+                    root.fold_reach(witnessed.witness());
+                    self.sched.rehome_terminal(id, Ok(witnessed));
+                }
             }
         }
+        // The scheduler is quiescent and every top-level statement has bound into the run root — seal
+        // its reach-set at run end. The run root is run-global (never reopens), so this is its close.
+        root.close();
         // A bare top-level expression is an untyped resolution boundary: an unstamped
         // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
         // than silently resolve to `List<Any>` / `Dict<Any, Any>`.
         for id in top_level {
-            match self.read_result(id) {
+            // Copy out the empty-container verdict from inside the open — the carrier never escapes.
+            let is_unannotated_empty = match self.read_result_with(id, |value| {
+                value
+                    .as_object()
+                    .is_some_and(|o| o.is_unstamped_empty_container())
+            }) {
                 Err(e) => return Err(e.clone()),
-                Ok(value)
-                    if value
-                        .as_object()
-                        .is_some_and(|o| o.is_unstamped_empty_container()) =>
-                {
-                    return Err(KError::new(KErrorKind::ShapeError(
-                        "bare empty container has no element type to infer; annotate its \
-                         type (e.g. via a typed FN return) or use a non-empty literal"
-                            .to_string(),
-                    )));
-                }
-                Ok(_) => {}
+                Ok(flag) => flag,
+            };
+            if is_unannotated_empty {
+                return Err(KError::new(KErrorKind::ShapeError(
+                    "bare empty container has no element type to infer; annotate its \
+                     type (e.g. via a typed FN return) or use a non-empty literal"
+                        .to_string(),
+                )));
             }
         }
         Ok(())

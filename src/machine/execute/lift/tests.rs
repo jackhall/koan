@@ -1,83 +1,324 @@
-//! Tests for `lift_kobject`, split by lifted KObject variant:
-//!
-//! - [`kfuture`] — KFuture borrow/anchor arms (parts, bundle.args, parsed-literals).
-//! - [`composites`] — List / Dict / Tagged composite recursion and Rc reuse.
-//! - [`leaf`] — KFunction, KModule, and primitive (slow-path catch-all) arms.
-
-mod composites;
-mod kfuture;
-mod leaf;
+//! Tests for [`relocate_carried`] — the value-relocation hook. It structurally copies a
+//! [`Carried`] into a destination region: the top node is re-allocated there, while the composite
+//! spine shares its `Rc` payloads and a `KFunction` / `KFuture` / first-class `Module` rides a bare
+//! borrow preserved verbatim. No region anchor is embedded in the value — the regions a relocated
+//! value reaches are pinned by the carrier's witness set at the `transfer_into` layer, not here.
 
 use super::*;
-use crate::machine::model::{KObject, Parseable};
-use crate::machine::{CallFrame, KError, KErrorKind, ResolveOutcome, Scope};
+use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
+use crate::machine::model::types::KType;
+use crate::machine::model::values::Held;
+use crate::machine::model::{Carried, KObject};
+use crate::machine::CallFrame;
+use std::rc::Rc;
 
-/// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
-/// `Scheduler`.
-pub(super) fn dispatch_for_test<'run>(
-    scope: &'run Scope<'run>,
-    expr: KExpression<'run>,
-) -> Result<KFuture<'run>, KError> {
-    let chain = crate::machine::LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Resolved(r) => r.function.bind(expr),
-        ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
-            expr: expr.summarize(),
-            candidates: n,
-        })),
-        ResolveOutcome::UnboundName(name) => Err(KError::new(KErrorKind::UnboundName(name))),
-        ResolveOutcome::Deferred
-        | ResolveOutcome::Unmatched
-        | ResolveOutcome::ParkOnProducers(_) => Err(KError::new(KErrorKind::DispatchFailed {
-            expr: expr.summarize(),
-            reason: "no matching function".to_string(),
-        })),
+/// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
+/// borrow-preservation tests. The body is never run.
+fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFunction<'run> {
+    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
+    use crate::machine::{Body, KFunction};
+    // Capture the home frame's child scope (read at the brand), build the function there, and alloc it
+    // into `home`'s region — where the captured scope genuinely lives — inside the open, so the re-homed
+    // `&KFunction` escapes at `home`'s lifetime without a fixed-lifetime reattach. Mirrors a closure
+    // capturing its defining scope in its own region.
+    home.with_scope(|child| {
+        let kf = KFunction::new(
+            ExpressionSignature {
+                return_type: ReturnType::Resolved(KType::Null),
+                elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            },
+            Body::Builtin(|ctx| {
+                crate::machine::core::kfunction::action::Action::Done(Ok(Carried::Object(
+                    ctx.scope.brand().alloc_object(KObject::Null),
+                )))
+            }),
+            child,
+        );
+        home.brand().alloc_function(kf)
+    })
+}
+
+/// The top node of a relocated `Carried::Object` is a fresh allocation owned by `dest`, not the
+/// source — that relocation (so the copy outlives the producer's dying frame) is the whole point.
+#[test]
+fn object_top_node_relocates_into_dest() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
+    match relocated {
+        Carried::Object(r) => {
+            assert!(dest.region().owns_object(r), "relocated node lives in dest");
+            assert!(
+                !std::ptr::eq(r, obj),
+                "top node is a fresh allocation, not the source"
+            );
+            assert!(
+                matches!(r, KObject::Number(n) if *n == 2.5),
+                "value preserved"
+            );
+        }
+        Carried::Type(_) => panic!("expected an Object carrier"),
     }
 }
 
-/// Stamp a sentinel KFunction into `dying.region()` so `functions_is_empty()` is false
-/// and `lift_kobject` enters the slow path. Side-effect only — the alloc'd ref is
-/// discarded; the function lives until `dying`'s region drops.
-pub(super) fn defeat_fast_path(dying: &Rc<CallFrame>) {
-    use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
-    use crate::machine::{Body, KFunction};
-    let kf = KFunction::new(
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Null),
-            elements: vec![SignatureElement::Keyword("__SLOW__".into())],
-        },
-        Body::Builtin(|ctx| {
-            crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(
-                    ctx.scope.region.alloc_object(KObject::Null),
-                ),
-            ))
-        }),
-        dying.scope(),
+/// A `List`'s inner `Rc<Vec<_>>` spine is shared, not deep-copied: relocating copies only the top
+/// node, so the relocated list points at the same items allocation.
+#[test]
+fn list_relocation_shares_inner_rc() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let items = Rc::new(vec![
+        Held::Object(KObject::Number(1.0)),
+        Held::Object(KObject::Number(2.0)),
+    ]);
+    let list: &KObject = source
+        .brand()
+        .alloc_object(KObject::list_with_type(Rc::clone(&items), KType::Any));
+    let before = Rc::strong_count(&items);
+
+    let relocated = relocate_carried(Carried::Object(list), dest.brand());
+    match relocated {
+        Carried::Object(r @ KObject::List(out, _)) => {
+            assert!(
+                dest.region().owns_object(r),
+                "relocated list node lives in dest"
+            );
+            assert!(
+                Rc::ptr_eq(out, &items),
+                "the items spine is shared, not copied"
+            );
+        }
+        Carried::Object(other) => panic!("expected a List, got {:?}", other.ktype()),
+        Carried::Type(_) => panic!("expected an Object carrier"),
+    }
+    assert_eq!(
+        Rc::strong_count(&items),
+        before + 1,
+        "sharing bumps the Rc by one"
     );
-    let _ = dying.region().alloc_function(kf);
 }
 
-/// A KFunction whose `captured_scope` lives in the dying region. Caller is responsible
-/// for not allocating a separate bait — this KFunction itself defeats `functions_is_empty`.
-pub(super) fn alloc_local_kf<'run>(
-    dying: &'run Rc<CallFrame>,
-) -> &'run crate::machine::KFunction<'run> {
-    use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
-    use crate::machine::{Body, KFunction};
-    let kf = KFunction::new(
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Null),
-            elements: vec![SignatureElement::Keyword("__INNER__".into())],
-        },
-        Body::Builtin(|ctx| {
-            crate::machine::core::kfunction::action::Action::Done(Ok(
-                crate::machine::model::Carried::Object(
-                    ctx.scope.region.alloc_object(KObject::Null),
-                ),
-            ))
-        }),
-        dying.scope(),
+/// A `Dict`'s inner `Rc<HashMap<_>>` is likewise shared through relocation.
+#[test]
+fn dict_relocation_shares_inner_rc() {
+    use crate::machine::model::types::Serializable;
+    use crate::machine::model::values::KKey;
+    use std::collections::HashMap;
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
+    map.insert(
+        Box::new(KKey::String("a".into())),
+        Held::Object(KObject::Number(1.0)),
     );
-    dying.region().alloc_function(kf)
+    let entries = Rc::new(map);
+    let dict: &KObject = source.brand().alloc_object(KObject::dict_with_type(
+        Rc::clone(&entries),
+        KType::Any,
+        KType::Any,
+    ));
+
+    let relocated = relocate_carried(Carried::Object(dict), dest.brand());
+    match relocated {
+        Carried::Object(r @ KObject::Dict(out, _, _)) => {
+            assert!(
+                dest.region().owns_object(r),
+                "relocated dict node lives in dest"
+            );
+            assert!(
+                Rc::ptr_eq(out, &entries),
+                "the entries map is shared, not copied"
+            );
+        }
+        Carried::Object(other) => panic!("expected a Dict, got {:?}", other.ktype()),
+        Carried::Type(_) => panic!("expected an Object carrier"),
+    }
+}
+
+/// A `Tagged` shares both its `value` and its `RecursiveSet` `Rc` through relocation, and the tag
+/// rides along unchanged.
+#[test]
+fn tagged_relocation_shares_value_and_set_rc() {
+    use crate::machine::model::types::{NominalSchema, RecursiveSet};
+    use crate::machine::ScopeId;
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let inner = Rc::new(KObject::Number(42.0));
+    let set = RecursiveSet::singleton(
+        "Maybe".into(),
+        ScopeId::next(),
+        NominalSchema::Tagged(std::collections::HashMap::new()),
+    );
+    let tagged: &KObject = source.brand().alloc_object(KObject::Tagged {
+        tag: "Just".into(),
+        value: Rc::clone(&inner),
+        set: Rc::clone(&set),
+        index: 0,
+        type_args: Rc::new(vec![]),
+    });
+
+    let relocated = relocate_carried(Carried::Object(tagged), dest.brand());
+    match relocated {
+        Carried::Object(
+            r @ KObject::Tagged {
+                tag,
+                value,
+                set: out_set,
+                ..
+            },
+        ) => {
+            assert!(
+                dest.region().owns_object(r),
+                "relocated tagged node lives in dest"
+            );
+            assert_eq!(tag, "Just");
+            assert!(Rc::ptr_eq(value, &inner), "the wrapped value is shared");
+            assert!(Rc::ptr_eq(out_set, &set), "the RecursiveSet is shared");
+        }
+        Carried::Object(other) => panic!("expected a Tagged, got {:?}", other.ktype()),
+        Carried::Type(_) => panic!("expected an Object carrier"),
+    }
+}
+
+/// A `KFunction` rides a *bare* borrow preserved verbatim — relocation copies the reference, never
+/// the closure (which may reference anything reachable from its captured scope). The borrow points
+/// back into the source region; the carrier's witness set keeps that region alive.
+#[test]
+fn kfunction_borrow_preserved_verbatim() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let kf_ref = alloc_local_kf(&source);
+    let obj: &KObject = source.brand().alloc_object(KObject::KFunction(kf_ref));
+
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
+    match relocated {
+        Carried::Object(r @ KObject::KFunction(f)) => {
+            assert!(
+                dest.region().owns_object(r),
+                "the KFunction node relocated into dest"
+            );
+            assert!(
+                std::ptr::eq(*f, kf_ref),
+                "the function borrow is preserved verbatim"
+            );
+        }
+        Carried::Object(other) => panic!("expected a KFunction, got {:?}", other.ktype()),
+        Carried::Type(_) => panic!("expected an Object carrier"),
+    }
+}
+
+/// A `KFuture` preserves its `function` borrow through relocation (the future deep-clones its
+/// `parsed`/`args` but shares the immutable region-allocated function).
+#[test]
+fn kfuture_relocation_preserves_function_borrow() {
+    use crate::machine::model::ast::KExpression;
+    use crate::machine::model::types::Record;
+    use crate::machine::KFuture;
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let source = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new_test(scope, None);
+
+    let kf_ref = alloc_local_kf(&source);
+    let future = KFuture {
+        parsed: KExpression::new(vec![]),
+        function: kf_ref,
+        args: Record::new(),
+    };
+    let obj: &KObject = source.brand().alloc_object(KObject::KFuture(future));
+
+    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
+    match relocated {
+        Carried::Object(r @ KObject::KFuture(fut)) => {
+            assert!(
+                dest.region().owns_object(r),
+                "the KFuture node relocated into dest"
+            );
+            assert!(
+                std::ptr::eq(fut.function, kf_ref),
+                "the function borrow is preserved"
+            );
+        }
+        Carried::Object(other) => panic!("expected a KFuture, got {:?}", other.ktype()),
+        Carried::Type(_) => panic!("expected an Object carrier"),
+    }
+}
+
+/// A recursive `SetRef` *type* value (a self-recursive newtype) relocates by sharing the whole
+/// `RecursiveSet` `Rc` — no copy — and stays navigable afterward: the member's self-edge
+/// `SetLocal(0)` still resolves back through the relocated set. Guards against a type value
+/// escaping the region that built it with a dangling self-reference (cf. `recursive_tagged_match`).
+#[test]
+fn type_recursive_setref_relocates_and_navigates() {
+    use crate::machine::model::types::{KKind, NominalMember, NominalSchema, Record, RecursiveSet};
+    use crate::machine::ScopeId;
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let dest = CallFrame::new_test(scope, None);
+
+    // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
+    // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
+    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
+        Record::from_pairs(vec![(
+            "children".into(),
+            KType::List(Box::new(KType::SetLocal(0))),
+        )]),
+    )))));
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let type_value = KType::SetRef {
+        set: Rc::clone(&set),
+        index: 0,
+    };
+    let before = Rc::strong_count(&set);
+
+    let relocated = relocate_carried(Carried::Type(&type_value), dest.brand());
+    assert_eq!(
+        Rc::strong_count(&set),
+        before + 1,
+        "the set travels by Rc::clone"
+    );
+    match relocated {
+        Carried::Type(KType::SetRef {
+            set: out_set,
+            index,
+        }) => {
+            assert!(
+                Rc::ptr_eq(out_set, &set),
+                "lift shares the same RecursiveSet allocation"
+            );
+            // Navigable: the member's self-edge `SetLocal(0)` survives the relocation.
+            let borrow = out_set.member(*index).schema();
+            match borrow.as_ref() {
+                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
+                    KType::Record(fields) => assert_eq!(
+                        fields.get("children"),
+                        Some(&KType::List(Box::new(KType::SetLocal(0)))),
+                        "the relocated Tree's self-reference is still SetLocal(0)",
+                    ),
+                    other => panic!("expected a record repr, got {other:?}"),
+                },
+                other => panic!("expected a navigable NewType schema, got {other:?}"),
+            }
+        }
+        Carried::Type(other) => panic!("expected a SetRef type, got {other:?}"),
+        Carried::Object(_) => panic!("expected a Type carrier"),
+    }
 }

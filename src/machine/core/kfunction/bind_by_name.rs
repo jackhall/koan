@@ -73,7 +73,7 @@ fn arguments<'sig, 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::KoanRegion;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::types::ReturnType;
     use crate::machine::model::values::KObject;
     use crate::machine::model::KType;
@@ -102,7 +102,8 @@ mod tests {
 
     #[test]
     fn named_and_positional_bind_identically() {
-        let region = KoanRegion::new();
+        let storage = FrameStorage::run_root();
+        let region = storage.brand();
         let seven = Carried::Object(region.alloc_object(KObject::Number(7.0)));
 
         let mut named_args = Record::new();

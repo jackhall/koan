@@ -11,7 +11,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-use finalize::{classify, finalize_fn_with_kind, FnKind, FnPlan, ParamListResult};
+use finalize::{classify, finalize_fn_with_kind, fn_action, FnKind, FnPlan, ParamListResult};
 use return_type::{classify_return_type, AdmissibleVerdict};
 use signature::ParamListOutcome;
 
@@ -105,7 +105,7 @@ pub(crate) fn build_fn_like<'a>(
         FnPlan::Synchronous {
             elements,
             return_type,
-        } => Action::Done(finalize_fn_with_kind(
+        } => fn_action(finalize_fn_with_kind(
             ctx.scope,
             elements,
             return_type,
@@ -181,7 +181,7 @@ pub fn body_record_schema<'a>(
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
-        FnPlan::Synchronous { return_type, .. } => Action::Done(finalize_fn_with_kind(
+        FnPlan::Synchronous { return_type, .. } => fn_action(finalize_fn_with_kind(
             ctx.scope,
             elements,
             return_type,

@@ -2,9 +2,11 @@ use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
-use crate::machine::core::{assemble_body_chain, ErasedScopePtr, ScopeId};
+use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
-use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NodeId};
+use crate::witnessed::{SealedExtern, Witnessed};
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
@@ -26,13 +28,24 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 // path to balance the variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep<'step> {
-    /// The terminal value is born at the step lifetime `'step` (the consumer frame the step ran
-    /// against): it is finalized *within* the step that produced it (the run loop's `run_step` erases
-    /// it into the slot store before the step's frame witness drops), so it never crosses the
-    /// step-guard exit as a fabricated `'run`. The only lifetime-bearing arm — `Replace`'s contract
-    /// is erased and its chain reshape lowered to a [`ChainOp`] in `apply_outcome`, so it carries no
-    /// `'run`.
+    /// The finalized terminal, live at the step lifetime `'step`. `run_step` checks it against the
+    /// declared return contract (while value and contract share `'step`), then bundles it with the
+    /// witness set ([`FrameSet`]) of every region it reaches — the producer frame ∪ the dep sources
+    /// accumulated over the step — and finalizes it into the slot store, erasing `'step` before the
+    /// frame drops.
     Done(Result<Carried<'step>, KError>),
+    /// The finalized terminal **already bundled with its witness set** — a
+    /// [`Witnessed`](crate::witnessed::Witnessed) carrier the object-family construction inversion
+    /// built inside the witness closure, naming every region it reaches. `run_step` seals it through
+    /// [`finalize_terminal_witnessed`](super::finalize::NodeFinalize::finalize_terminal_witnessed)
+    /// (a declared-return re-stamp aside, a pass-through — no `Witnessed::new`). The type channel and
+    /// errors stay on [`Done`](Self::Done); the carrier is lifetime-free, so this arm carries no
+    /// `'step`.
+    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
+    /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
+    /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
+    /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)
+    ForwardReady(NodeId),
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
@@ -100,7 +113,7 @@ impl ChainOp {
         match self {
             ChainOp::Unchanged => prev_chain,
             ChainOp::AssembleBody { body_index } => {
-                assemble_body_chain(body_frame.scope(), prev_chain, body_index)
+                body_frame.with_scope(|s| assemble_body_chain(s, prev_chain, body_index))
             }
             ChainOp::PushBlock {
                 scope_id,
@@ -115,25 +128,27 @@ impl ChainOp {
 /// read time, never re-anchored at a free `'run`:
 ///
 /// - `Yoked` — no pointer at all: the slot's scope *is* its own per-call cart's scope, re-projected
-///   from the [`Node::frame`](crate::scheduler::nodes::Node) cart (`scope_bounded`). Single-cart: the
-///   frame `Rc` already on the slot is the sole liveness witness, so there is no second `Rc` clone
-///   and no contention with `try_reset_for_tail`'s uniqueness check.
-/// - `YokedChild` — an erased [`ErasedScopePtr`] to a block scope a builtin allocated in a cart
-///   *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY). Re-attached at read with a
-///   borrow bounded by the slot's frame `Rc` ([`ErasedScopePtr::reattach`]), sound because the cart's
-///   `FrameStorage.outer` chain pins that ancestor region for as long as the slot holds the cart.
-///   Distinct from `Yoked` only in that the child differs from the cart's own scope, so it needs a
-///   stored pointer.
+///   from the [`Node::frame`](crate::scheduler::nodes::Node) cart through
+///   [`CallFrame::with_scope`](crate::machine::CallFrame). Single-cart: the frame `Rc` already on the
+///   slot is the sole liveness witness, so there is no second `Rc` clone and no contention with
+///   `try_reset_for_tail`'s uniqueness check.
+/// - `YokedChild` — a [`SealedExtern<ScopeRefFamily>`] carrier (a `&'static Scope`) to a block scope a
+///   builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY).
+///   Opened at read against the slot's frame `Rc` ([`SealedExtern::open`] at a `for<'b>` brand), sound
+///   because the cart's `FrameStorage.outer` chain pins that ancestor region for as long as the slot
+///   holds the cart. Distinct from `Yoked` only in that the child differs from the cart's own scope,
+///   so it needs a stored carrier.
 ///
-/// Storing an erased, frame-witnessed handle keeps the borrow honest across a TCO `try_reset_for_tail`
+/// Storing an erased, frame-witnessed carrier keeps the borrow honest across a TCO `try_reset_for_tail`
 /// (nothing persisted points into the reset region; the live frame is re-read each step) and keeps the
 /// slot from naming `'run` in its node-stored scope state.
 ///
-/// `Copy` because both arms are trivially copyable ([`ErasedScopePtr`] is `Copy` / a unit) and
-/// submission threads the handle through `pre_subs` recursion without re-deriving it.
+/// `Copy` because both arms are trivially copyable ([`SealedExtern<ScopeRefFamily>`] is `Copy` — a
+/// thin `&Scope` — or a unit) and submission threads the handle through `pre_subs` recursion without
+/// re-deriving it.
 #[derive(Clone, Copy)]
 pub(super) enum NodeScope {
-    YokedChild(ErasedScopePtr),
+    YokedChild(SealedExtern<ScopeRefFamily>),
     Yoked,
 }
 
@@ -156,38 +171,39 @@ pub(super) struct NodePayload {
 #[cfg(test)]
 mod tests {
     //! Miri coverage for the `NodeScope::YokedChild` lifetime fabrication: each test pins the
-    //! erase→reattach shape under tree borrows; logical assertions are minimal — these fail when
+    //! erase→open shape under tree borrows; logical assertions are minimal — these fail when
     //! Miri reports UB, not on values.
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::KoanRegion;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::KObject;
-    use crate::machine::{BindingIndex, Scope};
+    use crate::machine::BindingIndex;
 
-    /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a lifetime-free
-    /// `ErasedScopePtr` (`erase`) and reattaches it ([`ErasedScopePtr::reattach`]) at read — the
-    /// fabrication the scheduler performs each step for a `YokedChild` slot, the borrow bounded by
-    /// the slot's frame. Mirrors the erase→reattach pair plus a subsequent region mutation through a
-    /// sibling pointer; fails on UB, not values.
+    /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
+    /// [`SealedExtern<ScopeRefFamily>`] carrier (`erase`) and opens it ([`SealedExtern::open`] at a
+    /// `for<'b>` brand) at read — the fabrication the scheduler performs each step for a `YokedChild`
+    /// slot, witnessed by the slot's frame. Mirrors the erase→open pair plus a region mutation through
+    /// a sibling pointer while the opened scope is live; fails on UB, not values.
     #[test]
-    fn node_scope_yoked_child_erase_reattach_roundtrip() {
-        let region = KoanRegion::new();
+    fn node_scope_yoked_child_erase_open_roundtrip() {
+        let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
-        let v = region.alloc_object(KObject::Number(7.0));
+        let v = region.brand().alloc_object(KObject::Number(7.0));
         scope
             .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
             .unwrap();
 
-        let ns = NodeScope::YokedChild(ErasedScopePtr::erase(scope));
-        let NodeScope::YokedChild(ptr) = &ns else {
+        let ns = NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
+        let NodeScope::YokedChild(carrier) = &ns else {
             unreachable!("constructed YokedChild")
         };
-        // Reattach with a borrow bounded by `&ns`; read a binding back, then mutate the region
-        // through a sibling pointer while the reattached scope is still live.
-        let reattached: &Scope<'_> = unsafe { ptr.reattach() };
-        assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
-        let _other = region.alloc_object(KObject::Number(8.0));
-        assert!(reattached.lookup("k").is_some());
+        // Open at a `for<'b>` brand witnessed by the region; read a binding back, then mutate the
+        // region through a sibling pointer while the opened scope is still live.
+        carrier.open(region.region(), |reattached| {
+            assert!(matches!(reattached.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
+            let _other = region.brand().alloc_object(KObject::Number(8.0));
+            assert!(reattached.lookup("k").is_some());
+        });
     }
 }

@@ -1,12 +1,13 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::model::KType;
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 
 /// Smoke: the VAL slot lives in `bindings.types` under its value-class name so
 /// `ascribe::shape_check` will require it of an ascribed module.
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = ((VAL zero :Number))");
     let s = match scope.resolve_type("OrderedSig") {
@@ -25,7 +26,7 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     use crate::machine::model::types::AbstractSource;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -51,7 +52,7 @@ fn val_resolves_sig_local_type_shadow() {
 /// Gate fires on the immediate-enclosing labeled scope.
 #[test]
 fn val_outside_sig_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("VAL x :Number"));
     match &err.kind {
@@ -69,7 +70,7 @@ fn val_outside_sig_errors() {
 /// `"MODULE ..."`, not `"SIG ..."`, so the same diagnostic must fire.
 #[test]
 fn val_inside_module_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("MODULE Foo = ((VAL x :Number))"));
     match &err.kind {
@@ -87,7 +88,7 @@ fn val_inside_module_errors() {
 /// shadow to honor, so the body skips the re-dispatch path.
 #[test]
 fn val_function_typed_slot() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -113,7 +114,7 @@ fn val_function_typed_slot() {
 /// surfaces as a ShapeError naming both the member and the SIG.
 #[test]
 fn val_slot_required_by_shape_check() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -137,7 +138,7 @@ fn val_slot_required_by_shape_check() {
 /// `Number` — that's modular implicits' job, not shape_check's.
 #[test]
 fn val_slot_satisfied_by_module_let_member() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -149,10 +150,7 @@ fn val_slot_satisfied_by_module_let_member() {
     // module identity lives in `types`.
     assert!(matches!(
         scope.resolve_type("Ord"),
-        Some(KType::Module {
-            module: _,
-            frame: _
-        })
+        Some(KType::Module { module: _ })
     ));
 }
 
@@ -164,7 +162,7 @@ fn val_slot_satisfied_by_module_let_member() {
 #[test]
 fn val_with_abstract_type_member_declaration() {
     use crate::machine::model::types::AbstractSource;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,

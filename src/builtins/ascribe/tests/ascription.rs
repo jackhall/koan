@@ -1,14 +1,15 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 #[test]
 fn transparent_ascription_returns_module() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -20,16 +21,13 @@ fn transparent_ascription_returns_module() {
     // in `types`.
     assert!(matches!(
         scope.resolve_type("IntOrdView"),
-        Some(KType::Module {
-            module: _,
-            frame: _
-        }),
+        Some(KType::Module { module: _ }),
     ));
 }
 
 #[test]
 fn ascription_missing_member_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -46,7 +44,7 @@ fn ascription_missing_member_errors() {
 
 #[test]
 fn opaque_ascription_mints_distinct_module_type_per_application() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let src = "MODULE IntOrd = (LET compare = 0)\n\
          SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
@@ -60,22 +58,16 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = sched.read_result(*id) {
+        if let Err(e) = sched.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }
     let a = match scope.resolve_type("FirstAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("FirstAbstract should be a module identity in types"),
     };
     let b = match scope.resolve_type("SecondAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SecondAbstract should be a module identity in types"),
     };
     let a_t = a.type_members.borrow().get("Carrier").cloned();
@@ -98,7 +90,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
 
 #[test]
 fn transparent_ascription_does_not_mint_module_types() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -107,10 +99,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
     let v = match scope.resolve_type("ViewMod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("ViewMod should be a module identity in types"),
     };
     assert!(v.type_members.borrow().is_empty());
@@ -119,7 +108,7 @@ fn transparent_ascription_does_not_mint_module_types() {
 /// End-to-end example from [design/typing/modules.md](../../../../design/typing/modules.md).
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -129,10 +118,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     );
 
     let abstract_mod = match scope.resolve_type("IntOrdAbstract") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("IntOrdAbstract should be a module identity in types"),
     };
     let minted = abstract_mod

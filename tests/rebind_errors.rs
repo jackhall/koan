@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{KError, KErrorKind, KoanRegion, KoanRuntime, Scope};
+use koan::machine::{FrameStorage, KError, KErrorKind, KoanRuntime, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -22,7 +22,7 @@ impl std::io::Write for SharedBuf {
     }
 }
 
-fn build_scope<'a>(region: &'a KoanRegion) -> &'a Scope<'a> {
+fn build_scope<'a>(region: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
     default_scope(region, Box::new(SharedBuf(captured)))
 }
@@ -38,7 +38,7 @@ fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.
     ids.into_iter()
-        .map(|id| sched.read_result(id).map(|_| ()).map_err(|e| e.clone()))
+        .map(|id| sched.result_error(id).map_err(|e| e.clone()))
         .collect()
 }
 
@@ -46,7 +46,7 @@ fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(
 /// duplicate is rejected per the decided rule).
 #[test]
 fn same_scope_let_rebind_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = build_scope(&region);
     let results = run_collecting_errors(scope, "LET x = 1\nLET x = 2");
     assert!(results[0].is_ok(), "first LET should succeed");
@@ -65,7 +65,7 @@ fn same_scope_let_rebind_errors() {
 /// any subsequent `LET x = ...` (function or otherwise) collides.
 #[test]
 fn let_function_collides_with_let_value() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
@@ -89,7 +89,7 @@ fn let_function_collides_with_let_value() {
 /// from a same-shape overload with different KTypes.
 #[test]
 fn exact_signature_duplicate_errors() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
@@ -111,7 +111,7 @@ fn exact_signature_duplicate_errors() {
 /// doesn't collide with the outer LET.
 #[test]
 fn cross_scope_shadowing_succeeds() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
@@ -127,10 +127,7 @@ fn cross_scope_shadowing_succeeds() {
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99. MODULE is type-only — its `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("Mod should be a module identity in types"),
     };
     let x = m.child_scope().lookup("x");

@@ -13,14 +13,24 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::model::values::NonWrappedRef;
-use crate::machine::model::{Carried, KObject};
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
+use crate::machine::model::{Carried, KObject, Record};
+use crate::machine::{FrameSet, KError, KErrorKind, RegionTypeFamily};
 use crate::source::Spanned;
+use crate::witnessed::{reattachable, Witnessed};
 
-use super::super::DepFinish;
+use super::super::outcome::DepTerminal;
+use super::super::WitnessedDepFinish;
+use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
-use super::{park_on_deps, DepRequest, Outcome};
+use super::{park_on_deps_witnessed, DepRequest, Outcome};
+
+/// Fold accumulator for a record-repr newtype: the field values gathered from the value deps, each
+/// `transfer_into`-folded so the accumulator's witness names every region a field reaches. The final
+/// `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
+/// Layout-invariant: a `Vec` of layout-invariant `(String, KObject)` cells.
+struct RecordFieldsFamily;
+reattachable!(RecordFieldsFamily => Vec<(String, KObject<'r>)>);
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -77,12 +87,11 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     )
 }
 
-/// Type-check `value` against the newtype member's projected `repr` and wrap it with
-/// `identity`, peeling any `Wrapped` layer (the single-layer collapse invariant).
-fn construct_newtype<'step>(
-    identity: &'step KType<'step>,
-    value: &KObject<'step>,
-) -> Result<KObject<'step>, KError> {
+/// Type-check `value` against the newtype member's projected `repr`. The check runs **before** the
+/// witness-closure build (read out of the value carrier), so the build inside the brand is infallible
+/// — it only `peel`s the value and wraps it with the identity (the single-layer collapse invariant
+/// `peel` enforces).
+fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<(), KError> {
     let (set, index) = match identity {
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
@@ -98,10 +107,7 @@ fn construct_newtype<'step>(
             got: value.ktype().name(),
         }));
     }
-    Ok(KObject::Wrapped {
-        inner: NonWrappedRef::peel(value),
-        type_id: identity,
-    })
+    Ok(())
 }
 
 /// Direct-construct a tagged-union value from the projected schema of its sealed
@@ -132,8 +138,9 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
 /// Decide a constructor park: every value part is a fresh sub-Dispatch dep (a single-part
 /// `Expression` wrapping routes through normal classification), and a freshly-minted sub is never
 /// terminal in the same step (submission is enqueue-then-drain), so there is no inline-ready case —
-/// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish reads the resolved deps in
-/// declaration order and materializes the value via [`finish`]; dep errors propagate frameless.
+/// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish folds the resolved value
+/// carriers into the wrapped value **inside the witness closure** ([`finish_witnessed`]) so it names
+/// every region it reaches; dep errors propagate frameless.
 fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>) -> Outcome<'step> {
     debug_assert!(
         !value_parts.is_empty(),
@@ -146,36 +153,97 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: DepFinish<'step> = Box::new(move |ctx, results| {
-        let values: Vec<&'step KObject<'step>> = results.iter().map(|c| c.object()).collect();
-        finish(ctx.current_scope(), &kind, &values)
-    });
-    park_on_deps(deps, None, combine_finish)
+    let combine_finish: WitnessedDepFinish<'step> =
+        Box::new(move |view, terminals| finish_witnessed(view, &kind, terminals));
+    park_on_deps_witnessed(deps, None, combine_finish)
 }
 
-/// All value subs have completed. Read each, materialize the kind-keyed
-/// payload, and region-allocate the produced `KObject`.
-pub(in crate::machine::execute::dispatch) fn finish<'step>(
-    scope: &Scope<'step>,
+/// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
+/// value carriers' reach onto the result so the constructed object names every region it reaches by
+/// construction (no `Witnessed::new` over a read-out value). The nominal type identity is type-channel
+/// data the consumer frame's `outer` chain pins; it crosses the brand as a non-object operand
+/// ([`RegionTypeFamily`]). Type-checks run before the build (read out of the carrier), so the
+/// closure is infallible.
+fn finish_witnessed<'step>(
+    view: &SchedulerView<'step, '_>,
     kind: &CtorKind<'step>,
-    values: &[&'step KObject<'step>],
-) -> Outcome<'step> {
-    let result = match kind {
+    terminals: &[&DepTerminal<'step>],
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    let scope = view.current_scope();
+    let region = scope.brand();
+    let dest_frame = scope
+        .region_owner()
+        .upgrade()
+        .expect("the consumer scope's region owner is held for the step");
+    match kind {
         CtorKind::NewType { identity } => {
-            debug_assert_eq!(values.len(), 1);
-            construct_newtype(identity, values[0])
+            debug_assert_eq!(terminals.len(), 1);
+            check_newtype_repr(identity, terminals[0].value.object())?;
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
+                (region, identity),
+                FrameSet::singleton(dest_frame),
+            );
+            Ok(terminals[0]
+                .carrier
+                .transfer_into::<RegionTypeFamily, CarriedFamily>(
+                    home,
+                    |value, (region, identity_ty), _brand| {
+                        Carried::Object(region.alloc_object(KObject::Wrapped {
+                            inner: NonWrappedRef::peel(value.object()),
+                            type_id: identity_ty,
+                        }))
+                    },
+                )
+                .expect("a FrameSet set witness always represents the union"))
         }
         CtorKind::RecordNewType {
             identity,
             field_names,
         } => {
-            let record = crate::machine::model::Record::from_pairs(
+            // Check the assembled record against the newtype repr first (read out of the carriers),
+            // then fold the field carriers into the witnessed record and wrap it.
+            let probe = Record::from_pairs(
                 field_names
                     .iter()
                     .cloned()
-                    .zip(values.iter().map(|v| v.deep_clone())),
+                    .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
-            construct_newtype(identity, &KObject::record(record))
+            check_newtype_repr(identity, &KObject::record(probe))?;
+            let acc0 = Witnessed::<RecordFieldsFamily, FrameSet>::yoke(
+                FrameSet::singleton(dest_frame.clone()),
+                |_region| Vec::with_capacity(field_names.len()),
+            );
+            let fields = terminals
+                .iter()
+                .zip(field_names)
+                .fold(acc0, |acc, (term, name)| {
+                    let name = name.clone();
+                    term.carrier
+                        .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
+                            acc,
+                            move |value, mut fields, _brand| {
+                                fields.push((name, value.object().deep_clone()));
+                                fields
+                            },
+                        )
+                        .expect("a FrameSet set witness always represents the union")
+                });
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
+                (region, identity),
+                FrameSet::singleton(dest_frame),
+            );
+            Ok(fields
+                .merge::<RegionTypeFamily, CarriedFamily>(
+                    home,
+                    |fields, (region, identity_ty), _brand| {
+                        let record = Record::from_pairs(fields);
+                        Carried::Object(region.alloc_object(KObject::Wrapped {
+                            inner: NonWrappedRef::peel(&KObject::record(record)),
+                            type_id: identity_ty,
+                        }))
+                    },
+                )
+                .expect("a FrameSet set witness always represents the union"))
         }
         CtorKind::Tagged {
             schema,
@@ -183,12 +251,52 @@ pub(in crate::machine::execute::dispatch) fn finish<'step>(
             index,
             tag,
         } => {
-            debug_assert_eq!(values.len(), 1);
-            tagged_union::construct(schema, set, *index, tag.clone(), values[0])
+            debug_assert_eq!(terminals.len(), 1);
+            let expected = schema.get(tag).ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "tag `{}` not in union (known: {})",
+                    tag,
+                    schema.keys().cloned().collect::<Vec<_>>().join(", ")
+                )))
+            })?;
+            if !expected.matches_value(terminals[0].value.object()) {
+                return Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "value".to_string(),
+                    expected: expected.name().to_string(),
+                    got: terminals[0].value.object().ktype().name().to_string(),
+                }));
+            }
+            // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
+            // its set/index at the brand; re-homed in the consumer region (a strict ancestor of the
+            // value's, pinned by the dest frame's `outer` chain).
+            let identity: &KType<'step> = region.alloc_ktype(KType::SetRef {
+                set: Rc::clone(set),
+                index: *index,
+            });
+            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
+                (region, identity),
+                FrameSet::singleton(dest_frame),
+            );
+            let tag = tag.clone();
+            Ok(terminals[0]
+                .carrier
+                .transfer_into::<RegionTypeFamily, CarriedFamily>(
+                    home,
+                    move |value, (region, identity_ty), _brand| {
+                        let (set, index) = match identity_ty {
+                            KType::SetRef { set, index } => (Rc::clone(set), *index),
+                            _ => unreachable!("a Tagged identity is always a SetRef"),
+                        };
+                        Carried::Object(region.alloc_object(KObject::Tagged {
+                            tag,
+                            value: Rc::new(value.object().deep_clone()),
+                            set,
+                            index,
+                            type_args: Rc::new(vec![]),
+                        }))
+                    },
+                )
+                .expect("a FrameSet set witness always represents the union"))
         }
-    };
-    match result {
-        Ok(obj) => Outcome::Done(Ok(Carried::Object(scope.region.alloc_object(obj)))),
-        Err(e) => Outcome::Done(Err(e)),
     }
 }

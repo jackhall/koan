@@ -52,13 +52,12 @@ impl CarrierKind {
 /// `KFunction` / `KFunctor` identity in a `Carried::Type`. Shared by the synchronous and
 /// dep-finish paths.
 fn finalize_carrier<'a>(
-    scope: &Scope<'a>,
     fields: Vec<(String, KType<'a>)>,
     ret: KType<'a>,
     kind: CarrierKind,
-) -> &'a KType<'a> {
+) -> KType<'a> {
     let record = Record::from_pairs(fields);
-    let kt = match kind {
+    match kind {
         // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
         // callable, so it carries no body.
         CarrierKind::Functor => KType::KFunctor {
@@ -70,8 +69,7 @@ fn finalize_carrier<'a>(
             params: record,
             ret: Box::new(ret),
         },
-    };
-    scope.region.alloc_ktype(kt)
+    }
 }
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
@@ -81,25 +79,27 @@ mod action_bodies {
     use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
-    use crate::machine::model::values::Carried;
+
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
 
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        Action::Done(Ok(Carried::Type(
-            ctx.scope.region.alloc_ktype(KType::List(Box::new(elem))),
-        )))
+        let carrier = ctx
+            .scope
+            .brand()
+            .alloc_ktype_witnessed(KType::List(Box::new(elem)));
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        Action::Done(Ok(Carried::Type(
-            ctx.scope
-                .region
-                .alloc_ktype(KType::Dict(Box::new(k), Box::new(v))),
-        )))
+        let carrier = ctx
+            .scope
+            .brand()
+            .alloc_ktype_witnessed(KType::Dict(Box::new(k), Box::new(v)));
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -128,12 +128,14 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        Action::Done(Ok(Carried::Type(ctx.scope.region.alloc_ktype(
-            KType::ConstructorApply {
+        let carrier = ctx
+            .scope
+            .brand()
+            .alloc_ktype_witnessed(KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
-            },
-        ))))
+            });
+        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -156,7 +158,7 @@ fn build_carrier<'a>(
     kind: CarrierKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
-    use crate::machine::model::values::Carried;
+
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);
@@ -167,9 +169,13 @@ fn build_carrier<'a>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(fields) => Action::Done(Ok(Carried::Type(finalize_carrier(
-            ctx.scope, fields, ret, kind,
-        )))),
+        FieldListOutcome::Done(fields) => {
+            let kt = finalize_carrier(fields, ret, kind);
+            Action::DoneWitnessed(
+                ctx.scope
+                    .seal_value(ctx.scope.brand().alloc_ktype_witnessed(kt), None),
+            )
+        }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
@@ -185,7 +191,8 @@ fn build_carrier<'a>(
             None,
             None,
             Box::new(move |scope, fields| {
-                Ok(Carried::Type(finalize_carrier(scope, fields, ret, kind)))
+                let kt = finalize_carrier(fields, ret, kind);
+                Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt), None))
             }),
         ),
     }
@@ -266,12 +273,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::{KKind, KType, Record};
-    use crate::machine::{KoanRegion, Scope};
+    use crate::machine::Scope;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
         assert_eq!(*result, KType::List(Box::new(KType::Number)));
@@ -283,7 +291,7 @@ mod tests {
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let wrap_set = RecursiveSet::singleton(
             "Wrap".into(),
@@ -318,7 +326,7 @@ mod tests {
 
     #[test]
     fn map_str_number_lowers_to_dict() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
         assert_eq!(
@@ -329,7 +337,7 @@ mod tests {
 
     #[test]
     fn fn_lowers_to_kfunction() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         assert_eq!(
@@ -346,7 +354,7 @@ mod tests {
 
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
         assert_eq!(
@@ -361,7 +369,7 @@ mod tests {
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
     #[test]
     fn functor_lowers_to_kfunctor() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
         assert_eq!(
@@ -378,7 +386,7 @@ mod tests {
     /// shared field-list parser and lands in the parameter record.
     #[test]
     fn fn_with_nested_list_param_lowers_to_kfunction() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         assert_eq!(
@@ -407,7 +415,7 @@ mod tests {
 
     #[test]
     fn fn_multi_param_round_trips() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -423,7 +431,7 @@ mod tests {
 
     #[test]
     fn fn_nullary_round_trips() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -436,7 +444,7 @@ mod tests {
 
     #[test]
     fn fn_nested_param_round_trips() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -452,7 +460,7 @@ mod tests {
 
     #[test]
     fn functor_capitalized_param_round_trips_and_preserves_name() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let expected = KType::KFunctor {
             params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),

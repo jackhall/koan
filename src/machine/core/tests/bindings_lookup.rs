@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, KoanRegion, Resolution};
+use crate::machine::core::{BindingIndex, FrameStorage, Resolution};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -15,9 +15,9 @@ use super::{body_no_op, unit_signature};
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let value = region.alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("late".to_string(), value, BindingIndex::value(99))
         .unwrap();
@@ -29,9 +29,9 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_value_strict_less_than_hides_later_sibling() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let value = region.alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("later".to_string(), value, BindingIndex::value(5))
         .unwrap();
@@ -40,9 +40,9 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let value = region.alloc_object(KObject::Number(7.0));
+    let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
         .bind_value("earlier".to_string(), value, BindingIndex::value(2))
         .unwrap();
@@ -54,7 +54,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 
 #[test]
 fn lookup_value_placeholder_filtered_same_as_value() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder("placeholder".to_string(), NodeId(2), BindingIndex::value(5))
@@ -71,7 +71,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 
 #[test]
 fn lookup_type_chain_cutoff_none_admits_every_index() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
     assert!(matches!(
@@ -82,7 +82,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_type_strict_less_than_hides_later_sibling() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
@@ -91,14 +91,14 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f = region.alloc_function(KFunction::new(
+    let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.alloc_object(KObject::KFunction(f, None));
+    let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
         .unwrap();
@@ -111,7 +111,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
     // argument shape so they coexist in `functions[key]`.
@@ -137,10 +137,16 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early = region.alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f_late = region.alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
-    let obj_early = region.alloc_object(KObject::KFunction(f_early, None));
-    let obj_late = region.alloc_object(KObject::KFunction(f_late, None));
+    let f_early =
+        region
+            .brand()
+            .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
+    let f_late =
+        region
+            .brand()
+            .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let obj_early = region.brand().alloc_object(KObject::KFunction(f_early));
+    let obj_late = region.brand().alloc_object(KObject::KFunction(f_late));
     scope
         .register_function(
             "BAR".to_string(),
@@ -165,7 +171,7 @@ fn lookup_function_filters_per_overload_visibility() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
     // No bucket for this key, but a pending-overload entry stands in for an
     // in-flight FN/FUNCTOR producer.
@@ -185,14 +191,14 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f = region.alloc_function(KFunction::new(
+    let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.alloc_object(KObject::KFunction(f, None));
+    let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
         .unwrap();
@@ -209,14 +215,14 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    let f = region.alloc_function(KFunction::new(
+    let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
     ));
-    let obj = region.alloc_object(KObject::KFunction(f, None));
+    let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
         .unwrap();

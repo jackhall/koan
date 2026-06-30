@@ -1,12 +1,12 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::KoanRegion;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -30,7 +30,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 
 #[test]
 fn chained_tail_calls_reuse_frames() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -66,7 +66,7 @@ fn chained_tail_calls_reuse_frames() {
 /// the terminal first (`ok, a, b, c, d`).
 #[test]
 fn leading_statements_run_before_tail_across_chain() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -97,7 +97,7 @@ fn leading_statements_run_before_tail_across_chain() {
 /// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
 
     run(
@@ -133,7 +133,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 /// [per-call-region/frames.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-region/frames.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -159,7 +159,7 @@ fn match_driven_tail_recursion_completes() {
 /// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
 #[test]
 fn match_arm_leading_statement_runs_before_tail_recursion() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -189,7 +189,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 fn tail_call_enforces_first_callers_return_contract() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -201,9 +201,9 @@ fn tail_call_enforces_first_callers_return_contract() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
+    let err = match sched.result_error(id) {
         Err(e) => e,
-        Ok(_) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
+        Ok(()) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
     };
     assert!(
         matches!(err.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "<return>"),
@@ -218,7 +218,7 @@ fn tail_call_enforces_first_callers_return_contract() {
 #[test]
 fn tail_call_stamps_result_against_first_callers_return_contract() {
     use crate::machine::model::{KObject, KType};
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -238,14 +238,14 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
 
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (ECHO v :Number) -> Number = (v)");
-    let baseline = region.alloc_count();
+    let baseline = region.region().alloc_count();
     for _ in 0..50 {
         let _ = run_one(scope, parse_one("ECHO 7"));
     }
-    let after = region.alloc_count();
+    let after = region.region().alloc_count();
     let growth = after - baseline;
     // Measured at 50 (one `KObject::Number(7)` per call); < 150 catches
     // any regression that re-introduces a per-call leak into run-root.
@@ -263,7 +263,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
 /// body's transient fanout (~5+ slots/call) behind.
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -312,4 +312,83 @@ fn body_subexpression_slots_recycle_across_calls() {
          {after_batch}). Expected ≤ 3 — body's transient sub-Dispatches/\
          Binds should be recycled via the free-list, not accumulating."
     );
+}
+
+/// A closure capturing a per-call value survives a `let`-bind: `MAKE_HOLDER` returns a closure over
+/// its `base` argument, which lives in MAKE_HOLDER's per-call frame; `LET hold` binds the closure,
+/// retiring that frame. Calling `hold` reads the captured `base`, so the bind's carrier fold (C1)
+/// must keep the producing frame's region alive. (Under Miri this is the no-use-after-free check for
+/// a captured per-call value read after its producing frame retires.)
+#[test]
+fn captured_per_call_value_survives_let_bind_and_call() {
+    use crate::machine::model::KObject;
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         LET hold = (MAKE_HOLDER 99)",
+    );
+    let result = run_one(scope, parse_one("hold {q = 0}"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 99.0),
+        "the let-bound closure must read its captured base=99, got {:?}",
+        result.ktype(),
+    );
+}
+
+/// A closure passed as a user-fn argument stays live through the call: `CALL_IT` receives a closure
+/// over `base` (in MAKE_HOLDER's per-call frame) and invokes it. The arg-bind carrier fold (D1) must
+/// keep that frame alive for the per-call scope, so the inner read of `base` does not dangle. (Miri:
+/// no-use-after-free for a closure argument invoked inside the callee.)
+#[test]
+fn closure_argument_stays_live_through_user_fn_call() {
+    use crate::machine::model::KObject;
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
+         LET answer = (CALL_IT (MAKE_HOLDER 77))",
+    );
+    let result = run_one(scope, parse_one("answer"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 77.0),
+        "the closure arg invoked inside CALL_IT must read base=77, got {:?}",
+        result.ktype(),
+    );
+}
+
+/// A `let`-bound list reaching two *distinct* per-call regions keeps both alive: each `MAKE_HOLDER`
+/// call captures its own per-call frame, and the list holds both closures. The bind's carrier fold
+/// (C1) must contribute *every* region the multi-region value reaches — the case the single-frame
+/// relocate-seam fold under-recorded. Reading the list back after the producing frames retire must
+/// find both closures intact. (Miri: the multi-region no-use-after-free check.)
+#[test]
+fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
+    use crate::machine::model::{Held, KObject};
+    let region = FrameStorage::run_root();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
+         (FN (GET q :Number) -> Number = (base))\n\
+         LET holders = [(MAKE_HOLDER 1) (MAKE_HOLDER 2)]",
+    );
+    let result = run_one(scope, parse_one("holders"));
+    match result {
+        KObject::List(items, _) => {
+            assert_eq!(items.len(), 2, "list should hold both holder closures");
+            assert!(
+                items
+                    .iter()
+                    .all(|h| matches!(h, Held::Object(KObject::KFunction(_)))),
+                "both list elements must be intact closures after their call regions retired",
+            );
+        }
+        other => panic!("expected a List, got {:?}", other.ktype()),
+    }
 }

@@ -31,7 +31,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
-    use crate::machine::model::Carried;
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
@@ -90,8 +89,12 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let obj = ctx.scope.region.alloc_object(result);
-    Action::Done(Ok(Carried::Object(obj)))
+    let carrier = ctx.scope.brand().alloc_object_witnessed(result);
+    // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
+    // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
+    // foreign reach folded in, so every region the shared backing borrows into outlives the
+    // projection — the object-family terminal replacing the relocate-seam reconstruction.
+    Action::DoneWitnessed(ctx.scope.seal_value(carrier, ctx.arg_carrier("record")))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -114,14 +117,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::KoanRegion;
 
     /// `(x y) FROM r` re-tags the carried type to `{x, y}` while every field of `r`
     /// stays physically present on the `Rc`-shared backing record.
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
@@ -144,7 +147,7 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
@@ -161,7 +164,7 @@ mod tests {
     /// `() FROM r` projects to zero fields → the empty record `:{}`, not an error.
     #[test]
     fn from_empty_field_list_yields_empty_record() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
@@ -177,7 +180,7 @@ mod tests {
     /// Naming a field absent from the record is a `ShapeError`.
     #[test]
     fn from_unknown_field_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -190,7 +193,7 @@ mod tests {
     /// A duplicate name in the field list is a `ShapeError`.
     #[test]
     fn from_duplicate_field_errors() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -213,7 +216,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         let mut sched = KoanRuntime::new();
         let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
@@ -221,9 +224,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched
-            .read_result(root)
-            .err()
-            .expect("a non-record operand must fail dispatch");
+            .result_error(root)
+            .expect_err("a non-record operand must fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected a clean DispatchFailed (not a leaked unbound-name), got: {err}",
@@ -238,7 +240,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -254,9 +256,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let error = sched
-            .read_result(root)
-            .err()
-            .expect("the bare call must tie across both incomparable arms");
+            .result_error(root)
+            .expect_err("the bare call must tie across both incomparable arms");
         assert!(
             matches!(error.kind, KErrorKind::AmbiguousDispatch { .. }),
             "expected AmbiguousDispatch on the bare call, got {error:?}",

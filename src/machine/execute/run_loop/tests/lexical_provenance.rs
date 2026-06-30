@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::KoanRegion;
 use crate::source::Spanned;
 
 use super::let_expr;
@@ -19,7 +19,7 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 
 #[test]
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(
@@ -43,7 +43,7 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 
 #[test]
 fn sibling_statements_in_inner_block_share_parent_rc() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let ids = sched.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
@@ -65,7 +65,7 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 #[test]
 fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::values::Module;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let module_expr = parse_one("MODULE Foo = (LET x = 1)");
@@ -90,7 +90,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
 /// call depth. Non-tail-recursive Rc allocation would OOM or overflow.
 #[test]
 fn tail_recursive_fn_does_not_balloon_chain() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let (scope, captured) = crate::builtins::test_support::run_root_with_buf(&region);
     crate::builtins::test_support::run(
         scope,
@@ -109,7 +109,7 @@ fn tail_recursive_fn_does_not_balloon_chain() {
 /// `tail_recursive_fn_does_not_balloon_chain`; this smoke-tests assembly.
 #[test]
 fn fn_body_call_with_spacers_produces_value() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = crate::builtins::test_support::run_root_silent(&region);
     crate::builtins::test_support::run(
         scope,
@@ -128,7 +128,7 @@ fn fn_body_call_with_spacers_produces_value() {
 fn cons_head_subdispatch_inherits_parent_chain() {
     // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = crate::builtins::test_support::run_root_silent(&region);
     crate::builtins::test_support::run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
@@ -145,7 +145,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 #[test]
 #[should_panic(expected = "every dispatched node has a chain")]
 fn add_with_chain_without_chain_panics() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     sched.add_with_chain(

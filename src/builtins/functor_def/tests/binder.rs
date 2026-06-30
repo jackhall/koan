@@ -2,12 +2,12 @@
 //! `is_functor: true`, and the carrier's `ktype()` projects to `KFunctor`.
 
 use crate::builtins::test_support::{lookup_fn, run, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::model::KType;
-use crate::machine::KoanRegion;
 
 #[test]
 fn functor_binder_sets_is_functor_flag() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -24,7 +24,7 @@ fn functor_binder_sets_is_functor_flag() {
 #[test]
 fn functor_carrier_ktype_projects_to_kfunctor() {
     use crate::machine::model::values::KObject;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -32,7 +32,7 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     let f = lookup_fn(scope, "MAKESET");
-    let obj = KObject::KFunction(f, None);
+    let obj = KObject::KFunction(f);
     match obj.ktype() {
         KType::KFunctor { .. } => {}
         other => panic!("expected KFunctor projection, got {}", other.name()),
@@ -43,7 +43,7 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
 /// (`bindings.types` as `KType::KFunctor { body: Some(f) }`), never in `bindings.data`.
 #[test]
 fn let_type_class_admits_functor_rhs() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,

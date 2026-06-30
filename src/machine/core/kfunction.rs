@@ -5,7 +5,6 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::scope_ptr::BoundedScopePtr;
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
@@ -30,17 +29,16 @@ pub use pick::ClassifiedSlots;
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// The captured definition scope, stored as a content-branded [`BoundedScopePtr<'a>`] (the
-    /// same reader-bounded handle [`Scope::outer`] uses): the FN may be defined inside a per-call
-    /// frame, so the capture borrow is frame-bounded while the scope *content* stays `'a`.
-    /// [`Self::captured_scope`] re-hands it behind a reader-bounded borrow; liveness past the
-    /// defining frame rides the `Rc<CallFrame>` that lift attaches to an escaping closure.
+    /// The captured definition scope, held as a plain `&'a Scope<'a>`. The holder is re-anchored to
+    /// `'a` as a whole when it is read out of its region (the substrate retype in
+    /// [`Region::alloc`](crate::witnessed::Region)), so the embedded scope reference re-anchors with
+    /// it and [`Self::captured_scope`] is a bare field read — no per-pointer handle. The captured
+    /// region's owner is read off the scope itself ([`Scope::region_owner`]), so no separate handle
+    /// rides here; when the closure escapes, the consumer frame retains that region in its witness set.
     ///
-    /// **Variance-load-bearing.** `BoundedScopePtr<'a>` carries `'a` structurally (`Scope<'a>` is
-    /// invariant — it contains `RefCell`s), so `captured` is what keeps `KFunction<'a>` invariant
-    /// in `'a`. Do **not** weaken the brand to a covariant carrier — that would make `KFunction`
-    /// covariant in `'a` and silently reintroduce a soundness bug.
-    captured: BoundedScopePtr<'a>,
+    /// **Variance-load-bearing.** `&'a Scope<'a>` is invariant in `'a` (`Scope<'a>` is invariant — it
+    /// holds `RefCell`s), so `captured` keeps `KFunction<'a>` invariant in `'a`.
+    captured: &'a Scope<'a>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
     /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
@@ -57,14 +55,14 @@ pub struct KFunction<'a> {
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &Scope<'a>) -> Self {
+    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &'a Scope<'a>) -> Self {
         Self::with_binder_name(signature, body, captured, None)
     }
 
     pub fn with_binder_name(
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &Scope<'a>,
+        captured: &'a Scope<'a>,
         binder_name: Option<BinderNameFn>,
     ) -> Self {
         Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
@@ -73,7 +71,7 @@ impl<'a> KFunction<'a> {
     pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
-        captured: &Scope<'a>,
+        captured: &'a Scope<'a>,
         binder_name: Option<BinderNameFn>,
         binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
@@ -82,19 +80,19 @@ impl<'a> KFunction<'a> {
         Self {
             signature,
             body,
-            captured: BoundedScopePtr::erase(captured),
+            // The capture is already the co-located `&'a Scope<'a>` resident — stored by plain
+            // coercion, no re-anchor.
+            captured,
             binder_name,
             binder_bucket,
             is_functor,
         }
     }
 
-    /// Re-attach `'a` to the captured scope. The branded `captured` makes this a safe
-    /// re-attach: it was erased from a `&'a Scope<'a>` in [`Self::with_binder_and_functor`],
-    /// and points at a scope that outlives this `KFunction<'a>` by the broader runtime-region
-    /// argument.
-    pub fn captured_scope(&self) -> &Scope<'a> {
-        self.captured.get()
+    /// The captured definition scope. A bare field read: the holder was re-anchored to `'a` as a
+    /// whole when it was read out of its region, so the stored `&'a Scope<'a>` is already at `'a`.
+    pub fn captured_scope(&self) -> &'a Scope<'a> {
+        self.captured
     }
 
     pub fn summarize(&self) -> String {

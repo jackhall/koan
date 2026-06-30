@@ -2,14 +2,15 @@
 //! per-call generativity.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, KoanRegion};
+use crate::machine::KErrorKind;
 use crate::parse::parse;
 
 #[test]
 fn functor_returns_a_module() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -24,10 +25,7 @@ fn functor_returns_a_module() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetValue should be a module identity in types"),
     };
     let inner = m
@@ -41,7 +39,7 @@ fn functor_returns_a_module() {
 
 #[test]
 fn functor_body_reads_signature_typed_parameter() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -56,10 +54,7 @@ fn functor_body_reads_signature_typed_parameter() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m
@@ -76,7 +71,7 @@ fn functor_body_reads_signature_typed_parameter() {
 /// require multi-statement-FN-body forward refs that don't share lexical bindings.
 #[test]
 fn functor_application_is_generative() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -92,17 +87,11 @@ fn functor_application_is_generative() {
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
 
     let m1 = match scope.resolve_type("SetOne") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetOne should be a module identity in types"),
     };
     let m2 = match scope.resolve_type("SetTwo") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetTwo should be a module identity in types"),
     };
     assert_ne!(
@@ -116,7 +105,7 @@ fn functor_application_is_generative() {
 /// `Signature { sig, .. }` (constraint-role) slot.
 #[test]
 fn functor_rejects_unascribed_module_argument() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -138,9 +127,8 @@ fn functor_rejects_unascribed_module_argument() {
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let err = sched
-        .read_result(root)
-        .err()
-        .expect("expected a DispatchFailed in the dispatch slot");
+        .result_error(root)
+        .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed, got {err}",
@@ -151,7 +139,7 @@ fn functor_rejects_unascribed_module_argument() {
 /// (`OrderedSig` vs `HashedSig`); dispatch routes by the argument's satisfied sig.
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -177,17 +165,11 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
 
     let mo = match scope.resolve_type("OrdSet") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("OrdSet not a module identity in types"),
     };
     let mh = match scope.resolve_type("HashSet") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("HashSet not a module identity in types"),
     };
     let to = mo
@@ -218,7 +200,7 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 /// and the body still reads the underlying member through the view.
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -233,10 +215,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     run(scope, "LET SetValue = (MAKESET IntView)");
 
     let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m
@@ -252,7 +231,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 /// just like the lowercase-identifier and parens-wrapped forms do.
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -268,10 +247,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m
@@ -289,7 +265,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::types::KKind;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
                MODULE IntList = ((LET Wrap = Number))\n\
@@ -303,22 +279,16 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     }
     sched.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = sched.read_result(*id) {
+        if let Err(e) = sched.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }
     let a = match scope.resolve_type("First") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("First should be a module identity in types"),
     };
     let b = match scope.resolve_type("Second") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         _ => panic!("Second should be a module identity in types"),
     };
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
@@ -362,7 +332,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 /// survive subsequent region churn under tree borrows.
 #[test]
 fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` write
     // and the `KFunction → functions` mirror.
@@ -374,10 +344,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     );
     // `Held` is a type-only `:|`-ascribed module alias — its identity lives in `types`.
     let held = match scope.resolve_type("Held") {
-        Some(KType::Module {
-            module: m,
-            frame: _,
-        }) => *m,
+        Some(KType::Module { module: m }) => *m,
         other => panic!("Held should be a module identity in types, got {other:?}"),
     };
 
@@ -398,7 +365,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     assert!(
         matches!(
             inner.get("helper").map(|(o, _)| *o),
-            Some(KObject::KFunction(_, _))
+            Some(KObject::KFunction(_))
         ),
         "held.child_scope().helper must still resolve to a KFunction after churn",
     );

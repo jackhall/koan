@@ -3,7 +3,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::{KErrorKind, KoanRegion, Scope};
+use crate::machine::core::{FrameStorage, KErrorKind, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::KObject;
@@ -21,7 +21,7 @@ impl Write for SharedBuf {
 }
 
 fn build_scope<'run>(
-    region: &'run KoanRegion,
+    region: &'run Rc<FrameStorage>,
     captured: Rc<RefCell<Vec<u8>>>,
 ) -> &'run Scope<'run> {
     default_scope(region, Box::new(SharedBuf(captured)))
@@ -60,17 +60,17 @@ fn run_one_err<'run>(
     sched
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.read_result(id) {
-        Ok(_) => panic!("expected error"),
+    match sched.result_error(id) {
+        Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }
 }
 
-/// `tagged_union::construct`'s value-type check fires when the value-cell
-/// resolves to a `KObject` that doesn't match the tag's expected type.
+/// The tagged-union value-type check fires when the value-cell resolves to a
+/// `KObject` that doesn't match the tag's expected type.
 #[test]
 fn ctor_fast_lane_rejects_value_of_wrong_type() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)");
@@ -88,7 +88,7 @@ fn ctor_fast_lane_rejects_value_of_wrong_type() {
 /// `TypeCall` fast lane (leaf-Type head) propagates the schema's tag check.
 #[test]
 fn ctor_fast_lane_propagates_tag_validation_error() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)");
@@ -103,7 +103,7 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 /// `x` before the synthesized TAG call sees the typed-slot bind.
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)\nLET x = 7");

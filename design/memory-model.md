@@ -12,40 +12,48 @@ A `KoanRegion` holds seven `typed_arena`-backed sub-arenas — for `KObject`,
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 
-- `Scope.outer: Option<&'a Scope<'a>>` — the lexical-parent chain. Many
-  sibling scopes can share one outer, so the in-degree is unbounded.
+- `Scope.outer: Option<&'a Scope<'a>>` — the lexical-parent chain, held
+  outright. Many sibling scopes can share one outer, so the
+  in-degree is unbounded.
 - `Scope.region: &'a KoanRegion` — back-pointer to the owning region.
 - [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
   to a `&'a KObject<'a>`. The pointee may live in this scope's region or in
   an outer one.
-- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds a
-  [`BoundedScopePtr`](../src/machine/core/scope_ptr.rs) — the closure's definition
-  scope, lifetime-erased. Multiple `KFunction`s share one captured scope when
-  they were defined in the same body.
-- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<FrameStorage>>)` and
-  `KObject::KFuture(KFuture, Option<Rc<FrameStorage>>)` carry both a value-side
-  reference to a function-region slot and an optional `Rc<FrameStorage>` anchor
-  to the per-call region that owns the function's captured scope.
-- `Module` and `Signature` cache their declaration scopes as a
-  [`BoundedScopePtr`](../src/machine/core/scope_ptr.rs) (heap-pinned by the surrounding
-  region chain).
+- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds the closure's
+  definition scope as a plain `&'a Scope<'a>`, re-anchored to `'a` with the rest
+  of the `KFunction` when the holder is read out of its region. Multiple
+  `KFunction`s share one captured scope when they were defined in the same body.
+- `KObject::KFunction(&'a KFunction<'a>)` and `KObject::KFuture(KFuture<'a>)`
+  hold a bare value-side reference to a function-region slot and reach the
+  per-call region that owns the function's captured scope only through that
+  reference's scope `region_owner`. They carry no per-value liveness anchor:
+  the region an escaping closure / future reaches is pinned by the carrier's
+  witness [`FrameSet`](../src/machine/core/arena.rs) while it rides a scheduler
+  slot, then carried on the relocated value's own witness and folded onto the
+  consumer scope's reach-set when the value is bound (see
+  [§ Region lifetime erasure](#region-lifetime-erasure)).
+- `Module` and `Signature` cache their declaration scopes as a plain
+  `&'a Scope<'a>` (heap-pinned by the surrounding region chain), re-anchored with
+  the rest of the value when the holder is read out of its region.
 
 **Directionality rule.** References go inward freely — a per-call region's
 slots may point at run-root slots, because the run-root region outlives every
-per-call region by the lexical-scoping invariant. References that need to
-point *outward* — a lifted value referencing a slot in a dying per-call
-region — must carry an `Rc<FrameStorage>` anchor on the value (or its enclosing
-variant) so the per-call region survives. The lift machinery enforces this at
-the region boundary; see
-[per-call-region/lifecycle.md § Lift-time anchor decision](per-call-region/lifecycle.md#lift-time-anchor-decision).
+per-call region by the lexical-scoping invariant. A reference that points
+*outward* — a value referencing a slot in a dying per-call region, the
+canonical case being a closure / module returned from its defining frame —
+keeps that region alive through its carrier's witness, never a per-value anchor
+on the value itself: a producer slot's `FrameSet` pins it while the value rides
+the scheduler, and the relocated value carries its reach on its own carrier
+witness, deposited onto the consumer scope's reach-set when bound (see
+[§ Region lifetime erasure](#region-lifetime-erasure)).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
 scopes sharing an outer, mutual references between a `Scope` and its
-region's `scopes` sub-arena, and cross-region `Rc<FrameStorage>` anchors all
+region's `scopes` sub-arena, and cross-region carrier-witness pins all
 break tree shape. Slots are added incrementally as the program runs;
 references can be installed before or after the pointee exists (forward
-declarations, replay-park edges). The cycle gate and the frame-chain `Rc`
-that ride on top of this graph live in
+declarations, replay-park edges). The frame-chain `Rc` that rides on top of
+this graph lives in
 [per-call-region/README.md](per-call-region/README.md).
 
 The graph shape is also why the runtime stores `*const T<'static>` and
@@ -67,11 +75,9 @@ the call-site scope and pin every prior frame's bindings alive.
 
 ## Per-call region protocol
 
-The per-call region's lifecycle — which `KObject` variants carry an
-`Option<Rc<FrameStorage>>` anchor, how
-[`lift_kobject`](../src/machine/execute/lift.rs) decides to attach
-one, how the `alloc_object` cycle gate routes self-referential
-allocations, how the scheduler propagates the active frame, how
+The per-call region's lifecycle — how a relocated value's reached regions are
+kept alive (the [`relocate_carried`](../src/machine/execute/lift.rs) copy plus the
+carrier-set reach read off each dep's witness for both channels), how the scheduler propagates the active frame, how
 builtin-built frames chain the call-site frame's storage through
 `FrameStorage.outer`, and how the TCO step reuses the frame shell over a
 fresh `FrameStorage` — is documented in
@@ -84,7 +90,7 @@ protocol sits on top of.
 Every sub-arena inside [`KoanRegion`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `KoanRegion`
 itself carries no lifetime parameter. The erase-store engine lives generically in
-the [`Region<W>`](../src/machine/core/region.rs) substrate (`KoanRegion`
+the [`Region<W>`](../src/witnessed/region.rs) substrate (`KoanRegion`
 is the Koan instantiation `Region<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
 erases the value into its `'static` lifetime family (`At<'static>`) for storage and
@@ -104,30 +110,44 @@ because:
   by the time anyone could observe it.
 
 The scope-pointer case — `CallFrame`, `Module`, `Signature`, `KFunction`, and a `Scope`'s
-own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — is
-centralized in two branded handles in
-[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), split on **whether the carrier can brand the
-scope's `'a`**.
+own lexical parent each holding a pointer to a captured, defining, or parent `Scope` — holds that
+scope **outright** as a plain `&'a Scope<'a>` (a thin pointer, layout-invariant in `'a`), centralized
+through the [`ScopeRefFamily`](../src/machine/core/scope_ptr.rs) reattach family in
+[`scope_ptr.rs`](../src/machine/core/scope_ptr.rs), with no scope-specialized re-anchor helper — the
+embedded pointer re-anchors with the holder's own whole-value retype.
 
-The **safe** [`BoundedScopePtr<'a>`](../src/machine/core/scope_ptr.rs) backs every carrier that owns
-a real `'a`: `KFunction::captured`, `Module::child_scope`, `Signature::decl_scope`, and a `Scope`'s
-`outer` lexical parent. `erase(&Scope<'a>)` records the content `'a` in a `PhantomData<&'a Scope<'a>>`
-brand (which, because `Scope<'a>` is invariant, also pins the carrier invariant in `'a`); `get(&'p
-self) -> &'p Scope<'a>` re-hands the content `'a` behind a reader-bounded borrow. Because the free
-content `'a` is never cashed *unbounded*, a shorter witness borrow cannot fabricate a longer-lived
-reference, so `get` needs no borrow==content coupling and carries **no `unsafe`**.
+A region-stored holder's embedded scope reference re-anchors to the holder's `'a` as part of the
+holder's **own whole-value substrate retype**: when a `KFunction` / `Module` / `Signature` / `Scope`
+is read out of its region, the embedded `&Scope` rides along in that single `Reattachable` retype over
+the whole value. So `KFunction::captured_scope`, `Module::child_scope`, `Signature::decl_scope`, and a
+`Scope`'s `outer` / `root` are **bare field reads** of an already-`'a` reference, not scope-specialized
+re-hands. The scope / module / function path carries **no `unsafe`** of its own — the only retype it
+routes is the substrate's single [`retype`](../src/witnessed.rs), shared with every other carrier;
+there is no per-handle `NonNull` deref.
 
-The remaining [`ErasedScopePtr`](../src/machine/core/scope_ptr.rs) is the **one audited `unsafe`** the
-whole scope-erasure surface reduces to, for the two carriers that hold *no* lifetime and so cannot
-brand `'a`: `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a
-scheduler slot's `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free
-node). Both store through the safe `erase(&Scope<'_>)` (forgetting a lifetime for storage cannot
-fabricate one) and recover the content lifetime on read through the single `unsafe fn reattach<'s,
-'b: 's>(&'s self) -> &'s Scope<'b>` — borrow bounded by the reader, content `'b` free. The witness is
-**external** (the frame `Rc`, which for a `YokedChild` pins the ancestor region through its
-`FrameStorage.outer` chain) and not expressible in the type, so the re-attach cannot be safe. The
-`CallFrame` accessors (`scope` / `scope_for_bind` / `scope_bounded`) are thin safe wrappers that only
-pick the lifetimes; every frame-scope fabrication funnels through the one `ErasedScopePtr::reattach`.
+At construction the scope reference is coupled at its target lifetime with no scope-specialized
+re-anchor verb. A same-region child stores its already-`'a` parent by plain coercion — the
+constructors take `&'a Scope<'a>`. A per-call child, whose lexical parent / root is longer-lived,
+builds through the externally-witnessed construction door
+[`build_frame_child_witnessed`](../src/machine/core/arena.rs): it brands the fresh region and the
+foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../src/witnessed.rs) the
+run-loop step also rests on), builds the real invariant `Scope<'b>` coupling them through
+[`Scope::child_for_frame_witnessed`](../src/machine/core/scope.rs), and erases it witness-less — so
+`CallFrame::new` / `try_reset_for_tail` build the per-call child at real (non-`'static`) lifetimes with
+no construction-time fabrication and no re-anchor outside the witnessed substrate.
+
+`CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a scheduler slot's
+`NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free node) additionally
+ride the substrate's externally-witnessed [`SealedExtern<ScopeRefFamily>`](../src/witnessed.rs)
+carrier — a `&'static Scope` erased once on the store side through the safe
+`erase_to_static::<ScopeRefFamily>` (forgetting a reference's lifetime for storage cannot fabricate
+one). Both are read through the carrier's **rank-2** [`SealedExtern::open`](../src/witnessed.rs) (the
+frame's `with_scope`): the scope opens at a `for<'b>` brand against the frame / cart `Rc`, so the
+fabricated lifetime cannot escape the window and no scope borrow rides up a `&mut self` path.
+[`SealedExtern::open`](../src/witnessed.rs) (plus its consuming externally-witnessed twin) is the
+**single access verb**: every frame-side and seed-side read folds onto it, and the borrow-bounded
+`attach` re-anchor — a `<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` that handed back a
+free content `'b` the brand cannot — is deleted.
 
 Beyond the store-side erasure and the branded scope pointers, a handful of carriers store a
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
@@ -142,14 +162,13 @@ private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `t
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit — is the only place a
 `T::At<'a> → T::At<'b>` lifetime retype is written; `Erased::erase` / `Erased::reattach`, the
-transient `reattach_value` / `reattach_ref` / `reattach_slice_with` helpers, the witness-borrowed
-`reattach_with` / `vend_carrier`, the `Witnessed` accessors, and the region's store-side
-`erase_to_static` all route it. The carrier families live beside their own
+externally-witnessed `SealedExtern::open`, the `Witnessed` accessors, and the region's
+store-side `erase_to_static` all route it. The carrier families live beside their own
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
-(`Workload::Continuation`), `ResultCarriedFamily` for the transient step-lifetime re-anchor
-(`deps_at_step`) in `outcome.rs`, and `ScopeFamily` so the scope-pointer handles re-attach and the
+(`Workload::Continuation`), `RegionRefFamily` for the consumer region the run-loop step opens its
+tail against, and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
@@ -158,67 +177,94 @@ the substrate for the machinery, not the reverse).
 witness `W` that pins its pointee in one value, so "the witness keeps the value alive" is a type
 invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`Witness`](../src/witnessed.rs)
 — an `unsafe` marker asserting its pointee stays at a fixed address while held; `Rc<F>` qualifies
-(a static `StableDeref` assert records the obligation) and `Option<W>` lifts it for a frameless
-terminal whose backing region outlives the carrier (`None`). The carrier is re-anchored through one
-of three accessors, all sound by construction: `with` re-anchors behind a **rank-2** `for<'b>` brand
-so the fabricated content lifetime cannot escape the closure into the result (the generativity trick;
-the naive content-free reattach is a Miri-proven use-after-free); `map` consumes and re-projects
-under the same brand and witness (`yoke::map_project`'s shape); and `read` hands the carrier out
-bounded by the `&self` borrow itself, sound because the content lifetime *is* the borrow the bundled
-witness pins, not a free `'b` the caller could widen. All three keep their `unsafe` retype inside the
-module, so callers carry none.
+(a static `StableDeref` assert records the obligation), and a *set* of them — the Koan result-slot
+and lift witness [`FrameSet`](../src/machine/core/arena.rs) — pins every region a value reaches at
+once, an empty set being a frameless / run-region terminal whose backing outlives the carrier. The carrier is re-anchored through one
+of three read/transform accessors, all sound by construction: `with` re-anchors behind a **rank-2**
+`for<'b>` brand so the fabricated content lifetime cannot escape the closure into the result (the
+generativity trick; the naive content-free reattach is a Miri-proven use-after-free); `map` consumes
+and re-projects under the same brand and witness (`yoke::map_project`'s shape); and `read` hands the
+carrier out bounded by the `&self` borrow itself, sound because the content lifetime *is* the borrow
+the bundled witness pins, not a free `'b` the caller could widen. Two build-time accessors close the
+co-location gap `new` leaves to caller assertion: `yoke` *sources* a carrier from the witness's own
+region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only references the carrier
+can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
+asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
+re-seals under the *combined* witness — the union of both operands' regions, with `outer`-chain
+subsumption dropping a region another already pins (the `MergeWitness` trait's `merge`), returning
+`None` only when a single-region witness cannot represent two unrelated regions. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
+in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`Witnessed<W::Value, Option<Rc<W::Cart>>>` ([`node_store.rs`](../src/scheduler/node_store.rs)),
-bundling the erased value with its producer frame `Rc` inside `finalize` (the `None` arm is a
-frameless / run-region terminal). A read (`read_result` / `read` / `read_result_with_frame`) goes
-through `Witnessed::read`, re-anchoring to the read's own `&self` borrow — `Live<'node, W>`. Because
-`free_one` / `finalize` need `&mut self`, the bundled frame `Rc` cannot drop while a read borrow is
-live, so the re-anchored `'node` lifetime cannot outlive the backing region: the pin-outlives-read
-fact is a borrow the compiler checks. The driver's transient reads
-([`KoanRuntime::read_result`](../src/machine/execute/runtime.rs), the
-[`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) forwarder) consume that `'node` value with
-no `unsafe` of their own. The continuation and contract carriers — stored `Erased` on the
-lifetime-free node — re-anchor through [`vend_carrier`](../src/witnessed.rs), whose returned `'w` the
-compiler bounds against a witness borrow `&'w Rc<W::Frame>` the driver passes (the slot's cart for
-the continuation in `run_step`, the producer frame for the contract at the Done boundary), so those
-call sites carry no `unsafe` either. The consumer-pull lift and the `Outcome::Forward` ready pull
-re-anchor their reads at a *node* lifetime, not a fabricated `'run`: `read_lifted` forwards a
-frameless terminal through the witness-borrowed `reattach_with` and copies a framed terminal into the
-consumer's region through [`lift`](../src/machine/execute/lift.rs), and the node→step re-anchors
-(`deps_at_step`, the `Outcome::Forward` shorten) are safe `reattach_slice_with` / `reattach_with`
-bounded by the step-held cart `Rc`. The consumer-less root drain in
-[`run_program`](../src/machine/execute/runtime/interpret.rs) lifts each top-level terminal into the
-run-global root region directly through `lift`. The single irreducible audited `unsafe` reattach in
-the value path is `lift`'s own value-relocation re-anchor: a value about to be copied out has no
-*borrowed* witness to bound the target lifetime, but `src` heap-pins the value's region for the copy
-and `lift_kobject` self-anchors any surviving borrow into the destination via an embedded `Rc` — the
-same self-anchoring shape as `Erased::reattach`.
+`Sealed<W::Value, W::Witness>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
+opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
+`merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
+the erased value with its producer frame's witness (a singleton `FrameSet`) and seals it (an empty set
+is a frameless / run-region terminal). A value read goes through `Sealed::open`, which copies the value
+out inside a `for<'b>` brand — the fabricated content lifetime is un-nameable, so nothing branded
+escapes into the result (`open` delegates to the kept `Witnessed::read` for the copy, witness-pinned
+for the `&self` borrow it spans). The driver exposes two accessors over it:
+[`read_result_with`](../src/machine/execute/runtime.rs) hands the value to a closure that copies out
+what it needs, and the borrow-free `result_error` reports a slot's success or failure without reading
+the value at all — the [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) a decide sees exposes
+only the probe, since a resolved value rides the scope channel rather than a slot read. Neither lets a
+re-anchored reference ride the `&self` borrow up-stack. The continuation and contract carriers — stored `Erased` on the
+lifetime-free node — re-anchor through the run-loop step's **consuming, externally-witnessed**
+`Sealed::open`: [`run_step`](../src/machine/execute/run_loop.rs) zips the continuation, the contract,
+and the consumer region and opens them at one rank-2 `for<'b>` brand standing in for the step
+lifetime, witnessed by the held start cart `Rc` (whose `outer` chain subsumes the contract's home),
+so the whole tail nests inside the brand and carries no loose witness-borrow reattach. The
+consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
+not a fabricated `'run`: each dep terminal is read out borrow-bounded, erased into one
+`DepResultsFamily` slice carrier, and opened **in-band** at `'b` alongside the continuation. Inside
+that brand [`relocate_carried`](../src/machine/execute/lift.rs) copies each dep into the consumer
+`dest` region with a plain `'b → 'b` structural alloc — the composite spine sharing its `Rc` payloads,
+a closure / future / module riding its bare `&'b` borrow into the source region — and the
+`Outcome::Forward` pull lands in that same region at the brand, so every dep value is born at `'b`
+with no reattach of its own beyond the one step `open`. There is **no value-path `unsafe`** left: the
+relocation allocs at the destination region's own lifetime, so the lift hook is a safe
+`deep_clone` + `alloc`. The relocation seam `Sealed::transfer_into` wraps this as a `merge` — the
+relocated value re-sealed under the set union of every region it still reaches (its retained sources ∪
+`dest`) — and the storage-bound drain / forward path routes it via
+[`relocate_terminal`](../src/machine/execute/runtime.rs). The consumer-less root drain in
+[`run_program`](../src/machine/execute/runtime/interpret.rs) relocates each top-level terminal into the
+run-global root region the same way.
 
-A sibling primitive in [`reattach.rs`](../src/machine/core/reattach.rs), `pin_deref`, owns the
-*other* unsafe shape — re-borrowing a raw `*const T` whose pointee a heap pin holds fixed (the
-`Rc<FrameStorage>`-pinned region pointer, the storage engine's escape frame). Erase/reattach
-moves a value between lifetimes; `pin_deref` recovers a reference from a pointer the borrow checker
-never tracked, so it stays in `machine::core` (it recovers a pointer an region pins, not a value
-moving between nodes) as the one audited home for the `&*ptr` the region and storage engine would
-otherwise each open inline. The
-store side carries no `unsafe` at all: each handle's `erase` builds its stored pointer with the safe
-`NonNull::from(scope).cast()`, deferring every fabrication hazard to the re-attach.
+A relocated closure / future / module survives its producer's dying frame because the copy keeps its
+bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
+reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
+**closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
+child-scope home frame and reach-set the same way (via [`Scope::seal_module`](../src/machine/core/scope.rs)).
+The embedding or binding site folds that carrier (`merge` at an `attr` / `FROM` projection, `fold_reach`
+at a `let` / user-fn arg / `USING` bind), and the root drain folds the rehomed terminal's full witness
+set onto the run-root scope's reach-set — so a multi-region value keeps *every* region it reaches, read
+straight off its carrier rather than reconstructed from the value. No cycle forms: a dispatched frame's
+`outer` is `None`, so a depositing descendant never strong-refs back, and `fold_reach` omits a region
+the consumer or an ancestor already pins.
 
-Every family implements the `Stored` trait and routes the one gated
-[`alloc`](../src/machine/core/region.rs) engine. `anchors_to` is a required trait
-method, so each family declares its cycle behavior at its impl site: `KObject` and
-`KType` walk their composite tree for a self-targeting `Rc<FrameStorage>`, while the
-families that cannot hold one — `KFunction`, `Scope`, `Module`, `Signature`, and
-`OperatorGroup` — declare `anchors_to => false`. The gate is therefore uniform and
-unbypassable by construction: `Stored` is unsealed (an in-crate extension point), but
-the substrate's `storage` bundle is private and `alloc` is the only path to it, so no
-impl can route a value around the redirect. A self-anchoring value redirects to the
-escape region no matter which wrapper stored it.
+The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
+elaboration) open the child scope at a `for<'b>` brand through
+[`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
+opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
+the erasing `alloc_object` (which forgets the caller lifetime and re-homes the value at the frame
+region), the deferred return re-homing its elaborated `KType` into the captured-scope region — so the
+seed fabricates no free `&'a`. The store
+side carries no `unsafe` at all: forgetting a scope reference's lifetime for storage routes the safe
+`erase_to_static`, and a region-resident holder's embedded `&Scope` re-anchors with the whole value on
+read, both deferring every fabrication hazard to the witnessed retype.
+
+The allocation engine needs **no cycle gate**: a stored value holds no owning `Rc` back to a region —
+a closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
+witness set rather than an embedded anchor — so storing it where requested can never close an
+allocation back-edge. Every family implements the `Stored` trait and routes the one
+[`alloc`](../src/witnessed/region.rs) engine, which erases the value to `'static`, stores it in the
+family's sub-arena, and re-anchors the store to `'a`; the engine carries no redirect logic. It stays
+unbypassable by construction: the substrate's `storage` bundle is private and `alloc` is the only path
+to it, so no `Stored` impl can route around the engine.
 
 A [`CallFrame`](../src/machine/core/arena.rs) is a thin shell over a refcounted
 [`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
-`Option<ErasedScopePtr>` (the child scope; `None` only transiently during construction), while
+`Option<SealedExtern<ScopeRefFamily>>` (the child scope; `None` only transiently during construction), while
 `FrameStorage` bundles the `KoanRegion` and an `Option<Rc<FrameStorage>>` for the parent-frame
 chain. The shell/storage split lets an escaping value pin only the storage, leaving the shell
 uniquely owned for tail reuse (see
@@ -227,24 +273,26 @@ invariants make the ownership unit coherent:
 
 - **Heap-pinning via `Rc`.** `CallFrame::new` builds the region inside its own
   `Rc<FrameStorage>` and only ever exposes the frame as `Rc<CallFrame>`, so the inner
-  region's heap address is stable for the storage Rc's life and `scope_ptr` (a raw
-  pointer into `region.scopes`) stays valid alongside it. Accessors re-attach lifetimes
+  region's heap address is stable for the storage Rc's life and `scope_carrier` (a
+  `&'static Scope` into `region.scopes`) stays valid alongside it. Accessors re-attach lifetimes
   anchored to `&self`. A tail reset installs a *fresh* `FrameStorage`, so the region
   address changes across a reset — no accessor captures it across one, and the borrow
   checker forbids safe code from doing so.
 - **Field declaration order encodes drop order.** On `FrameStorage`, `region` is declared
   before `outer` so the auto-derived `Drop` tears down this frame's region *before*
-  releasing the parent storage Rc; on the shell, `storage` is declared before `scope_ptr`.
-  Inner pointers die before the outer storage they may reference, ruling out a dangling
+  releasing the parent storage Rc; on the shell, `storage` is declared before `scope_carrier`.
+  Inner references die before the outer storage they may reference, ruling out a dangling
   `outer` during drop.
 
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
 A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
 `Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
-as `NodeScope::YokedChild`, an erased `ErasedScopePtr` re-attached at read through the `unsafe` `reattach`.
+as `NodeScope::YokedChild`, a [`SealedExtern<ScopeRefFamily>`](../src/witnessed.rs) carrier (a
+`&'static Scope`) opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand,
+witnessed by the slot's cart `Rc`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
-slot-storage scope handle and the seed-side `with_frame_interior` re-anchor are documented in
+slot-storage scope handle and the seed-side `with_scope` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).
 
 ## Re-entrant scope writes
@@ -331,14 +379,10 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/machine/core/scope.rs)
   holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and
   confirms the queued write applied — exercising the conditional-defer path.
-- Per-call-region protocol verification (lift anchors, cycle gate, TCO
+- Per-call-region protocol verification (escaping-value relocation and retention, TCO
   frame reuse, MATCH `FrameStorage.outer` chain) is enumerated in
   [per-call-region/scope-handles.md § Verification](per-call-region/scope-handles.md#verification).
 - The audit slate runs cycle-free across every unsafe site in the runtime
   under `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
   leaks, signing off the memory model as it stands today. The canonical
   slate list lives in [observe/miri_slate.md](../observe/miri_slate.md).
-
-## Open work
-
-- *(none currently tracked)*

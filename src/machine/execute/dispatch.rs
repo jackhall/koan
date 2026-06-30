@@ -31,7 +31,7 @@ use crate::source::Spanned;
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use super::{ignore_results, DepFinish};
+use super::{ignore_results, DepFinish, WitnessedDepFinish};
 use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
 use crate::scheduler::Scheduler;
 
@@ -54,7 +54,7 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
-pub(in crate::machine::execute) use ctx::{reattach_node_scope, SchedulerView};
+pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -122,9 +122,9 @@ fn disposition_for_producer<'step>(
     consumer: Option<NodeId>,
 ) -> NameOutcome<'step> {
     if scheduler.is_result_ready(producer) {
-        match scheduler.read_result(producer) {
+        match scheduler.result_error(producer) {
             Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
-            Ok(_) => NameOutcome::Unbound(name.to_string()),
+            Ok(()) => NameOutcome::Unbound(name.to_string()),
         }
     } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
         NameOutcome::Cycle(name.to_string())
@@ -188,6 +188,17 @@ pub(in crate::machine::execute) struct PartWalkResult<'step> {
     pub new_parts: Vec<Spanned<ExpressionPart<'step>>>,
     pub producers_to_wait: Vec<NodeId>,
     pub staged_subs: Vec<(usize, PendingSub<'step>)>,
+    /// Reach carriers for the wrap slots that resolved to a value **inline** (spliced in place rather
+    /// than sub-dispatched), keyed by part slot. The committed call threads them to the body so a
+    /// bound-name arg names its reach by construction; a staged sub's carrier is collected later, at
+    /// the eager-subs finish.
+    pub arg_carriers: Vec<(
+        usize,
+        crate::witnessed::Sealed<
+            crate::machine::model::values::CarriedFamily,
+            crate::machine::FrameSet,
+        >,
+    )>,
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
@@ -263,6 +274,23 @@ pub(in crate::machine::execute) fn park_on_deps<'step>(
         deps,
         park_count: 0,
         continuation: Continuation::Finish(finish),
+        dep_error_frame,
+    }
+}
+
+/// Construction-inversion sibling of [`park_on_deps`]: park on `deps` (all owned) and, on resolve,
+/// fold their terminals (value + reach) into one witnessed carrier via the [`WitnessedDepFinish`],
+/// sealing the slot as [`Outcome::DoneWitnessed`]. The decide-side entry a construction decide
+/// (newtype / tagged union) uses so the built value names every region it reaches by construction.
+pub(in crate::machine::execute) fn park_on_deps_witnessed<'step>(
+    deps: Vec<DepRequest<'step>>,
+    dep_error_frame: Option<TraceFrame>,
+    finish: WitnessedDepFinish<'step>,
+) -> Outcome<'step> {
+    Outcome::ParkThenContinue {
+        deps,
+        park_count: 0,
+        continuation: Continuation::FinishWitnessed(finish),
         dep_error_frame,
     }
 }
@@ -431,7 +459,7 @@ fn classify_dispatch<'step>(
                 ExpressionPart::Type(t) => t.clone(),
                 _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            single_poll::bare_type_leaf(view, &t)
+            view.with_current_scope(|s| single_poll::bare_type_leaf(view, s, &t))
         }
         DispatchShape::BareIdentifier => {
             debug_assert!(pre_subs.is_empty());
@@ -439,7 +467,7 @@ fn classify_dispatch<'step>(
                 ExpressionPart::Identifier(n) => n.clone(),
                 _ => unreachable!("BareIdentifier shape implies single Identifier part"),
             };
-            single_poll::bare_identifier(view, name)
+            view.with_current_scope(|s| single_poll::bare_identifier(view, s, name))
         }
         DispatchShape::FunctionValueCall => {
             debug_assert!(pre_subs.is_empty());
@@ -473,7 +501,7 @@ fn classify_dispatch<'step>(
         }
         DispatchShape::OperatorChain => {
             debug_assert!(pre_subs.is_empty());
-            operator_chain::run(view, &expr)
+            view.with_current_scope(|s| operator_chain::run(view, s, &expr))
         }
         DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {

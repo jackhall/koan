@@ -15,7 +15,7 @@ use super::record::Record;
 use super::recursive_set::RecursiveSet;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{FrameStorage, ScopeId};
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
@@ -163,11 +163,13 @@ pub enum KType<'a> {
         sig: &'a ModuleSignature<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
-    /// First-class module value's type. `frame` carries the per-call `Rc<FrameStorage>`
-    /// anchor for functor-built modules.
+    /// First-class module value's type. A bare borrow into the region the functor call minted the
+    /// module in; that region is pinned by the value carrier's witness set when the module flows down
+    /// a dep edge (see [`relocate_carried`](crate::machine::execute) / `transfer_into`). A *concrete*
+    /// module is rejected as a function's resolved return type (a module value's identity is not a
+    /// return type — return a signature or the `:Module` kind), so it never rides the contract channel.
     Module {
         module: &'a Module<'a>,
-        frame: Option<Rc<FrameStorage>>,
     },
     /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
     /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a

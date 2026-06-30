@@ -25,10 +25,11 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, KError, KErrorKind, Resolution, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Resolution, Scope, TraceFrame};
 use crate::source::Spanned;
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
 
@@ -41,18 +42,20 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
     member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let kt_ref: &'a KType = scope.region.alloc_ktype(identity);
+    let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index)
     {
-        Ok(ApplyOutcome::Applied) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        Ok(ApplyOutcome::Applied) => {
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
+        }
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -73,7 +76,7 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-) -> Result<Carried<'a>, KError> {
+) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),
@@ -102,7 +105,9 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(Carried::Type(scope.region.alloc_ktype(kt_ref.clone()))),
+        SealOutcome::Sealed(kt_ref) => {
+            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
+        }
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -131,7 +136,12 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    return Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index));
+                    return Action::done_witnessed(finalize_newtype(
+                        ctx.scope,
+                        name,
+                        kt.clone(),
+                        bind_index,
+                    ));
                 }
                 // The repr names a type still finalizing in this scheduler: park on its producer
                 // and re-resolve at dep-finish. A name with no in-flight producer is a genuine
@@ -145,7 +155,7 @@ pub fn body<'a>(
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(kt) => Action::Done(finalize_newtype(
+                            Some(kt) => Action::done_witnessed(finalize_newtype(
                                 fctx.scope,
                                 name,
                                 kt.clone(),
@@ -166,7 +176,9 @@ pub fn body<'a>(
                     te.as_str(),
                 )))))
             }
-            other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
+            other => {
+                Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
+            }
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -190,7 +202,7 @@ fn defer_resolved_sigil<'a>(
     ))]);
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
-            Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
+            Action::done_witnessed(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }
         Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",
@@ -311,10 +323,11 @@ mod tests {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{KErrorKind, KoanRegion, Scope};
+    use crate::machine::{KErrorKind, Scope};
 
     /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
     /// identity so assertions see `SetLocal` / `List(SetLocal)` back-edges before projection.
@@ -346,7 +359,7 @@ mod tests {
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
@@ -376,7 +389,7 @@ mod tests {
     /// `inner` is the bare `Number`.
     #[test]
     fn construct_wraps_repr_matching_value() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let result = run_one(scope, parse_one("Distance (3.0)"));
@@ -398,7 +411,7 @@ mod tests {
     /// `Distance("hi")` (Number repr, Str value) surfaces as `TypeMismatch`.
     #[test]
     fn construct_rejects_non_matching_repr() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
@@ -416,7 +429,7 @@ mod tests {
     /// leaked a stale value-side placeholder that panicked the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -442,7 +455,7 @@ mod tests {
     /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Boxed = Nope");
         assert!(
@@ -463,7 +476,7 @@ mod tests {
     /// this pins the seal shape, not construction.)
     #[test]
     fn record_repr_self_recursion_seals_set_local() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
         let (set, fields) = record_fields(scope, "Node");
@@ -487,7 +500,7 @@ mod tests {
     /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
     #[test]
     fn record_repr_list_of_self_field_seals_set_local() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
@@ -512,7 +525,7 @@ mod tests {
     /// with an empty threaded set.
     #[test]
     fn nested_record_field_threads_self_reference() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Outer = :{inner :{owner :Outer}}");
         let (set, fields) = record_fields(scope, "Outer");
@@ -539,7 +552,7 @@ mod tests {
     /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Nums = :(LIST OF Number)");
         let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
@@ -565,7 +578,7 @@ mod tests {
     /// inner: Number(3.0) }` — pins the collapse invariant.
     #[test]
     fn newtype_over_newtype_collapses() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
         let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
@@ -594,7 +607,7 @@ mod tests {
     /// per-slot Err result.
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -618,9 +631,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err = sched1
-            .read_result(root)
-            .err()
-            .expect("TAKES_NUM on Distance should fail dispatch");
+            .result_error(root)
+            .expect_err("TAKES_NUM on Distance should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
@@ -631,9 +643,8 @@ mod tests {
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
         let err2 = sched2
-            .read_result(root2)
-            .err()
-            .expect("TAKES_DIST on raw Number should fail dispatch");
+            .result_error(root2)
+            .expect_err("TAKES_DIST on raw Number should fail dispatch");
         assert!(
             matches!(&err2.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Distance-slot Number, got {err2}",
@@ -644,7 +655,7 @@ mod tests {
     /// dep before the finish closure runs — pins the non-trivial-dispatch path.
     #[test]
     fn construct_with_identifier_value() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
         let result = run_one(scope, parse_one("Distance (x)"));
@@ -665,7 +676,7 @@ mod tests {
     /// Pins the pre-dispatch arity guard: `Distance ()` rejects with `ArityMismatch`.
     #[test]
     fn construct_arity_zero_rejects() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance ()"));
@@ -686,7 +697,7 @@ mod tests {
     /// language yet"), so a user-fn call stands in for non-trivial dispatch.
     #[test]
     fn construct_with_operator_value() {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
         run(
             scope,

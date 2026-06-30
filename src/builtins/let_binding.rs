@@ -16,7 +16,6 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
     use crate::machine::model::values::Held;
-    use crate::machine::model::Carried;
 
     let done_err = |e: KError| Action::Done(Err(e));
     let bind_index = ctx.bind_index();
@@ -62,9 +61,7 @@ pub fn body<'a>(
             };
             type_for_types_map = Some(match rhs {
                 Held::Type(kt) => kt.clone(),
-                Held::Object(o) if matches!(o, KObject::KFunction(f, _) if f.is_functor) => {
-                    o.ktype()
-                }
+                Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => o.ktype(),
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
@@ -89,7 +86,7 @@ pub fn body<'a>(
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let region = ctx.scope.region;
+    let region = ctx.scope.brand();
     if let Some(kt) = type_for_types_map {
         let is_type_constructor = matches!(
             &kt,
@@ -105,16 +102,21 @@ pub fn body<'a>(
         } else {
             kt
         };
-        let kt_ref: &'a KType<'a> = region.alloc_ktype(kt.clone());
-        if let Err(e) = ctx.scope.register_user_type(name, kt, bind_index) {
+        if let Err(e) = ctx.scope.register_user_type(name, kt.clone(), bind_index) {
             return done_err(e);
         }
-        Action::Done(Ok(Carried::Type(kt_ref)))
+        // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
+        // region (a module returned from a call, naming a child scope in the now-dying producer frame)
+        // outlives the binding — the type-channel analogue of the value-arm fold below. `fold_reach`
+        // omits the home frame, so a region-pure / ancestor-resident type deposits nothing.
+        let carrier = ctx.scope.seal_type(region.alloc_ktype_witnessed(kt));
+        ctx.scope.fold_reach(carrier.witness());
+        Action::DoneWitnessed(carrier)
     } else {
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
-        if matches!(value, KObject::KFunction(f, _) if f.is_functor) {
+        if matches!(value, KObject::KFunction(f) if f.is_functor) {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "a functor must be bound to a Type-class (capitalized) name; `{name}` \
                  is value-class — rebind under a Type-classified identifier instead \
@@ -133,7 +135,19 @@ pub fn body<'a>(
         if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index) {
             return done_err(e);
         }
-        Action::Done(Ok(Carried::Object(allocated)))
+        // Deposit the bound value's reach into the scope's reach-set so every foreign region it
+        // borrows into outlives the binding — the bind-precise fold replacing the single-frame
+        // relocate-seam reconstruction for the object channel. The delivered carrier witnesses the
+        // consumer frame ∪ the value's foreign reach; `fold_reach` omits the home frame, so a
+        // region-pure value (or an ancestor-bound name, kept alive by the home frame's `outer` chain)
+        // deposits nothing, while a multi-region value contributes every region it reaches.
+        if let Some(carrier) = ctx.arg_carrier("value") {
+            ctx.scope.fold_reach(carrier.witness());
+        }
+        // The bound value lives in this scope's region with its foreign reach deposited above, so the
+        // terminal is born witnessed by this scope's home frame (the asserted-co-location read path)
+        // rather than handed out as a bare `Done` for the finalize forward to wrap.
+        Action::DoneWitnessed(ctx.scope.resident_object_carrier(allocated))
     }
 }
 

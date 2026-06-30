@@ -12,10 +12,22 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
-    use crate::machine::model::Carried;
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    let obj = ctx.scope.region.alloc_object(KObject::KExpression(expr));
-    Action::Done(Ok(Carried::Object(obj)))
+    // A quoted expression is raw, unevaluated AST — splice-free, so borrow-free owned data that
+    // references no other region. It is therefore region-pure: the `KObject::KExpression` allocs
+    // through the witnessed object surface born under the empty (foreign-reach-only) set, the active
+    // frame folded in at close. A `Spliced(Carried)` part would hold a live region reference the
+    // empty set could not name, so the splice-free precondition is asserted.
+    debug_assert!(
+        expr.is_splice_free(),
+        "QUOTE expr must be splice-free raw AST: a Spliced(Carried) part holds a live region \
+         reference the region-pure witnessed alloc would mis-witness as empty reach"
+    );
+    let carrier = ctx
+        .scope
+        .brand()
+        .alloc_object_witnessed(KObject::KExpression(expr));
+    Action::DoneWitnessed(carrier)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -29,10 +41,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_with_buf};
-    use crate::machine::KoanRegion;
+    use crate::machine::core::FrameStorage;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();

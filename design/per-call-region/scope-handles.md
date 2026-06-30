@@ -15,35 +15,34 @@ from the slot's live frame at read, never re-anchored at a free `'run`:
   from the frame at the read boundary. Single-cart, because the slot's own `Frame::cart`
   `Rc<CallFrame>` is the sole liveness witness, so there is no second `Rc` clone and no contention
   with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
-- `YokedChild(ErasedScopePtr)` holds an erased pointer to a block scope a builtin allocated in a
-  cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY), re-attached at read with a
-  borrow bounded by the slot's frame `Rc`, sound because the cart's `FrameStorage.outer` chain pins
-  that ancestor region for as long as the slot holds the cart. It differs from `Yoked` only in that the
-  child scope differs from the cart's own scope, so it needs a stored pointer.
+- `YokedChild(SealedExtern<ScopeRefFamily>)` holds a `&'static Scope` carrier to a block scope a
+  builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY),
+  opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand against the slot's frame
+  `Rc`, sound because the cart's `FrameStorage.outer` chain pins that ancestor region for as long as
+  the slot holds the cart. It differs from `Yoked` only in that the child scope differs from the cart's
+  own scope, so it needs a stored carrier.
 
 The funnel [`resolve_node_scope`](../../src/machine/execute/runtime/submit.rs) decides the arm in
 order: a pointer test (`std::ptr::eq(active_frame.scope(), scope)`) routes a frame's-own-child slot
 to `Yoked`; a walk of the active cart's scope `outer` chain that reaches `scope`'s region routes a
-cart-ancestor block scope to `YokedChild`, erasing the borrow through `ErasedScopePtr::erase`; the
+cart-ancestor block scope to `YokedChild`, erasing the borrow through `SealedExtern::<ScopeRefFamily>::erase`; the
 frameless top-level run root routes to `Yoked` via the `run_frame` cart that adopts it (the slot's
 cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
 whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every
 frameless one to the run root. Storing an erased handle rather than a live `&'run` keeps the borrow
 honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset region.
 
-The read boundary hands a slot's scope back on demand, not as a stored free `&'run`:
-[`reattach_node_scope`](../../src/machine/execute/dispatch/ctx.rs) materializes it per use — a
-`YokedChild` slot re-attaches its erased `ErasedScopePtr` through the `unsafe` `reattach`
-(borrow bounded by the frame `Rc`, content lifetime free, sound because the cart pins the ancestor
-region); a `Yoked` slot re-reads from the live
-`active_frame` cart via [`CallFrame::scope_bounded`](../../src/machine/core/arena.rs), a
-**witness-bounded** brand whose borrow is capped at the `&Rc<CallFrame>` receiver (content `'a`
-free, `'a: 'p`). Because the borrow cannot outlive the frame `Rc` it reads from, storing it past
-the frame is a compile error rather than a fabrication; `Scope<'a>` invariance rides structurally
-on the returned `Scope<'a>`, so the brand needs no separate struct. Bodies / finishes / the
-dispatch engine no longer thread a `scope` parameter — they call `current_scope()`; the genuine
-run-scope methods (`dispatch_in_scope` / `dispatch_in_scope_with_chain` /
-`enter_block`) keep their `&'a Scope` argument.
+The read boundary hands a slot's scope to a closure on demand, not as a stored free `&'run`:
+[`with_node_scope`](../../src/machine/execute/dispatch/ctx.rs) opens it per use at a `for<'b>` brand —
+a `YokedChild` slot opens its stored `&'static Scope` carrier through `SealedExtern::open` (witnessed
+by the frame `Rc`, sound because the cart pins the ancestor region; the open carries no `unsafe` of
+its own); a `Yoked` slot re-reads from the live `active_frame` cart via
+[`CallFrame::with_scope`](../../src/machine/core/arena.rs), the same rank-2 `open`. Because the
+`&Scope<'b>` is confined to the closure, storing it past the frame is a compile error rather than a
+fabrication; `Scope<'a>` invariance rides structurally on the returned `Scope`, so the brand needs no
+separate struct. Bodies / finishes / the dispatch engine no longer thread a `scope` parameter — they
+call `current_scope()`; the genuine run-scope methods (`dispatch_in_scope` /
+`dispatch_in_scope_with_chain` / `enter_block`) keep their `&'a Scope` argument.
 
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
 `PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
@@ -55,13 +54,14 @@ primitives, lifting to the run `'a` only at the `lift_kobject` Done boundary.
 ## Seed-side re-anchor
 
 The MATCH / TRY arm seeds and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs)
-bind their `it` / parameters — values whose type carries the caller's `'a`, allocated into the
-frame region — inside [`CallFrame::with_frame_interior`](../../src/machine/core/arena.rs), the
-single audited home for that re-anchor. The closure receives the frame's region re-exposed at a
-free `'a` (the C0-irreducible re-exposure: an `'a`-typed value must land in an `'a`-typed region,
-and the frame `Rc` the caller holds heap-pins it) and its child scope re-handed through the
-witness-bounded `scope_bounded` brand — so the scope half is *not* fabricated free, only the
-region half is. This is the sole surviving free re-exposure in the protocol.
+bind their `it` / parameters — values whose type carries the caller's `'a`, deep-cloned into the
+frame region — inside [`CallFrame::with_scope`](../../src/machine/core/arena.rs), which opens the
+child scope at a `for<'b>` brand. A seed **relocates** its caller-`'a` value into the opened scope's
+own region through the substrate (the erasing `alloc_object`, which forgets the caller lifetime and
+re-homes the value at the frame region) before binding it, so the value lands at the brand and the
+seed fabricates no free `&'a`. The deferred-return-type elaboration takes the same `with_scope` read
+and re-homes its elaborated `KType` into the captured-scope region inside the open. The whole
+re-anchor carries no `unsafe` of its own — only the substrate's single retype.
 Arm and body statements then dispatch through the framed scheduler write primitives
 (`dispatch_in_active_frame`, `dispatch_body`), which
 derive the scope from the active frame and store `Yoked`, so the seed itself persists no

@@ -17,12 +17,16 @@ use super::SchedulerView;
 use crate::machine::core::kfunction::action::FramePlacement;
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
+use crate::machine::core::kfunction::exec::{
+    home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
+};
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::execute::lift::lift_ktype;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::{Record, SignatureElement};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{KError, KErrorKind};
+use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::witnessed::Sealed;
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
@@ -32,6 +36,7 @@ use crate::machine::{KError, KErrorKind};
 pub(super) fn invoke_continue<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
@@ -40,7 +45,7 @@ pub(super) fn invoke_continue<'step>(
         },
     };
     Outcome::Continue {
-        work: invoke_work(picked, working_expr),
+        work: invoke_work(picked, working_expr, arg_carriers),
         frame,
         contract: None,
         block_entry: None,
@@ -53,13 +58,14 @@ pub(super) fn invoke_continue<'step>(
 fn invoke_work<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
         Vec::new(),
         0,
         ignore_results(Box::new(move |view, _idx| {
-            invoke(view, picked, working_expr)
+            invoke(view, picked, working_expr, arg_carriers)
         })),
         Some(carrier),
     )
@@ -75,17 +81,21 @@ pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
+        // Re-key the slot-indexed arg carriers onto their parameter names (the body reads them by
+        // name) before `bind` consumes the working expression.
+        let arg_carriers = map_arg_carriers(picked, arg_carriers);
         let args = match picked.bind(working_expr) {
             Ok(future) => future.args,
             Err(e) => return Outcome::Done(Err(e)),
         };
-        return run_action_builtin(view, f, args);
+        return run_action_builtin(view, f, args, arg_carriers);
     }
 
     // Validate each argument against its declared parameter type before the (type-trusting)
@@ -111,12 +121,23 @@ pub(super) fn invoke<'step>(
         Err(e) => return Outcome::Done(Err(e)),
     };
 
-    let outer = picked.captured_scope();
     // The per-call frame the producer's `Continue` (`ReuseReserve`) already acquired and installed
     // as the slot's cart — `invoke` runs against it, so read it from the view rather than a param.
     let frame = view
         .current_frame()
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
+    // Deposit each delivered argument's reach into the per-call scope's reach-set — the same scope
+    // `run_user_fn` deep-clones the arguments into and binds the parameters on — so every foreign
+    // region an argument borrows into outlives the call. This is the bind-precise fold replacing the
+    // relocate-seam reconstruction for user-fn object args (the seam wrongly folds into the caller
+    // scope). Each carrier names the consumer frame ∪ foreign reach, and `fold_reach` omits the home
+    // frame, so a region-pure argument deposits nothing while a multi-region one contributes every
+    // region it reaches. Slot identity is irrelevant here, so all carriers fold uniformly.
+    frame.with_scope(|call_scope| {
+        for (_slot, carrier) in &arg_carriers {
+            call_scope.fold_reach(carrier.witness());
+        }
+    });
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
@@ -126,28 +147,23 @@ pub(super) fn invoke<'step>(
     match run_user_fn(picked, bound, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
-            // the signature; a deferred `Type` return carries the resolved per-call type as a
-            // `PerCall` contract — checked + stamped at the lift boundary like any FN return, so the
-            // body is a proper tail call and a recursive deferred body stays TCO-flat.
+            // the signature; a deferred `Type` return carries the resolved per-call type — already
+            // re-homed into the captured-scope region by `run_user_fn` — as a `PerCall` contract,
+            // checked + stamped at the lift boundary like any FN return, so the body is a proper tail
+            // call and a recursive deferred body stays TCO-flat.
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked),
-                PerCallReturn::Resolved(kt) => {
-                    // Re-home the per-call type in the captured-scope (frame-outer) region — a strict
-                    // ancestor the cart keeps live — so the erased contract's `ret` borrow stays
-                    // valid past the dying frame, mirroring an `Arm`'s `ret`.
-                    let ret_ref = outer.region.alloc_ktype(lift_ktype(&kt, &frame));
-                    ReturnContract::PerCall {
-                        func: picked,
-                        ret: ret_ref,
-                    }
-                }
+                PerCallReturn::Resolved(ret_ref) => ReturnContract::PerCall {
+                    func: picked,
+                    ret: ret_ref,
+                },
             };
             // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
             // the leading statements sit at indices `1..=N` and the tail replaces in at `N + 1`.
             let body_index = leading.len() + 1;
             // Capture the body scope id before `frame` moves; the reinstall site reads it to
             // assemble the chain.
-            let block_entry = frame.scope().id;
+            let block_entry = frame.scope_id();
             let tail_expr = tail.clone();
             if leading.is_empty() {
                 // No leading statements: tail-replace directly into the body terminal. The frame is
@@ -168,13 +184,14 @@ pub(super) fn invoke<'step>(
             // `Continue`, re-entering the already-installed cart with `Inherit`.
             let statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: DepFinish<'step> = Box::new(move |_view, _results| Outcome::Continue {
-                work: super::decide(tail_expr),
-                frame: FramePlacement::Inherit,
-                contract: Some(contract),
-                block_entry: Some(block_entry),
-                body_index,
-            });
+            let finish: DepFinish<'step> =
+                Box::new(move |_view, _results, _carriers| Outcome::Continue {
+                    work: super::decide(tail_expr),
+                    frame: FramePlacement::Inherit,
+                    contract: Some(contract),
+                    block_entry: Some(block_entry),
+                    body_index,
+                });
             Outcome::ParkThenContinue {
                 deps: vec![DepRequest::BodyBlock { frame, statements }],
                 park_count: 0,
@@ -201,8 +218,8 @@ pub(super) fn invoke<'step>(
             let tail_expr = tail.clone();
             // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
             // re-enters that already-installed cart with `Inherit`.
-            let block_entry = frame.scope().id;
-            let finish: DepFinish<'step> = Box::new(move |view, results| {
+            let block_entry = frame.scope_id();
+            let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
                 // The return-type expression is the last body statement, so its resolved value is
                 // the last result.
                 let kt = match results[results.len() - 1] {
@@ -215,17 +232,13 @@ pub(super) fn invoke<'step>(
                     }
                 };
                 // The per-call type rides the captured-scope (frame-outer) region, a strict ancestor
-                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. `kt` was
-                // pull-lifted into this node's call frame, which the captured scope outlives, so
-                // relocate it with `lift_ktype` (re-anchoring any per-call `Module` frame onto the
-                // call frame) rather than a bare clone that would dangle once the frame frees.
-                let call_frame = view
-                    .current_frame()
-                    .expect("a deferred-return finish runs against a per-call frame");
-                let ret_ref = picked
-                    .captured_scope()
-                    .region
-                    .alloc_ktype(lift_ktype(kt, &call_frame));
+                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. A concrete
+                // module return type is rejected (see `home_return_type`); every other resolved type
+                // is owned / `Rc` data the clone re-homes past the dying frame.
+                let ret_ref = match home_return_type(kt, picked.captured_scope().brand()) {
+                    Ok(r) => r,
+                    Err(e) => return Outcome::Done(Err(e)),
+                };
                 let contract = ReturnContract::PerCall {
                     func: picked,
                     ret: ret_ref,
@@ -249,13 +262,33 @@ pub(super) fn invoke<'step>(
     }
 }
 
+/// Re-key the delivered arg carriers — indexed by their working-expr part slot — onto the parameter
+/// name the builtin body reads. A committed call's parts line up 1:1 with `picked`'s signature
+/// elements (`validate_call_args` enforces it), so the element at a carrier's slot names its
+/// parameter. Only spliced / bound-name args carry a carrier; a scalar-literal arg is region-pure and
+/// simply has no entry, which the body reads as "no foreign reach".
+fn map_arg_carriers<'step>(
+    picked: &KFunction<'step>,
+    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
+) -> Record<Sealed<CarriedFamily, FrameSet>> {
+    let mut record = Record::new();
+    for (slot, carrier) in arg_carriers {
+        if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
+            record.insert(arg.name.clone(), carrier);
+        }
+    }
+    record
+}
+
 /// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
 /// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
-/// returned `Action` through the shared `run_action`.
+/// returned `Action` through the shared `run_action`. `arg_carriers` are the per-parameter reach
+/// carriers (a value-embedding body folds / merges the one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
-    args: crate::machine::model::types::Record<crate::machine::model::values::ArgValue<'step>>,
+    args: Record<crate::machine::model::values::ArgValue<'step>>,
+    arg_carriers: Record<Sealed<CarriedFamily, FrameSet>>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::values::{ArgValue, Held};
@@ -267,7 +300,7 @@ fn run_action_builtin<'step>(
     });
     let args_obj: &'step KObject<'step> = view
         .current_scope()
-        .region
+        .brand()
         .alloc_object(KObject::record_of_held(cells));
     let frame = view.current_frame();
     let chain = view.current_lexical_chain();
@@ -277,6 +310,7 @@ fn run_action_builtin<'step>(
             frame: frame.as_ref(),
             chain,
             args: args_obj,
+            arg_carriers: &arg_carriers,
         };
         f(&body_ctx)
     };
@@ -301,7 +335,7 @@ fn extract_carried_args<'step>(
             ExpressionPart::Literal(_) => {
                 let object = view
                     .current_scope()
-                    .region
+                    .brand()
                     .alloc_object(part.value.resolve());
                 args.push(Carried::Object(object));
             }

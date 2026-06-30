@@ -38,11 +38,8 @@ pub fn body<'a>(
     };
     use crate::machine::model::values::Held;
 
-    let (module, module_frame) = match arg_held(ctx.args, "m") {
-        Some(Held::Type(KType::Module {
-            module: m,
-            frame: anchor,
-        })) => (*m, anchor.clone()),
+    let module = match arg_held(ctx.args, "m") {
+        Some(Held::Type(KType::Module { module: m })) => *m,
         Some(Held::Type(other)) => {
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
@@ -60,20 +57,22 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
-    // Root the frame `Rc` in the call-site region so the borrowed window outlives the eager `m`
-    // arg and any escaping closure. No-op for top-level modules.
-    if module_frame.is_some() {
-        ctx.scope.region.alloc_ktype(KType::Module {
-            module,
-            frame: module_frame,
-        });
+    // Root the opened module's reach on the call-site scope. Its child-scope region (a functor
+    // result's per-call frame) is pinned only by the eager `m` dep across this step, but the
+    // transparent `child` window below borrows that region and outlives the step — and any closure
+    // escaping the block captures `child`. Folding the `m` carrier's reach onto `ctx.scope` (where
+    // `child` lives) keeps the region alive for the window's life, the carrier-delivered analogue of
+    // the old relocate-seam reach reconstruction. A top-level module reaches no per-call region, so
+    // `fold_reach`'s home/ancestor omission folds nothing.
+    if let Some(carrier) = ctx.arg_carrier("m") {
+        ctx.scope.fold_reach(carrier.witness());
     }
     // Transparent scope lives in the call-site region so forwarded binds and block-defined
     // functions outlive the block.
     let module_bindings = module.child_scope().bindings();
     let child: &'a Scope<'a> = ctx
         .scope
-        .region
+        .brand()
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
     let finish: AwaitContinue<'a> = Box::new(move |_fctx, results| {
         // The body block's final statement value is the USING result.

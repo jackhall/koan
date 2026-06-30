@@ -9,7 +9,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, Action};
-    use crate::machine::model::Carried;
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) —
     // `Held::summarize` is the twin of `ArgValue::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
@@ -18,8 +17,14 @@ pub fn body<'a>(
     };
     let line = format!("{rendered}\n");
     ctx.scope.write_out(line.as_bytes());
-    let obj = ctx.scope.region.alloc_object(KObject::KString(rendered));
-    Action::Done(Ok(Carried::Object(obj)))
+    // The rendered string is owned (region-pure), so it allocs through the witnessed surface born
+    // under the empty (foreign-reach-only) set — the active frame is folded in at finalize/close, not
+    // bundled here.
+    let carrier = ctx
+        .scope
+        .brand()
+        .alloc_object_witnessed(KObject::KString(rendered));
+    Action::DoneWitnessed(carrier)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

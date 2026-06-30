@@ -1,19 +1,19 @@
 //! `free` / node-reclamation invariants.
 
 use crate::builtins::default_scope;
+use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::KoanRegion;
 use crate::scheduler::DepEdge;
 
 #[test]
 fn free_reclaims_owned_subtree() {
     // s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3; free(s1) reclaims s1..s3, leaves s0.
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let value: &KObject = region.alloc_object(KObject::Number(42.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
     let s1 = sched.add(mk_dispatch(), root);
@@ -66,7 +66,7 @@ fn free_reclaims_owned_subtree() {
 
 #[test]
 fn free_skips_live_slot_and_is_idempotent() {
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
@@ -77,7 +77,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     assert_eq!(sched.scheduler().free_list_len(), 0);
 
     sched.scheduler_mut().clear_node(s);
-    let value: &KObject = region.alloc_object(KObject::Number(1.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(1.0));
     sched
         .scheduler_mut()
         .set_result(s, Ok(Carried::Object(value)));
@@ -95,10 +95,10 @@ fn free_skips_live_slot_and_is_idempotent() {
 fn free_does_not_recurse_through_notify_edges() {
     // Regression canary for the Owned/Notify conflation fixed by `DepEdge`:
     // free(owner) must reclaim only Owned descendants, not parked-on siblings.
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
-    let value: &KObject = region.alloc_object(KObject::Number(7.0));
+    let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
     let s_owner = sched.add(mk_dispatch(), root);
     let s_owned = sched.add(mk_dispatch(), root);
@@ -145,7 +145,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     // Reclamation invariant: after `free(idx)`, no other slot's `notify_list` may
     // reference `idx`. Canary against a future change that frees a slot before its
     // producer drains, leaving a stale edge to misfire onto a reused slot.
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
 

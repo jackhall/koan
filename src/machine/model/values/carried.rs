@@ -8,7 +8,6 @@
 use std::rc::Rc;
 
 use crate::machine::model::types::{KType, Parseable};
-use crate::machine::KError;
 use crate::witnessed::reattachable;
 
 use super::KObject;
@@ -23,21 +22,16 @@ pub enum Carried<'a> {
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner. It is the
 /// `Workload::Value` the scheduler stores in a `Witnessed<CarriedFamily, _>` slot and re-anchors on
-/// read (`Witnessed::read`), and the family the transient `reattach_with` / `deps_at_step` re-anchors
-/// route. Layout-invariant: a `Carried<'a>` is two `&'a` references, whose representation does not
-/// depend on `'a`.
+/// read (`Witnessed::read`), and the family the transient re-anchor routes (the
+/// consumer-pull dep terminals and an `Outcome::Forward` pull, born at the step brand via
+/// `read_lifted` into the opened `dest` region). Layout-invariant: a `Carried<'a>` is two `&'a`
+/// references, whose representation does not depend on `'a`.
 pub struct CarriedFamily;
 
-/// `Reattachable` family for a dep terminal `Result<Carried, KError>` — the element type the
-/// dep-delivery slice retypes (`deps_at_step`). Layout-invariant for the same reason as
-/// [`CarriedFamily`] (`KError` carries no lifetime).
-pub struct ResultCarriedFamily;
-
-// Both families are one type generic only in `'r` (the `KError` arm is lifetime-free), layout
-// identical for every `'r`; the shared `reattachable!` macro discharges that obligation once.
+// `CarriedFamily` is one type generic only in `'r`, layout identical for every `'r`; the shared
+// `reattachable!` macro discharges that obligation once.
 reattachable! {
     CarriedFamily => Carried<'r>,
-    ResultCarriedFamily => Result<Carried<'r>, KError>,
 }
 
 impl<'a> Carried<'a> {

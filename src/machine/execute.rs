@@ -18,13 +18,10 @@ mod run_loop;
 mod runtime;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_continuation, ignore_results, short_circuit, CatchFinish, ContinuationFamily, DepFinish,
-    NodeContinuation,
+    catch_continuation, ignore_results, short_circuit, short_circuit_witnessed, CatchFinish,
+    ContinuationFamily, DepFinish, WitnessedDepFinish,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 
 pub(crate) use dispatch::{defer_field_list_action, resolve_type_leaf_carrier, TypeLeafCarrier};
 pub use dispatch::{NameOutcome, ResolveOutcome, Resolved, TypeIdentifierResolution};
-
-#[cfg(test)]
-pub use lift::lift_ktype_for_test;

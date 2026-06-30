@@ -34,7 +34,7 @@ enum BinderKey {
 /// Find the binder overload (if any) the dispatching scope's chain declares for `expr`, and the
 /// eager-slot mask its bucket admits. Pure dispatch semantics: it reads only the function table
 /// and signatures, never scheduler state.
-fn extract_binder_install<'ast: 'step, 'step>(
+fn extract_binder_install<'ast, 'step>(
     expr: &KExpression<'ast>,
     scope: &'step Scope<'step>,
 ) -> Option<BinderInstall> {
@@ -101,7 +101,7 @@ impl<'run> KoanRuntime<'run> {
     /// installs at the same outermost step), allocates the slot via [`Scheduler::alloc_node`], then
     /// stamps the binder's placeholder on the scope — before the slot is ever popped, so a later
     /// sibling parks rather than surfacing `UnboundName` / `DispatchFailed`.
-    pub(in crate::machine::execute) fn submit_expression<'ast: 'step, 'step>(
+    pub(in crate::machine::execute) fn submit_expression<'ast, 'step>(
         &mut self,
         expr: KExpression<'ast>,
         scope: &'step Scope<'step>,

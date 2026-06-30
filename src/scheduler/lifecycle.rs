@@ -2,9 +2,7 @@
 //! workload's driver calls at a step's Done boundary. See
 //! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
 
-use std::rc::Rc;
-
-use super::{Live, NodeId, Scheduler, Workload};
+use super::{NodeId, Scheduler, Witnessed, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
@@ -12,15 +10,15 @@ impl<W: Workload> Scheduler<W> {
     /// producer drains.
     ///
     /// Wakes must all land before any queue push: a later wake re-reading the
-    /// slot must observe the prior transition.
+    /// slot must observe the prior transition. The terminal arrives already bundled with its witness
+    /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
     pub(crate) fn finalize(
         &mut self,
         idx: usize,
-        output: Result<Live<'_, W>, W::Error>,
-        frame: Option<Rc<W::Cart>>,
+        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
     ) {
         let id = NodeId(idx);
-        self.store.finalize(id, output, frame);
+        self.store.finalize(id, output);
         let drained = self.deps.drain_notify(idx);
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
@@ -37,8 +35,8 @@ impl<W: Workload> Scheduler<W> {
     /// producers this slot merely parked on, and reclaiming a consumer must not reach
     /// across a park edge into the producer's subtree.
     ///
-    /// Idempotent and safe to call on a still-live slot. References handed out by `read` survive
-    /// because the value lives in a region.
+    /// Idempotent and safe to call on a still-live slot. A value opened by a read lives in a region
+    /// the carrier's frame pins, not in the slot, so freeing the slot cannot dangle it.
     pub(crate) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {

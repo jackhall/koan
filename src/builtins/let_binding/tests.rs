@@ -16,10 +16,10 @@ fn binder_name_extracts_let_name() {
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::default_scope;
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
-    use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET hello = 1").unwrap();
@@ -37,11 +37,11 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 #[test]
 fn let_t_cycle_errors() {
     use crate::builtins::default_scope;
+    use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET Ty = Ty").unwrap();
@@ -49,7 +49,7 @@ fn let_t_cycle_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -59,7 +59,7 @@ fn let_t_cycle_errors() {
             matches!(&e.kind, KErrorKind::UnboundName(msg) if msg.contains("Ty")),
             "expected UnboundName naming Ty, got {e}",
         ),
-        Ok(v) => panic!("expected UnboundName error, got value {:?}", v.ktype()),
+        Ok(ktype) => panic!("expected UnboundName error, got value {ktype}"),
     }
 }
 
@@ -68,11 +68,11 @@ fn let_t_cycle_errors() {
 /// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
-        let region = KoanRegion::new();
+        let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
         let mut sched = KoanRuntime::new();
         let exprs = parse(src).unwrap();
@@ -80,13 +80,13 @@ fn let_type_class_with_non_type_value_errors() {
         sched
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result(id) {
+        match sched.read_result_with(id, |v| format!("{:?}", v.ktype())) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
                 "expected TypeClassBindingExpectsType for {src:?}, got {e}",
             ),
-            Ok(v) => panic!("expected bind-time error for {src:?}, got {:?}", v.ktype()),
+            Ok(ktype) => panic!("expected bind-time error for {src:?}, got {ktype}"),
         }
     }
 }
@@ -95,10 +95,10 @@ fn let_type_class_with_non_type_value_errors() {
 /// via `register_type`, reachable through `Scope::resolve_type`.
 #[test]
 fn let_type_class_with_type_value_still_binds() {
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::KType;
-    use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET Foo = Number").unwrap();
@@ -109,7 +109,7 @@ fn let_type_class_with_type_value_still_binds() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
         .resolve_type("Foo")
@@ -121,9 +121,9 @@ fn let_type_class_with_type_value_still_binds() {
 /// `KTypeValue(_)` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
-    use crate::machine::KoanRegion;
+    use crate::machine::core::FrameStorage;
     use crate::parse::parse;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET foo = 1").unwrap();
@@ -134,7 +134,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
     let (entry, _) = data.get("foo").expect("expected binding 'foo'");
@@ -149,10 +149,10 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 /// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
     use crate::parse::parse;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut sched = KoanRuntime::new();
     let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
@@ -163,13 +163,13 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     sched
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result(ids[0]);
+    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),
             "expected ShapeError, got {e}",
         ),
-        Ok(v) => panic!("expected shape error, got value {:?}", v.ktype()),
+        Ok(ktype) => panic!("expected shape error, got value {ktype}"),
     }
 }
 
@@ -179,9 +179,9 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 #[test]
 fn let_aliases_struct_preserves_type_identity() {
     use crate::builtins::test_support::run;
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::KType;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     run(
         scope,
@@ -206,9 +206,9 @@ fn let_aliases_struct_preserves_type_identity() {
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
     assert!(
@@ -219,7 +219,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     // outer SIG's error is a combine-propagated shape error and doesn't carry
     // the inner diagnostic text.
     use crate::machine::Scope;
-    let sig_scope = region.alloc_scope(Scope::child_under_sig(
+    let sig_scope = region.brand().alloc_scope(Scope::child_under_sig(
         scope,
         "SyntheticForTest".to_string(),
     ));
@@ -241,9 +241,9 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 #[test]
 fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
@@ -264,8 +264,8 @@ fn let_type_class_with_plain_function_rejects() {
 #[test]
 fn let_type_class_with_functor_admits() {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    use crate::machine::core::FrameStorage;
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -294,9 +294,9 @@ fn let_type_class_with_functor_admits() {
 #[test]
 fn let_value_class_with_functor_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
     let err = run_one_err(
@@ -331,9 +331,9 @@ fn let_value_class_with_functor_rejects() {
 #[test]
 fn let_type_class_in_sig_body_still_works() {
     use crate::builtins::test_support::{run, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::types::AbstractSource;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -373,8 +373,8 @@ fn let_type_class_in_sig_body_still_works() {
 #[test]
 fn let_type_class_signature_alias_preserves_identity() {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    use crate::machine::core::FrameStorage;
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -401,9 +401,9 @@ fn let_type_class_signature_alias_preserves_identity() {
 #[test]
 fn let_value_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -432,9 +432,9 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::core::FrameStorage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRegion;
-    let region = KoanRegion::new();
+    let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
     let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
