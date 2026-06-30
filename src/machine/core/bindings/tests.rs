@@ -1,10 +1,12 @@
 //! Unit coverage for the `types` map write primitive `try_register_type`, plus
-//! the `pending_types` RAII guard lifecycle.
+//! the `pending_types` RAII guard lifecycle and the cross-kind exclusion that
+//! makes the `data`/`types` partition structural (no name in both).
 
 use super::*;
 use crate::machine::core::arena::FrameStorage;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::{KKind, KType};
+use crate::machine::model::values::KObject;
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
@@ -87,6 +89,112 @@ fn try_register_type_does_not_touch_data_or_functions() {
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
+}
+
+// --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
+// Each declarator routes to one of these write primitives (LET-value →
+// `try_bind_value`; LET-type-alias / VAL / NEWTYPE-sigil → `try_register_type`;
+// MODULE / SIG / UNION / NEWTYPE-record / RECURSIVE-finalize →
+// `try_register_type_upsert`; module/USING replay → `try_bulk_install_from`), so
+// proving the primitive rejects a cross-kind collision proves it for every bind
+// site. The reverse — a bare `FN`, which binds neither `data` nor `types` — is
+// exempt; that is covered Scope-side in `core::tests::register`.
+
+#[test]
+fn value_bind_then_type_register_is_rebind() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    bindings
+        .try_bind_value("x", val, BindingIndex::BUILTIN)
+        .expect("value bind should succeed on fresh bindings");
+    let err = match bindings.try_register_type("x", kt, BindingIndex::BUILTIN) {
+        Err(e) => e,
+        Ok(_) => panic!("registering a type over a committed value must be rejected"),
+    };
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "x"));
+    // The value survives untouched; nothing landed in `types`.
+    assert!(bindings.types().get("x").is_none());
+    assert!(bindings.data().get("x").is_some());
+}
+
+#[test]
+fn value_bind_then_type_upsert_is_rebind() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    bindings
+        .try_bind_value("x", val, BindingIndex::BUILTIN)
+        .expect("value bind should succeed");
+    let err = match bindings.try_register_type_upsert("x", kt, BindingIndex::BUILTIN) {
+        Err(e) => e,
+        Ok(_) => panic!("upserting a type over a committed value must be rejected"),
+    };
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "x"));
+    assert!(bindings.types().get("x").is_none());
+}
+
+#[test]
+fn type_register_then_value_bind_is_rebind() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    bindings
+        .try_register_type("T", kt, BindingIndex::BUILTIN)
+        .expect("type register should succeed on fresh bindings");
+    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN) {
+        Err(e) => e,
+        Ok(_) => panic!("binding a value over a committed type must be rejected"),
+    };
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "T"));
+    assert!(bindings.data().get("T").is_none());
+    assert!(bindings.types().get("T").is_some());
+}
+
+#[test]
+fn type_upsert_then_value_bind_is_rebind() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    bindings
+        .try_register_type_upsert("T", kt, BindingIndex::BUILTIN)
+        .expect("type upsert should succeed");
+    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN) {
+        Err(e) => e,
+        Ok(_) => panic!("binding a value over an upserted type must be rejected"),
+    };
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "T"));
+    assert!(bindings.data().get("T").is_none());
+}
+
+#[test]
+fn bulk_install_rejects_value_colliding_with_committed_type() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    // `dst` already holds `Foo` as a type; replaying a source whose `data` binds
+    // `Foo` as a value must be rejected — `try_bulk_install_from` routes through
+    // `try_apply` (`write_data == true`), so the cross-kind check fires.
+    let dst: Bindings<'_> = Bindings::new();
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    dst.try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .expect("type register should succeed");
+    let src: Bindings<'_> = Bindings::new();
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    src.try_bind_value("Foo", val, BindingIndex::BUILTIN)
+        .expect("source value bind should succeed");
+    let err = dst
+        .try_bulk_install_from(&src)
+        .expect_err("bulk-installing a value over a committed type must be rejected");
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
+    assert!(dst.data().get("Foo").is_none());
 }
 
 #[test]

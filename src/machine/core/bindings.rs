@@ -2,8 +2,10 @@
 //! `functions`, `placeholders`, `pending_overloads`) behind validated write
 //! paths that keep the function-mirror invariant — every `data[name]` wrapping
 //! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal
-//! declarations (STRUCT / UNION / MODULE) install identity into `types`
-//! alongside the carrier in `data` atomically.
+//! declarations (NEWTYPE / UNION / MODULE / SIG) install their identity into
+//! `types` only — there is no value-side carrier. The `data` and `types` maps
+//! are a structural partition: a name is committed to one xor the other, never
+//! both, enforced by the cross-kind check the value and type write paths run.
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
@@ -414,7 +416,8 @@ impl<'a> Bindings<'a> {
         self.pending.remove(name);
     }
 
-    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists.
+    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists, or if `name`
+    /// is a committed type (`types[name]`) — the value/type partition is mutually exclusive.
     /// When `obj` wraps a `KFunction` it is also mirrored into
     /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
     ///
@@ -447,9 +450,9 @@ impl<'a> Bindings<'a> {
         self.try_apply(name, obj, Some(fn_ref), false, index)
     }
 
-    /// Register `name` → `kt` in `types`. Errors `Rebind` if already present;
-    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on
-    /// success.
+    /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
+    /// if `name` is a committed value (`data[name]`) — the partition is mutually exclusive.
+    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
     pub fn try_register_type(
         &self,
         name: &str,
@@ -462,7 +465,8 @@ impl<'a> Bindings<'a> {
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
     /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
     /// `index`) so the `SetRef` an SCC seal pre-installed (same set + index) is rewritten
-    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`.
+    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`, as is a
+    /// committed value at `data[name]` (the value/type partition is mutually exclusive).
     ///
     /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
     /// would `Rebind` on the seal pre-install rather than overwrite it.
@@ -477,6 +481,18 @@ impl<'a> Bindings<'a> {
             Ok(t) => t,
             Err(_) => return Ok(ApplyOutcome::Conflict),
         };
+        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
+        // is already held, so probing `data` next preserves the `types → data` borrow order.
+        match self.data.try_borrow() {
+            Ok(data) => {
+                if data.contains_key(name) {
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: name.to_string(),
+                    }));
+                }
+            }
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        }
         match types.get(name).map(|(t, _)| *t) {
             Some(existing) if *existing != *kt => {
                 return Err(KError::new(KErrorKind::Rebind {
@@ -596,6 +612,18 @@ impl<'a> Bindings<'a> {
                 name: name.to_string(),
             }));
         }
+        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
+        // is already held, so probing `data` next preserves the `types → data` borrow order.
+        match self.data.try_borrow() {
+            Ok(data) => {
+                if data.contains_key(name) {
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: name.to_string(),
+                    }));
+                }
+            }
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        }
         types.insert(name.to_string(), (kt, index));
         drop(types);
         self.clear_placeholder_best_effort(name);
@@ -622,6 +650,22 @@ impl<'a> Bindings<'a> {
         write_data: bool,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
+        // Cross-kind exclusion: a value name may not collide with a committed type — the
+        // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
+        // order `types → functions → data`); a bare-`FN` registration (`write_data == false`)
+        // binds no value, so it is exempt.
+        if write_data {
+            match self.types.try_borrow() {
+                Ok(types) => {
+                    if types.contains_key(name) {
+                        return Err(KError::new(KErrorKind::Rebind {
+                            name: name.to_string(),
+                        }));
+                    }
+                }
+                Err(_) => return Ok(ApplyOutcome::Conflict),
+            }
+        }
         let mut functions_handle = if fn_part.is_some() {
             match self.functions.try_borrow_mut() {
                 Ok(g) => Some(g),

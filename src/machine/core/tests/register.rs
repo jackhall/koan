@@ -246,6 +246,33 @@ fn register_function_coexists_with_same_name_value() {
         .unwrap_or(false));
 }
 
+/// The cross-kind exclusion guards the value/type partition, but a bare FN binds
+/// neither `data` nor `types` (it writes only `functions`, `write_data == false`),
+/// so it is exempt: a same-name type and a bare FN coexist.
+#[test]
+fn register_function_coexists_with_same_name_type() {
+    let region = FrameStorage::run_root();
+    let scope = run_root_bare(&region);
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
+    let f = region.brand().alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
+    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    scope
+        .register_function("Foo".to_string(), f, obj, BindingIndex::BUILTIN)
+        .expect("bare FN registration must not collide with a same-name type");
+    assert!(scope.bindings().types().get("Foo").is_some());
+    let key = f.signature.untyped_key();
+    assert!(scope
+        .bindings()
+        .functions()
+        .get(&key)
+        .map(|b| !b.is_empty())
+        .unwrap_or(false));
+}
+
 #[test]
 fn resolve_returns_placeholder_when_only_placeholder_exists() {
     let region = FrameStorage::run_root();
