@@ -346,11 +346,13 @@ What's shipped that the open items below build on:
   invariant now holds structurally across `scheduler/**`. The methods are `&mut self` on
   `KoanRuntime` (below), reached through the scheduler's public surface (`submit_in_own_scope` /
   `current_scope`). See [design/execution/README.md](../design/execution/scheduler.md#the-dispatcher--scheduler-boundary).
-- *Dep-request enum made AST-free at the source.* The six-arm dep enum a
+- *One dep-request currency, AST-free at the source.* The six-arm dep enum a
   `ParkThenContinue` declares (`Dispatch` / `ListLit` / `DictLit` / `RecordLit` / `BodyBlock` /
-  `Existing`) is renamed `DispatchDep`→[`DepRequest`](../src/machine/execute/dispatch.rs) and
-  moved out of `outcome.rs` to the dispatch side, beside `PendingSub` — the layer that
-  legitimately names AST. The data arms are unchanged (each still carries its `KExpression` /
+  `Existing`) is the one [`DepRequest`](../src/machine/core/kfunction/action.rs) both a dispatch
+  `ParkThenContinue` and a builtin's `Action` (`AwaitDeps` / `Catch`) declare — the former `Dep`
+  core enum folded in, so the shared `Dispatch` / `Existing` core is spelled once. It lives in
+  core (`action.rs`) so an `Action` can carry it, and is re-exported to the dispatch side beside
+  `PendingSub` — the layer that legitimately names AST. The data arms are unchanged (each still carries its `KExpression` /
   `ExpressionPart`), and the harness `match` still does every `&mut Scheduler` write. The win:
   `outcome.rs` imports no `crate::machine::model::ast` and carries `DepRequest` as an opaque
   type, so the decide phase stays read-only and the scheduler-step currency names no AST.
@@ -378,7 +380,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
-- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
@@ -492,9 +493,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md) — name the
   bound/parked/unbound disposition shared by core `Resolution` and execute `NameOutcome` once,
   without minting a third `ResolveOutcome`.
-- [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md) — the two dep enums
-  carry an identical `Dispatch`/`Existing` core (and already share `DepPlacement`); give them a
-  shared core or a visibly-related pair.
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md) — verify the
   AST recursion that finds a submission's binders, then cache its parse-static portion on
   `KExpression` (beside `DispatchShape`) instead of re-deriving it at every submission.
