@@ -114,7 +114,7 @@ pub(crate) fn classify_return_type<'a>(
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
             let state = match scope.resolve_type_identifier(&te, chain) {
-                TypeIdentifierResolution::Done(kt) => ReturnTypeState::Done(kt.clone()),
+                TypeIdentifierResolution::Done { kt, .. } => ReturnTypeState::Done(kt.clone()),
                 TypeIdentifierResolution::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }
                 }
@@ -239,7 +239,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeIdentifier::leaf(name.clone());
             match scope.resolve_type_identifier(&te, None) {
-                TypeIdentifierResolution::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
+                TypeIdentifierResolution::Done { kt, .. } => Ok(ReturnType::Resolved(kt.clone())),
                 TypeIdentifierResolution::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after dep-finish wake".to_string(),
                 ))),

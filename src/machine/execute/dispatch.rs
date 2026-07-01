@@ -100,7 +100,9 @@ pub(super) fn resolve_name_part<'step>(
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
         Some(t) => match resolve_type_leaf_carrier(scope, t, active_chain.cloned()) {
-            TypeLeafCarrier::Resolved(kt) => NameOutcome::Resolved(Carried::Type(kt)),
+            // The `&KType` rides the type channel; its reach is recomputed at the read site
+            // (`literal.rs`) via `resolve_type_reach`, since `NameOutcome` carries only the value.
+            TypeLeafCarrier::Resolved { kt, .. } => NameOutcome::Resolved(Carried::Type(kt)),
             TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
             TypeLeafCarrier::Park(producers) => match producers.first() {
                 Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),

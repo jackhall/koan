@@ -53,7 +53,7 @@ fn finalize_newtype<'a>(
     let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
     match scope
         .bindings()
-        .try_register_type(&name, kt_ref, bind_index)
+        .try_register_type(&name, kt_ref, bind_index, FrameSet::empty())
     {
         Ok(ApplyOutcome::Applied) => {
             Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
@@ -360,7 +360,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
-        let (kt, _) = types
+        let (kt, _, _) = types
             .get("Distance")
             .expect("Distance should be in bindings.types");
         match **kt {

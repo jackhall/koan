@@ -15,7 +15,8 @@ use super::{arg, kw, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Reads `m` / `s` from the
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
-/// witnessed [`Action::DoneWitnessed`] carrier (`Scope::seal_module` folds the child scope's reach).
+/// witnessed [`Action::DoneWitnessed`] carrier ([`Scope::resident_type_carrier`] seals it under the
+/// child scope's reach, folded via [`Scope::reach_of_child`]).
 pub fn body_opaque<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -126,13 +127,18 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let carrier = region.alloc_ktype_witnessed(KType::Module { module: new_module });
-    Action::DoneWitnessed(ctx.scope.seal_module(carrier))
+    // The view's reach is folded from `new_scope` held directly here (co-located, so it names only
+    // what the bulk-installed members reach), stored nowhere — the view is a returned value, not a
+    // named binding — and sealed onto the terminal carrier, witnessing the module in place.
+    let reach = ctx.scope.reach_of_child(new_scope);
+    let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
+    Action::DoneWitnessed(ctx.scope.resident_type_carrier(kt_ref, &reach))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
 /// own child scope and returns the retagged view module as a witnessed [`Action::DoneWitnessed`]
-/// carrier — `seal_module` pins the (foreign) source module's child-scope region the view borrows.
+/// carrier — [`Scope::resident_type_carrier`] pins the (foreign) source module's child-scope region
+/// the view borrows, from the reach folded via [`Scope::reach_of_child`].
 pub fn body_transparent<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -148,8 +154,11 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let carrier = region.alloc_ktype_witnessed(KType::Module { module: new_module });
-    Action::DoneWitnessed(ctx.scope.seal_module(carrier))
+    // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
+    // to this frame — so its reach folds that source's region and reach, sealed onto the terminal.
+    let reach = ctx.scope.reach_of_child(m.child_scope());
+    let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
+    Action::DoneWitnessed(ctx.scope.resident_type_carrier(kt_ref, &reach))
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing

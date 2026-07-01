@@ -34,6 +34,9 @@ enum PendingWrite<'a> {
         name: String,
         kt: &'a crate::machine::model::types::KType<'a>,
         index: BindingIndex,
+        /// The bound type's home-omitted foreign reach, carried through the deferred write so a
+        /// drained type register stores the same reach a direct register would.
+        reach: FrameSet,
     },
 }
 
@@ -83,10 +86,14 @@ impl<'a> PendingQueue<'a> {
         name: String,
         kt: &'a crate::machine::model::types::KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) {
-        self.pending
-            .borrow_mut()
-            .push(PendingWrite::Type { name, kt, index });
+        self.pending.borrow_mut().push(PendingWrite::Type {
+            name,
+            kt,
+            index,
+            reach,
+        });
     }
 
     /// Items that still hit a borrow conflict re-queue (eventually-consistent, not
@@ -152,20 +159,25 @@ impl<'a> PendingQueue<'a> {
                         debug_assert!(false, "PendingQueue::drain hit invariant violation: {_e}",);
                     }
                 },
-                PendingWrite::Type { name, kt, index } => {
-                    match bindings.try_register_type(&name, kt, index) {
-                        Ok(ApplyOutcome::Applied) => {}
-                        Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Type { name, kt, index });
-                        }
-                        Err(_e) => {
-                            debug_assert!(
-                                false,
-                                "PendingQueue::drain hit invariant violation: {_e}",
-                            );
-                        }
+                PendingWrite::Type {
+                    name,
+                    kt,
+                    index,
+                    reach,
+                } => match bindings.try_register_type(&name, kt, index, reach.clone()) {
+                    Ok(ApplyOutcome::Applied) => {}
+                    Ok(ApplyOutcome::Conflict) => {
+                        still_pending.push(PendingWrite::Type {
+                            name,
+                            kt,
+                            index,
+                            reach,
+                        });
                     }
-                }
+                    Err(_e) => {
+                        debug_assert!(false, "PendingQueue::drain hit invariant violation: {_e}",);
+                    }
+                },
             }
         }
         if !still_pending.is_empty() {
@@ -193,13 +205,19 @@ mod tests {
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
         let kt = region.alloc_ktype(KType::Number);
-        queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
+        queue.defer_type(
+            "Foo".to_string(),
+            kt,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        );
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);
-        let (stored, _) = *bindings
+        let stored = bindings
             .types()
             .get("Foo")
-            .expect("Foo should be in types after drain");
+            .expect("Foo should be in types after drain")
+            .0;
         assert!(std::ptr::eq(stored, kt));
     }
 

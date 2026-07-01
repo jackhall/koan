@@ -298,14 +298,22 @@ impl<'step> KoanRuntime<'step> {
                 ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
                 _ => unreachable!("resolve_aggregate_bare_name only sees Identifier / Type parts"),
             };
+            let leaf_name = match &part_b {
+                ExpressionPart::Identifier(n) => n.as_str(),
+                ExpressionPart::Type(t) => t.as_str(),
+                _ => unreachable!(),
+            };
             match resolve_name_part(s, &part_b, &self.sched, active_chain, None) {
-                // A first-class **type** resolved into the cell rides the type channel sealed under the
-                // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
-                // chain. The resolved leaf is cloned into the region-pure witnessed surface (sharing its
-                // `Rc` payload, identity preserved) and sealed — a `KType::Module` folds its child reach.
-                NameOutcome::Resolved(Carried::Type(kt)) => Some(Slot::Static(Sealed::seal(
-                    s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone())),
-                ))),
+                // A first-class **type** resolved into the cell is witnessed in place from its binding's
+                // stored reach (recomputed here, since `resolve_name_part` returns only the `&KType`):
+                // the read scope's home frame pins the type's (ancestor) region via its `outer` chain,
+                // and `reach` names any genuinely-foreign region (a module's child scope).
+                NameOutcome::Resolved(Carried::Type(kt)) => {
+                    let reach = s.resolve_type_reach(leaf_name, active_chain.map(|c| &**c));
+                    Some(Slot::Static(Sealed::seal(
+                        s.resident_type_carrier(kt, &reach),
+                    )))
+                }
                 // The value case is handled above via the reach-carrying binding-scope carrier
                 // (`resolve_value_carrier`). A bare `Carried::Object` reaching here carries no reach to
                 // build a correct carrier from, so it falls through to the sub-dispatch fallback rather

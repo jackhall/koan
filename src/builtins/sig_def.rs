@@ -13,6 +13,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
+use crate::machine::FrameSet;
 use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
@@ -49,10 +50,12 @@ pub fn body<'a>(
             sig,
             pinned_slots: Vec::new(),
         };
-        match fctx
-            .scope
-            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
-        {
+        match fctx.scope.register_type_upsert(
+            name_for_finish.clone(),
+            identity,
+            bind_index,
+            FrameSet::empty(),
+        ) {
             Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
                 fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,

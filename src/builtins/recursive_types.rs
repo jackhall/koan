@@ -17,6 +17,7 @@
 //! guarantees every forward reference resolved.
 
 use crate::machine::model::types::KKind;
+use crate::machine::FrameSet;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -146,18 +147,22 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             };
-            if let Err(e) = fctx
-                .scope
-                .register_type_upsert(name.clone(), member_ref, bind_index)
-            {
+            if let Err(e) = fctx.scope.register_type_upsert(
+                name.clone(),
+                member_ref,
+                bind_index,
+                FrameSet::empty(),
+            ) {
                 return Action::Done(Err(e.with_frame(frame())));
             }
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
-        match fctx
-            .scope
-            .register_type_upsert(group_name.clone(), handle, bind_index)
-        {
+        match fctx.scope.register_type_upsert(
+            group_name.clone(),
+            handle,
+            bind_index,
+            FrameSet::empty(),
+        ) {
             Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
                 fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,

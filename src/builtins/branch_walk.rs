@@ -22,7 +22,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     let ret_kt = match arg_type(ctx.args, "return_type") {
         Some(KType::Unresolved(te)) => {
             match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
-                TypeIdentifierResolution::Done(kt) => kt.clone(),
+                TypeIdentifierResolution::Done { kt, .. } => kt.clone(),
                 _ => KType::from_name(&te.render()).ok_or_else(|| {
                     KError::new(KErrorKind::ShapeError(format!(
                         "{kind} return type `{}` is not a known type",

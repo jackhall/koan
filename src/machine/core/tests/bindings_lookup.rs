@@ -94,7 +94,12 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
+    scope.register_type(
+        "Tee".into(),
+        KType::Number,
+        BindingIndex::value(99),
+        FrameSet::empty(),
+    );
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
         Some(TypeResolution::Type(KType::Number)),
@@ -105,7 +110,12 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
+    scope.register_type(
+        "TyLate".into(),
+        KType::Number,
+        BindingIndex::value(5),
+        FrameSet::empty(),
+    );
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
 }

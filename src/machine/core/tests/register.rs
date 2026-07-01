@@ -294,7 +294,12 @@ fn register_function_coexists_with_same_name_value() {
 fn register_function_coexists_with_same_name_type() {
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Foo".to_string(),
+        KType::Number,
+        BindingIndex::BUILTIN,
+        FrameSet::empty(),
+    );
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -331,7 +336,12 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
             FrameSet::empty(),
         )
         .unwrap();
-    scope.register_type("Ty".to_string(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Ty".to_string(),
+        KType::Number,
+        BindingIndex::BUILTIN,
+        FrameSet::empty(),
+    );
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
@@ -339,7 +349,10 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     ));
     assert!(matches!(
         bindings.lookup_member("Ty", None),
-        Some(MemberResolution::Type(KType::Number))
+        Some(MemberResolution::Type {
+            kt: KType::Number,
+            ..
+        })
     ));
     assert!(bindings.lookup_member("absent", None).is_none());
 }
@@ -541,7 +554,12 @@ fn visibility_type_side_gate_mirrors_value_side() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = run_root_bare(&region);
-    scope.register_type("TyLate".to_string(), KType::Number, BindingIndex::value(5));
+    scope.register_type(
+        "TyLate".to_string(),
+        KType::Number,
+        BindingIndex::value(5),
+        FrameSet::empty(),
+    );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(scope
         .resolve_type_with_chain("TyLate", Some(&consumer_before))

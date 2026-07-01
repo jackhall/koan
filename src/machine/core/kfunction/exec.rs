@@ -174,9 +174,20 @@ where
                     }
                     // Type-denoting params (`Er`-style) register a type, not a value binding.
                     // The arg is an already-resolved type, so `type_identity_for` would just
-                    // pass it through — register it directly (avoids the def-scope lifetime).
+                    // pass it through — register it directly (avoids the def-scope lifetime). A
+                    // module-typed argument reaches its child scope's region, so store the arg
+                    // carrier's home-omitted reach (empty for an owned type).
                     Held::Type(kt) => {
-                        child.register_type(name.clone(), kt.clone(), BindingIndex::value(0));
+                        let reach = arg_carriers
+                            .get(name)
+                            .map(|carrier| child.foreign_reach_of(carrier.witness()))
+                            .unwrap_or_default();
+                        child.register_type(
+                            name.clone(),
+                            kt.clone(),
+                            BindingIndex::value(0),
+                            reach,
+                        );
                     }
                 }
             }

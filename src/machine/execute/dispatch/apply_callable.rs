@@ -122,8 +122,10 @@ fn apply_constructor<'step>(
                     tag,
                 };
                 let scope = ctx.current_scope();
+                // A freshly-built union `Variant` — owned data (a `SetRef` via `Rc`) reaching no
+                // foreign region — sealed under the home frame alone.
                 let carrier = scope.brand().alloc_ktype_witnessed(variant);
-                return Outcome::DoneWitnessed(scope.seal_type(carrier));
+                return Outcome::DoneWitnessed(scope.seal_value(carrier, None));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.

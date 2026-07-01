@@ -184,8 +184,9 @@ impl<'a> RegionBrand<'a> {
     ///
     /// Region-pure is the precondition: a `KType` built fresh inside the brand referencing no other
     /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
-    /// scope's region, so it is born here empty and folds that reach through
-    /// [`Scope::seal_module`](crate::machine::core::Scope) rather than naming it on this surface.
+    /// scope's region, so its carrier is not born on this surface: it is sealed by
+    /// [`Scope::resident_type_carrier`](crate::machine::core::Scope) under the child-scope reach folded
+    /// at construction.
     pub(crate) fn alloc_ktype_witnessed(
         self,
         value: KType<'_>,

@@ -229,7 +229,7 @@ pub enum Action<'a> {
     Done(Result<Carried<'a>, KError>),
     /// Produce a value built **inside the witness closure** — already bundled with the set of
     /// regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at the alloc site, or
-    /// a `seal_value` / `seal_type` / `seal_module` sealing a constructed value), so it is co-located
+    /// a `seal_value` / `resident_type_carrier` sealing a constructed or read value), so it is co-located
     /// by construction rather than paired with an asserted witness at finalize. The construction
     /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` returns this
     /// instead of the bare [`Done`](Self::Done). Only errors and a single-dep value *forward* (whose

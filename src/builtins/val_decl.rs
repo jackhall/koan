@@ -14,7 +14,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -153,10 +153,14 @@ fn finalize_val<'a>(
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    if let Err(e) = scope.register_user_type(name, declared_kt.clone(), bind_index) {
+    // A VAL declares an abstract / declared slot type — owned data reaching no foreign region, so its
+    // stored reach is empty.
+    if let Err(e) =
+        scope.register_user_type(name, declared_kt.clone(), bind_index, FrameSet::empty())
+    {
         return Action::Done(Err(e));
     }
-    Action::DoneWitnessed(scope.seal_type(scope.brand().alloc_ktype_witnessed(declared_kt)))
+    Action::DoneWitnessed(scope.seal_value(scope.brand().alloc_ktype_witnessed(declared_kt), None))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

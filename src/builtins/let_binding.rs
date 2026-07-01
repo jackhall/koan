@@ -102,15 +102,29 @@ pub fn body<'a>(
         } else {
             kt
         };
-        if let Err(e) = ctx.scope.register_user_type(name, kt.clone(), bind_index) {
+        // The aliased type's home-omitted foreign reach arrives on the delivered RHS carrier (a module
+        // alias inherits the module's child-scope reach); a region-pure / owned type has none. Stored
+        // on the `types` binding and folded into the scope reach-set — no walk of the built value.
+        let reach = ctx
+            .arg_carrier("value")
+            .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
+            .unwrap_or_default();
+        if let Err(e) = ctx
+            .scope
+            .register_user_type(name, kt.clone(), bind_index, reach.clone())
+        {
             return done_err(e);
         }
         // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
         // region (a module returned from a call, naming a child scope in the now-dying producer frame)
-        // outlives the binding — the type-channel analogue of the value-arm fold below. `fold_reach`
-        // omits the home frame, so a region-pure / ancestor-resident type deposits nothing.
-        let carrier = ctx.scope.seal_type(region.alloc_ktype_witnessed(kt));
-        ctx.scope.fold_reach(carrier.witness());
+        // outlives the binding — the type-channel analogue of the value-arm fold below.
+        if let Some(carrier) = ctx.arg_carrier("value") {
+            ctx.scope.fold_reach(carrier.witness());
+        }
+        // The terminal witnesses the aliased type in place from that stored reach.
+        let carrier = ctx
+            .scope
+            .resident_type_carrier(region.alloc_ktype(kt), &reach);
         Action::DoneWitnessed(carrier)
     } else {
         let value = rhs

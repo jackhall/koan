@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::core::{LexicalFrame, Resolution, Scope, ScopeId, TypeResolution};
+use crate::machine::core::{FrameSet, LexicalFrame, Resolution, Scope, ScopeId, TypeResolution};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
@@ -213,7 +213,7 @@ pub fn finalize_nominal_member<'a>(
         set: Rc::clone(&set),
         index,
     };
-    match scope.register_type_upsert(name.to_string(), identity, bind_index) {
+    match scope.register_type_upsert(name.to_string(), identity, bind_index, FrameSet::empty()) {
         Ok(kt_ref) => SealOutcome::Sealed(kt_ref),
         Err(e) => SealOutcome::Rebind(e),
     }

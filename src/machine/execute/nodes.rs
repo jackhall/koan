@@ -30,7 +30,7 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 pub(super) enum NodeStep {
     /// The finalized value terminal — a [`Witnessed`](crate::witnessed::Witnessed) carrier naming
     /// every region it reaches, built inside its witness closure (a construction inversion, a
-    /// `seal_value` / `seal_type`, or a region-pure [`resident`](crate::witnessed::Witnessed::resident)
+    /// `seal_value` / `resident_type_carrier`, or a region-pure [`resident`](crate::witnessed::Witnessed::resident)
     /// seal of a bare terminal). `run_step` seals it through
     /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal): fold the producing
     /// frame into the witness (the scope-reach seal at close), a declared-return re-stamp aside. The

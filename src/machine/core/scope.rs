@@ -8,7 +8,9 @@ use crate::machine::model::ast::KExpression;
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
 pub use super::bindings::Resolution;
-use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, TypeResolution};
+use super::bindings::{
+    ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, TypeCarrierHit, TypeResolution,
+};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
@@ -410,7 +412,7 @@ impl<'a> Scope<'a> {
         &self,
         te: &crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<&'a crate::machine::model::types::KType<'a>> {
+    ) -> Option<(&'a crate::machine::model::types::KType<'a>, FrameSet)> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -418,19 +420,21 @@ impl<'a> Scope<'a> {
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
-    /// [`Self::type_identifier_memo_get`]).
+    /// [`Self::type_identifier_memo_get`]). `reach` is the resolved type binding's home-omitted
+    /// foreign reach, cached alongside the `&KType` so a memo hit rebuilds the read carrier.
     pub(crate) fn type_identifier_memo_insert(
         &self,
         te: crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
         kt: &'a crate::machine::model::types::KType<'a>,
+        reach: FrameSet,
     ) {
         if self.bindings.is_borrowed() {
             return;
         }
         self.bindings
             .get()
-            .type_identifier_memo_insert(te, cutoff, kt);
+            .type_identifier_memo_insert(te, cutoff, kt, reach);
     }
 
     /// Call-site scope a `Borrowed` window forwards writes to. Panics if `Borrowed`
@@ -596,16 +600,21 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target().register_type(name, ktype, index);
+            self.write_target().register_type(name, ktype, index, reach);
             return;
         }
         self.assert_open(&name);
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref, index) {
+        match self
+            .bindings
+            .get()
+            .try_register_type(&name, kt_ref, index, reach.clone())
+        {
             Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index, reach),
             Err(_) => {}
         }
     }
@@ -621,11 +630,12 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<(), KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        self.register_type(name, ktype, index);
+        self.register_type(name, ktype, index, reach);
         Ok(())
     }
 
@@ -644,9 +654,12 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().register_type_upsert(name, ktype, index);
+            return self
+                .write_target()
+                .register_type_upsert(name, ktype, index, reach);
         }
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -655,7 +668,7 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_register_type_upsert(&name, kt_ref, index)?
+            .try_register_type_upsert(&name, kt_ref, index, reach)?
         {
             ApplyOutcome::Applied => Ok(kt_ref),
             ApplyOutcome::Conflict => panic!(
@@ -686,7 +699,13 @@ impl<'a> Scope<'a> {
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref, index) {
+        // A pre-installed nominal identity is a `KType::SetRef` into the declaring set — owned data
+        // reaching no foreign region — so its stored reach is empty.
+        match self
+            .bindings
+            .get()
+            .try_register_type(&name, kt_ref, index, FrameSet::empty())
+        {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
                 "preinstall_identity borrow conflict on `{name}` — runs with no outer \
@@ -868,65 +887,42 @@ impl<'a> Scope<'a> {
         carrier.reseal_under(witness)
     }
 
-    /// Fold this scope's home frame **plus the module's child-scope reach** onto an already-witnessed
-    /// `carrier` holding a `KType::Module` value — the [`Self::seal_value`] analogue for a module.
-    /// Like `seal_value` the base fold is this scope's home frame, but a module rides a bare borrow
-    /// into its **child scope's** region — co-located for a freshly-built module (`MODULE`, opaque
-    /// `:|`), foreign for a transparent `:!` view of a source module — so the fold also names the
-    /// child scope's home frame and its sealed reach-set, omitting any frame the home already pins
-    /// (see [`FrameSet::fold_foreign`]). The carrier is read once via [`Witnessed::with`] to recover
-    /// the child scope, then resealed under the combined set; the relocated module identity outlives
-    /// its producer with every region it reaches named on the carrier, never reconstructed from the
-    /// value.
-    pub(crate) fn seal_module(
+    /// Build the terminal carrier for a type living **in this scope's region** from its binding's
+    /// stored reach — the type-channel twin of [`Self::resident_value_carrier`]. Witness = this
+    /// scope's home frame ∪ `foreign` (the type's home-omitted foreign reach: empty for owned data, a
+    /// module's child-scope reach folded at construction). The home frame is fetched fresh (never
+    /// stored) and the bundle runs on the confined arena surface ([`RegionBrand::seal_resident`]), so
+    /// a type read witnesses the existing `&'a KType` in place — no `alloc_ktype_witnessed` re-clone,
+    /// no `child_scope()` walk to rebuild the reach.
+    pub(crate) fn resident_type_carrier(
         &self,
-        carrier: Witnessed<CarriedFamily, FrameSet>,
+        kt: &'a crate::machine::model::types::KType<'a>,
+        foreign: &FrameSet,
     ) -> Witnessed<CarriedFamily, FrameSet> {
         let home = self
             .region_owner()
             .upgrade()
-            .expect("the sealing scope's region owner is held while its module is read");
-        // Read the module to fold its child scope's frame plus every region the child's bindings
-        // reach, omitting anything the producer home already keeps alive (so a co-located module folds
-        // nothing extra, a transparent view pins the source's region and reach).
-        let witness = carrier.with(|carried| {
-            let Carried::Type(crate::machine::model::types::KType::Module { module }) = carried
-            else {
-                unreachable!("seal_module requires a Carried::Type(KType::Module)");
-            };
-            let child = module.child_scope();
-            let mut witness = FrameSet::singleton(home.clone());
-            if let Some(child_home) = child.region_owner().upgrade() {
-                witness.fold_foreign(&FrameSet::singleton(child_home), Some(&home));
-            }
-            witness.fold_foreign(&child.reach.borrow(), Some(&home));
-            witness
-        });
-        carrier.reseal_under(witness)
+            .expect("the binding scope's region owner is held while its type is read");
+        let mut witness = FrameSet::singleton(home.clone());
+        witness.fold_foreign(foreign, Some(&home));
+        self.brand().seal_resident(Carried::Type(kt), witness)
     }
 
-    /// Fold this scope's reach onto an already-witnessed `carrier` holding a **resolved** type value
-    /// (a `LET` alias RHS, an `ATTR` type member, a bare type leaf). A `KType::Module` routes
-    /// [`Self::seal_module`] (it reaches its child scope's region); every other variant is owned data
-    /// or borrows a region this scope's home frame already pins (a lexical ancestor on the `outer`
-    /// chain, or this scope's own region), so [`Self::seal_value`] under the home frame names its full
-    /// reach. The dispatcher the resolution sites use so a projected nested module is sealed
-    /// Module-correctly without each site branching; the carrier is peeked once via [`Witnessed::with`]
-    /// to pick the arm.
-    pub(crate) fn seal_type(
-        &self,
-        carrier: Witnessed<CarriedFamily, FrameSet>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        if carrier.with(|kt| {
-            matches!(
-                kt,
-                Carried::Type(crate::machine::model::types::KType::Module { .. })
-            )
-        }) {
-            self.seal_module(carrier)
-        } else {
-            self.seal_value(carrier, None)
+    /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope,
+    /// folded from the child scope held **directly** at construction (never recovered by walking a
+    /// built `KType::Module`): the child's `region_owner` ∪ its sealed reach-set, omitting any region
+    /// this scope's home frame already pins. A co-located module (`MODULE`, opaque `:|`) folds nothing
+    /// extra; a transparent `:!` view of a source module pins that source's (foreign) region and reach.
+    /// Stored on the module's `types` binding and passed to [`Self::resident_type_carrier`] at reads,
+    /// so a module's reach is folded once at construction and never rebuilt by walking the value.
+    pub(crate) fn reach_of_child(&self, child: &Scope<'a>) -> FrameSet {
+        let home = self.region_owner().upgrade();
+        let mut foreign = FrameSet::empty();
+        if let Some(child_home) = child.region_owner().upgrade() {
+            foreign.fold_foreign(&FrameSet::singleton(child_home), home.as_ref());
         }
+        foreign.fold_foreign(&child.reach.borrow(), home.as_ref());
+        foreign
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See
@@ -1019,6 +1015,29 @@ impl<'a> Scope<'a> {
                 .bindings()
                 .lookup_type(name, scope.binding_cutoff(chain))
         })
+    }
+
+    /// The home-omitted foreign reach of the `types` binding `name` resolves to under `chain` — the
+    /// reach a bare-type-leaf read stores on its carrier, computed at the memo-miss so a hit rebuilds
+    /// the carrier without re-walking. Mirrors [`Self::resolve_type_with_chain`]'s walk (builtins
+    /// first, then innermost-wins) via the reach-carrying [`Bindings::lookup_type_carrier`]. A builtin,
+    /// a `from_name` / `RecursiveRef` fallback that names no binding, or a placeholder reaches nothing
+    /// foreign, so all yield the empty set.
+    pub(crate) fn resolve_type_reach(&self, name: &str, chain: Option<&LexicalFrame>) -> FrameSet {
+        if self.root_scope().bindings().has_builtin_type(name) {
+            return FrameSet::empty();
+        }
+        self.ancestors()
+            .find_map(|scope| {
+                scope
+                    .bindings()
+                    .lookup_type_carrier(name, scope.binding_cutoff(chain))
+            })
+            .map(|hit| match hit {
+                TypeCarrierHit::Bound { reach, .. } => reach,
+                TypeCarrierHit::Placeholder(_) => FrameSet::empty(),
+            })
+            .unwrap_or_default()
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`

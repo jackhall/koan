@@ -11,7 +11,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{Scope, TraceFrame, TypeResolution};
+use crate::machine::{Scope, TraceFrame, TypeCarrierHit};
 
 use super::{arg, kw, sig};
 
@@ -39,13 +39,19 @@ pub fn body<'a>(
         // reach-set here, before the module captures it: the sealed foreign reach rides the escaping
         // module value.
         child_scope.close();
-        // Idempotent-finalize guard: a re-bound name short-circuits.
-        if let Some(TypeResolution::Type(kt)) =
-            fctx.scope.bindings().lookup_type(&name_for_finish, None)
+        // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
+        // `&KType` in place from its **stored** reach.
+        if let Some(TypeCarrierHit::Bound { kt, reach }) = fctx
+            .scope
+            .bindings()
+            .lookup_type_carrier(&name_for_finish, None)
         {
-            let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt.clone());
-            return Action::DoneWitnessed(fctx.scope.seal_module(carrier));
+            return Action::DoneWitnessed(fctx.scope.resident_type_carrier(kt, &reach));
         }
+        // The module's home-omitted foreign reach, folded from the child scope held **directly** here
+        // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
+        // the terminal carrier.
+        let reach = fctx.scope.reach_of_child(child_scope);
         let module: &'a Module<'a> = fctx
             .scope
             .brand()
@@ -60,13 +66,16 @@ pub fn body<'a>(
             }
         }
         let identity = KType::Module { module };
-        match fctx
-            .scope
-            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
-        {
+        match fctx.scope.register_type_upsert(
+            name_for_finish.clone(),
+            identity,
+            bind_index,
+            reach.clone(),
+        ) {
             Ok(kt_ref) => {
-                let carrier = fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone());
-                Action::DoneWitnessed(fctx.scope.seal_module(carrier))
+                // Witness the registered `&KType` in place from the stored reach — no re-clone, no
+                // `child_scope()` walk.
+                Action::DoneWitnessed(fctx.scope.resident_type_carrier(kt_ref, &reach))
             }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",
@@ -110,7 +119,7 @@ mod tests {
     use crate::machine::core::FrameStorage;
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, Scope};
+    use crate::machine::{BindingIndex, FrameSet, KErrorKind, Scope};
 
     /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
     /// `bindings.types`. Recover it for inspection.
@@ -240,7 +249,12 @@ mod tests {
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.
-        scope.register_type("Foo".into(), identity, BindingIndex::value(0));
+        scope.register_type(
+            "Foo".into(),
+            identity,
+            BindingIndex::value(0),
+            FrameSet::empty(),
+        );
         run(scope, "MODULE Foo = (LET y = 2)");
         let foo = resolve_module(scope, "Foo");
         assert!(std::ptr::eq(foo, module));

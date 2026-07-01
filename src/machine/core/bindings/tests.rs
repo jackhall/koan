@@ -15,13 +15,14 @@ fn try_register_type_inserts_into_types_map() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
     let outcome = bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    let (stored, _) = *bindings
+    let stored = bindings
         .types()
         .get("Foo")
-        .expect("Foo should be in types map");
+        .expect("Foo should be in types map")
+        .0;
     assert!(std::ptr::eq(stored, kt));
     assert!(bindings.data().get("Foo").is_none());
 }
@@ -34,17 +35,19 @@ fn try_register_type_rejects_collision_with_rebind() {
     let kt1: &KType = region.alloc_ktype(KType::Number);
     let kt2: &KType = region.alloc_ktype(KType::Str);
     bindings
-        .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt1, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("first register should succeed");
-    let err = match bindings.try_register_type("Foo", kt2, BindingIndex::BUILTIN) {
+    let err = match bindings.try_register_type("Foo", kt2, BindingIndex::BUILTIN, FrameSet::empty())
+    {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    let (stored, _) = *bindings
+    let stored = bindings
         .types()
         .get("Foo")
-        .expect("Foo should still be present");
+        .expect("Foo should still be present")
+        .0;
     assert!(std::ptr::eq(stored, kt1));
 }
 
@@ -56,7 +59,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
     let kt: &KType = region.alloc_ktype(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
     assert!(_r.get("Foo").is_none());
@@ -78,7 +81,7 @@ fn try_register_type_clears_matching_placeholder() {
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type("Bar", kt, BindingIndex::BUILTIN)
+        .try_register_type("Bar", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
@@ -90,7 +93,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
@@ -115,7 +118,7 @@ fn value_bind_then_type_register_is_rebind() {
     bindings
         .try_bind_value("x", val, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("value bind should succeed on fresh bindings");
-    let err = match bindings.try_register_type("x", kt, BindingIndex::BUILTIN) {
+    let err = match bindings.try_register_type("x", kt, BindingIndex::BUILTIN, FrameSet::empty()) {
         Err(e) => e,
         Ok(_) => panic!("registering a type over a committed value must be rejected"),
     };
@@ -135,7 +138,12 @@ fn value_bind_then_type_upsert_is_rebind() {
     bindings
         .try_bind_value("x", val, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("value bind should succeed");
-    let err = match bindings.try_register_type_upsert("x", kt, BindingIndex::BUILTIN) {
+    let err = match bindings.try_register_type_upsert(
+        "x",
+        kt,
+        BindingIndex::BUILTIN,
+        FrameSet::empty(),
+    ) {
         Err(e) => e,
         Ok(_) => panic!("upserting a type over a committed value must be rejected"),
     };
@@ -151,7 +159,7 @@ fn type_register_then_value_bind_is_rebind() {
     let kt: &KType = region.alloc_ktype(KType::Number);
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     bindings
-        .try_register_type("T", kt, BindingIndex::BUILTIN)
+        .try_register_type("T", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("type register should succeed on fresh bindings");
     let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN, FrameSet::empty()) {
         Err(e) => e,
@@ -170,7 +178,7 @@ fn type_upsert_then_value_bind_is_rebind() {
     let kt: &KType = region.alloc_ktype(KType::Number);
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     bindings
-        .try_register_type_upsert("T", kt, BindingIndex::BUILTIN)
+        .try_register_type_upsert("T", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("type upsert should succeed");
     let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN, FrameSet::empty()) {
         Err(e) => e,
@@ -189,7 +197,7 @@ fn bulk_install_rejects_value_colliding_with_committed_type() {
     // `try_apply` (`write_data == true`), so the cross-kind check fires.
     let dst: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
-    dst.try_register_type("Foo", kt, BindingIndex::BUILTIN)
+    dst.try_register_type("Foo", kt, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("type register should succeed");
     let src: Bindings<'_> = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));

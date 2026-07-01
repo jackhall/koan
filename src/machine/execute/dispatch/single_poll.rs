@@ -78,15 +78,12 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match resolve_type_leaf_carrier(s, t, ctx.active_chain()) {
-        // A resolved type leaf seals under `s` (the scope it was resolved against): a `KType::Module`
-        // folds its child-scope reach via `seal_type`, every owned / ancestor-pinned variant rides
-        // `s`'s home frame — born co-located rather than bare-reattached to the step region.
-        TypeLeafCarrier::Resolved(kt) => {
-            // A resolved leaf is an existing region-resident `&KType`; clone it (sharing its `Rc`
-            // payload, so identity holds) and re-home through the region-pure witnessed surface, then
-            // seal — a `KType::Module` folds its child reach. The clone stays inside `Region`'s
-            // `resident`, so no asserted wrap is needed.
-            Outcome::DoneWitnessed(s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone())))
+        // A resolved type leaf is witnessed in place under `s` (the scope it was resolved against) from
+        // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
+        // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
+        // re-home, no `child_scope()` walk.
+        TypeLeafCarrier::Resolved { kt, reach } => {
+            Outcome::DoneWitnessed(s.resident_type_carrier(kt, &reach))
         }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS

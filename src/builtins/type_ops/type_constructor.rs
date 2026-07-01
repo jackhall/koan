@@ -56,6 +56,7 @@ pub fn body<'a>(
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
+    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
@@ -123,6 +124,7 @@ mod tests {
             "Wrap".into(),
             wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         );
         let mut sched = KoanRuntime::new();
         let id = sched.dispatch_in_scope(

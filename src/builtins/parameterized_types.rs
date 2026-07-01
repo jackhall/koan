@@ -273,6 +273,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::model::{KKind, KType, Record};
     use crate::machine::Scope;
@@ -308,6 +309,7 @@ mod tests {
                 index: 0,
             },
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         );
         let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
         match result {

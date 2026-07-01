@@ -17,7 +17,7 @@ use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, Scope, TypeCarrierHit};
 use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
@@ -26,8 +26,8 @@ use super::{arg, kw, sig};
 /// seals as a [`Witnessed`] carrier naming its reach
 /// ([`Action::DoneWitnessed`](crate::machine::core::kfunction::action::Action::done_witnessed)), an
 /// error as a bare `Done`. Both channels are witnessed: an object value via
-/// [`Scope::seal_value`], a type identity via [`Scope::seal_type`] (a projected nested module folds
-/// its child-scope reach).
+/// [`Scope::seal_value`], a type identity witnessed in place from its stored reach via
+/// [`Scope::resident_type_carrier`] (or, for a projected type field, sealed under the embedded reach).
 fn route<'a>(
     result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -124,7 +124,9 @@ pub fn body_type_lhs<'a>(
     let field_name = crate::try_action!(read_field_name(ctx.args));
     match s_kt {
         KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
-            TypeLeafCarrier::Resolved(kt) => route(access_type_member(kt, &field_name)),
+            // The lhs type's own reach is irrelevant here — the member's carrier is built from the
+            // *member's* stored reach inside `access_type_member`.
+            TypeLeafCarrier::Resolved { kt, .. } => route(access_type_member(kt, &field_name)),
             TypeLeafCarrier::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -206,8 +208,8 @@ fn access_type_member<'a>(
                 Some(MemberResolution::Value { obj, reach }) => {
                     Ok(decl.resident_value_carrier(obj, &reach))
                 }
-                Some(MemberResolution::Type(kt)) => {
-                    Ok(decl.seal_type(decl.brand().alloc_ktype_witnessed(kt.clone())))
+                Some(MemberResolution::Type { kt, reach }) => {
+                    Ok(decl.resident_type_carrier(kt, &reach))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
@@ -251,8 +253,11 @@ fn access_field<'a>(
                     scope.brand().alloc_object_witnessed(value.deep_clone()),
                     embedded,
                 )),
+                // A projected type field of the `Wrapped` record — born region-pure and sealed under
+                // the home frame plus the `embedded` carrier's reach (which pins a nested module's
+                // region, since the `Wrapped` physically contains it), mirroring the Object arm above.
                 Some(Held::Type(kt)) => {
-                    Ok(scope.seal_type(scope.brand().alloc_ktype_witnessed(kt.clone())))
+                    Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt.clone()), embedded))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
@@ -296,8 +301,21 @@ fn access_module_member<'a>(
     field: &str,
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let module_scope = m.child_scope();
-    if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt)));
+    if let Some(minted) = m.type_members.borrow().get(field).cloned() {
+        // Prefer the child scope's own binding — witness its `&KType` in place from the stored reach
+        // (non-empty for a nested module). A member present only in the mirror is an `:|`-minted
+        // abstract type reaching nothing foreign, so it is alloc'd fresh under the empty reach.
+        return Ok(
+            match module_scope.bindings().lookup_type_carrier(field, None) {
+                Some(TypeCarrierHit::Bound { kt, reach }) => {
+                    module_scope.resident_type_carrier(kt, &reach)
+                }
+                _ => module_scope.resident_type_carrier(
+                    module_scope.brand().alloc_ktype(minted),
+                    &FrameSet::empty(),
+                ),
+            },
+        );
     }
     // One classified lookup over the module's own bindings — the cross-kind exclusion makes a
     // name value-xor-type, so a single read decides the arm instead of probing `data` then
@@ -322,8 +340,8 @@ fn access_module_member<'a>(
             }
             Ok(module_scope.resident_value_carrier(obj, &reach))
         }
-        Some(MemberResolution::Type(kt)) => {
-            Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt.clone())))
+        Some(MemberResolution::Type { kt, reach }) => {
+            Ok(module_scope.resident_type_carrier(kt, &reach))
         }
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
