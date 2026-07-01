@@ -220,8 +220,11 @@ What's shipped that the open items below build on:
   already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. The build
   leaf is now confined behind a branded region handle (a bare `&KoanRegion` cannot allocate), the
   access surface is collapsed to `open` — the borrow-bounded `attach`, the witness-borrow read path
-  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted —
-  closing the per-node-memory project. See
+  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted. The
+  last asserted **type / region construction operands** have since become computed carriers — the
+  newtype / tagged-union / `CATCH` build `merge`s a delivered type-identity carrier under the binding's
+  stored reach, and the contract-home and relocate destinations ride born-co-located carriers — so the
+  asserted-co-location `Witnessed::new` is deleted outright, closing the per-node-memory project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -373,7 +376,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Witnessed type and region operands](per-node-memory/type-operand-carriers.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
@@ -505,11 +507,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
   field order, and type parameters right.
 
-### Per-node memory — [per-node-memory/](per-node-memory/)
-
-Substrate follow-up the per-node-memory project left behind — closing the last asserted
-witnesses so co-location is computed by the type system, not stated in prose:
-
-- [Witnessed type and region operands](per-node-memory/type-operand-carriers.md) — yoke + `into_set` +
-  merge the `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands from a delivered
-  type-identity carrier, and, as the capstone, delete `Witnessed::new`.

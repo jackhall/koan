@@ -93,8 +93,8 @@ arriving witnessed from the lift); a closure folds the captured-scope operand mi
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
 dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
 / [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
-brand enforces, never asserted. The carrier-self-building object constructions climb off `Witnessed::new`
-the same way: the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
+brand enforces, never asserted. The carrier-self-building object constructions are built the same way:
+the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
 and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge`, and FN
 def [`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located `KObject::KFunction` onto a
 carrier witnessed by the defining scope's frame. The value-embedding sites that take a *bare arg* —
@@ -104,9 +104,8 @@ climb off it the same way: each receives the value it embeds as a delivered
 [`Sealed`](#storage-and-access-seal-open-transfer_into) carrier (`attr` / `FROM` through
 [`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs), the Resolved arm through the binding
 scope's own [`Scope::seal_value`](../src/machine/core/scope.rs)) and `merge`s it, so the projected object
-names every region it reaches by construction. `Witnessed::new`, which pairs an *already-built* value
-with an asserted witness, enforces no co-location — it asserts it in prose at the call site — so it
-backs no construction terminal: the **type** family seals the same way — a region-pure or owned `KType`
+names every region it reaches by construction. No construction terminal pairs an *already-built* value
+with a separately-asserted witness: the **type** family seals the same way — a region-pure or owned `KType`
 through [`Scope::seal_value`](../src/machine/core/scope.rs), a region-referencing `KType::Module` through
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
 construction ([`Scope::reach_of_child`](../src/machine/core/scope.rs), from the child scope the birth
@@ -121,9 +120,12 @@ result (a spliced value, a builtin's synchronous result) through `resident`, a d
 folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
 the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
 producing frame into that carrier's own reach at close rather than asserting a separately-computed
-witness set; an error carries no value and finalizes bare. `Witnessed::new` keeps **no** blessed home:
-its surviving callers — the type / region operand bundles — are transitional, asserting in prose the
-co-location the `yoke` / `merge` / `resident` constructors enforce structurally. A read of an
+witness set; an error carries no value and finalizes bare. The type / region construction operands are
+computed carriers too — the newtype / tagged-union / `CATCH` build `merge`s a delivered type-identity
+carrier under the binding's stored reach ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)),
+the contract-home operand is born region-pure via `resident` and folded by `merge`, and the relocate
+destination rides a `yoke`d-or-`resident` carrier — so no site pairs an already-built value with a
+separately-asserted witness. A read of an
 *already-built* region-resident value — a bound name, an `ATTR` value member, a defined FN object —
 does **not** rebuild a witness: it pre-exists its carrier, so the read bundles it through the confined
 [`RegionBrand::seal_resident`](../src/machine/core/arena.rs) surface
@@ -378,10 +380,3 @@ door [`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands
 the foreign parent at one `for<'b>` and erases the child witness-less. No scope re-anchor survives
 outside the witnessed substrate and the access surface is `open` alone, so "always witnessed" is a
 closed type rule.
-
-## Open work
-
-- [Witnessed type and region operands](../roadmap/per-node-memory/type-operand-carriers.md) — the
-  `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands still assert
-  [`Witnessed::new`](../src/witnessed.rs); this yokes + merges a delivered type-identity carrier and, as
-  the capstone, deletes `Witnessed::new`.
