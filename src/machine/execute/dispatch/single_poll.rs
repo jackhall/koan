@@ -178,7 +178,7 @@ pub(super) fn literal_pass_through<'step>(
     match only.value {
         // A literal is region-pure owned data, so the `KObject` is built **inside** the witness
         // closure — `yoke`d into this scope's frame, born co-located with that frame as its sole reach
-        // rather than resolved at the ambient lifetime and bundled via `Witnessed::new`. (The literal
+        // rather than resolved at the ambient lifetime and bundled under an asserted witness. (The literal
         // is scope-independent — it comes from `expr`, not a scope resolve — so it stays on the cart
         // region.)
         ExpressionPart::Literal(lit) => {

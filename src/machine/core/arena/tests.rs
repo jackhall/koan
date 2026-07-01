@@ -631,7 +631,7 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
 
 /// A closure carrier born witnessed by its home frame — the born-witnessed `resident` / `reseal_under`
 /// path (production's finalize seal / [`Scope::seal_value`](super::super::scope::Scope)), never an
-/// asserted `Witnessed::new`. A closure captures only its home frame's own scope, so it is region-pure
+/// asserted co-location bundle. A closure captures only its home frame's own scope, so it is region-pure
 /// there: `resident` bundles it under the empty set and `reseal_under` folds in its producer frame (a
 /// witness-only `merge`). A closure can't be `yoke`d — yoke's `for<'b>` build closure can't capture the
 /// frame's existing scope, and minting a fresh one needs the frame's storage `Rc` a `for<'b>` forbids.

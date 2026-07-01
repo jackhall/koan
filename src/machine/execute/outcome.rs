@@ -45,7 +45,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// The node dies with a value **built inside the witness closure** — a
     /// [`Witnessed`](crate::witnessed::Witnessed) carrier already naming every region it reaches
     /// (`yoke` / `merge` / the aggregate fold at the alloc site), so `finalize` seals it without an
-    /// asserted-co-location [`Witnessed::new`](crate::witnessed::Witnessed::new). The object-family
+    /// asserted-co-location bundle. The object-family
     /// terminal; the type channel and every error stay on [`Done`](Self::Done) until the type family
     /// inverts. The carrier is lifetime-free, so this arm carries no `'step`.
     DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),

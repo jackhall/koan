@@ -46,7 +46,7 @@ impl Slot {
 /// own `Sealed` carrier (arriving witnessed from the lift, un-relocated — `transfer_into` relocates it
 /// once into the aggregate's region while unioning its reach onto the carrier). The dep arm hands back
 /// a [`duplicate`](crate::witnessed::Sealed::duplicate) of the terminal's carrier, never a fresh
-/// `Witnessed::new` over the read-out value + a separately-read reach.
+/// bundle pairing the read-out value with a separately-read reach.
 fn cell_carrier(
     slot: Slot,
     terminals: &[&DepTerminal<'_>],
@@ -252,7 +252,7 @@ impl<'step> KoanRuntime<'step> {
                 // A static literal (keyword / bare identifier / type name / literal): region-pure owned
                 // data, so the cell is built **inside** the witness closure — `yoke`d into the classify
                 // scope's frame, born co-located with that frame as its reach rather than resolved at
-                // the ambient lifetime and bundled via `Witnessed::new`. The cell is then lifetime-free
+                // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free
                 // and folds uniformly with the dep cells.
                 let frame = with_current_node_scope(&self.ambient, |s| {
                     s.region_owner()
@@ -279,7 +279,7 @@ impl<'step> KoanRuntime<'step> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         // A value-bound Identifier element rides into the cell on a carrier witnessed by its binding
         // scope's home frame, which transitively pins that scope's reach-set — so the cell names the
-        // value's reach by construction, never an asserted `Witnessed::new`. Type leaves and unbound /
+        // value's reach by construction, never an asserted co-location bundle. Type leaves and unbound /
         // pending names fall to the shared `resolve_name_part` path below.
         if let ExpressionPart::Identifier(name) = part {
             let resolved = with_current_node_scope(&self.ambient, |s| {

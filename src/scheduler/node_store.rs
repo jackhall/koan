@@ -227,7 +227,7 @@ impl<W: Workload> NodeStore<W> {
     /// own seal intact for other consumers. The consumer-pull lift hands this to a construction finish
     /// so the dep arrives **witnessed** (its reach named on the carrier), ready to fold via
     /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) — rather than the value read
-    /// out bare and re-paired with a separately-read witness through an asserted `Witnessed::new`.
+    /// out bare and re-paired with a separately-read witness in an asserted co-location bundle.
     pub(super) fn dep_carrier(&self, id: NodeId) -> Result<FinalizedValue<W>, &W::Error> {
         match &self.slots[id] {
             SlotState::Done(Ok(sealed), ..) => Ok(sealed.duplicate()),

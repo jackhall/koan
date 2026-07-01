@@ -25,7 +25,7 @@ pub enum KLiteral {
 impl KLiteral {
     /// The owned [`KObject`] this literal denotes — region-pure (no borrow), so a construction site can
     /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure rather than resolving
-    /// it at the ambient lifetime and bundling it via `Witnessed::new`. Generic in `'a` (rather than
+    /// it at the ambient lifetime and bundling it under an asserted witness. Generic in `'a` (rather than
     /// `'static`) because [`KObject`] is invariant in its lifetime: every arm owns its data (a copied
     /// `f64` / `bool`, a cloned `String`, `Null`), so the value is constructible at *any* lifetime — in
     /// particular the `yoke` brand the caller hands it to. The region-pure peer of
@@ -277,7 +277,7 @@ impl<'a> ExpressionPart<'a> {
 
     /// The owned [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic
     /// peer of [`resolve`](Self::resolve) for the aggregate static-cell sites that `yoke` (build the
-    /// value inside the witness closure rather than bundling it via `Witnessed::new`). The borrow-free
+    /// value inside the witness closure rather than bundling it under an asserted witness). The borrow-free
     /// variants (keyword, bare identifier, type name, literal) own their data, so the value is
     /// constructible at the caller's `yoke` brand — where [`resolve`]'s `KObject<'a>` cannot go, the
     /// type being invariant in `'a`. The borrow-bearing variants (`Expression`, `Spliced`, the
