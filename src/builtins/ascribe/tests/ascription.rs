@@ -141,6 +141,6 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         .bindings()
         .data()
         .get("compare")
-        .map(|(o, _)| *o);
+        .map(|(o, _, _)| *o);
     assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));
 }

@@ -29,6 +29,7 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::operators::OperatorGroup;
@@ -90,8 +91,27 @@ impl<'a> TypeResolution<'a> {
 /// value map then the type map by hand. The `data`/`types` cross-kind exclusion keeps the two
 /// arms from ever both matching within a scope.
 pub enum MemberResolution<'a> {
-    Value(&'a KObject<'a>),
+    Value {
+        obj: &'a KObject<'a>,
+        /// The member's home-omitted foreign reach, stored on the module's own `data` entry when
+        /// the module body bound it — so an ATTR read wraps the member in a carrier built from its
+        /// stored reach rather than re-asserting single-frame co-location.
+        reach: FrameSet,
+    },
     Type(&'a KType<'a>),
+}
+
+/// The value-side carrier hit for a name — the reach-carrying twin of [`Resolution`]'s value arm.
+/// Produced by [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness
+/// from the binding's stored reach. `Placeholder` mirrors [`Resolution::Placeholder`].
+pub enum CarrierHit<'a> {
+    Bound {
+        obj: &'a KObject<'a>,
+        /// The binding's home-omitted foreign reach, cloned out so the read wrapper does not hold
+        /// the `data` `RefCell` borrow across the carrier build.
+        reach: FrameSet,
+    },
+    Placeholder(NodeId),
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -147,7 +167,14 @@ impl BindingIndex {
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
     types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
-    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex)>>,
+    /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
+    /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
+    /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
+    /// back so the read wraps the value in a self-contained witness built from its stored reach,
+    /// rather than re-asserting single-frame co-location. The reach is foreign-only (home-omitted)
+    /// so it never stores the region's own home frame `Rc` in-region — that would close a
+    /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
+    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN / FUNCTOR overloads whose binder has
@@ -207,14 +234,22 @@ impl<'a> Bindings<'a> {
     /// means no visible entry at this scope; the caller keeps walking
     /// ancestors and surfaces `UnboundName` on chain exhaustion.
     pub fn lookup_value(&self, name: &str, chain_cutoff: Option<usize>) -> Option<Resolution<'a>> {
-        if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
-            if Self::visible(idx, chain_cutoff) {
+        if let Some((obj, idx, _reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
                 return Some(Resolution::Value(obj));
             }
         }
+        self.value_placeholder(name, chain_cutoff)
+            .map(Resolution::Placeholder)
+    }
+
+    /// The value-side placeholder producer for `name`, or `None` — shared by
+    /// [`Self::lookup_value`] and [`Self::lookup_value_carrier`], which differ only in the
+    /// `data` arm.
+    fn value_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
         if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
             if kind == BindKind::Value && Self::visible(idx, chain_cutoff) {
-                return Some(Resolution::Placeholder(id));
+                return Some(id);
             }
         }
         None
@@ -252,9 +287,12 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<MemberResolution<'a>> {
-        if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
-            if Self::visible(idx, chain_cutoff) {
-                return Some(MemberResolution::Value(obj));
+        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(MemberResolution::Value {
+                    obj,
+                    reach: reach.clone(),
+                });
             }
         }
         if let Some((kt, idx)) = self.types.borrow().get(name).copied() {
@@ -263,6 +301,26 @@ impl<'a> Bindings<'a> {
             }
         }
         None
+    }
+
+    /// Carrier-oriented value lookup — the reach-carrying twin of [`Self::lookup_value`]. A `data`
+    /// hit returns [`CarrierHit::Bound`] with the binding's stored reach (cloned out); otherwise a
+    /// visible value placeholder or a miss, mirroring `lookup_value`'s data-then-placeholder order.
+    pub fn lookup_value_carrier(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<CarrierHit<'a>> {
+        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(CarrierHit::Bound {
+                    obj,
+                    reach: reach.clone(),
+                });
+            }
+        }
+        self.value_placeholder(name, chain_cutoff)
+            .map(CarrierHit::Placeholder)
     }
 
     /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight
@@ -365,7 +423,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .iter()
-            .map(|(name, (obj, _))| (name.clone(), *obj))
+            .map(|(name, (obj, _, _))| (name.clone(), *obj))
             .collect()
     }
 
@@ -440,7 +498,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex)>> {
+    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>> {
         self.data.borrow()
     }
 
@@ -471,7 +529,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .get(name)
-            .map(|(obj, _)| *obj)
+            .map(|(obj, _, _)| *obj)
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -516,8 +574,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true, index)
+        self.try_apply(name, obj, obj.as_function(), true, index, reach)
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -536,7 +595,8 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, Some(fn_ref), false, index)
+        // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach.
+        self.try_apply(name, obj, Some(fn_ref), false, index, FrameSet::empty())
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -620,7 +680,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         kind: BindKind,
     ) -> Result<(), KError> {
-        if let Some((existing, _)) = self.data.borrow().get(&name).copied() {
+        if let Some((existing, _, _)) = self.data.borrow().get(&name) {
             if matches!(existing, KObject::KFunction(_)) {
                 return Ok(());
             }
@@ -669,14 +729,14 @@ impl<'a> Bindings<'a> {
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex)> = src
+        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, FrameSet)> = src
             .data
             .borrow()
             .iter()
-            .map(|(k, (v, idx))| (k.clone(), *v, *idx))
+            .map(|(k, (v, idx, reach))| (k.clone(), *v, *idx, reach.clone()))
             .collect();
-        for (name, obj, index) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function(), true, index)? {
+        for (name, obj, index, reach) in snapshot {
+            match self.try_apply(&name, obj, obj.as_function(), true, index, reach)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -742,6 +802,7 @@ impl<'a> Bindings<'a> {
         fn_part: Option<&'a KFunction<'a>>,
         write_data: bool,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
@@ -780,7 +841,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some((existing, _)) = data.get(name) {
+            if let Some((existing, _, _)) = data.get(name) {
                 match fn_part {
                     None => {
                         return Err(KError::new(KErrorKind::Rebind {
@@ -820,7 +881,7 @@ impl<'a> Bindings<'a> {
             cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), (obj, index));
+            data.insert(name.to_string(), (obj, index, reach));
         }
         drop(data);
         drop(functions_handle);

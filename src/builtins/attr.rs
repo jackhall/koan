@@ -203,7 +203,9 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             match decl.bindings().lookup_member(field, None) {
-                Some(MemberResolution::Value(obj)) => Ok(decl.resident_object_carrier(obj)),
+                Some(MemberResolution::Value { obj, reach }) => {
+                    Ok(decl.resident_value_carrier(obj, &reach))
+                }
                 Some(MemberResolution::Type(kt)) => {
                     Ok(decl.seal_type(decl.brand().alloc_ktype_witnessed(kt.clone())))
                 }
@@ -304,8 +306,11 @@ fn access_module_member<'a>(
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
-        Some(MemberResolution::Value(obj)) => {
+        Some(MemberResolution::Value { obj, reach }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
+                // A re-tag is a *fresh* `Wrapped` construction, born region-pure and sealed under
+                // the module scope's home frame — not a read of the pre-existing member — so the
+                // stored `reach` does not apply here.
                 let type_id = module_scope.brand().alloc_ktype(tag);
                 let carrier = module_scope
                     .brand()
@@ -315,7 +320,7 @@ fn access_module_member<'a>(
                     });
                 return Ok(module_scope.seal_value(carrier, None));
             }
-            Ok(module_scope.resident_object_carrier(obj))
+            Ok(module_scope.resident_value_carrier(obj, &reach))
         }
         Some(MemberResolution::Type(kt)) => {
             Ok(module_scope.seal_type(module_scope.brand().alloc_ktype_witnessed(kt.clone())))

@@ -1,6 +1,7 @@
 //! `queue` arm of `machine::core` tests.
 
 use crate::builtins::test_support::run_root_bare;
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::FrameStorage;
 use crate::machine::model::types::KType;
@@ -17,7 +18,12 @@ fn add_during_active_data_borrow_queues_and_drains() {
     let scope = run_root_bare(&region);
     let pre = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value("pre".to_string(), pre, BindingIndex::BUILTIN)
+        .bind_value(
+            "pre".to_string(),
+            pre,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
 
     let new_entry = region.brand().alloc_object(KObject::Number(2.0));
@@ -25,14 +31,21 @@ fn add_during_active_data_borrow_queues_and_drains() {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
         scope
-            .bind_value("during".to_string(), new_entry, BindingIndex::BUILTIN)
+            .bind_value(
+                "during".to_string(),
+                new_entry,
+                BindingIndex::BUILTIN,
+                FrameSet::empty(),
+            )
             .unwrap();
         assert!(!snapshot.contains_key("during"));
     }
     assert!(scope.bindings().data().get("during").is_none());
     scope.drain_pending();
     let after = scope.bindings().data();
-    assert!(matches!(after.get("during").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 2.0));
+    assert!(
+        matches!(after.get("during").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0)
+    );
 }
 
 /// `PendingQueue::drain`'s `debug_assert!` must fire when a deferred `Value` write
@@ -59,7 +72,12 @@ fn drain_debug_asserts_on_invariant_violation() {
 
     let snapshot = scope.bindings().data();
     scope
-        .bind_value("a".to_string(), obj1, BindingIndex::BUILTIN)
+        .bind_value(
+            "a".to_string(),
+            obj1,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     drop(snapshot);
     scope
@@ -106,14 +124,19 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 
     let snapshot = scope.bindings().data();
     scope
-        .bind_value("v".to_string(), obj, BindingIndex::BUILTIN)
+        .bind_value(
+            "v".to_string(),
+            obj,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     scope.drain_pending();
     assert!(!snapshot.contains_key("v"));
     drop(snapshot);
     scope.drain_pending();
     assert!(
-        matches!(scope.bindings().data().get("v").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+        matches!(scope.bindings().data().get("v").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
     );
 }
 

@@ -2,6 +2,7 @@
 
 use super::super::{BindingIndex, Resolution};
 use crate::builtins::test_support::run_root_bare;
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::FrameStorage;
 use crate::machine::model::types::{
@@ -22,10 +23,20 @@ fn bind_value_errors_on_same_scope_rebind() {
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     scope
-        .bind_value("x".to_string(), v1, BindingIndex::BUILTIN)
+        .bind_value(
+            "x".to_string(),
+            v1,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     let err = scope
-        .bind_value("x".to_string(), v2, BindingIndex::BUILTIN)
+        .bind_value(
+            "x".to_string(),
+            v2,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap_err();
     match &err.kind {
         crate::machine::core::KErrorKind::Rebind { name } => assert_eq!(name, "x"),
@@ -39,12 +50,22 @@ fn bind_value_allows_shadowing_in_child_scope() {
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_value("x".to_string(), v1, BindingIndex::BUILTIN)
+        .bind_value(
+            "x".to_string(),
+            v1,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_value("x".to_string(), v2, BindingIndex::BUILTIN)
+        .bind_value(
+            "x".to_string(),
+            v2,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(matches!(outer.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
@@ -56,7 +77,7 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
         .unwrap();
     assert!(!scope.is_closed());
     scope.close();
@@ -75,7 +96,7 @@ fn bind_after_close_panics() {
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_object(KObject::Number(1.0));
-    let _ = scope.bind_value("x".to_string(), v, BindingIndex::BUILTIN);
+    let _ = scope.bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty());
 }
 
 #[test]
@@ -86,7 +107,7 @@ fn close_is_per_scope_open_child_still_binds() {
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(!inner.is_closed());
@@ -143,7 +164,12 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
-        .bind_value("OTHER_NAME".to_string(), obj2, BindingIndex::BUILTIN)
+        .bind_value(
+            "OTHER_NAME".to_string(),
+            obj2,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap_err();
     assert!(
         matches!(&err.kind, crate::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "OTHER_NAME"),
@@ -166,10 +192,20 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     let obj1 = region.brand().alloc_object(KObject::KFunction(f));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f));
     scope
-        .bind_value("FIRST".to_string(), obj1, BindingIndex::BUILTIN)
+        .bind_value(
+            "FIRST".to_string(),
+            obj1,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     scope
-        .bind_value("ALIAS".to_string(), obj2, BindingIndex::BUILTIN)
+        .bind_value(
+            "ALIAS".to_string(),
+            obj2,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
 }
 
@@ -223,7 +259,12 @@ fn register_function_coexists_with_same_name_value() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value("FOO".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value(
+            "FOO".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -235,7 +276,7 @@ fn register_function_coexists_with_same_name_value() {
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
     assert!(
-        matches!(scope.bindings().data().get("FOO").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 1.0)
+        matches!(scope.bindings().data().get("FOO").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 1.0)
     );
     let key = f.signature.untyped_key();
     assert!(scope
@@ -283,13 +324,18 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value("val".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value(
+            "val".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     scope.register_type("Ty".to_string(), KType::Number, BindingIndex::BUILTIN);
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
-        Some(MemberResolution::Value(KObject::Number(n))) if *n == 1.0
+        Some(MemberResolution::Value { obj: KObject::Number(n), .. }) if *n == 1.0
     ));
     assert!(matches!(
         bindings.lookup_member("Ty", None),
@@ -322,7 +368,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
@@ -360,7 +406,7 @@ fn bind_value_clears_own_placeholder() {
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN)
+        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
     assert!(matches!(scope.resolve("x"), Resolution::Value(KObject::Number(n)) if *n == 42.0));
@@ -378,7 +424,12 @@ fn visibility_chain_none_sees_every_entry() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("late".to_string(), v, BindingIndex::value(99))
+        .bind_value(
+            "late".to_string(),
+            v,
+            BindingIndex::value(99),
+            FrameSet::empty(),
+        )
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
     // every entry is visible regardless of index.
@@ -398,7 +449,12 @@ fn visibility_strict_less_than_hides_later_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("later".to_string(), v, BindingIndex::value(5))
+        .bind_value(
+            "later".to_string(),
+            v,
+            BindingIndex::value(5),
+            FrameSet::empty(),
+        )
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
@@ -416,7 +472,12 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("earlier".to_string(), v, BindingIndex::value(2))
+        .bind_value(
+            "earlier".to_string(),
+            v,
+            BindingIndex::value(2),
+            FrameSet::empty(),
+        )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
     assert!(matches!(
@@ -433,7 +494,12 @@ fn visibility_self_index_hidden_under_strict_less_than() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("self_idx".to_string(), v, BindingIndex::value(3))
+        .bind_value(
+            "self_idx".to_string(),
+            v,
+            BindingIndex::value(3),
+            FrameSet::empty(),
+        )
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);

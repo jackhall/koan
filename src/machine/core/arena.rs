@@ -193,6 +193,26 @@ impl<'a> RegionBrand<'a> {
         self.0
             .alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
     }
+
+    /// Bundle a value **already resident in this brand's region** under `witness` — the terminal
+    /// carrier a name / ATTR read hands back and an FN-def / LET define site seals its object with.
+    /// Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not stored here;
+    /// it pre-exists in the region, so it is bundled through [`Witnessed::resident`] — a within-step
+    /// transient (the reading / defining frame pins the region for the step) — and immediately
+    /// [`reseal_under`](Witnessed::reseal_under) its own reach, fixing the carrier's witness before it
+    /// is stored on a node. Confines [`Witnessed::resident`] to this arena surface, so no read / define
+    /// builtin reaches for it. `witness` must name the value's full reach (its home frame ∪ its
+    /// home-omitted foreign reach); the caller
+    /// ([`Scope::resident_value_carrier`](crate::machine::core::Scope)) folds it. The brand is the
+    /// capability marker: only a handle into the region the value lives in may re-seal it resident.
+    pub(crate) fn seal_resident(
+        self,
+        carried: Carried<'_>,
+        witness: FrameSet,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        let _ = self.0;
+        Witnessed::resident(carried).reseal_under(witness)
+    }
 }
 
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the

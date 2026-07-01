@@ -255,7 +255,11 @@ mod tests {
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let foo = resolve_module(scope, "Foo");
         let inner = foo.child_scope().bindings().data();
-        assert!(matches!(inner.get("x").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
-        assert!(matches!(inner.get("z").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 11.0));
+        assert!(
+            matches!(inner.get("x").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+        );
+        assert!(
+            matches!(inner.get("z").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 11.0)
+        );
     }
 }

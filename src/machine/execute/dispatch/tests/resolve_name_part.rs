@@ -5,6 +5,7 @@ use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::BindingIndex;
+use crate::machine::FrameSet;
 use crate::machine::NameOutcome;
 use crate::source::Spanned;
 
@@ -14,7 +15,12 @@ fn resolve_name_part_identifier_resolved() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
+        .bind_value(
+            "x".to_string(),
+            bound,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     let sched = KoanRuntime::new();

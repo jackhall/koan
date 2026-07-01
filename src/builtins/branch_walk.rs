@@ -53,6 +53,7 @@ pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
     outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_value: crate::machine::model::KObject<'a>,
+    scrutinee_witness: crate::machine::FrameSet,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -61,11 +62,13 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
     // Bind the matched `it` value into the frame's own scope: `alloc_object` erases the caller-`'a`
-    // input and re-homes it at the frame region, so no pre-shortening is needed. Its reach rides the
-    // matched value's enclosing chain, pinned by `outer_frame`.
+    // input and re-homes it at the frame region, so no pre-shortening is needed. The `it` value is a
+    // clone of the scrutinee, so it inherits the scrutinee's reach: store that reach (home-omitted for
+    // the arm scope) on the binding, so a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
         let it_obj = child.brand().alloc_object(it_value);
-        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+        let reach = child.foreign_reach_of(&scrutinee_witness);
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0), reach);
     });
     block_tail(
         FramePlacement::FreshChild { frame },

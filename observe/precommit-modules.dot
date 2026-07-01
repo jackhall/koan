@@ -475,6 +475,7 @@ digraph {
     "koan::machine::core" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::core" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine::model" [label="uses", style="dashed"];
@@ -547,11 +548,13 @@ digraph {
     "koan::machine::core::kfunction::body" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::exec" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::exec" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::exec" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::types" [label="uses", style="dashed"];

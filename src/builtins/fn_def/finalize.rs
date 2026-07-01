@@ -263,11 +263,11 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     }
     // The FN value is co-located in its defining scope's region (owned signature / body, a `&Scope`
     // capture), and the captured scope — region-resident under that frame — transitively keeps every
-    // foreign region its bindings reach alive through the scope's sealed reach-set. So the already-built
-    // object is wrapped as a carrier witnessed by that scope's home frame (the asserted-co-location read
-    // path), the single-frame witness naming its full reach. `LET f = (FN ...)` still captures the
-    // callable via this carrier.
-    Ok(scope.resident_object_carrier(obj))
+    // foreign region its bindings reach alive through the scope's sealed reach-set. So a fresh FN
+    // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
+    // carrier is built with an empty foreign reach, witnessed by that scope's home frame alone.
+    // `LET f = (FN ...)` still captures the callable via this carrier.
+    Ok(scope.resident_value_carrier(obj, &FrameSet::empty()))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

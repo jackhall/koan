@@ -8,7 +8,7 @@ use crate::machine::model::ast::KExpression;
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
 pub use super::bindings::Resolution;
-use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, TypeResolution};
+use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, TypeResolution};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
@@ -514,13 +514,14 @@ impl<'a> Scope<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call
             // site, so a local bind whose name is already a surfaced module member
             // would be silently shadowed. Reject it; otherwise forward to the call
             // site under the caller's `index` (the bind belongs to the call site's
-            // block, at the call site's statement position).
+            // block, at the call site's statement position), carrying the value's reach.
             if matches!(
                 self.bindings.get().lookup_value(&name, None),
                 Some(Resolution::Value(_))
@@ -530,13 +531,17 @@ impl<'a> Scope<'a> {
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self.write_target().bind_value(name, obj, index);
+            return self.write_target().bind_value(name, obj, index, reach);
         }
         self.assert_open(&name);
-        match self.bindings.get().try_bind_value(&name, obj, index)? {
+        match self
+            .bindings
+            .get()
+            .try_bind_value(&name, obj, index, reach.clone())?
+        {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_value(name, obj, index);
+                self.pending.defer_value(name, obj, index, reach);
                 Ok(())
             }
         }
@@ -783,39 +788,58 @@ impl<'a> Scope<'a> {
             .find_map(|scope| {
                 match scope
                     .bindings()
-                    .lookup_value(name, scope.binding_cutoff(chain))?
+                    .lookup_value_carrier(name, scope.binding_cutoff(chain))?
                 {
-                    Resolution::Value(obj) => Some(ValueCarrierResolution::Value(
-                        scope.resident_object_carrier(obj),
+                    CarrierHit::Bound { obj, reach } => Some(ValueCarrierResolution::Value(
+                        scope.resident_value_carrier(obj, &reach),
                     )),
-                    Resolution::Placeholder(producer) => {
+                    CarrierHit::Placeholder(producer) => {
                         Some(ValueCarrierResolution::Placeholder(producer))
                     }
-                    // `lookup_value` reports a miss as `None`, never `Some(UnboundName)`; treat any
-                    // such value as a miss and keep walking the chain.
-                    Resolution::UnboundName => None,
                 }
             })
             .unwrap_or(ValueCarrierResolution::UnboundName)
     }
 
-    /// Wrap a value living **in this scope's region** as a carrier witnessed by this scope's home
-    /// frame, asserting co-location: the value's foreign reach is in this scope's sealed reach-set,
-    /// which the home frame pins, so a single-frame witness names its full reach. The transitional
-    /// asserted-co-location path ([`Witnessed::new`]) for reading an *already-built* region-resident
-    /// reference into a carrier — a bound name, an `ATTR` value member, a defined FN object. Unlike a
-    /// fresh construction (born witnessed through the region alloc surface), the value pre-exists, so it
-    /// cannot be built inside an alloc brand; `new` is retired when the bind/read paths deliver each
-    /// value's carrier structurally from its bind site.
-    pub(crate) fn resident_object_carrier(
+    /// Build the terminal carrier for a value living **in this scope's region** from its binding's
+    /// stored reach: witness = this scope's home frame ∪ `foreign` (the value's home-omitted foreign
+    /// reach, captured at bind time). The home frame is fetched **fresh** here (never stored — that
+    /// would close the `frame → region → scope → bindings → frame` cycle) and pins this scope's own
+    /// region; `foreign` names every other region the value reaches, so the carrier is self-contained.
+    /// Both a name / ATTR read and the FN-def / LET define sites route this, so a read never
+    /// reconstructs the reach by walking the value. The bundle itself runs on the confined arena
+    /// surface ([`RegionBrand::seal_resident`]), so `Witnessed::resident` is never reached from a
+    /// builtin.
+    pub(crate) fn resident_value_carrier(
         &self,
         obj: &'a KObject<'a>,
+        foreign: &FrameSet,
     ) -> Witnessed<CarriedFamily, FrameSet> {
         let home = self
             .region_owner()
             .upgrade()
-            .expect("the sealing scope's region owner is held while its value is read");
-        Witnessed::new(Carried::Object(obj), FrameSet::singleton(home))
+            .expect("the binding scope's region owner is held while its value is read");
+        let mut witness = FrameSet::singleton(home.clone());
+        witness.fold_foreign(foreign, Some(&home));
+        self.brand().seal_resident(Carried::Object(obj), witness)
+    }
+
+    /// The home-omitted foreign reach of `witness` as this scope would fold it into its reach-set —
+    /// its home frame and lexical-ancestor regions omitted (mirrors [`Self::fold_reach`]) — as a
+    /// standalone [`FrameSet`] to **store on a binding entry**. Cycle-safe by the same rule
+    /// `fold_reach` obeys: the home frame's own `Rc` never lands in the set, so storing it inside the
+    /// scope's own region opens no `frame → region → scope → bindings → frame` strong cycle. A
+    /// region-pure or ancestor-resident value yields the empty set.
+    pub(crate) fn foreign_reach_of(&self, witness: &FrameSet) -> FrameSet {
+        let home = self.region_owner.upgrade();
+        let mut foreign = FrameSet::empty();
+        foreign.fold_foreign_omitting(witness, |region| {
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+                || self
+                    .ancestors()
+                    .any(|scope| std::ptr::eq(scope.region(), region))
+        });
+        foreign
     }
 
     /// Fold this scope's home frame onto an already-witnessed `carrier` whose value lives **in this

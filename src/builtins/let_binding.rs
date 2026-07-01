@@ -132,22 +132,32 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index) {
+        // The bound value's home-omitted foreign reach, computed once from the delivered carrier: it
+        // is both stored on the binding (so a later read rebuilds the value's carrier from it) and
+        // folded into the scope's reach-set below. A region-pure RHS (no delivered carrier) reaches
+        // nothing foreign, so the reach is empty.
+        let reach = ctx
+            .arg_carrier("value")
+            .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
+            .unwrap_or_default();
+        if let Err(e) = ctx
+            .scope
+            .bind_value(name, allocated, bind_index, reach.clone())
+        {
             return done_err(e);
         }
         // Deposit the bound value's reach into the scope's reach-set so every foreign region it
         // borrows into outlives the binding — the bind-precise fold replacing the single-frame
-        // relocate-seam reconstruction for the object channel. The delivered carrier witnesses the
-        // consumer frame ∪ the value's foreign reach; `fold_reach` omits the home frame, so a
+        // relocate-seam reconstruction for the object channel. `fold_reach` omits the home frame, so a
         // region-pure value (or an ancestor-bound name, kept alive by the home frame's `outer` chain)
         // deposits nothing, while a multi-region value contributes every region it reaches.
         if let Some(carrier) = ctx.arg_carrier("value") {
             ctx.scope.fold_reach(carrier.witness());
         }
-        // The bound value lives in this scope's region with its foreign reach deposited above, so the
-        // terminal is born witnessed by this scope's home frame (the asserted-co-location read path)
+        // The bound value lives in this scope's region with its foreign reach `reach`, so its terminal
+        // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
         // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::DoneWitnessed(ctx.scope.resident_object_carrier(allocated))
+        Action::DoneWitnessed(ctx.scope.resident_value_carrier(allocated, &reach))
     }
 }
 

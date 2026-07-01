@@ -38,7 +38,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
         .bindings()
         .data()
         .get("inner")
-        .map(|(o, _)| *o);
+        .map(|(o, _, _)| *o);
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
         "HeldSet.inner must still read 1.0 after subsequent churn"

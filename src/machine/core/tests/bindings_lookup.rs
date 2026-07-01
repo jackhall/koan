@@ -4,6 +4,7 @@
 //! lookups the index-gated resolver walks.
 
 use crate::builtins::test_support::run_root_bare;
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::{BindingIndex, FrameStorage, Resolution, TypeResolution};
 use crate::machine::model::types::{
@@ -19,7 +20,12 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("late".to_string(), value, BindingIndex::value(99))
+        .bind_value(
+            "late".to_string(),
+            value,
+            BindingIndex::value(99),
+            FrameSet::empty(),
+        )
         .unwrap();
     match scope.bindings().lookup_value("late", None) {
         Some(Resolution::Value(KObject::Number(n))) => assert_eq!(*n, 7.0),
@@ -33,7 +39,12 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("later".to_string(), value, BindingIndex::value(5))
+        .bind_value(
+            "later".to_string(),
+            value,
+            BindingIndex::value(5),
+            FrameSet::empty(),
+        )
         .unwrap();
     assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
 }
@@ -44,7 +55,12 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
-        .bind_value("earlier".to_string(), value, BindingIndex::value(2))
+        .bind_value(
+            "earlier".to_string(),
+            value,
+            BindingIndex::value(2),
+            FrameSet::empty(),
+        )
         .unwrap();
     match scope.bindings().lookup_value("earlier", Some(5)) {
         Some(Resolution::Value(KObject::Number(n))) => assert_eq!(*n, 7.0),

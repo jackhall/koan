@@ -138,13 +138,17 @@ pub(super) fn invoke<'step>(
             call_scope.fold_reach(carrier.witness());
         }
     });
+    // Re-key the arg carriers onto their parameter names so `run_user_fn` can store each parameter
+    // binding's reach from its own delivered carrier — the same carriers folded into the call-scope
+    // reach above, keyed to match `bound`.
+    let named_carriers = map_arg_carriers(picked, arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let in_chain = view.in_contract_chain();
-    match run_user_fn(picked, bound, &exec_frame, in_chain) {
+    match run_user_fn(picked, bound, &named_carriers, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
             // the signature; a deferred `Type` return carries the resolved per-call type — already

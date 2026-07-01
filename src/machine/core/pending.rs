@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::values::KObject;
 
@@ -19,6 +20,9 @@ enum PendingWrite<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        /// The bound value's home-omitted foreign reach, carried through the deferred write so a
+        /// drained bind stores the same reach a direct bind would (see [`Bindings::try_bind_value`]).
+        reach: FrameSet,
     },
     Function {
         name: String,
@@ -44,10 +48,19 @@ impl<'a> PendingQueue<'a> {
         }
     }
 
-    pub fn defer_value(&self, name: String, obj: &'a KObject<'a>, index: BindingIndex) {
-        self.pending
-            .borrow_mut()
-            .push(PendingWrite::Value { name, obj, index });
+    pub fn defer_value(
+        &self,
+        name: String,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+        reach: FrameSet,
+    ) {
+        self.pending.borrow_mut().push(PendingWrite::Value {
+            name,
+            obj,
+            index,
+            reach,
+        });
     }
 
     pub fn defer_function(
@@ -95,11 +108,21 @@ impl<'a> PendingQueue<'a> {
         let mut still_pending: Vec<PendingWrite<'a>> = Vec::new();
         for item in pending {
             match item {
-                PendingWrite::Value { name, obj, index } => {
-                    match bindings.try_bind_value(&name, obj, index) {
+                PendingWrite::Value {
+                    name,
+                    obj,
+                    index,
+                    reach,
+                } => {
+                    match bindings.try_bind_value(&name, obj, index, reach.clone()) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Value { name, obj, index });
+                            still_pending.push(PendingWrite::Value {
+                                name,
+                                obj,
+                                index,
+                                reach,
+                            });
                         }
                         // `_e`: format string only reads it in debug.
                         Err(_e) => {

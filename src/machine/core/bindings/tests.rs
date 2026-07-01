@@ -113,7 +113,7 @@ fn value_bind_then_type_register_is_rebind() {
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
-        .try_bind_value("x", val, BindingIndex::BUILTIN)
+        .try_bind_value("x", val, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("value bind should succeed on fresh bindings");
     let err = match bindings.try_register_type("x", kt, BindingIndex::BUILTIN) {
         Err(e) => e,
@@ -133,7 +133,7 @@ fn value_bind_then_type_upsert_is_rebind() {
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
-        .try_bind_value("x", val, BindingIndex::BUILTIN)
+        .try_bind_value("x", val, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("value bind should succeed");
     let err = match bindings.try_register_type_upsert("x", kt, BindingIndex::BUILTIN) {
         Err(e) => e,
@@ -153,7 +153,7 @@ fn type_register_then_value_bind_is_rebind() {
     bindings
         .try_register_type("T", kt, BindingIndex::BUILTIN)
         .expect("type register should succeed on fresh bindings");
-    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN) {
+    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN, FrameSet::empty()) {
         Err(e) => e,
         Ok(_) => panic!("binding a value over a committed type must be rejected"),
     };
@@ -172,7 +172,7 @@ fn type_upsert_then_value_bind_is_rebind() {
     bindings
         .try_register_type_upsert("T", kt, BindingIndex::BUILTIN)
         .expect("type upsert should succeed");
-    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN) {
+    let err = match bindings.try_bind_value("T", val, BindingIndex::BUILTIN, FrameSet::empty()) {
         Err(e) => e,
         Ok(_) => panic!("binding a value over an upserted type must be rejected"),
     };
@@ -193,7 +193,7 @@ fn bulk_install_rejects_value_colliding_with_committed_type() {
         .expect("type register should succeed");
     let src: Bindings<'_> = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
-    src.try_bind_value("Foo", val, BindingIndex::BUILTIN)
+    src.try_bind_value("Foo", val, BindingIndex::BUILTIN, FrameSet::empty())
         .expect("source value bind should succeed");
     let err = dst
         .try_bulk_install_from(&src)

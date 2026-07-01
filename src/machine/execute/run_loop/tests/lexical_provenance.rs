@@ -121,7 +121,7 @@ fn fn_body_call_with_spacers_produces_value() {
     );
     let data = scope.bindings().data();
     use crate::machine::model::KObject;
-    assert!(matches!(data.get("r").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 5.0));
+    assert!(matches!(data.get("r").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 5.0));
 }
 
 #[test]

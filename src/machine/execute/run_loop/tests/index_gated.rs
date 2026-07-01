@@ -122,7 +122,7 @@ fn nested_block_cutoff_is_per_scope() {
     };
     let data = m.child_scope().bindings().data();
     assert!(
-        matches!(data.get("b").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 2.0),
+        matches!(data.get("b").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0),
         "inner backward ref `b = a` should resolve a from the same module body",
     );
 }

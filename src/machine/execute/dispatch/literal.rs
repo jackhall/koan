@@ -303,17 +303,14 @@ impl<'step> KoanRuntime<'step> {
                 // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
                 // chain. The resolved leaf is cloned into the region-pure witnessed surface (sharing its
                 // `Rc` payload, identity preserved) and sealed — a `KType::Module` folds its child reach.
-                // The value case is handled above via the binding-scope carrier, so the `Object` arm is
-                // defensive: an existing value reference wraps via the asserted-co-location read path.
-                NameOutcome::Resolved(c) => {
-                    let carrier = match c {
-                        Carried::Type(kt) => {
-                            s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone()))
-                        }
-                        Carried::Object(obj) => s.resident_object_carrier(obj),
-                    };
-                    Some(Slot::Static(Sealed::seal(carrier)))
-                }
+                NameOutcome::Resolved(Carried::Type(kt)) => Some(Slot::Static(Sealed::seal(
+                    s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone())),
+                ))),
+                // The value case is handled above via the reach-carrying binding-scope carrier
+                // (`resolve_value_carrier`). A bare `Carried::Object` reaching here carries no reach to
+                // build a correct carrier from, so it falls through to the sub-dispatch fallback rather
+                // than wrapping a reachless value.
+                NameOutcome::Resolved(Carried::Object(_)) => None,
                 NameOutcome::Parked(producer) => {
                     let pos = park_producers.len();
                     park_producers.push(producer);

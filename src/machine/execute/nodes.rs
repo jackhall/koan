@@ -196,7 +196,7 @@ mod tests {
         let scope = default_scope(&region, Box::new(std::io::sink()));
         let v = region.brand().alloc_object(KObject::Number(7.0));
         scope
-            .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
+            .bind_value("k".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
             .unwrap();
 
         let ns = NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));

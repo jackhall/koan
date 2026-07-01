@@ -137,7 +137,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let res = sched.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
-    let (entry, _) = data.get("foo").expect("expected binding 'foo'");
+    let (entry, _, _) = data.get("foo").expect("expected binding 'foo'");
     assert!(
         matches!(entry, KObject::Number(n) if *n == 1.0),
         "expected Number(1.0), got {:?}",

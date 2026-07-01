@@ -22,6 +22,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::FrameSet;
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
@@ -74,7 +75,12 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     ));
     let obj = scope.brand().alloc_object(KObject::KFunction(f));
     scope
-        .bind_value("f".to_string(), obj, BindingIndex::BUILTIN)
+        .bind_value(
+            "f".to_string(),
+            obj,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .expect("bind_value should succeed");
 }
 
@@ -548,6 +554,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             "producer_target".to_string(),
             producer_target,
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         )
         .expect("bind_value should succeed");
     let producer = sched.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
