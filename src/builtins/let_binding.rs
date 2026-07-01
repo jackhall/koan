@@ -125,7 +125,7 @@ pub fn body<'a>(
         let carrier = ctx
             .scope
             .resident_type_carrier(region.alloc_ktype(kt), &reach);
-        Action::DoneWitnessed(carrier)
+        Action::Done(Ok(carrier))
     } else {
         let value = rhs
             .as_object()
@@ -171,7 +171,7 @@ pub fn body<'a>(
         // The bound value lives in this scope's region with its foreign reach `reach`, so its terminal
         // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
         // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::DoneWitnessed(ctx.scope.resident_value_carrier(allocated, &reach))
+        Action::Done(Ok(ctx.scope.resident_value_carrier(allocated, &reach)))
     }
 }
 

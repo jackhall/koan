@@ -234,7 +234,8 @@ fn fn_typed_function_param_incomparable_is_ambiguous() {
     );
     run(scope, "FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
     let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
+    let root =
+        runtime.dispatch_in_scope(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");

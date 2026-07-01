@@ -160,7 +160,9 @@ fn finalize_val<'a>(
     {
         return Action::Done(Err(e));
     }
-    Action::DoneWitnessed(scope.seal_value(scope.brand().alloc_ktype_witnessed(declared_kt), None))
+    Action::Done(Ok(
+        scope.seal_value(scope.brand().alloc_ktype_witnessed(declared_kt), None)
+    ))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

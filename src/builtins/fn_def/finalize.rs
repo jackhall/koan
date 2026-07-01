@@ -271,12 +271,12 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
-/// (it names its captured scope's frame), so success seals as [`Action::DoneWitnessed`].
+/// (it names its captured scope's frame), so success seals as [`Action::Done(Ok)`](Action::Done).
 pub(crate) fn fn_action<'a>(
     result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
 ) -> Action<'a> {
     match result {
-        Ok(witnessed) => Action::DoneWitnessed(witnessed),
+        Ok(witnessed) => Action::Done(Ok(witnessed)),
         Err(e) => Action::Done(Err(e)),
     }
 }

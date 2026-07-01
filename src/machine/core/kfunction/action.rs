@@ -225,16 +225,14 @@ pub type CatchContinue<'a> =
 
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
 pub enum Action<'a> {
-    /// Produce a value / error for this slot (after any direct scope mutation the builtin did).
-    Done(Result<Carried<'a>, KError>),
-    /// Produce a value built **inside the witness closure** — already bundled with the set of
-    /// regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at the alloc site, or
-    /// a `seal_value` / `resident_type_carrier` sealing a constructed or read value), so it is co-located
-    /// by construction rather than paired with an asserted witness at finalize. The construction
-    /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` returns this
-    /// instead of the bare [`Done`](Self::Done). Only errors and a single-dep value *forward* (whose
-    /// witness is exactly the forwarded dep's reach) stay on `Done`.
-    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
+    /// Produce this slot's terminal (after any direct scope mutation the builtin did): a witnessed
+    /// value or an error. The `Ok` carrier is built **inside the witness closure** — already bundled
+    /// with the set of regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at
+    /// the alloc site, or a `seal_value` / `resident_type_carrier` sealing a constructed or read
+    /// value) — so it is co-located by construction rather than paired with an asserted witness at
+    /// finalize. The construction terminal for **both** channels: a builtin that allocates a `KObject`
+    /// or a `KType` seals it here.
+    Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
     /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
     /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
     /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before
@@ -260,18 +258,15 @@ pub enum Action<'a> {
     },
 }
 
+#[cfg(test)]
 impl<'a> Action<'a> {
-    /// Lift a witnessed-construction result into a terminal: `Ok` seals as
-    /// [`DoneWitnessed`](Self::DoneWitnessed) (the carrier already names its reach), `Err` as a
-    /// bare [`Done`](Self::Done) error. The terminal form for a type/object construction that may
-    /// fail its seal — folds the pervasive `match { Ok => DoneWitnessed, Err => Done(Err) }`.
-    pub(crate) fn done_witnessed(
-        result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
-    ) -> Self {
-        match result {
-            Ok(carrier) => Action::DoneWitnessed(carrier),
-            Err(error) => Action::Done(Err(error)),
-        }
+    /// Seal a **region-pure** bare value as a `Done` terminal — the test-only constructor for a
+    /// marker object that references no foreign region ([`Witnessed::resident`] fixes the empty
+    /// witness). Production never mints a bare terminal: a real value is always built witnessed at its
+    /// alloc site (`seal_value` / `yoke` / `merge` / `resident_*_carrier`), so this stays behind
+    /// `cfg(test)`.
+    pub(crate) fn done_resident(value: Carried<'a>) -> Self {
+        Action::Done(Ok(Witnessed::resident(value)))
     }
 }
 

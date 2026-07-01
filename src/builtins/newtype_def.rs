@@ -138,12 +138,9 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    Some(TypeResolution::Type(kt)) => Action::done_witnessed(finalize_newtype(
-                        ctx.scope,
-                        name,
-                        kt.clone(),
-                        bind_index,
-                    )),
+                    Some(TypeResolution::Type(kt)) => {
+                        Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index))
+                    }
                     // The repr names a type still finalizing in this scheduler: park on its
                     // producer and re-resolve at dep-finish.
                     Some(TypeResolution::Placeholder(producer)) => {
@@ -152,9 +149,12 @@ pub fn body<'a>(
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(TypeResolution::Type(kt)) => Action::done_witnessed(
-                                finalize_newtype(fctx.scope, name, kt.clone(), bind_index),
-                            ),
+                            Some(TypeResolution::Type(kt)) => Action::Done(finalize_newtype(
+                                fctx.scope,
+                                name,
+                                kt.clone(),
+                                bind_index,
+                            )),
                             _ => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                                 "NEWTYPE repr slot = unknown type name `{}`",
                                 te.as_str()
@@ -172,9 +172,7 @@ pub fn body<'a>(
                     ))))),
                 }
             }
-            other => {
-                Action::done_witnessed(finalize_newtype(ctx.scope, name, other.clone(), bind_index))
-            }
+            other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -198,7 +196,7 @@ fn defer_resolved_sigil<'a>(
     ))]);
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match results[0] {
         Carried::Type(kt) => {
-            Action::done_witnessed(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
+            Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }
         Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE repr sigil resolved to a non-type value `{}`",

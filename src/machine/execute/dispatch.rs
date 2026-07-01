@@ -297,7 +297,7 @@ pub(in crate::machine::execute) fn park_on_deps<'step>(
 
 /// Construction-inversion sibling of [`park_on_deps`]: park on `deps` (all owned) and, on resolve,
 /// fold their terminals (value + reach) into one witnessed carrier via the [`WitnessedDepFinish`],
-/// sealing the slot as [`Outcome::DoneWitnessed`]. The decide-side entry a construction decide
+/// sealing the slot as [`Outcome::Done(Ok)`](Outcome::Done). The decide-side entry a construction decide
 /// (newtype / tagged union) uses so the built value names every region it reaches by construction.
 pub(in crate::machine::execute) fn park_on_deps_witnessed<'step>(
     deps: Vec<DepRequest<'step>>,

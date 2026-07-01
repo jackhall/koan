@@ -49,9 +49,9 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
-        Some(obj) => Action::Done(Ok(Carried::Object(
+        Some(obj) => Action::done_resident(Carried::Object(
             ctx.scope.brand().alloc_object(obj.deep_clone()),
-        ))),
+        )),
         None => Action::Done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         ))),
@@ -795,7 +795,9 @@ fn operator_chain_undeclared_errors_cleanly() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
-    runtime.execute().expect("scheduler drains without deadlock");
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
     let msg = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
         Ok(summary) => {
@@ -835,7 +837,9 @@ fn operator_chain_registered_reaches_fold_seam() {
 
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
-    runtime.execute().expect("scheduler drains without deadlock");
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
     let msg = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
         Ok(summary) => panic!("a registered chain reaches the fold seam (an error); got {summary}"),

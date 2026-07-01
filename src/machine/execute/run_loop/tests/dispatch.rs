@@ -17,19 +17,19 @@ use crate::machine::FrameStorage;
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "identifier"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "identifier")))
 }
 fn body_marker_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "any"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "any")))
 }
 fn body_inner_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "inner_any"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "inner_any")))
 }
 fn body_outer_number<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "outer_number"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "outer_number")))
 }
 fn body_lowercase<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "lowercase"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "lowercase")))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {

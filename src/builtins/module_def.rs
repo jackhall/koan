@@ -46,7 +46,7 @@ pub fn body<'a>(
             .bindings()
             .lookup_type_carrier(&name_for_finish, None)
         {
-            return Action::DoneWitnessed(fctx.scope.resident_type_carrier(kt, &reach));
+            return Action::Done(Ok(fctx.scope.resident_type_carrier(kt, &reach)));
         }
         // The module's home-omitted foreign reach, folded from the child scope held **directly** here
         // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
@@ -75,7 +75,7 @@ pub fn body<'a>(
             Ok(kt_ref) => {
                 // Witness the registered `&KType` in place from the stored reach — no re-clone, no
                 // `child_scope()` walk.
-                Action::DoneWitnessed(fctx.scope.resident_type_carrier(kt_ref, &reach))
+                Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach)))
             }
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<module>",

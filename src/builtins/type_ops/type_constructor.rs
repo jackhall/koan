@@ -50,7 +50,7 @@ pub fn body<'a>(
         .scope
         .brand()
         .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
-    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+    Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
 }
 
 #[cfg(test)]

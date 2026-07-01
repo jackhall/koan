@@ -200,12 +200,10 @@ impl<'run> KoanRuntime<'run> {
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
 pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
     match action {
-        // Terminal: the value the builtin already computed (scope was mutated in place first).
-        Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
-        Action::Done(Err(e)) => Outcome::Done(Err(e)),
-        // Object-family terminal: the carrier the builtin built inside its witness closure rides
-        // straight through — `finalize` seals it, no asserted-co-location bundle.
-        Action::DoneWitnessed(carrier) => Outcome::DoneWitnessed(carrier),
+        // Terminal: the witnessed carrier (or error) the builtin already computed inside its witness
+        // closure (scope was mutated in place first) rides straight through — `finalize` seals it, no
+        // asserted-co-location bundle.
+        Action::Done(result) => Outcome::Done(result),
 
         Action::Tail {
             leading,
@@ -407,7 +405,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
-    /// (a `Done` / `DoneWitnessed` return, or a tail `Continue` retiring this iteration), so the scope
+    /// (a `Done` return, or a tail `Continue` retiring this iteration), so the scope
     /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
     /// (its `owner` never names this slot), so its `Done` is a no-op here.
     fn close_owned_scope(&self, idx: usize) {
@@ -427,24 +425,15 @@ impl<'run> KoanRuntime<'run> {
         idx: usize,
     ) -> NodeStep {
         match outcome {
-            // A bare terminal. A value is region-pure relative to its producer frame (a builtin's
-            // direct `Action::Done(Ok)` — its args resolved synchronously, nothing born reaching a
-            // dep region): seal it region-pure through `resident` (born under the empty set, the
-            // producer frame folded in at finalize/close) so it joins the sole witnessed value
-            // terminal. An error carries no value and finalizes bare.
-            Outcome::Done(Ok(value)) => {
+            // The value terminal: a construction carrier already naming its reach rides straight
+            // through to the Done boundary, where the workload hook seals it (a declared-return
+            // re-stamp aside, untouched). An error carries no value and finalizes bare.
+            Outcome::Done(result) => {
                 self.close_owned_scope(idx);
-                NodeStep::DoneWitnessed(Witnessed::<CarriedFamily, FrameSet>::resident(value))
-            }
-            Outcome::Done(Err(error)) => {
-                self.close_owned_scope(idx);
-                NodeStep::Error(error)
-            }
-            // A construction carrier rides straight through to the Done boundary, where the workload
-            // hook seals it (a declared-return re-stamp aside, untouched).
-            Outcome::DoneWitnessed(carrier) => {
-                self.close_owned_scope(idx);
-                NodeStep::DoneWitnessed(carrier)
+                match result {
+                    Ok(carrier) => NodeStep::DoneWitnessed(carrier),
+                    Err(error) => NodeStep::Error(error),
+                }
             }
             Outcome::Continue {
                 work,
@@ -571,7 +560,7 @@ impl<'run> KoanRuntime<'run> {
                     ),
                     // The construction-inversion sibling: same realized deps and edges, but the
                     // continuation folds the resolved terminals (value + reach) into one witnessed
-                    // carrier and seals as `DoneWitnessed` (see [`short_circuit_witnessed`]).
+                    // carrier and seals as `Done(Ok)` (see [`short_circuit_witnessed`]).
                     Continuation::FinishWitnessed(finish) => NodeWork::new(
                         dep_ids,
                         park_count,

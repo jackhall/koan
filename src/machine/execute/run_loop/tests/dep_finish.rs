@@ -41,7 +41,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             .current_scope()
             .brand()
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        Outcome::Done(Ok(Carried::Object(allocated)))
+        Outcome::done_resident(Carried::Object(allocated))
     });
     let dep_finish_id = runtime.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
     runtime.execute().unwrap();
@@ -88,7 +88,7 @@ fn dep_finish_short_circuits_on_dep_error() {
     let invoked_clone = Rc::clone(&invoked);
     let finish: DepFinish = Box::new(move |_sched, _results, _carriers| {
         invoked_clone.set(true);
-        Outcome::Done(Ok(Carried::Object(value)))
+        Outcome::done_resident(Carried::Object(value))
     });
     let dep_finish_id = runtime.add_dep_finish(vec![dep_ok, dep_err], vec![], scope, finish);
     runtime.execute().unwrap();
@@ -121,7 +121,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
                 .scope
                 .brand()
                 .alloc_object(KObject::KString("from-combine".into()));
-            Action::Done(Ok(Carried::Object(v)))
+            Action::done_resident(Carried::Object(v))
         });
         Action::AwaitDeps {
             deps: Vec::new(),

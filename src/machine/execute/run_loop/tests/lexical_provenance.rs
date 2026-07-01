@@ -27,7 +27,10 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
         vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
         root,
     );
-    let chains: Vec<_> = ids.iter().map(|id| runtime.chain_of(*id).unwrap()).collect();
+    let chains: Vec<_> = ids
+        .iter()
+        .map(|id| runtime.chain_of(*id).unwrap())
+        .collect();
     for (i, chain) in chains.iter().enumerate() {
         assert!(
             chain.parent.is_none(),

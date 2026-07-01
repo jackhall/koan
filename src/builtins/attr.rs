@@ -23,15 +23,14 @@ use crate::witnessed::{Sealed, Witnessed};
 use super::{arg, kw, sig};
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
-/// seals as a [`Witnessed`] carrier naming its reach
-/// ([`Action::DoneWitnessed`](crate::machine::core::kfunction::action::Action::done_witnessed)), an
-/// error as a bare `Done`. Both channels are witnessed: an object value via
-/// [`Scope::seal_value`], a type identity witnessed in place from its stored reach via
-/// [`Scope::resident_type_carrier`] (or, for a projected type field, sealed under the embedded reach).
+/// seals as a [`Witnessed`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
+/// [`Action::Done(Err)`]. Both channels are witnessed: an object value via [`Scope::seal_value`], a
+/// type identity witnessed in place from its stored reach via [`Scope::resident_type_carrier`] (or,
+/// for a projected type field, sealed under the embedded reach).
 fn route<'a>(
     result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    crate::machine::core::kfunction::action::Action::done_witnessed(result)
+    crate::machine::core::kfunction::action::Action::Done(result)
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the

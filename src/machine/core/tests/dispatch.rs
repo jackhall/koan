@@ -13,10 +13,10 @@ use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 use crate::source::Spanned;
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "a"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "a")))
 }
 fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "b"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "b")))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {

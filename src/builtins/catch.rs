@@ -118,7 +118,7 @@ pub fn body<'a>(
                     .expect("a FrameSet set witness always represents the union")
             }
         };
-        Action::DoneWitnessed(witnessed)
+        Action::Done(Ok(witnessed))
     });
     Action::Catch {
         watched: Dep::Dispatch {

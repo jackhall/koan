@@ -35,8 +35,8 @@ pub(crate) type FieldListFinalize<'step> = Box<
 >;
 
 /// `Action`-path twin of [`FieldListFinalize`], returning a witnessed carrier — used by
-/// [`defer_field_list_action`], whose finish lifts the result through
-/// [`Action::done_witnessed`](crate::machine::core::kfunction::action::Action::done_witnessed).
+/// [`defer_field_list_action`], whose finish lifts the result straight into
+/// [`Action::Done(Ok)`](crate::machine::core::kfunction::action::Action::Done).
 pub(crate) type FieldListFinalizeAction<'step> = Box<
     dyn for<'view> FnOnce(
             &'view Scope<'step>,
@@ -156,7 +156,7 @@ pub(crate) fn defer_field_list_action<'a>(
             &mut elaborator,
             Some(&mut feed),
         ) {
-            FieldListOutcome::Done(fields) => Action::done_witnessed(finalize(fctx.scope, fields)),
+            FieldListOutcome::Done(fields) => Action::Done(finalize(fctx.scope, fields)),
             FieldListOutcome::Err(msg) => {
                 let error = KError::new(KErrorKind::ShapeError(msg));
                 Action::Done(Err(match error_frame {
@@ -189,7 +189,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         let carrier = scope
             .brand()
             .alloc_ktype_witnessed(KType::Record(Box::new(record)));
-        Outcome::DoneWitnessed(scope.seal_value(carrier, None))
+        Outcome::Done(Ok(scope.seal_value(carrier, None)))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(

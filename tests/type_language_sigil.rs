@@ -40,7 +40,9 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> &'a Scope<'a> {
     for e in exprs {
         runtime.dispatch_in_scope(e, scope);
     }
-    runtime.execute().expect("scheduler should run to completion");
+    runtime
+        .execute()
+        .expect("scheduler should run to completion");
     scope
 }
 

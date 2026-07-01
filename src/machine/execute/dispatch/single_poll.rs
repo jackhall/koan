@@ -75,7 +75,7 @@ pub(super) fn bare_identifier<'step, 'b>(
         // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
         // transitively pins that scope's reach-set — so the read names the value's reach by
         // construction rather than reconstructing it from the value.
-        ValueCarrierResolution::Value(carrier) => Outcome::DoneWitnessed(carrier),
+        ValueCarrierResolution::Value(carrier) => Outcome::Done(Ok(carrier)),
         ValueCarrierResolution::Placeholder(producer) => forward_to_producer(producer),
         ValueCarrierResolution::UnboundName => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
@@ -94,7 +94,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
         TypeLeafCarrier::Resolved { kt, reach } => {
-            Outcome::DoneWitnessed(s.resident_type_carrier(kt, &reach))
+            Outcome::Done(Ok(s.resident_type_carrier(kt, &reach)))
         }
         TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
@@ -190,14 +190,14 @@ pub(super) fn literal_pass_through<'step>(
             let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
                 Carried::Object(region.alloc_object(lit.to_kobject()))
             });
-            Outcome::DoneWitnessed(carrier)
+            Outcome::Done(Ok(carrier))
         }
         // A spliced value is already resolved and region-pure relative to its producer frame (as the
         // bare terminal it replaces was, pinned by that frame alone). Seal it region-pure through
         // `Witnessed::resident` — born under the empty set, the producer frame folded in at
         // finalize/close — the exact witness the retired bare path computed.
         ExpressionPart::Spliced(c) => {
-            Outcome::DoneWitnessed(Witnessed::<CarriedFamily, FrameSet>::resident(c))
+            Outcome::Done(Ok(Witnessed::<CarriedFamily, FrameSet>::resident(c)))
         }
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),

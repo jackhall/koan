@@ -56,10 +56,10 @@ pub fn body<'a>(
             bind_index,
             FrameSet::empty(),
         ) {
-            Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
+            Ok(kt_ref) => Action::Done(Ok(fctx.scope.seal_value(
                 fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,
-            )),
+            ))),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),

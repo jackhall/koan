@@ -94,7 +94,7 @@ pub fn body<'a>(
     // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
     // foreign reach folded in, so every region the shared backing borrows into outlives the
     // projection — the object-family terminal replacing the relocate-seam reconstruction.
-    Action::DoneWitnessed(ctx.scope.seal_value(carrier, ctx.arg_carrier("record")))
+    Action::Done(Ok(ctx.scope.seal_value(carrier, ctx.arg_carrier("record"))))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
