@@ -285,13 +285,13 @@ pub(crate) fn fn_action<'a>(
 /// sub-Dispatches for parens-wrapped parameter types, then re-run the signature
 /// elaboration in the finish closure.
 ///
-/// Build the dep-finish as an `Action` — park producers become `Dep::Existing`, the
-/// optional return-type sub and the param-type subs become `Dep::Dispatch { OwnScope }`
+/// Build the dep-finish as an `Action` — park producers become `DepRequest::Existing`, the
+/// optional return-type sub and the param-type subs become `DepRequest::Dispatch { OwnScope }`
 /// (in that order, so the `[park ++ rt? ++ subs]` result layout the `splice_layout` /
 /// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish wraps the
 /// [`finalize_fn_with_kind`] result in `Action::Done`.
 ///
-/// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `Dep::Dispatch`;
+/// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `DepRequest::Dispatch`;
 /// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
 /// `Spliced(obj)` before re-running `parse_fn_param_list` against the now-final scope.
 pub(crate) fn defer<'a>(
@@ -301,7 +301,9 @@ pub(crate) fn defer<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        Action, AwaitContinue, DepPlacement, DepRequest,
+    };
     let DeferredInputs {
         capture,
         park_producers,
@@ -310,10 +312,14 @@ pub(crate) fn defer<'a>(
         prebuilt_elements,
     } = inputs;
     let park_count = park_producers.len();
-    let mut deps: Vec<Dep<'a>> = park_producers.iter().copied().map(Dep::Existing).collect();
+    let mut deps: Vec<DepRequest<'a>> = park_producers
+        .iter()
+        .copied()
+        .map(DepRequest::Existing)
+        .collect();
     let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
-        deps.push(Dep::Dispatch {
+        deps.push(DepRequest::Dispatch {
             expr: rt_expr,
             placement: DepPlacement::OwnScope,
         });
@@ -321,7 +327,7 @@ pub(crate) fn defer<'a>(
     }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        deps.push(Dep::Dispatch {
+        deps.push(DepRequest::Dispatch {
             expr: sub_expr,
             placement: DepPlacement::OwnScope,
         });

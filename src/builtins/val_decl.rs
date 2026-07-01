@@ -54,7 +54,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, Action, AwaitContinue, Dep, DepPlacement,
+        arg_object, arg_type, Action, AwaitContinue, DepPlacement, DepRequest,
     };
 
     let done_err = |e: KError| Action::Done(Err(e));
@@ -133,7 +133,7 @@ pub fn body<'a>(
         finalize_val(fctx.scope, name_for_finish.clone(), kt, bind_index)
     });
     Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
+        deps: vec![DepRequest::Dispatch {
             expr,
             placement: DepPlacement::OwnScope,
         }],

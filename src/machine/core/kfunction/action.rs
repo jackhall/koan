@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, ScopeId};
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
@@ -248,12 +248,12 @@ pub enum Action<'a> {
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
     AwaitDeps {
-        deps: Vec<Dep<'a>>,
+        deps: Vec<DepRequest<'a>>,
         finish: AwaitContinue<'a>,
     },
     /// Watch `watched`, recover via `finish`.
     Catch {
-        watched: Dep<'a>,
+        watched: DepRequest<'a>,
         finish: CatchContinue<'a>,
     },
 }
@@ -270,18 +270,53 @@ impl<'a> Action<'a> {
     }
 }
 
-/// A dep-finish/Tail dependency. `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a
-/// producer NodeId the builtin already found in scope (a forward-ref / pending type) kept alive as
-/// a park-producer.
-pub enum Dep<'a> {
+/// The dependency currency both an [`Action`] (`AwaitDeps` / `Catch`) and a dispatch
+/// [`Outcome::ParkThenContinue`](crate::machine::execute) declare — the one dep type, defined here in
+/// core so `Action` can carry it without core depending on the execute layer.
+///
+/// `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a producer NodeId already in
+/// scope (a forward-ref / pending type) kept alive as a park-producer. These two arms are the whole
+/// builtin-`Action` currency. The remaining arms are dispatcher-only lowerings a builtin never
+/// constructs: `ListLit` / `DictLit` / `RecordLit` schedule an aggregate literal as one owned
+/// producer, and `BodyBlock` fans a non-tail statement block out to one owned producer per statement
+/// (see [`BodyPlacement`] for where they bind). Deps resolve in declaration order, so a finish reads
+/// `results[k]` for the k-th dep — except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose
+/// multi-statement body each fan out to one resolved producer per statement (the harness `extend`s
+/// them in order).
+pub enum DepRequest<'a> {
     Dispatch {
         expr: KExpression<'a>,
         placement: DepPlacement<'a>,
     },
     Existing(NodeId),
+    ListLit(Vec<ExpressionPart<'a>>),
+    DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
+    RecordLit(Vec<(String, ExpressionPart<'a>)>),
+    /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
+    /// statement (the harness `extend`s them in declaration order). `placement` picks where they
+    /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
+    /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
+    /// inherited-cart overlay.
+    BodyBlock {
+        statements: Vec<KExpression<'a>>,
+        placement: BodyPlacement<'a>,
+    },
 }
 
-/// Where a `Dep::Dispatch` attaches — collapses the `_here` / `_in_frame` / `_with_chain` zoo.
+/// Where a [`DepRequest::BodyBlock`]'s statements bind — the two block fan-outs a leading-carrying
+/// tail chooses between.
+pub enum BodyPlacement<'a> {
+    /// Dispatch as body-chain siblings in `frame`'s own scope (`KoanRuntime::dispatch_body`) — a
+    /// deferred-return FN's first-call body (its non-tail body + the return-type expression) and
+    /// MATCH / TRY arm leading statements. The only dep that carries its own frame.
+    Frame(Rc<CallFrame>),
+    /// Enter `overlay` as a fresh lexical block without a per-call frame (`KoanRuntime::enter_block`)
+    /// — USING's leading statements, which bind into the transparent overlay inside the inherited
+    /// call-site cart.
+    Overlay(&'a Scope<'a>),
+}
+
+/// Where a [`DepRequest::Dispatch`] attaches — collapses the `_here` / `_in_frame` / `_with_chain` zoo.
 pub enum DepPlacement<'a> {
     /// The slot's own `NodeScope` (`add_dispatch_here`) — binders' type sub-dispatches.
     OwnScope,

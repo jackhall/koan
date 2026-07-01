@@ -45,6 +45,25 @@ pub(crate) type FieldListFinalizeAction<'step> = Box<
         + 'step,
 >;
 
+/// The `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]` dep vector both
+/// deferral twins declare — the harness owns the `Dispatch` suffix and parks the `Existing` prefix,
+/// feeding results in that order (so the re-walk consumes `results[park_count..]` in DFS order).
+/// Built once here rather than spelled arm-for-arm in each twin.
+fn field_list_deps<'step>(
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<KExpression<'step>>,
+) -> Vec<DepRequest<'step>> {
+    let mut deps: Vec<DepRequest<'step>> = park_producers
+        .into_iter()
+        .map(DepRequest::Existing)
+        .collect();
+    deps.extend(sub_dispatches.into_iter().map(|sub| DepRequest::Dispatch {
+        expr: sub,
+        placement: DepPlacement::OwnScope,
+    }));
+    deps
+}
+
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
 /// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
 /// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
@@ -97,16 +116,7 @@ pub(crate) fn defer_field_list<'step>(
             }
         }
     });
-    // Deps `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]`; the harness owns
-    // the `Dispatch` suffix and parks the `Existing` prefix, feeding results in that order.
-    let mut deps: Vec<DepRequest<'step>> = park_producers
-        .into_iter()
-        .map(DepRequest::Existing)
-        .collect();
-    deps.extend(sub_dispatches.into_iter().map(|sub| DepRequest::Dispatch {
-        expr: sub,
-        placement: DepPlacement::OwnScope,
-    }));
+    let deps = field_list_deps(park_producers, sub_dispatches);
     Outcome::ParkThenContinue {
         deps,
         park_count,
@@ -115,10 +125,9 @@ pub(crate) fn defer_field_list<'step>(
     }
 }
 
-/// `Action`-harness twin of [`defer_field_list`]: build the same dep-finish as an
-/// [`Action`](crate::machine::core::kfunction::action::Action) — park producers become
-/// `Dep::Existing`, sigil sub-Dispatches `Dep::Dispatch { OwnScope }`, and the finish re-walks
-/// `expr` then wraps the `finalize` result in `Action::Done`.
+/// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] vector
+/// but wraps the dep-finish as an [`Action`](crate::machine::core::kfunction::action::Action) — its
+/// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_action<'a>(
     expr: KExpression<'a>,
@@ -132,16 +141,12 @@ pub(crate) fn defer_field_list_action<'a>(
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalizeAction<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
     // park_producers, and the scheduler feeds results as [park.. , owned..] — so the re-walk
     // consumes `results[park_count..]`, exactly as the scheduler-side twin does.
     let park_count = park_producers.len();
-    let mut deps: Vec<Dep<'a>> = park_producers.into_iter().map(Dep::Existing).collect();
-    deps.extend(sub_dispatches.into_iter().map(|sub| Dep::Dispatch {
-        expr: sub,
-        placement: DepPlacement::OwnScope,
-    }));
+    let deps = field_list_deps(park_producers, sub_dispatches);
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;

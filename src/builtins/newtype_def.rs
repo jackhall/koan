@@ -118,13 +118,13 @@ fn finalize_record_newtype<'a>(
 }
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight producer (a `Dep::Existing` dep-finish), or errors; a raw sigil repr
+/// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, Dep,
+        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, DepRequest,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
@@ -161,7 +161,7 @@ pub fn body<'a>(
                             ))))),
                         });
                         Action::AwaitDeps {
-                            deps: vec![Dep::Existing(producer)],
+                            deps: vec![DepRequest::Existing(producer)],
                             finish,
                         }
                     }
@@ -190,7 +190,9 @@ fn defer_resolved_sigil<'a>(
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        Action, AwaitContinue, DepPlacement, DepRequest,
+    };
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
@@ -204,7 +206,7 @@ fn defer_resolved_sigil<'a>(
         ))))),
     });
     Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
+        deps: vec![DepRequest::Dispatch {
             expr: wrapped,
             placement: DepPlacement::OwnScope,
         }],

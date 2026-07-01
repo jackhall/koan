@@ -22,7 +22,8 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, AwaitContinue, DepPlacement,
+        DepRequest,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
@@ -84,7 +85,7 @@ pub fn body<'a>(
         }
     });
     Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
+        deps: vec![DepRequest::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(child_scope),
         }],

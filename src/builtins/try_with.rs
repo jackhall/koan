@@ -29,7 +29,7 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract};
     use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchContinue, Dep, DepPlacement,
+        require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
@@ -92,7 +92,7 @@ pub fn body<'a>(
         )
     });
     Action::Catch {
-        watched: Dep::Dispatch {
+        watched: DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::InScope(body_scope),
         },

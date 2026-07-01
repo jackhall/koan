@@ -21,9 +21,6 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
-use std::rc::Rc;
-
-use crate::machine::core::CallFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
@@ -32,8 +29,14 @@ use crate::source::Spanned;
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 use super::{ignore_results, DepFinish, WitnessedDepFinish};
-use crate::machine::core::kfunction::action::{BlockEntry, DepPlacement, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::scheduler::Scheduler;
+
+// The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
+// dispatch-side view `Outcome` consumers reach through `super::dispatch`.
+pub(in crate::machine::execute) use crate::machine::core::kfunction::action::{
+    BodyPlacement, DepRequest,
+};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -153,51 +156,6 @@ pub(in crate::machine::execute) enum PendingSub<'step> {
     ListLit(Vec<ExpressionPart<'step>>),
     DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
     RecordLit(Vec<(String, ExpressionPart<'step>)>),
-}
-
-/// A dependency a [`Outcome::ParkThenContinue`] declares — the data the read-only decide phase hands
-/// the harness (`KoanRuntime::apply_outcome`; the harness is the sole `&mut Scheduler` holder),
-/// which runs the matching write. The
-/// decide phase issues no graph write itself. `Dispatch` / `*Lit` / `BodyBlock` are fresh producers the harness submits
-/// (and owns); `Existing` is a pre-existing producer the decide phase found that the slot merely
-/// parks on. Deps resolve in declaration order, so a finish reads `results[k]` for the k-th dep —
-/// except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each fan out
-/// to one resolved producer per statement (the harness `extend`s them in order).
-///
-/// This enum names AST (`KExpression` / `ExpressionPart`) and so lives on the dispatch side, beside
-/// [`PendingSub`]; [`Outcome`] carries it as an opaque type, keeping `outcome.rs` AST-free.
-pub(in crate::machine::execute) enum DepRequest<'step> {
-    Dispatch {
-        expr: KExpression<'step>,
-        placement: DepPlacement<'step>,
-    },
-    ListLit(Vec<ExpressionPart<'step>>),
-    DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
-    RecordLit(Vec<(String, ExpressionPart<'step>)>),
-    /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
-    /// statement (the harness `extend`s them in declaration order). `placement` picks where they
-    /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
-    /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
-    /// inherited-cart overlay.
-    BodyBlock {
-        statements: Vec<KExpression<'step>>,
-        placement: BodyPlacement<'step>,
-    },
-    Existing(NodeId),
-}
-
-/// Where a [`DepRequest::BodyBlock`]'s statements bind — the two block fan-outs a leading-carrying
-/// tail chooses between.
-pub(in crate::machine::execute) enum BodyPlacement<'step> {
-    /// Dispatch as body-chain siblings in `frame`'s own scope
-    /// ([`dispatch_body`](super::runtime::KoanRuntime::dispatch_body)) — a deferred-return FN's
-    /// first-call body (its non-tail body + the return-type expression) and MATCH / TRY arm leading
-    /// statements. The only dep that carries its own frame.
-    Frame(Rc<CallFrame>),
-    /// Enter `overlay` as a fresh lexical block without a per-call frame
-    /// ([`enter_block`](super::runtime::KoanRuntime::enter_block)) — USING's leading statements,
-    /// which bind into the transparent overlay inside the inherited call-site cart.
-    Overlay(&'step Scope<'step>),
 }
 
 /// Result of a successful keyworded part walk.

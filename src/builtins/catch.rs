@@ -39,7 +39,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_kexpression, scope_frame, Action, CatchContinue, Dep, DepPlacement,
+        require_kexpression, scope_frame, Action, CatchContinue, DepPlacement, DepRequest,
     };
     use crate::machine::execute::build_type_operand;
     use crate::machine::model::values::CarriedFamily;
@@ -121,7 +121,7 @@ pub fn body<'a>(
         Action::Done(Ok(witnessed))
     });
     Action::Catch {
-        watched: Dep::Dispatch {
+        watched: DepRequest::Dispatch {
             expr: expr_inner,
             placement: DepPlacement::OwnScope,
         },
