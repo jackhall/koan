@@ -89,7 +89,7 @@ mod action_bodies {
             .scope
             .brand()
             .alloc_ktype_witnessed(KType::List(Box::new(elem)));
-        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -99,7 +99,7 @@ mod action_bodies {
             .scope
             .brand()
             .alloc_ktype_witnessed(KType::Dict(Box::new(k), Box::new(v)));
-        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -135,7 +135,7 @@ mod action_bodies {
                 ctor: Box::new(ctor),
                 args: vec![applied],
             });
-        Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -171,10 +171,9 @@ fn build_carrier<'a>(
     ) {
         FieldListOutcome::Done(fields) => {
             let kt = finalize_carrier(fields, ret, kind);
-            Action::DoneWitnessed(
-                ctx.scope
-                    .seal_value(ctx.scope.brand().alloc_ktype_witnessed(kt), None),
-            )
+            Action::Done(Ok(ctx
+                .scope
+                .seal_value(ctx.scope.brand().alloc_ktype_witnessed(kt), None)))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -273,6 +272,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::model::{KKind, KType, Record};
     use crate::machine::Scope;
@@ -308,6 +308,7 @@ mod tests {
                 index: 0,
             },
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         );
         let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
         match result {

@@ -16,11 +16,11 @@ use crate::machine::{KError, KErrorKind, Scope};
 /// later refused). Compare `test_support::run_one_err`, which panics on the
 /// first path.
 fn run_expecting_dispatch_error<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    match sched.execute() {
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    match runtime.execute() {
         Err(e) => e,
-        Ok(()) => match sched.read_result_with(id, |v| v.ktype().name().to_string()) {
+        Ok(()) => match runtime.read_result_with(id, |v| v.ktype().name().to_string()) {
             Err(e) => e.clone(),
             Ok(type_name) => {
                 panic!("expected dispatch-level error, got value of type {type_name}",)
@@ -159,12 +159,12 @@ fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic()
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("BUILD Str"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("BUILD Str"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("BUILD Str should fail the per-call return-type check"),
     };

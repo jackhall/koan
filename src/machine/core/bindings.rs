@@ -2,8 +2,10 @@
 //! `functions`, `placeholders`, `pending_overloads`) behind validated write
 //! paths that keep the function-mirror invariant — every `data[name]` wrapping
 //! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal
-//! declarations (STRUCT / UNION / MODULE) install identity into `types`
-//! alongside the carrier in `data` atomically.
+//! declarations (NEWTYPE / UNION / MODULE / SIG) install their identity into
+//! `types` only — there is no value-side carrier. The `data` and `types` maps
+//! are a structural partition: a name is committed to one xor the other, never
+//! both, enforced by the cross-kind check the value and type write paths run.
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
@@ -27,6 +29,7 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::operators::OperatorGroup;
@@ -38,15 +41,96 @@ use super::kerror::{KError, KErrorKind};
 mod pending;
 pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 
+/// Whether a binding — committed or an in-flight placeholder — lives in the value
+/// language or the type language. The `data`/`types` partition is mutually exclusive
+/// (a name is one xor the other; see the cross-kind check in the write paths), and a
+/// forward-reference placeholder is tagged with its kind so a type placeholder is
+/// never satisfied by a value bind, nor the reverse.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum BindKind {
+    Value,
+    Type,
+}
+
 /// Outcome of a value-side name lookup. `Resolution::Placeholder` carries the
 /// producer `NodeId` the consumer should park on.
 ///
-/// Invariant: within one scope, `data` and `placeholders` never both hold the
-/// same name — every successful write path clears any matching placeholder.
+/// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry
+/// never both hold the same name — every successful value write path clears its
+/// matching value placeholder.
 pub enum Resolution<'a> {
     Value(&'a KObject<'a>),
     Placeholder(NodeId),
     UnboundName,
+}
+
+/// Outcome of a per-scope type-side lookup — the type-language mirror of
+/// [`Resolution`]. `Placeholder` carries the producer `NodeId` of an earlier
+/// still-finalizing type binder the consumer parks on. A miss is `None` (the caller
+/// keeps walking ancestors), matching how [`Bindings::lookup_value`] returns `None`.
+#[derive(Copy, Clone, Debug)]
+pub enum TypeResolution<'a> {
+    Type(&'a KType<'a>),
+    Placeholder(NodeId),
+}
+
+impl<'a> TypeResolution<'a> {
+    /// The resolved type, or `None` for an in-flight placeholder — for callers that act
+    /// only on a finalized type and treat a still-running producer as "not bound yet".
+    pub fn finalized(self) -> Option<&'a KType<'a>> {
+        match self {
+            TypeResolution::Type(kt) => Some(kt),
+            TypeResolution::Placeholder(_) => None,
+        }
+    }
+}
+
+/// The value-or-type a name resolves to in one classified result — for ATTR module/signature
+/// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
+/// module-own value side then the type side in one call, so a call site no longer probes the
+/// value map then the type map by hand. The `data`/`types` cross-kind exclusion keeps the two
+/// arms from ever both matching within a scope.
+pub enum MemberResolution<'a> {
+    Value {
+        obj: &'a KObject<'a>,
+        /// The member's home-omitted foreign reach, stored on the module's own `data` entry when
+        /// the module body bound it — so an ATTR read wraps the member in a carrier built from its
+        /// stored reach rather than re-asserting single-frame co-location.
+        reach: FrameSet,
+    },
+    Type {
+        kt: &'a KType<'a>,
+        /// The member type's home-omitted foreign reach (non-empty for a nested `KType::Module`),
+        /// stored on the module's own `types` entry — so an ATTR type read witnesses the existing
+        /// `&KType` in place from its stored reach rather than walking the value.
+        reach: FrameSet,
+    },
+}
+
+/// The value-side carrier hit for a name — the reach-carrying twin of [`Resolution`]'s value arm.
+/// Produced by [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness
+/// from the binding's stored reach. `Placeholder` mirrors [`Resolution::Placeholder`].
+pub enum CarrierHit<'a> {
+    Bound {
+        obj: &'a KObject<'a>,
+        /// The binding's home-omitted foreign reach, cloned out so the read wrapper does not hold
+        /// the `data` `RefCell` borrow across the carrier build.
+        reach: FrameSet,
+    },
+    Placeholder(NodeId),
+}
+
+/// The type-side carrier hit for a name — the type-channel mirror of [`CarrierHit`]. Produced by
+/// [`Bindings::lookup_type_carrier`] so a type read witnesses the existing `&KType` in place from
+/// the binding's stored reach. `Placeholder` mirrors [`TypeResolution::Placeholder`].
+pub enum TypeCarrierHit<'a> {
+    Bound {
+        kt: &'a KType<'a>,
+        /// The binding's home-omitted foreign reach (empty for owned data, the child-scope reach for
+        /// a module), cloned out so the read wrapper does not hold the `types` `RefCell` borrow.
+        reach: FrameSet,
+    },
+    Placeholder(NodeId),
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -101,10 +185,24 @@ impl BindingIndex {
 /// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
-    types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
-    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex)>>,
+    /// Each type entry stores its bound type, its lexical [`BindingIndex`], and its **reach** — the
+    /// home-omitted foreign [`FrameSet`] the type borrows into. Empty for owned data (`Number`, a
+    /// struct `SetRef`, an abstract member); non-empty for a `KType::Module`, whose reach is folded
+    /// from its child scope at construction. A carrier-oriented read ([`Self::lookup_type_carrier`])
+    /// hands the reach back so the read witnesses the existing `&'a KType` in place from its stored
+    /// reach, never re-deriving it by walking the value. Foreign-only (home-omitted) for the same
+    /// cycle-safety rule as [`Self::data`].
+    types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex, FrameSet)>>,
+    /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
+    /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
+    /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
+    /// back so the read wraps the value in a self-contained witness built from its stored reach,
+    /// rather than re-asserting single-frame co-location. The reach is foreign-only (home-omitted)
+    /// so it never stores the region's own home frame `Rc` in-region — that would close a
+    /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
+    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
-    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex)>>,
+    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN / FUNCTOR overloads whose binder has
     /// dispatched but not finalized. Sibling binders sharing one inner-call
     /// bucket key each install their own entry; consumers park on the
@@ -128,8 +226,12 @@ pub struct Bindings<'a> {
     /// Keyed by `(TypeIdentifier, chain cutoff)`: a forward consumer (smaller cutoff) and a
     /// backward consumer (larger cutoff) at the same scope resolve the same name to
     /// different verdicts under lexical gating, so they must not share a cache entry.
-    type_identifier_memo: RefCell<HashMap<(TypeIdentifier, Option<usize>), &'a KType<'a>>>,
+    type_identifier_memo: RefCell<HashMap<(TypeIdentifier, Option<usize>), TypeMemoEntry<'a>>>,
 }
+
+/// A `type_identifier_memo` value: the cached `&KType` plus the resolved binding's home-omitted
+/// foreign reach, so a memo hit rebuilds the read carrier without re-walking the chain.
+type TypeMemoEntry<'a> = (&'a KType<'a>, FrameSet);
 
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
@@ -149,11 +251,11 @@ impl<'a> Bindings<'a> {
         &self,
         te: &TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<&'a KType<'a>> {
+    ) -> Option<(&'a KType<'a>, FrameSet)> {
         self.type_identifier_memo
             .borrow()
             .get(&(te.clone(), cutoff))
-            .copied()
+            .map(|(kt, reach)| (*kt, reach.clone()))
     }
 
     /// Per-scope value-side lookup. Consults `data` then `placeholders`,
@@ -162,28 +264,135 @@ impl<'a> Bindings<'a> {
     /// means no visible entry at this scope; the caller keeps walking
     /// ancestors and surfaces `UnboundName` on chain exhaustion.
     pub fn lookup_value(&self, name: &str, chain_cutoff: Option<usize>) -> Option<Resolution<'a>> {
-        if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
-            if Self::visible(idx, chain_cutoff) {
+        if let Some((obj, idx, _reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
                 return Some(Resolution::Value(obj));
             }
         }
-        if let Some((id, idx)) = self.placeholders.borrow().get(name).copied() {
-            if Self::visible(idx, chain_cutoff) {
-                return Some(Resolution::Placeholder(id));
+        self.value_placeholder(name, chain_cutoff)
+            .map(Resolution::Placeholder)
+    }
+
+    /// The value-side placeholder producer for `name`, or `None` — shared by
+    /// [`Self::lookup_value`] and [`Self::lookup_value_carrier`], which differ only in the
+    /// `data` arm.
+    fn value_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
+        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+            if kind == BindKind::Value && Self::visible(idx, chain_cutoff) {
+                return Some(id);
             }
         }
         None
     }
 
-    /// Per-scope type-side lookup. Mirrors [`Self::lookup_value`] for the
-    /// `types` map.
-    pub fn lookup_type(&self, name: &str, chain_cutoff: Option<usize>) -> Option<&'a KType<'a>> {
-        let types = self.types.borrow();
-        let (kt, idx) = types.get(name).copied()?;
-        if Self::visible(idx, chain_cutoff) {
-            Some(kt)
-        } else {
-            None
+    /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]:
+    /// consults `types` then the `BindKind::Type` `placeholders` entries, returning the
+    /// first visible hit as a [`TypeResolution`], or `None` so the caller keeps walking.
+    pub fn lookup_type(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<TypeResolution<'a>> {
+        if let Some((kt, idx, _reach)) = self.types.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(TypeResolution::Type(kt));
+            }
+        }
+        self.type_placeholder(name, chain_cutoff)
+            .map(TypeResolution::Placeholder)
+    }
+
+    /// The type-side placeholder producer for `name`, or `None` — shared by [`Self::lookup_type`]
+    /// and [`Self::lookup_type_carrier`], which differ only in the `types` arm.
+    fn type_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
+        if let Some((id, idx, kind)) = self.placeholders.borrow().get(name).copied() {
+            if kind == BindKind::Type && Self::visible(idx, chain_cutoff) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Carrier-oriented type lookup — the reach-carrying twin of [`Self::lookup_type`]. A `types` hit
+    /// returns [`TypeCarrierHit::Bound`] with the binding's stored reach (cloned out); otherwise a
+    /// visible type placeholder or a miss.
+    pub fn lookup_type_carrier(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<TypeCarrierHit<'a>> {
+        if let Some((kt, idx, reach)) = self.types.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(TypeCarrierHit::Bound {
+                    kt,
+                    reach: reach.clone(),
+                });
+            }
+        }
+        self.type_placeholder(name, chain_cutoff)
+            .map(TypeCarrierHit::Placeholder)
+    }
+
+    /// Classified per-scope member lookup for ATTR module / signature access: the value-or-type
+    /// `name` resolves to, read from **this scope's own** `data` then `types` in one pass. A
+    /// module member is module-own — the lookup deliberately does **not** consult the builtin
+    /// root or walk lexical ancestors, so `m.Type` (a builtin type name) or `m.SomeOuterType`
+    /// is "no member", not a fall-through. The cross-kind exclusion keeps the two arms from both
+    /// matching, so the result is unambiguous. No placeholder arm — a read module is finalized.
+    pub fn lookup_member(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<MemberResolution<'a>> {
+        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(MemberResolution::Value {
+                    obj,
+                    reach: reach.clone(),
+                });
+            }
+        }
+        if let Some((kt, idx, reach)) = self.types.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(MemberResolution::Type {
+                    kt,
+                    reach: reach.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Carrier-oriented value lookup — the reach-carrying twin of [`Self::lookup_value`]. A `data`
+    /// hit returns [`CarrierHit::Bound`] with the binding's stored reach (cloned out); otherwise a
+    /// visible value placeholder or a miss, mirroring `lookup_value`'s data-then-placeholder order.
+    pub fn lookup_value_carrier(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<CarrierHit<'a>> {
+        if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
+            if Self::visible(*idx, chain_cutoff) {
+                return Some(CarrierHit::Bound {
+                    obj,
+                    reach: reach.clone(),
+                });
+            }
+        }
+        self.value_placeholder(name, chain_cutoff)
+            .map(CarrierHit::Placeholder)
+    }
+
+    /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight
+    /// from the kind-tagged `placeholders` map — *not* through [`Self::lookup_type`], which
+    /// prefers a (possibly seal-pre-installed, still-unsealed) `types` entry. The finalize gate
+    /// uses this to park the type-identifier memo on an in-flight producer even when the seal
+    /// has already pre-installed the name's external identity into `types`. Visibility-unfiltered:
+    /// this is producer-dependency tracking, not consumer-visibility enforcement.
+    pub fn type_placeholder_producer(&self, name: &str) -> Option<NodeId> {
+        match self.placeholders.borrow().get(name).copied() {
+            Some((id, _, BindKind::Type)) => Some(id),
+            _ => None,
         }
     }
 
@@ -274,7 +483,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .iter()
-            .map(|(name, (obj, _))| (name.clone(), *obj))
+            .map(|(name, (obj, _, _))| (name.clone(), *obj))
             .collect()
     }
 
@@ -283,7 +492,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .iter()
-            .map(|(name, (kt, _))| (name.clone(), *kt))
+            .map(|(name, (kt, _, _))| (name.clone(), *kt))
             .collect()
     }
 
@@ -305,7 +514,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .get(name)
-            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+            .is_some_and(|(_, idx, _)| *idx == BindingIndex::BUILTIN)
     }
 
     /// True iff `functions[key]` holds an overload registered at
@@ -335,21 +544,23 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Insert `(te → kt)` into the resolution cache. Caller region-allocates
-    /// `kt` and gates on finalize. Monotonic: a collision means equal values,
-    /// so we keep the existing entry rather than panic.
+    /// Insert `(te → (kt, reach))` into the resolution cache. Caller region-allocates `kt` and gates
+    /// on finalize; `reach` is the resolved type binding's home-omitted foreign reach, cached so a
+    /// memo hit rebuilds the read carrier without re-looking-up the binding. Monotonic: a collision
+    /// means equal values, so we keep the existing entry rather than panic.
     pub fn type_identifier_memo_insert(
         &self,
         te: TypeIdentifier,
         cutoff: Option<usize>,
         kt: &'a KType<'a>,
+        reach: FrameSet,
     ) {
         let mut memo = self.type_identifier_memo.borrow_mut();
-        memo.entry((te, cutoff)).or_insert(kt);
+        memo.entry((te, cutoff)).or_insert((kt, reach));
     }
 
     #[cfg(test)]
-    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex)>> {
+    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>> {
         self.data.borrow()
     }
 
@@ -361,7 +572,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex)>> {
+    pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex, BindKind)>> {
         self.placeholders.borrow()
     }
 
@@ -371,7 +582,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex)>> {
+    pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex, FrameSet)>> {
         self.types.borrow()
     }
 
@@ -380,7 +591,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .get(name)
-            .map(|(obj, _)| *obj)
+            .map(|(obj, _, _)| *obj)
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -389,7 +600,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .get(name)
-            .map(|(kt, _)| *kt)
+            .map(|(kt, _, _)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
     }
 
@@ -414,7 +625,8 @@ impl<'a> Bindings<'a> {
         self.pending.remove(name);
     }
 
-    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists.
+    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists, or if `name`
+    /// is a committed type (`types[name]`) — the value/type partition is mutually exclusive.
     /// When `obj` wraps a `KFunction` it is also mirrored into
     /// `functions[signature.untyped_key()]` so dispatch finds it (`LET f = (FN ...)`).
     ///
@@ -424,8 +636,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         obj: &'a KObject<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true, index)
+        self.try_apply(name, obj, obj.as_function(), true, index, reach)
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -444,25 +657,28 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, Some(fn_ref), false, index)
+        // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach.
+        self.try_apply(name, obj, Some(fn_ref), false, index, FrameSet::empty())
     }
 
-    /// Register `name` → `kt` in `types`. Errors `Rebind` if already present;
-    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on
-    /// success.
+    /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
+    /// if `name` is a committed value (`data[name]`) — the partition is mutually exclusive.
+    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
     pub fn try_register_type(
         &self,
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply_type(name, kt, index)
+        self.try_apply_type(name, kt, index, reach)
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
     /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
     /// `index`) so the `SetRef` an SCC seal pre-installed (same set + index) is rewritten
-    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`.
+    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`, as is a
+    /// committed value at `data[name]` (the value/type partition is mutually exclusive).
     ///
     /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
     /// would `Rebind` on the seal pre-install rather than overwrite it.
@@ -472,12 +688,25 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
             Err(_) => return Ok(ApplyOutcome::Conflict),
         };
-        match types.get(name).map(|(t, _)| *t) {
+        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
+        // is already held, so probing `data` next preserves the `types → data` borrow order.
+        match self.data.try_borrow() {
+            Ok(data) => {
+                if data.contains_key(name) {
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: name.to_string(),
+                    }));
+                }
+            }
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        }
+        match types.get(name).map(|(t, _, _)| *t) {
             Some(existing) if *existing != *kt => {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
@@ -486,11 +715,11 @@ impl<'a> Bindings<'a> {
             // Absent, or identity-equal (the seal's pre-installed `SetRef`): write the
             // identity, rewriting any pre-install in place.
             _ => {
-                types.insert(name.to_string(), (kt, index));
+                types.insert(name.to_string(), (kt, index, reach));
             }
         }
         drop(types);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Type);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -504,27 +733,31 @@ impl<'a> Bindings<'a> {
     ///
     /// The eventual `try_bind_value` / `try_register_*` call must carry the
     /// same `index` so the consumer's visibility test stays consistent across
-    /// the placeholder → finalized transition.
+    /// the placeholder → finalized transition. `kind` records which language the
+    /// forward reference resolves in, so a value bind never satisfies a type
+    /// placeholder (or the reverse) — see [`Bindings::lookup_value`] /
+    /// [`Bindings::lookup_type`], each of which surfaces only its own kind.
     pub fn try_install_placeholder(
         &self,
         name: String,
         idx: NodeId,
         index: BindingIndex,
+        kind: BindKind,
     ) -> Result<(), KError> {
-        if let Some((existing, _)) = self.data.borrow().get(&name).copied() {
+        if let Some((existing, _, _)) = self.data.borrow().get(&name) {
             if matches!(existing, KObject::KFunction(_)) {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let mut ph = self.placeholders.borrow_mut();
-        if let Some((existing, _)) = ph.get(&name).copied() {
+        if let Some((existing, _, _)) = ph.get(&name).copied() {
             if existing == idx {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        ph.insert(name, (idx, index));
+        ph.insert(name, (idx, index, kind));
         Ok(())
     }
 
@@ -560,14 +793,14 @@ impl<'a> Bindings<'a> {
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex)> = src
+        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, FrameSet)> = src
             .data
             .borrow()
             .iter()
-            .map(|(k, (v, idx))| (k.clone(), *v, *idx))
+            .map(|(k, (v, idx, reach))| (k.clone(), *v, *idx, reach.clone()))
             .collect();
-        for (name, obj, index) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function(), true, index)? {
+        for (name, obj, index, reach) in snapshot {
+            match self.try_apply(&name, obj, obj.as_function(), true, index, reach)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -586,6 +819,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
@@ -596,9 +830,21 @@ impl<'a> Bindings<'a> {
                 name: name.to_string(),
             }));
         }
-        types.insert(name.to_string(), (kt, index));
+        // Cross-kind exclusion: a type name may not collide with a committed value. `types`
+        // is already held, so probing `data` next preserves the `types → data` borrow order.
+        match self.data.try_borrow() {
+            Ok(data) => {
+                if data.contains_key(name) {
+                    return Err(KError::new(KErrorKind::Rebind {
+                        name: name.to_string(),
+                    }));
+                }
+            }
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        }
+        types.insert(name.to_string(), (kt, index, reach));
         drop(types);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Type);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -621,7 +867,24 @@ impl<'a> Bindings<'a> {
         fn_part: Option<&'a KFunction<'a>>,
         write_data: bool,
         index: BindingIndex,
+        reach: FrameSet,
     ) -> Result<ApplyOutcome, KError> {
+        // Cross-kind exclusion: a value name may not collide with a committed type — the
+        // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
+        // order `types → functions → data`); a bare-`FN` registration (`write_data == false`)
+        // binds no value, so it is exempt.
+        if write_data {
+            match self.types.try_borrow() {
+                Ok(types) => {
+                    if types.contains_key(name) {
+                        return Err(KError::new(KErrorKind::Rebind {
+                            name: name.to_string(),
+                        }));
+                    }
+                }
+                Err(_) => return Ok(ApplyOutcome::Conflict),
+            }
+        }
         let mut functions_handle = if fn_part.is_some() {
             match self.functions.try_borrow_mut() {
                 Ok(g) => Some(g),
@@ -643,7 +906,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some((existing, _)) = data.get(name) {
+            if let Some((existing, _, _)) = data.get(name) {
                 match fn_part {
                     None => {
                         return Err(KError::new(KErrorKind::Rebind {
@@ -683,11 +946,11 @@ impl<'a> Bindings<'a> {
             cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), (obj, index));
+            data.insert(name.to_string(), (obj, index, reach));
         }
         drop(data);
         drop(functions_handle);
-        self.clear_placeholder_best_effort(name);
+        self.clear_placeholder_best_effort(name, BindKind::Value);
         if let Some(bucket) = cleared_overload_bucket {
             // Remove only this binder's pending entry; siblings stay as wake sources.
             self.clear_pending_overload_best_effort(&bucket, index);
@@ -695,12 +958,17 @@ impl<'a> Bindings<'a> {
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Shared tail of every successful write path. `try_borrow_mut().ok()`
-    /// tolerates a caller holding a placeholder borrow up the stack — a
-    /// hard `borrow_mut()` would panic on legitimate reads across a write.
-    fn clear_placeholder_best_effort(&self, name: &str) {
+    /// Shared tail of every successful write path. Removes a *matching-kind* placeholder
+    /// for `name`: a value write clears only a [`BindKind::Value`] entry, a type write only
+    /// a [`BindKind::Type`] one, so a value bind never clears an in-flight type producer's
+    /// placeholder (or the reverse). `try_borrow_mut().ok()` tolerates a caller holding a
+    /// placeholder borrow up the stack — a hard `borrow_mut()` would panic on legitimate
+    /// reads across a write.
+    fn clear_placeholder_best_effort(&self, name: &str, kind: BindKind) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.remove(name);
+            if matches!(ph.get(name), Some((_, _, k)) if *k == kind) {
+                ph.remove(name);
+            }
         }
     }
 
@@ -711,7 +979,7 @@ impl<'a> Bindings<'a> {
     /// a later run on a persistent scope. Same tolerant `try_borrow_mut`.
     pub fn clear_placeholders_for_producer(&self, producer: NodeId) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.retain(|_, (id, _)| *id != producer);
+            ph.retain(|_, (id, _, _)| *id != producer);
         }
     }
 

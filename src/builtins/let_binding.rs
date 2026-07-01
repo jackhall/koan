@@ -102,16 +102,30 @@ pub fn body<'a>(
         } else {
             kt
         };
-        if let Err(e) = ctx.scope.register_user_type(name, kt.clone(), bind_index) {
+        // The aliased type's home-omitted foreign reach arrives on the delivered RHS carrier (a module
+        // alias inherits the module's child-scope reach); a region-pure / owned type has none. Stored
+        // on the `types` binding and folded into the scope reach-set — no walk of the built value.
+        let reach = ctx
+            .arg_carrier("value")
+            .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
+            .unwrap_or_default();
+        if let Err(e) = ctx
+            .scope
+            .register_user_type(name, kt.clone(), bind_index, reach.clone())
+        {
             return done_err(e);
         }
         // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
         // region (a module returned from a call, naming a child scope in the now-dying producer frame)
-        // outlives the binding — the type-channel analogue of the value-arm fold below. `fold_reach`
-        // omits the home frame, so a region-pure / ancestor-resident type deposits nothing.
-        let carrier = ctx.scope.seal_type(region.alloc_ktype_witnessed(kt));
-        ctx.scope.fold_reach(carrier.witness());
-        Action::DoneWitnessed(carrier)
+        // outlives the binding — the type-channel analogue of the value-arm fold below.
+        if let Some(carrier) = ctx.arg_carrier("value") {
+            ctx.scope.fold_reach(carrier.witness());
+        }
+        // The terminal witnesses the aliased type in place from that stored reach.
+        let carrier = ctx
+            .scope
+            .resident_type_carrier(region.alloc_ktype(kt), &reach);
+        Action::Done(Ok(carrier))
     } else {
         let value = rhs
             .as_object()
@@ -132,22 +146,32 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index) {
+        // The bound value's home-omitted foreign reach, computed once from the delivered carrier: it
+        // is both stored on the binding (so a later read rebuilds the value's carrier from it) and
+        // folded into the scope's reach-set below. A region-pure RHS (no delivered carrier) reaches
+        // nothing foreign, so the reach is empty.
+        let reach = ctx
+            .arg_carrier("value")
+            .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
+            .unwrap_or_default();
+        if let Err(e) = ctx
+            .scope
+            .bind_value(name, allocated, bind_index, reach.clone())
+        {
             return done_err(e);
         }
         // Deposit the bound value's reach into the scope's reach-set so every foreign region it
         // borrows into outlives the binding — the bind-precise fold replacing the single-frame
-        // relocate-seam reconstruction for the object channel. The delivered carrier witnesses the
-        // consumer frame ∪ the value's foreign reach; `fold_reach` omits the home frame, so a
+        // relocate-seam reconstruction for the object channel. `fold_reach` omits the home frame, so a
         // region-pure value (or an ancestor-bound name, kept alive by the home frame's `outer` chain)
         // deposits nothing, while a multi-region value contributes every region it reaches.
         if let Some(carrier) = ctx.arg_carrier("value") {
             ctx.scope.fold_reach(carrier.witness());
         }
-        // The bound value lives in this scope's region with its foreign reach deposited above, so the
-        // terminal is born witnessed by this scope's home frame (the asserted-co-location read path)
+        // The bound value lives in this scope's region with its foreign reach `reach`, so its terminal
+        // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
         // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::DoneWitnessed(ctx.scope.resident_object_carrier(allocated))
+        Action::Done(Ok(ctx.scope.resident_value_carrier(allocated, &reach)))
     }
 }
 
@@ -168,12 +192,17 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-/// Dispatch-time placeholder extractor for LET. Returns `None` on shape mismatch
+/// Dispatch-time placeholder extractor for the value-binding `LET <name> = …` overload:
+/// matches only an `Identifier` name part. The type-alias overload (`LET <Type> = …`) uses
+/// the shared [`type_part_binder_name`](crate::builtins::type_part_binder_name) instead, so
+/// each overload's extractor matches exactly its own name-part kind. This keeps the
+/// submit-time binder pick ([`extract_binder_install`]) selecting the correctly-classified
+/// overload (the value extractor misses a `Type` part, and vice versa), so the placeholder is
+/// tagged `Value` xor `Type` to match where the bind lands. Returns `None` on shape mismatch
 /// (the body surfaces a structured error later).
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
-        ExpressionPart::Type(t) => Some(t.render()),
         _ => None,
     }
 }
@@ -206,7 +235,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "LET",
         identifier_sig(),
         body,
-        Some(binder_name),
+        Some((binder_name, crate::machine::BindKind::Value)),
         None,
         false,
     );
@@ -215,7 +244,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "LET",
         type_sig(),
         body,
-        Some(binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

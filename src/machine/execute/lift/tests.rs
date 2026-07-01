@@ -29,9 +29,9 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 elements: vec![SignatureElement::Keyword("__INNER__".into())],
             },
             Body::Builtin(|ctx| {
-                crate::machine::core::kfunction::action::Action::Done(Ok(Carried::Object(
+                crate::machine::core::kfunction::action::Action::done_resident(Carried::Object(
                     ctx.scope.brand().alloc_object(KObject::Null),
-                )))
+                ))
             }),
             child,
         );

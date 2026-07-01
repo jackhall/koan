@@ -36,11 +36,13 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched.execute().expect("scheduler should run to completion");
+    runtime
+        .execute()
+        .expect("scheduler should run to completion");
     scope
 }
 
@@ -48,16 +50,16 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| sched.dispatch_in_scope(e, scope))
+        .map(|e| runtime.dispatch_in_scope(e, scope))
         .collect();
-    sched
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let last = *ids.last().expect("at least one expression");
-    match sched.result_error(last) {
+    match runtime.result_error(last) {
         Ok(()) => panic!("expected scheduler error, got success"),
         Err(e) => e.to_string(),
     }

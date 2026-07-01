@@ -8,7 +8,7 @@
 //! invoke / builtin) nor *whether* it ran before — only a read view in and an outcome out.
 //!
 //! The taxonomy is AST-free — no variant names a `KFunction` or a `KExpression`:
-//! - [`Outcome::Done`] — the node dies, producing a value to lift or an error.
+//! - [`Outcome::Done`] — the node dies, producing a witnessed value or an error.
 //! - [`Outcome::Continue`] — the node lives; replace its work and run again immediately (no park).
 //!   A resolved call folds into this: the producer installs the per-call cart (its frame placement)
 //!   and the work re-decides via the folded `invoke` / re-resolve closure on the next pop — so the
@@ -17,9 +17,8 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{CatchOk, Dep, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
@@ -38,18 +37,13 @@ use super::runtime::KoanWorkload;
 // continuation path to balance variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
 pub(in crate::machine::execute) enum Outcome<'step> {
-    /// The node dies with a value or an error. The value is bound to the per-step cart lifetime
-    /// `'step` — the decide-surface lifetime — born in the node's own per-call frame (a builtin
-    /// allocates it there, a forwarded dep arrives already lifted into it) and relocated across each
-    /// dep edge by the consumer-pull lift into the consuming node's frame.
-    Done(Result<Carried<'step>, KError>),
-    /// The node dies with a value **built inside the witness closure** — a
-    /// [`Witnessed`](crate::witnessed::Witnessed) carrier already naming every region it reaches
-    /// (`yoke` / `merge` / the aggregate fold at the alloc site), so `finalize` seals it without an
-    /// asserted-co-location [`Witnessed::new`](crate::witnessed::Witnessed::new). The object-family
-    /// terminal; the type channel and every error stay on [`Done`](Self::Done) until the type family
-    /// inverts. The carrier is lifetime-free, so this arm carries no `'step`.
-    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
+    /// The node dies with a value or an error. The `Ok` value is a
+    /// [`Witnessed`](crate::witnessed::Witnessed) carrier already naming every region it reaches —
+    /// built inside its witness closure (`yoke` / `merge` / the aggregate fold at the alloc site, a
+    /// `seal_value` / `resident_*_carrier`) so `finalize` seals it without an asserted-co-location
+    /// bundle. The sole value terminal for **both** channels (object and type); an error carries no
+    /// value and rides the `Err` arm. The carrier is lifetime-free, so this arm carries no `'step`.
+    Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart (`Inherit` keeps it; `ReuseReserve`/`FreshChild` install a new one — the
     /// harness resolves the placement to a cart); `contract` / `block_entry` / `body_index` carry
@@ -62,7 +56,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         work: NodeWork<KoanWorkload>,
         frame: FramePlacement<'step>,
         contract: Option<ReturnContract<'step>>,
-        block_entry: Option<ScopeId>,
+        block_entry: BlockEntry<'step>,
         body_index: usize,
     },
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
@@ -86,6 +80,17 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     Forward(NodeId),
 }
 
+#[cfg(test)]
+impl<'step> Outcome<'step> {
+    /// Seal a **region-pure** bare value as a `Done` terminal — the test-only constructor for a
+    /// marker object that references no foreign region ([`Witnessed::resident`] fixes the empty
+    /// witness). Production never mints a bare terminal: a real value is always built witnessed at its
+    /// alloc site, so this stays behind `cfg(test)`.
+    pub(in crate::machine::execute) fn done_resident(value: Carried<'step>) -> Self {
+        Outcome::Done(Ok(Witnessed::resident(value)))
+    }
+}
+
 /// What a [`Outcome::ParkThenContinue`] runs once its deps resolve. The shapes are the closed set
 /// of "what happens on wake":
 /// - `Finish` installs a [`NodeWork`](super::nodes::NodeWork) that short-circuits on the first
@@ -98,7 +103,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 /// - `FinishWitnessed` is the construction-inversion sibling of `Finish`: it short-circuits the same
 ///   way but hands the resolved dep *terminals* (value + reach) to a [`WitnessedDepFinish`] that folds
 ///   them into a single witnessed carrier ([`short_circuit_witnessed`]), sealing the slot as
-///   [`Outcome::DoneWitnessed`]. The decide-side twin of the apply-side
+///   [`Outcome::Done(Ok)`](Outcome::Done). The decide-side twin of the apply-side
 ///   `submit_dep_finish_witnessed_in_own_scope` — used by a construction decide (newtype / tagged
 ///   union) that parks on its value deps and builds the wrapped value naming every region it reaches.
 /// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s
@@ -270,7 +275,7 @@ pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
             }
         }
         match finish(view, &deps) {
-            Ok(carrier) => Outcome::DoneWitnessed(carrier),
+            Ok(carrier) => Outcome::Done(Ok(carrier)),
             Err(e) => Outcome::Done(Err(e)),
         }
     })

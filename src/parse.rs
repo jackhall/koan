@@ -15,4 +15,5 @@ mod triple_list;
 mod whitespace;
 
 pub use expression_tree::{parse, parse_with_path, parse_with_source};
+pub(crate) use tokens::is_type_name;
 pub use triple_list::{parse_pair_list, FieldNameKind};

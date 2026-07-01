@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, Scope};
 use crate::machine::model::types::{KKind, KType, NominalMember, NominalSchema, RecursiveSet};
+use crate::machine::FrameSet;
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let scope_id = scope.id;
@@ -32,7 +33,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Type-only: the variant schema rides the sealed member, so construction reads it via a
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
     // collision would be a programming error.
-    scope.register_type("Result".into(), identity, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Result".into(),
+        identity,
+        BindingIndex::BUILTIN,
+        FrameSet::empty(),
+    );
 }
 
 #[cfg(test)]

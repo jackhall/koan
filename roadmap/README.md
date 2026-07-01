@@ -100,6 +100,25 @@ What's shipped that the open items below build on:
   and `QUOTE` allocs it through the witnessed object surface
   ([`KoanRegion::alloc_object_witnessed`](../src/machine/core/arena.rs)) — the object born under the
   empty foreign-reach set — rather than asserting it via `Witnessed::new`.
+  The single-region `yoke` precondition is now a *type*: [`WitnessRegion`](../src/witnessed.rs) is held
+  by a lone frame owner (`Rc<FrameStorage>`) rather than by the `FrameSet` whose `region()` narrowed a
+  set that could be empty or multi, and a minted leaf widens into the aggregate `FrameSet` through a
+  distinct [`Witnessed::into_set`](../src/witnessed.rs) lift — so the latent multi-region under-count
+  (now covered by the Miri slate) is a compile-time impossibility; the unused `Option<W>: Witness`
+  residue is deleted (the frameless terminal is the empty set) and [`Witnessed::read`](../src/witnessed.rs)
+  is module-private.
+  Every node's value terminal now seals through that same surface — a region-pure result via `resident`,
+  a dep-reaching result by folding its delivered dep carriers — so `DoneWitnessed` is the sole value
+  terminal (an error carries no value and finalizes bare), retiring `finalize_terminal`'s asserted
+  `Witnessed::new`, its `dep_reached` threading, and the bare-`Done` / `DoneWitnessed` split; EVAL,
+  MATCH / TRY arms, and USING each build their block tail through one shared
+  [`block_tail`](../src/builtins/block_tail.rs) constructor.
+  Reads join the same surface: each value and type binding stores its home-omitted reach on its
+  [`Bindings`](../src/machine/core/bindings.rs) entry (a value's captured from its delivered carrier, a
+  module's folded from the child scope its birth site holds directly), so a name / `ATTR` read witnesses
+  the resident `&KObject` / `&KType` in place from that stored reach rather than rebuilding a witness by
+  walking the value — retiring `resident_object_carrier`, `seal_module`, and `seal_type`'s Module
+  dispatch, and confining `Witnessed::resident` behind the arena's `seal_resident`.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -201,8 +220,11 @@ What's shipped that the open items below build on:
   already-witnessed carrier's reach, the witness-borrow `reattach_with` re-anchor deleted. The build
   leaf is now confined behind a branded region handle (a bare `&KoanRegion` cannot allocate), the
   access surface is collapsed to `open` — the borrow-bounded `attach`, the witness-borrow read path
-  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted —
-  closing the per-node-memory project. See
+  (`reattach_ref_with`), and the construction-time scope re-anchor (`recouple_scope`) all deleted. The
+  last asserted **type / region construction operands** have since become computed carriers — the
+  newtype / tagged-union / `CATCH` build `merge`s a delivered type-identity carrier under the binding's
+  stored reach, and the contract-home and relocate destinations ride born-co-located carriers — so the
+  asserted-co-location `Witnessed::new` is deleted outright, closing the per-node-memory project. See
   [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Position-dependent type resolution.* Type names obey strict source order like the value
   language — a forward type reference is a position error — so the `nominal_binder`
@@ -229,6 +251,14 @@ What's shipped that the open items below build on:
   now total at the LET boundary — a type binds only under a Type-classified name, so
   `LET t = Point` under a value-classified name is rejected. See
   [design/typing/elaboration.md](../design/typing/elaboration.md).
+- *Structural type/value binding partition.* The `data`/`types` split is enforced by the
+  [`Bindings`](../src/machine/core/bindings.rs) write paths, not per-callsite convention: a value
+  bind whose name is a committed type — or a type register whose name is a committed value — is a
+  `Rebind`, so one name can never hold both. Forward-reference placeholders carry a `BindKind`
+  axis (a type placeholder is never satisfied by a value bind, nor the reverse), and ATTR module /
+  signature member access reads its module-own value-or-type through one classified `lookup_member`
+  instead of probing `data` then `types`. See
+  [design/typing/lookup-protocol.md § Layer 2](../design/typing/lookup-protocol.md#layer-2--bindings-per-scope-lookup).
 - *Product-side nominal collapse.* A struct is a `NominalKind::Newtype` over a `KType::Record`,
   carried as `Wrapped { inner: Rc<KObject::Record>, type_id }`; the `STRUCT` declarator,
   `KObject::Struct` carrier, the `NominalSchema` / `ProjectedSchema` / `NominalKind` `Struct`
@@ -348,7 +378,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
-- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
@@ -469,10 +498,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md) — verify the
   AST recursion that finds a submission's binders, then cache its parse-static portion on
   `KExpression` (beside `DispatchShape`) instead of re-deriving it at every submission.
-- [Enforce the type/value split in Bindings](refactor/enforce-bindings-type-value-split.md) —
-  the committed `types`/`data` maps are partitioned, but the split is held by per-callsite
-  convention and the in-flight `placeholders` map carries no type/value discriminant; make the
-  distinction structural in the `Bindings` API.
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md) — hold
   a record's `Box<Record<KType>>` field-type memo and an already-region-allocated `KType` by
   region reference, killing the `alloc_ktype(kt.clone())` and `.ktype()` deep clones on the
@@ -482,15 +507,3 @@ shrinking the unsafe surface, and cutting hot-path overhead:
   `Hash`/`Eq`) with a per-variant structural compare that gets NaN, nominal identity, record
   field order, and type parameters right.
 
-### Per-node memory — [per-node-memory/](per-node-memory/)
-
-Substrate follow-up the per-node-memory project left behind — closing the last asserted
-witnesses so co-location is computed by the type system, not stated in prose:
-
-- [Structural witnesses](per-node-memory/structural-witnesses.md) — retire `Witnessed::new`
-  (the asserted-co-location constructor still backing the object resident read, the bare-`Done`
-  terminal, and the `RegionTypeFamily` operand bundles), make every witness structural via
-  `yoke` / `merge` / a retained carrier, split off a single-region yoke witness so
-  `WitnessRegion for FrameSet` stops narrowing-and-panicking on a multi-region set, delete the
-  unused `Option<W>: Witness`, and add the multi-region Miri cases that would flag an
-  under-counting witness.

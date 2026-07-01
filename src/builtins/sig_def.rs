@@ -13,6 +13,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
+use crate::machine::FrameSet;
 use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
@@ -49,14 +50,16 @@ pub fn body<'a>(
             sig,
             pinned_slots: Vec::new(),
         };
-        match fctx
-            .scope
-            .register_type_upsert(name_for_finish.clone(), identity, bind_index)
-        {
-            Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
+        match fctx.scope.register_type_upsert(
+            name_for_finish.clone(),
+            identity,
+            bind_index,
+            FrameSet::empty(),
+        ) {
+            Ok(kt_ref) => Action::Done(Ok(fctx.scope.seal_value(
                 fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,
-            )),
+            ))),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),
@@ -87,7 +90,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "SIG",
         signature,
         body,
-        Some(super::type_part_binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );
@@ -150,6 +153,7 @@ mod tests {
             .decl_scope()
             .bindings()
             .lookup_type("x", None)
+            .and_then(crate::machine::TypeResolution::finalized)
             .expect("VAL slot `x` must live in SIG's type table");
         assert!(
             matches!(x, KType::Number),

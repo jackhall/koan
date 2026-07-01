@@ -106,7 +106,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "UNION",
         signature,
         body,
-        Some(super::type_part_binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );
@@ -177,12 +177,12 @@ mod tests {
 
         let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
-        let mut sched = KoanRuntime::new();
-        let root = sched.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
-        sched
+        let mut runtime = KoanRuntime::new();
+        let root = runtime.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
+        runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = sched
+        let err = runtime
             .result_error(root)
             .expect_err("a bare anonymous UNION (...) must fail dispatch");
         assert!(

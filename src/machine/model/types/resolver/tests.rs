@@ -3,6 +3,7 @@ use crate::builtins::test_support::run_root_silent;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::BindingIndex;
+use crate::machine::FrameSet;
 
 fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())
@@ -21,6 +22,7 @@ fn value_language_leaf_names_layering() {
             "Gee".into(),
             region.brand().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         )
         .expect("bind_value");
     let mut el = Elaborator::new(scope);

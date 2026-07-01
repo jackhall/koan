@@ -17,8 +17,8 @@ mod tests;
 
 pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily};
 pub use bindings::{
-    ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
-    Resolution,
+    ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, FunctionLookup, MemberResolution,
+    PendingBinderGuard, PendingTypeEntry, Resolution, TypeCarrierHit, TypeResolution,
 };
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};

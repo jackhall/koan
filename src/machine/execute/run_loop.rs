@@ -11,11 +11,13 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{FrameSet, KError, KErrorKind, NodeId, RegionBrand};
-use crate::witnessed::{erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern};
+use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
+use crate::witnessed::{
+    erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern, Witnessed,
+};
 
 use super::dispatch::SchedulerView;
-use super::finalize::NodeFinalize;
+use super::finalize::{finalize_error, NodeFinalize};
 use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::DepTerminal;
 use super::runtime::{KoanRuntime, KoanWorkload};
@@ -92,8 +94,9 @@ impl<'run> KoanRuntime<'run> {
     /// the dep slice together at `'b` witnessed by `combined` (the held cart `Rc` `continuation_witness`
     /// unioned with the dep `pin`), which the step guard keeps live across the continuation's run. The
     /// consumer `dest` region is the opened scope's own region (`scope.region`), and an
-    /// `Outcome::Forward` pull is born at `'b` into it. The body, including the [`NodeStep::Done`]
-    /// terminal's finalize, runs while the cart `Rc` witnesses the value-channel pull-lift. So the Done
+    /// `Outcome::Forward` pull is born at `'b` into it. The body, including the
+    /// [`NodeStep::DoneWitnessed`] terminal's finalize, runs while the cart `Rc` witnesses the
+    /// value-channel pull-lift. So the terminal
     /// value, born at `'b` in the consumer frame, is finalized into the slot store (where `finalize`
     /// erases it) *within* `'b`: it never has to be laundered to `'run` to cross a step-guard exit, and
     /// nothing branded escapes the closure. The cart clone is confined to this call and dropped at
@@ -165,12 +168,11 @@ impl<'run> KoanRuntime<'run> {
         // the dep terminals' `reach` above (an errored dep has no `DepTerminal`, so its witness is
         // re-read). Assembled *before* the open so it outlives the brand `'b`; unioned with the cart
         // into `combined` below, it is the witness the step open re-anchors its carriers against,
-        // keeping every dep source alive past `reclaim_deps`. As the *liveness* pin it must cover every
-        // read dep (each is opened at `'b`), so it spans the whole dep slice. As a *terminal* witness
-        // (the bare-`Done` path's `dep_reached`) it is now exact, not over-approximate: every multi-dep
-        // construction rides `DoneWitnessed` with its own carrier naming exactly the regions the output
-        // reaches, so the only terminals still taking `pin` are single-dep forwards (`pin` = that dep's
-        // reach) and errors (which carry no value witness).
+        // keeping every dep source alive past `reclaim_deps`. It must cover every read dep (each is
+        // opened at `'b`), so it spans the whole dep slice. `pin` is *only* a liveness pin: no terminal
+        // reads it as a witness — every value terminal rides `DoneWitnessed` with its own carrier
+        // naming exactly the regions the output reaches, and an error carries no value witness. A
+        // single-dep forward re-seals off the forwarded dep's own reach, not `pin`.
         let pin: FrameSet =
             dep_sources
                 .iter()
@@ -224,18 +226,19 @@ impl<'run> KoanRuntime<'run> {
                     // continuation relocates each into `dest` — `short_circuit` / `catch` for a
                     // value-copy finish, the construction inversion's `transfer_into` fold for an
                     // aggregate (which relocates once and names every reached region on the carrier).
-                    // The lift itself no longer pre-relocates.
-                    let dest: RegionBrand = scope.brand();
+                    // The lift itself no longer pre-relocates. A `ForwardReady` relocation below builds
+                    // its own witnessed destination carrier from this same scope's brand.
                     let outcome = continuation(
                         &SchedulerView::new(&self.sched, &self.ambient, scope),
                         &dep_sources,
                         idx,
                     );
                     self.sched.reclaim_deps(idx, owned_indices);
-                    // The dep half of the finalized terminal's witness set is `pin` itself.
-                    let dep_reached = pin.clone();
                     // `apply_outcome` realizes the outcome into a `NodeStep`; a ready `Outcome::Forward`
-                    // becomes a `ForwardReady` relocated below at the brand into this same `dest`.
+                    // becomes a `ForwardReady` relocated below at the brand into this same `dest`. `pin`
+                    // (the dep sources) is now purely the step's liveness pin — held across the open — not
+                    // a terminal witness: every value terminal rides `DoneWitnessed` with its own carrier
+                    // naming exactly the regions it reaches, so no terminal reads `pin`.
                     let step = self.apply_outcome(outcome, idx);
                     let post = self.exit_slot_step(guard);
                     self.ambient.active_in_contract_chain = false;
@@ -243,60 +246,56 @@ impl<'run> KoanRuntime<'run> {
                     // brand (`combined` pins it through the whole closure; the slot's scope is unchanged
                     // by the step).
                     scope.drain_pending();
-                    // The producer's per-call frame, gated to a dying producer: it is the frame folded into
-                    // a `Done` terminal's witness (a frameless / run-frame producer folds in nothing) and
-                    // the destination pin for a `ForwardReady` relocation.
+                    // The producer's per-call frame, gated to a dying producer: the frame the witnessed
+                    // seal folds into a value terminal's witness (a frameless / run-frame producer folds in
+                    // nothing) and the destination pin for a `ForwardReady` relocation.
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
                     match step {
-                        NodeStep::Done(output) => {
-                            // The return contract opened at the brand alongside the continuation, so it is
-                            // already a live `ReturnContract<'b>` — no separate reattach. The `frame` gate
-                            // drops it for a frameless / run-frame producer (which carries no per-call
-                            // return obligation), matching the prior frame-gated vend.
+                        NodeStep::DoneWitnessed(carrier) => {
+                            // The sole value terminal — object or type, a construction carrier or a
+                            // region-pure `resident` seal — arrives already witnessed, naming its foreign
+                            // reach. The return contract opened at the brand alongside the continuation, so
+                            // it is already a live `ReturnContract<'b>`; the `frame` gate drops it for a
+                            // frameless / run-frame producer (no per-call return obligation). The hook folds
+                            // the producing frame into the carrier's witness (the scope-reach seal at close)
+                            // and — when a declared return coarsens the value (e.g. `List<Number>` through
+                            // `:(LIST OF Any)`) — re-stamps it into the contract's home region. No
+                            // `dep_reached` / `pin`: the carrier names its own reach.
                             let live_contract = frame.and(live_contract);
-                            // Contract layer (the `NodeFinalize` workload hook): check the declared return
-                            // and — when the declared type coarsens the value (e.g. `List<Number>` through
-                            // `:(LIST OF Any)`) — re-tag it into the contract's own home region so the
-                            // terminal survives to every consumer's pull and the top-level read even when
-                            // the producer frame is reused/freed. A non-coarsened terminal stays in the
-                            // producer's own frame; the producer does **not** lift it at Done. The hook
-                            // then bundles the terminal with its witness set — the producer's own
-                            // `FrameStorage` folded into the dep sources accumulated above — so a dying
-                            // frame is held until the slot is freed (keeping the terminal readable until
-                            // every consumer has pulled it) while a frameless / run-frame producer pins
-                            // only the surviving sources. The scheduler erases the bundle for storage,
-                            // severing `'s` before the frame drops.
-                            let result =
-                                self.finalize_terminal(output, frame, live_contract, dep_reached);
+                            let result = self.finalize_terminal(carrier, frame, live_contract);
                             if result.is_err() {
                                 scope.clear_placeholders_for_producer(id);
                             }
                             self.sched.finalize(idx, result);
                         }
-                        NodeStep::DoneWitnessed(carrier) => {
-                            // A construction terminal — object *or* type — arrived already witnessed:
-                            // the construction inversion built it inside its witness closure, naming
-                            // its foreign reach. The hook folds the producing frame into that witness
-                            // (the scope-reach seal at close) and seals it — a pass-through bar a
-                            // declared-return re-stamp, with **no** `dep_reached`/`pin` use (unlike the
-                            // bare `finalize_terminal`).
+                        NodeStep::Error(error) => {
+                            // An error carries no value, so no witness — it finalizes bare. The frame-gated
+                            // contract still labels it with the callee's trace frame (a frameless / run
+                            // producer carries no contract, so it passes through unlabelled).
                             let live_contract = frame.and(live_contract);
-                            let result =
-                                self.finalize_terminal_witnessed(carrier, frame, live_contract);
-                            if result.is_err() {
-                                scope.clear_placeholders_for_producer(id);
-                            }
-                            self.sched.finalize(idx, result);
+                            let error = finalize_error(error, frame, live_contract);
+                            scope.clear_placeholders_for_producer(id);
+                            self.sched.finalize(idx, Err(error));
                         }
                         NodeStep::ForwardReady(producer) => {
                             // Relocate `producer`'s terminal into this slot's region via the merge-form
                             // transfer — re-sealed under the producer's own reached sources ∪ this slot's
-                            // frame (the `dest_witness` pinning `dest`); no contract re-check (the
-                            // producer enforced its own). A ready-but-errored producer relocates to an
-                            // `Err`, clearing this slot's placeholders as the `Done` error path does.
-                            let dest_witness = frame
-                                .map_or(FrameSet::empty(), |f| FrameSet::singleton(f.storage_rc()));
-                            let result = self.relocate_terminal(producer, dest, dest_witness);
+                            // frame (the `dest` carrier's witness pinning its backing); no contract
+                            // re-check (the producer enforced its own). A ready-but-errored producer
+                            // relocates to an `Err`, clearing this slot's placeholders as the `Done`
+                            // error path does. Framed: the dest brand is `yoke`d into its owning frame,
+                            // witnessed by it. Frameless: the dest region is externally pinned for the
+                            // step, so a confined empty-set `resident` carries it.
+                            let dest = match frame {
+                                Some(f) => KoanRegion::yoke_branded::<RegionRefFamily, _>(
+                                    f.storage_rc(),
+                                    |b| b,
+                                ),
+                                None => {
+                                    Witnessed::<RegionRefFamily, FrameSet>::resident(scope.brand())
+                                }
+                            };
+                            let result = self.relocate_terminal(producer, dest);
                             if result.is_err() {
                                 scope.clear_placeholders_for_producer(id);
                             }
@@ -307,6 +306,7 @@ impl<'run> KoanRuntime<'run> {
                             frame: new_frame,
                             contract: new_contract,
                             chain,
+                            overlay_scope,
                         } => {
                             let prev_frame = post.prev_frame;
                             let post_step_reserve = post.post_step_reserve;
@@ -327,6 +327,12 @@ impl<'run> KoanRuntime<'run> {
                             let new_chain = chain.apply(prev_chain_carrier, body_frame);
                             match new_frame {
                                 Some(f) => {
+                                    // A framed tail re-projects `Yoked` from its own cart, so it never
+                                    // carries an overlay scope — that is the frameless (`Inherit`) path.
+                                    debug_assert!(
+                                        overlay_scope.is_none(),
+                                        "a framed tail-replace carries no overlay scope"
+                                    );
                                     // Rotate the ping-pong reserve: the post-step reserve is superseded by
                                     // today's post-step frame (which we park as the new reserve).
                                     drop(post_step_reserve);
@@ -360,12 +366,18 @@ impl<'run> KoanRuntime<'run> {
                                 None => {
                                     // A frameless Replace keeps the prior cart — an invoke reuses the
                                     // reserve, never the active cart, so the slot's cart is always present.
+                                    // A tail entering an overlay without a fresh frame (USING) installs
+                                    // the overlay as the slot's scope — a `YokedChild` opened at read
+                                    // against the inherited cart, whose `outer` chain pins the overlay's
+                                    // cart-ancestor region — otherwise the slot keeps its existing scope.
+                                    let scope =
+                                        overlay_scope.map_or(node_scope, NodeScope::YokedChild);
                                     self.sched.replace(
                                         id,
                                         Node {
                                             work: new_work,
                                             payload: NodePayload {
-                                                scope: node_scope,
+                                                scope,
                                                 chain: new_chain,
                                             },
                                             frame: NodeFrame {

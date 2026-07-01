@@ -12,9 +12,9 @@ use super::super::nodes::NodeWork;
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
 use super::super::runtime::KoanWorkload;
 use super::super::{ignore_results, DepFinish};
-use super::DepRequest;
 use super::SchedulerView;
-use crate::machine::core::kfunction::action::FramePlacement;
+use super::{BodyPlacement, DepRequest};
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::exec::{
@@ -48,7 +48,7 @@ pub(super) fn invoke_continue<'step>(
         work: invoke_work(picked, working_expr, arg_carriers),
         frame,
         contract: None,
-        block_entry: None,
+        block_entry: BlockEntry::None,
         body_index: 0,
     }
 }
@@ -138,13 +138,17 @@ pub(super) fn invoke<'step>(
             call_scope.fold_reach(carrier.witness());
         }
     });
+    // Re-key the arg carriers onto their parameter names so `run_user_fn` can store each parameter
+    // binding's reach from its own delivered carrier — the same carriers folded into the call-scope
+    // reach above, keyed to match `bound`.
+    let named_carriers = map_arg_carriers(picked, arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
     };
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let in_chain = view.in_contract_chain();
-    match run_user_fn(picked, bound, &exec_frame, in_chain) {
+    match run_user_fn(picked, bound, &named_carriers, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // The return contract carried on the tail-replace. A resolved return reads its type off
             // the signature; a deferred `Type` return carries the resolved per-call type — already
@@ -173,7 +177,7 @@ pub(super) fn invoke<'step>(
                     work: super::decide(tail_expr),
                     frame: FramePlacement::Inherit,
                     contract: Some(contract),
-                    block_entry: Some(block_entry),
+                    block_entry: BlockEntry::FrameScope(block_entry),
                     body_index,
                 };
             }
@@ -189,11 +193,14 @@ pub(super) fn invoke<'step>(
                     work: super::decide(tail_expr),
                     frame: FramePlacement::Inherit,
                     contract: Some(contract),
-                    block_entry: Some(block_entry),
+                    block_entry: BlockEntry::FrameScope(block_entry),
                     body_index,
                 });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock { frame, statements }],
+                deps: vec![DepRequest::BodyBlock {
+                    statements,
+                    placement: BodyPlacement::Frame(frame),
+                }],
                 park_count: 0,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
@@ -247,12 +254,15 @@ pub(super) fn invoke<'step>(
                     work: super::decide(tail_expr),
                     frame: FramePlacement::Inherit,
                     contract: Some(contract),
-                    block_entry: Some(block_entry),
+                    block_entry: BlockEntry::FrameScope(block_entry),
                     body_index,
                 }
             });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock { frame, statements }],
+                deps: vec![DepRequest::BodyBlock {
+                    statements,
+                    placement: BodyPlacement::Frame(frame),
+                }],
                 park_count: 0,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),

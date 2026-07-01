@@ -138,7 +138,16 @@ calls like any other value: there is no separate pack/unpack form, no
 `(module M)` construction syntax, and no `(val m)` projection. A module
 named in expression position evaluates to its value, and `m.compare` is
 ordinary attribute access — ATTR projects through `KType::Module { module,
-.. }` to reach `module.access_module_member(field)`.
+.. }` to reach `module.access_module_member(field)`. Member access is
+**module-own**: one classified
+[`Bindings::lookup_member`](../../src/machine/core/bindings.rs) reads the
+module's own `data` then `types` and returns the value-or-type in a single pass
+(the `data`/`types` cross-kind exclusion makes the result unambiguous), so a name
+that isn't a declared member is a missing member — it does **not** fall through to
+a builtin type or a lexically enclosing binding. `IntOrd.Type` therefore resolves
+only when `IntOrd` declares a `Type` member (the `LET Type = …` convention),
+never to the builtin `Type` meta-type. Signature member access
+(`access_type_member` over `KType::Signature`) reads its decl scope the same way.
 
 `MODULE` and `SIG` declarations are both **type-only**: finalize installs the
 identity (`KType::Module { module, frame }` for MODULE, `KType::Signature {

@@ -93,12 +93,12 @@ fn record_field_type_mismatch_is_dispatch_failure() {
     let scope = run_root_silent(&region);
     run(scope, "LET r = {x = \"s\"}");
     run(scope, "FN (USE r :{x :Number}) -> Str = (\"ok\")");
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("USE r"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("USE r"), scope);
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = sched
+    let error = runtime
         .result_error(root)
         .expect_err("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
     assert!(
@@ -115,12 +115,12 @@ fn record_missing_field_is_dispatch_failure() {
     let scope = run_root_silent(&region);
     run(scope, "LET r = {x = 1}");
     run(scope, "FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("NEED r"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("NEED r"), scope);
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = sched
+    let error = runtime
         .result_error(root)
         .expect_err("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
     assert!(
@@ -139,12 +139,12 @@ fn record_incomparable_overloads_are_ambiguous() {
     let scope = run_root_silent(&region);
     run(scope, "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     run(scope, "FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = sched
+    let error = runtime
         .result_error(root)
         .expect_err("a value matching two incomparable record slots must be ambiguous");
     assert!(

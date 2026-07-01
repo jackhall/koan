@@ -35,9 +35,9 @@ fn run<'a>(
     }
     let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    sched.enter_block(scope.id, exprs, scope);
-    let _ = sched.execute();
+    let mut runtime = KoanRuntime::new();
+    runtime.enter_block(scope.id, exprs, scope);
+    let _ = runtime.execute();
     scope
 }
 
@@ -56,13 +56,13 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     }
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
-    if let Err(e) = sched.execute() {
+    let mut runtime = KoanRuntime::new();
+    let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
+    if let Err(e) = runtime.execute() {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = sched.result_error(id) {
+        if let Err(e) = runtime.result_error(id) {
             return Some(e.clone());
         }
     }
@@ -349,15 +349,15 @@ fn producer_error_propagates_to_parked_consumer() {
          LET y = (x)",
     )
     .expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| sched.dispatch_in_scope(e, scope))
+        .map(|e| runtime.dispatch_in_scope(e, scope))
         .collect();
-    sched
+    runtime
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
-    let err = sched
+    let err = runtime
         .result_error(ids[0])
         .expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
@@ -365,7 +365,7 @@ fn producer_error_propagates_to_parked_consumer() {
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
     assert!(
-        sched.result_error(ids[1]).is_err(),
+        runtime.result_error(ids[1]).is_err(),
         "y must inherit its dependency's error",
     );
 }

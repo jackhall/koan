@@ -22,7 +22,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     let ret_kt = match arg_type(ctx.args, "return_type") {
         Some(KType::Unresolved(te)) => {
             match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
-                TypeIdentifierResolution::Done(kt) => kt.clone(),
+                TypeIdentifierResolution::Done { kt, .. } => kt.clone(),
                 _ => KType::from_name(&te.render()).ok_or_else(|| {
                     KError::new(KErrorKind::ShapeError(format!(
                         "{kind} return type `{}` is not a known type",
@@ -45,40 +45,38 @@ pub(crate) fn resolve_arm_contract<'a>(
     })
 }
 
-/// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: a fresh
-/// per-call frame (`root`-rooted, chained onto `outer_frame`) with `it` bound at idx 0,
-/// tail-replacing into the arm body's last statement (the harness parks on the leading statements
-/// as owned deps, running them before the tail continues) carrying `contract`.
+/// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
+/// [`block_tail`](super::block_tail::block_tail) configuration for an arm — a fresh per-call frame
+/// (`root`-rooted, chained onto `outer_frame`) whose own scope is the block, seeded with `it` bound
+/// at idx 0, running the arm body split into leading statements + a tail under `contract`.
 pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
     outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_value: crate::machine::model::KObject<'a>,
+    scrutinee_witness: crate::machine::FrameSet,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, FramePlacement};
-    use crate::machine::core::kfunction::body::split_body_statements;
+    use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
+    use crate::machine::core::kfunction::action::FramePlacement;
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
-    frame.with_scope(|child| {
-        // Bind the matched `it` value into the frame: `alloc_object` erases the caller-`'a` input and
-        // re-homes it at the frame region, so no pre-shortening is needed. Its reach rides the matched
-        // value's enclosing chain, pinned by `outer_frame`.
+    // Bind the matched `it` value into the frame's own scope: `alloc_object` erases the caller-`'a`
+    // input and re-homes it at the frame region, so no pre-shortening is needed. The `it` value is a
+    // clone of the scrutinee, so it inherits the scrutinee's reach: store that reach (home-omitted for
+    // the arm scope) on the binding, so a later read of `it` rebuilds its carrier from it.
+    let seed: BlockSeed<'a> = Box::new(move |child| {
         let it_obj = child.brand().alloc_object(it_value);
-        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0));
+        let reach = child.foreign_reach_of(&scrutinee_witness);
+        let _ = child.bind_value("it".to_string(), it_obj, BindingIndex::value(0), reach);
     });
-    let arm_scope_id = frame.scope_id();
-    let mut statements = split_body_statements(body_expr);
-    let tail = statements
-        .pop()
-        .expect("split_body_statements always yields at least one");
-    Action::Tail {
-        leading: statements,
-        tail,
-        contract: Some(contract),
-        frame_placement: FramePlacement::FreshChild { frame },
-        block_entry: Some(arm_scope_id),
-    }
+    block_tail(
+        FramePlacement::FreshChild { frame },
+        BlockScope::FrameOwn,
+        Some(seed),
+        BlockBody::Block(body_expr),
+        Some(contract),
+    )
 }
 
 /// Returns the body for the first triple whose tag matches `target_tag`, or — when

@@ -74,7 +74,7 @@ pub fn body<'a>(
         sig: s,
         pinned_slots: pinned,
     });
-    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+    Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
 }
 
 #[cfg(test)]
@@ -170,12 +170,12 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = KoanRuntime::new();
-        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
-        sched
+        let mut runtime = KoanRuntime::new();
+        let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
+        runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.result_error(id) {
+        match runtime.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected unknown-slot rejection, got {e}",
@@ -192,12 +192,12 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
         );
-        let mut sched = KoanRuntime::new();
-        let id = sched.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
-        sched
+        let mut runtime = KoanRuntime::new();
+        let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
+        runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.result_error(id) {
+        match runtime.result_error(id) {
             Err(e) => assert!(
                 format!("{e}").contains("no abstract type slot"),
                 "expected lowercase-slot rejection, got {e}",

@@ -50,12 +50,13 @@ pub fn body<'a>(
         .scope
         .brand()
         .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
-    Action::DoneWitnessed(ctx.scope.seal_value(carrier, None))
+    Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
+    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
@@ -123,14 +124,15 @@ mod tests {
             "Wrap".into(),
             wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         );
-        let mut sched = KoanRuntime::new();
-        let id = sched.dispatch_in_scope(
+        let mut runtime = KoanRuntime::new();
+        let id = runtime.dispatch_in_scope(
             parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
             scope,
         );
-        sched.execute().expect("scheduler should run");
-        match sched.result_error(id) {
+        runtime.execute().expect("scheduler should run");
+        match runtime.result_error(id) {
             Ok(()) => {}
             Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
         }
@@ -159,17 +161,17 @@ mod tests {
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
         let exprs = parse(src).expect("parse should succeed");
-        let mut sched = KoanRuntime::new();
+        let mut runtime = KoanRuntime::new();
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(sched.dispatch_in_scope(expr, scope));
+            ids.push(runtime.dispatch_in_scope(expr, scope));
         }
-        match sched.execute() {
+        match runtime.execute() {
             Ok(()) => {}
             Err(e) => panic!("scheduler errored: {}", e),
         }
         for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = sched.result_error(*id) {
+            if let Err(e) = runtime.result_error(*id) {
                 panic!("expr {} errored: {}", i, e);
             }
         }

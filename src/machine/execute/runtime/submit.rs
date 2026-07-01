@@ -208,7 +208,7 @@ impl<'run> KoanRuntime<'run> {
     /// The caller must have installed the per-call frame as `active_frame` (the run loop does this
     /// per step; [`Self::dispatch_body`] does it transiently). `chain` is the explicit
     /// lexical chain (`Some` for an `enter_block`-routed body statement; the ambient-inheriting
-    /// `ActiveFrame` placement passes [`Self::ambient_or_detached_chain`]).
+    /// `OwnScope`→`Yoked` route passes [`Self::ambient_or_detached_chain`]).
     pub(in crate::machine::execute) fn dispatch_in_active_frame<'a>(
         &mut self,
         expr: KExpression<'a>,

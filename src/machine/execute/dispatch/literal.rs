@@ -46,7 +46,7 @@ impl Slot {
 /// own `Sealed` carrier (arriving witnessed from the lift, un-relocated — `transfer_into` relocates it
 /// once into the aggregate's region while unioning its reach onto the carrier). The dep arm hands back
 /// a [`duplicate`](crate::witnessed::Sealed::duplicate) of the terminal's carrier, never a fresh
-/// `Witnessed::new` over the read-out value + a separately-read reach.
+/// bundle pairing the read-out value with a separately-read reach.
 fn cell_carrier(
     slot: Slot,
     terminals: &[&DepTerminal<'_>],
@@ -73,10 +73,9 @@ fn fold_cells(
         .region_owner()
         .upgrade()
         .expect("the consumer scope's region owner is held for the step");
-    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(
-        FrameSet::singleton(dest_frame),
-        |region| (region, Vec::with_capacity(capacity)),
-    );
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
+        (region, Vec::with_capacity(capacity))
+    });
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc,
@@ -253,17 +252,16 @@ impl<'step> KoanRuntime<'step> {
                 // A static literal (keyword / bare identifier / type name / literal): region-pure owned
                 // data, so the cell is built **inside** the witness closure — `yoke`d into the classify
                 // scope's frame, born co-located with that frame as its reach rather than resolved at
-                // the ambient lifetime and bundled via `Witnessed::new`. The cell is then lifetime-free
+                // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free
                 // and folds uniformly with the dep cells.
                 let frame = with_current_node_scope(&self.ambient, |s| {
                     s.region_owner()
                         .upgrade()
                         .expect("the classify scope's region owner is held for the step")
                 });
-                let carrier =
-                    KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
-                        Carried::Object(region.alloc_object(other.resolve_region_pure()))
-                    });
+                let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
+                    Carried::Object(region.alloc_object(other.resolve_region_pure()))
+                });
                 Slot::Static(Sealed::seal(carrier))
             }
         }
@@ -281,7 +279,7 @@ impl<'step> KoanRuntime<'step> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         // A value-bound Identifier element rides into the cell on a carrier witnessed by its binding
         // scope's home frame, which transitively pins that scope's reach-set — so the cell names the
-        // value's reach by construction, never an asserted `Witnessed::new`. Type leaves and unbound /
+        // value's reach by construction, never an asserted co-location bundle. Type leaves and unbound /
         // pending names fall to the shared `resolve_name_part` path below.
         if let ExpressionPart::Identifier(name) = part {
             let resolved = with_current_node_scope(&self.ambient, |s| {
@@ -300,22 +298,27 @@ impl<'step> KoanRuntime<'step> {
                 ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
                 _ => unreachable!("resolve_aggregate_bare_name only sees Identifier / Type parts"),
             };
+            let leaf_name = match &part_b {
+                ExpressionPart::Identifier(n) => n.as_str(),
+                ExpressionPart::Type(t) => t.as_str(),
+                _ => unreachable!(),
+            };
             match resolve_name_part(s, &part_b, &self.sched, active_chain, None) {
-                // A first-class **type** resolved into the cell rides the type channel sealed under the
-                // classify scope's home frame, which pins the type's (ancestor) region via its `outer`
-                // chain. The resolved leaf is cloned into the region-pure witnessed surface (sharing its
-                // `Rc` payload, identity preserved) and sealed — a `KType::Module` folds its child reach.
-                // The value case is handled above via the binding-scope carrier, so the `Object` arm is
-                // defensive: an existing value reference wraps via the asserted-co-location read path.
-                NameOutcome::Resolved(c) => {
-                    let carrier = match c {
-                        Carried::Type(kt) => {
-                            s.seal_type(s.brand().alloc_ktype_witnessed(kt.clone()))
-                        }
-                        Carried::Object(obj) => s.resident_object_carrier(obj),
-                    };
-                    Some(Slot::Static(Sealed::seal(carrier)))
+                // A first-class **type** resolved into the cell is witnessed in place from its binding's
+                // stored reach (recomputed here, since `resolve_name_part` returns only the `&KType`):
+                // the read scope's home frame pins the type's (ancestor) region via its `outer` chain,
+                // and `reach` names any genuinely-foreign region (a module's child scope).
+                NameOutcome::Resolved(Carried::Type(kt)) => {
+                    let reach = s.resolve_type_reach(leaf_name, active_chain.map(|c| &**c));
+                    Some(Slot::Static(Sealed::seal(
+                        s.resident_type_carrier(kt, &reach),
+                    )))
                 }
+                // The value case is handled above via the reach-carrying binding-scope carrier
+                // (`resolve_value_carrier`). A bare `Carried::Object` reaching here carries no reach to
+                // build a correct carrier from, so it falls through to the sub-dispatch fallback rather
+                // than wrapping a reachless value.
+                NameOutcome::Resolved(Carried::Object(_)) => None,
                 NameOutcome::Parked(producer) => {
                     let pos = park_producers.len();
                     park_producers.push(producer);

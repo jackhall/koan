@@ -68,7 +68,7 @@ pub(crate) fn nominal_schema_action<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            Action::done_witnessed(finalize(ctx.scope, name, fields, bind_index))
+            Action::Done(finalize(ctx.scope, name, fields, bind_index))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {

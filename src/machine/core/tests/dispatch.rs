@@ -13,10 +13,10 @@ use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
 use crate::source::Spanned;
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "a"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "a")))
 }
 fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "b"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "b")))
 }
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
@@ -104,7 +104,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     }
 }
 
-/// A binder_name-bearing overload populates `placeholder_name` from its extractor.
+/// A binder_name-bearing overload populates `placeholder` from its extractor.
 #[test]
 fn resolve_carries_placeholder_name_for_binder_function() {
     use crate::builtins::register_builtin_full;
@@ -136,7 +136,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
         "LETLIKE",
         sig,
         body_a,
-        Some(name_extractor),
+        Some((name_extractor, crate::machine::BindKind::Value)),
         None,
         false,
     );
@@ -149,10 +149,10 @@ fn resolve_carries_placeholder_name_for_binder_function() {
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
         ResolveOutcome::Resolved(r) => {
-            assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
+            assert_eq!(r.placeholder.as_ref().map(|(n, _)| n.as_str()), Some("foo"));
             assert!(r.slots.picked_has_binder_name);
         }
-        _ => panic!("expected Resolved with placeholder_name"),
+        _ => panic!("expected Resolved with placeholder"),
     }
 }
 
@@ -410,9 +410,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         region
             .brand()
             .alloc_function(KFunction::new(pick_num, Body::Builtin(body_a), scope));
-    let pick_num_obj = region
-        .brand()
-        .alloc_object(KObject::KFunction(pick_num_fn));
+    let pick_num_obj = region.brand().alloc_object(KObject::KFunction(pick_num_fn));
     scope
         .register_function(
             "pick_num".to_string(),

@@ -1,7 +1,7 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
-use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
@@ -75,8 +75,8 @@ pub(super) fn initial<'step>(
         .expect("dispatching slot must have an active chain")
         .index;
     let bind_index = BindingIndex::value(lex_index);
-    if let Some(name) = resolved.placeholder_name.as_ref() {
-        if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
+    if let Some((name, kind)) = resolved.placeholder.as_ref() {
+        if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index, *kind) {
             return Outcome::Done(Err(e));
         }
     }
@@ -182,7 +182,7 @@ pub(super) fn redispatch_continue<'step>(
         work,
         frame: FramePlacement::Inherit,
         contract: None,
-        block_entry: None,
+        block_entry: BlockEntry::None,
         body_index: 0,
     }
 }

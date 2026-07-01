@@ -7,9 +7,9 @@ use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnT
 use crate::machine::model::{KKind, KObject};
 
 fn body_any<'a>(ctx: &super::action::BodyCtx<'a, '_>) -> super::action::Action<'a> {
-    super::action::Action::Done(Ok(crate::machine::model::Carried::Object(marker(
+    super::action::Action::done_resident(crate::machine::model::Carried::Object(marker(
         ctx.scope, "any",
-    ))))
+    )))
 }
 
 /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape

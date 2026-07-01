@@ -5,7 +5,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
+use crate::machine::core::{BindKind, KError, KErrorKind, KFuture, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{ArgValue, NamedPairs};
 
@@ -39,8 +39,13 @@ pub struct KFunction<'a> {
     /// **Variance-load-bearing.** `&'a Scope<'a>` is invariant in `'a` (`Scope<'a>` is invariant — it
     /// holds `RefCell`s), so `captured` keeps `KFunction<'a>` invariant in `'a`.
     captured: &'a Scope<'a>,
-    /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
-    pub binder_name: Option<BinderNameFn>,
+    /// `Some((extractor, kind))` for name-binding declarators (LET, VAL, UNION, SIG,
+    /// MODULE, NEWTYPE, RECURSIVE). `extractor` pulls the bound name out of the binder
+    /// expression; `kind` records whether the binding lands in the value or the type
+    /// language, so the forward-reference placeholder the dispatch driver installs is
+    /// tagged and a value bind never satisfies a type placeholder (or the reverse). FN /
+    /// FUNCTOR carry `binder_bucket` instead and install no name placeholder.
+    pub binder_name: Option<(BinderNameFn, BindKind)>,
     /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
     /// `FUNCTOR`). Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
     /// dispatch driver installs an entry in `bindings.pending_overloads` and a
@@ -55,7 +60,11 @@ pub struct KFunction<'a> {
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(signature: ExpressionSignature<'a>, body: Body<'a>, captured: &'a Scope<'a>) -> Self {
+    pub fn new(
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        captured: &'a Scope<'a>,
+    ) -> Self {
         Self::with_binder_name(signature, body, captured, None)
     }
 
@@ -63,7 +72,7 @@ impl<'a> KFunction<'a> {
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
-        binder_name: Option<BinderNameFn>,
+        binder_name: Option<(BinderNameFn, BindKind)>,
     ) -> Self {
         Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
     }
@@ -72,7 +81,7 @@ impl<'a> KFunction<'a> {
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
-        binder_name: Option<BinderNameFn>,
+        binder_name: Option<(BinderNameFn, BindKind)>,
         binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
     ) -> Self {

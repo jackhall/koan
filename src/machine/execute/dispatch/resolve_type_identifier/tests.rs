@@ -8,12 +8,12 @@ fn resolve_type_expr_builtin_leaf_caches() {
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done(kt) => kt,
+        TypeIdentifierResolution::Done { kt, .. } => kt,
         _ => panic!("expected Done"),
     };
     assert_eq!(*first, KType::Number);
     let second = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done(kt) => kt,
+        TypeIdentifierResolution::Done { kt, .. } => kt,
         _ => panic!("expected Done on second call"),
     };
     assert!(
@@ -43,7 +43,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let te = TypeIdentifier::leaf("Point".into());
     let kt = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done(kt) => kt,
+        TypeIdentifierResolution::Done { kt, .. } => kt,
         _ => panic!("expected Done after STRUCT declaration"),
     };
     match kt {
@@ -51,7 +51,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         _ => panic!("expected SetRef for Point"),
     }
     let kt2 = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done(kt) => kt,
+        TypeIdentifierResolution::Done { kt, .. } => kt,
         _ => panic!("expected Done on memo hit"),
     };
     assert!(std::ptr::eq(kt, kt2));
@@ -117,6 +117,7 @@ mod resolve_type_leaf_carrier {
     use super::super::{resolve_type_leaf_carrier, TypeLeafCarrier};
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::BindingIndex;
+    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::KType;
@@ -125,10 +126,17 @@ mod resolve_type_leaf_carrier {
     fn builtin_synthesizes_type_carrier() {
         let region = FrameStorage::run_root();
         let scope = run_root_bare(&region);
-        scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+        scope.register_type(
+            "Number".into(),
+            KType::Number,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        );
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match resolve_type_leaf_carrier(scope, &leaf, None) {
-            TypeLeafCarrier::Resolved(KType::Number) => {}
+            TypeLeafCarrier::Resolved {
+                kt: KType::Number, ..
+            } => {}
             other => panic!("expected Resolved(Number), got {:?}", carrier_tag(&other)),
         }
     }
@@ -191,7 +199,12 @@ mod resolve_type_leaf_carrier {
             },
         );
         scope
-            .install_placeholder("Node".into(), NodeId(7), BindingIndex::value(0))
+            .install_placeholder(
+                "Node".into(),
+                NodeId(7),
+                BindingIndex::value(0),
+                crate::machine::BindKind::Type,
+            )
             .expect("placeholder install");
 
         let leaf = TypeIdentifier::leaf("Node".to_string());
@@ -211,7 +224,10 @@ mod resolve_type_leaf_carrier {
         drop(pending_guard);
 
         match resolve_type_leaf_carrier(scope, &leaf, None) {
-            TypeLeafCarrier::Resolved(KType::SetRef { set: s, index }) => {
+            TypeLeafCarrier::Resolved {
+                kt: KType::SetRef { set: s, index },
+                ..
+            } => {
                 assert_eq!(s.member(*index).name, "Node");
             }
             other => {
@@ -225,7 +241,7 @@ mod resolve_type_leaf_carrier {
 
     fn carrier_tag(c: &TypeLeafCarrier<'_>) -> &'static str {
         match c {
-            TypeLeafCarrier::Resolved(_) => "Resolved",
+            TypeLeafCarrier::Resolved { .. } => "Resolved",
             TypeLeafCarrier::Park(_) => "Park",
             TypeLeafCarrier::Unbound(_) => "Unbound",
         }

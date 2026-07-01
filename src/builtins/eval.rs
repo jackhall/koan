@@ -15,6 +15,7 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use super::block_tail::{block_tail, BlockBody, BlockScope};
     use crate::machine::core::kfunction::action::{arg_object, Action, FramePlacement};
     use crate::machine::model::KObject;
     use crate::machine::{KError, KErrorKind};
@@ -30,15 +31,17 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
     };
     // Chain the call-site frame Rc onto the new frame (keeps the parent region alive past the
-    // new frame's `outer` pointer) — matching a normal call frame.
+    // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted
+    // expression run in the fresh frame's own scope (`BlockScope::None`): no block push, no seed,
+    // and — unlike an arm — no split, so a parenthesized group evaluates as one expression.
     let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
-    Action::Tail {
-        leading: vec![],
-        tail: inner,
-        contract: None,
-        frame_placement: FramePlacement::FreshChild { frame },
-        block_entry: None,
-    }
+    block_tail(
+        FramePlacement::FreshChild { frame },
+        BlockScope::None,
+        None,
+        BlockBody::Single(inner),
+        None,
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

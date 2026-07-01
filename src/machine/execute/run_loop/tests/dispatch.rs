@@ -17,19 +17,19 @@ use crate::machine::FrameStorage;
 use crate::source::Spanned;
 
 fn body_identifier<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "identifier"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "identifier")))
 }
 fn body_marker_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "any"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "any")))
 }
 fn body_inner_any<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "inner_any"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "inner_any")))
 }
 fn body_outer_number<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "outer_number"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "outer_number")))
 }
 fn body_lowercase<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
-    Action::Done(Ok(Carried::Object(marker(ctx.scope, "lowercase"))))
+    Action::done_resident(Carried::Object(marker(ctx.scope, "lowercase")))
 }
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
@@ -86,10 +86,10 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, inner);
-    sched.execute().unwrap();
-    let (matched, summary) = sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, inner);
+    runtime.execute().unwrap();
+    let (matched, summary) = runtime
         .read_result_with(id, |v| {
             let obj = v.object();
             (
@@ -129,10 +129,10 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().unwrap();
-    let err = match sched.read_result_with(id, |v| v.summarize()) {
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().unwrap();
+    let err = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
@@ -169,10 +169,10 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().unwrap();
-    assert!(sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().unwrap();
+    assert!(runtime
         .read_result_with(
             id,
             |v| matches!(v.object(), KObject::KString(s) if s == "lowercase")

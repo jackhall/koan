@@ -13,7 +13,9 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::{KType, SignatureElement};
-use crate::machine::{BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope};
+use crate::machine::{
+    BindKind, BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope,
+};
 
 use super::super::nodes::{NodePayload, NodeScope};
 use super::super::runtime::KoanRuntime;
@@ -27,7 +29,7 @@ struct BinderInstall {
 
 /// The two install channels a binder may use, mutually exclusive per binder.
 enum BinderKey {
-    Name(String),
+    Name(String, BindKind),
     Bucket(UntypedKey),
 }
 
@@ -48,8 +50,11 @@ fn extract_binder_install<'ast, 'step>(
         }
         let bucket_fns = overloads;
         let picked: Option<(&KFunction<'step>, BinderKey)> = bucket_fns.iter().find_map(|f| {
-            if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
-                Some((*f, BinderKey::Name(name)))
+            if let Some((name, kind)) = f
+                .binder_name
+                .and_then(|(extractor, kind)| extractor(expr).map(|name| (name, kind)))
+            {
+                Some((*f, BinderKey::Name(name, kind)))
             } else {
                 f.binder_bucket
                     .and_then(|extractor| extractor(expr))
@@ -150,8 +155,8 @@ impl<'run> KoanRuntime<'run> {
             // `data[name]` is already a KFunction or the same slot re-installs.
             let bind_index = BindingIndex::value(chain.index);
             match install.key {
-                BinderKey::Name(name) => {
-                    let _ = scope.install_placeholder(name, id, bind_index);
+                BinderKey::Name(name, kind) => {
+                    let _ = scope.install_placeholder(name, id, bind_index, kind);
                 }
                 BinderKey::Bucket(bucket) => {
                     let _ = scope.install_pending_overload(bucket, id, bind_index);

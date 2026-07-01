@@ -44,15 +44,28 @@ pub fn body<'a>(
         // unwrapped from `KError::to_tagged`'s Tagged carrier.
         // TRY-WITH reads the watched value (relocated into the consumer region) to bind `it` and
         // tail-replaces into the matched branch; it builds no object, so it ignores `ok.carrier`.
-        let (tag, it_value, original_err): (String, KObject<'a>, Option<KError>) = match result {
-            Ok(ok) => ("Ok".to_string(), ok.value.object().deep_clone(), None),
+        // Alongside the `it` value, capture the scrutinee's reach so the `it` binding stores it: on
+        // `ok`, the watched value's own carrier witness; on error, the freshly-built Tagged payload is
+        // region-pure (reaches nothing foreign), so the empty set.
+        let (tag, it_value, it_witness, original_err): (
+            String,
+            KObject<'a>,
+            crate::machine::FrameSet,
+            Option<KError>,
+        ) = match result {
+            Ok(ok) => (
+                "Ok".to_string(),
+                ok.value.object().deep_clone(),
+                ok.carrier.witness().clone(),
+                None,
+            ),
             Err(e) => {
                 let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand());
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
                 };
-                (tag, payload, Some(e))
+                (tag, payload, crate::machine::FrameSet::empty(), Some(e))
             }
         };
         let body_expr = match find_branch_body(&branches_expr, &tag, true) {
@@ -69,7 +82,14 @@ pub fn body<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(fctx.scope, outer_frame, it_value, body_expr, contract)
+        arm_tail(
+            fctx.scope,
+            outer_frame,
+            it_value,
+            it_witness,
+            body_expr,
+            contract,
+        )
     });
     Action::Catch {
         watched: Dep::Dispatch {

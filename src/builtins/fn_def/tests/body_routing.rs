@@ -117,12 +117,12 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
 fn fn_def_parens_param_type_non_type_value_errors() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("non-type param type expression should error"),
     };
@@ -140,12 +140,12 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 fn fn_def_sigil_return_type_non_type_value_errors() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("non-type return-type expression should error"),
     };

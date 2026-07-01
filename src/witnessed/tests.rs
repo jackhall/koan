@@ -116,7 +116,7 @@ fn read_borrow_bounded_witness_only() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![5, 6, 7]);
     let w: Witnessed<RefFamily, Rc<Vec<u32>>> = {
         let borrow: &u32 = &backing[2];
-        Witnessed::new(borrow, Rc::clone(&backing))
+        Witnessed::from_erased(Erased::erase(borrow), Rc::clone(&backing))
     };
     drop(backing); // witness is sole owner.
     let escaped: &u32 = w.read(); // hands the carrier OUT, bounded by `&w`.
@@ -148,7 +148,7 @@ fn covariant_roundtrip_witness_only() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![7, 8, 9]);
     let w: Witnessed<RefFamily, Rc<Vec<u32>>> = {
         let borrow: &u32 = &backing[0]; // original binding...
-        Witnessed::new(borrow, Rc::clone(&backing))
+        Witnessed::from_erased(Erased::erase(borrow), Rc::clone(&backing))
     }; // ...dropped here; only the witness `Rc` inside `w` keeps `backing[0]` alive.
     drop(backing); // drop the other handle too — `w`'s witness is now the sole owner.
     assert_eq!(w.with(|r| **r), 7);
@@ -161,7 +161,7 @@ fn invariant_roundtrip_witness_only() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![10, 20, 30]);
     let w: Witnessed<InvFamily, Rc<Vec<u32>>> = {
         let cell: Cell<&u32> = Cell::new(&backing[1]);
-        Witnessed::new(cell, Rc::clone(&backing))
+        Witnessed::from_erased(Erased::erase(cell), Rc::clone(&backing))
     };
     drop(backing); // witness is sole owner now.
     assert_eq!(w.with(|c| *c.get()), 20);
@@ -180,7 +180,7 @@ fn continuation_binds_cart_coherent_value_via_map() {
             scope: Cell::new(None),
             pool: &backing[..],
         };
-        Witnessed::new(carrier, Rc::clone(&backing))
+        Witnessed::from_erased(Erased::erase(carrier), Rc::clone(&backing))
     };
     // At the brand, bind pool[2] into the invariant scope slot — sound only because scope and bound
     // value share the brand — then re-seal.
@@ -199,7 +199,7 @@ fn continuation_binds_cart_coherent_value_via_map() {
 fn invariant_same_brand_mutation() {
     let backing: Rc<Vec<u32>> = Rc::new(vec![100, 200, 300]);
     let w: Witnessed<InvFamily, Rc<Vec<u32>>> =
-        Witnessed::new(Cell::new(&backing[0]), Rc::clone(&backing));
+        Witnessed::from_erased(Erased::erase(Cell::new(&backing[0])), Rc::clone(&backing));
     let got = w.with(|c| {
         let here = c.get();
         c.set(here);

@@ -14,7 +14,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Carried, KObject, KType};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -79,8 +79,8 @@ pub fn body<'a>(
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
 
-    // Defense-in-depth: abstract-type members must use `LET`, not `VAL`.
-    if super::ascribe::is_abstract_type_name(&name) {
+    // Defense-in-depth: abstract-type members (Type-class names) must use `LET`, not `VAL`.
+    if crate::parse::is_type_name(&name) {
         return done_err(KError::new(KErrorKind::ShapeError(format!(
             "VAL slot name `{name}` classifies as a Type token; abstract-type members \
              must use `LET {name} = <Type>` instead of `VAL`",
@@ -153,10 +153,16 @@ fn finalize_val<'a>(
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    if let Err(e) = scope.register_user_type(name, declared_kt.clone(), bind_index) {
+    // A VAL declares an abstract / declared slot type — owned data reaching no foreign region, so its
+    // stored reach is empty.
+    if let Err(e) =
+        scope.register_user_type(name, declared_kt.clone(), bind_index, FrameSet::empty())
+    {
         return Action::Done(Err(e));
     }
-    Action::DoneWitnessed(scope.seal_type(scope.brand().alloc_ktype_witnessed(declared_kt)))
+    Action::Done(Ok(
+        scope.seal_value(scope.brand().alloc_ktype_witnessed(declared_kt), None)
+    ))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
@@ -181,7 +187,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "VAL",
         signature,
         body,
-        Some(binder_name),
+        // VAL records a value-slot's declared type into the SIG decl-scope's `types` map
+        // (a type-language write), so its forward-reference placeholder is `Type`-kind.
+        Some((binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

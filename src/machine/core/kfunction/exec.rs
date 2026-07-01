@@ -27,12 +27,14 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::arena::FrameSet;
 use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
 };
-use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
+use crate::witnessed::Sealed;
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -139,6 +141,7 @@ pub(crate) fn home_return_type<'a>(
 pub fn run_user_fn<'ast, 'step>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'step>>,
+    arg_carriers: &Record<Sealed<CarriedFamily, FrameSet>>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
 ) -> ExecOutcome<'ast, 'step>
@@ -159,13 +162,32 @@ where
             for (name, cell) in cells.iter() {
                 match cell {
                     Held::Object(object) => {
-                        let _ = child.bind_value(name.clone(), object, BindingIndex::value(0));
+                        // Store the parameter's reach from its own delivered arg carrier (home-omitted),
+                        // so a later read of the parameter rebuilds its carrier from the stored reach.
+                        // A region-pure argument has no carrier entry → empty reach.
+                        let reach = arg_carriers
+                            .get(name)
+                            .map(|carrier| child.foreign_reach_of(carrier.witness()))
+                            .unwrap_or_default();
+                        let _ =
+                            child.bind_value(name.clone(), object, BindingIndex::value(0), reach);
                     }
                     // Type-denoting params (`Er`-style) register a type, not a value binding.
                     // The arg is an already-resolved type, so `type_identity_for` would just
-                    // pass it through — register it directly (avoids the def-scope lifetime).
+                    // pass it through — register it directly (avoids the def-scope lifetime). A
+                    // module-typed argument reaches its child scope's region, so store the arg
+                    // carrier's home-omitted reach (empty for an owned type).
                     Held::Type(kt) => {
-                        child.register_type(name.clone(), kt.clone(), BindingIndex::value(0));
+                        let reach = arg_carriers
+                            .get(name)
+                            .map(|carrier| child.foreign_reach_of(carrier.witness()))
+                            .unwrap_or_default();
+                        child.register_type(
+                            name.clone(),
+                            kt.clone(),
+                            BindingIndex::value(0),
+                            reach,
+                        );
                     }
                 }
             }

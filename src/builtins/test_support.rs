@@ -29,18 +29,18 @@ use super::default_scope;
 /// it, so its reach-set keeps every region the result reaches alive. Test-only — production code reads
 /// inside the open without a fixed escape lifetime.
 pub(crate) fn extract_terminal<'a>(
-    sched: &KoanRuntime<'a>,
+    runtime: &KoanRuntime<'a>,
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
     let brand = scope.brand();
-    let value = sched
+    let value = runtime
         .read_result_with(id, |live| match live {
             Carried::Object(obj) => Carried::Object(brand.alloc_object(obj.deep_clone())),
             Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
         })
         .expect("terminal should be a value, not an error");
-    scope.fold_reach(&sched.dep_witness(id));
+    scope.fold_reach(&runtime.dep_witness(id));
     value
 }
 
@@ -92,19 +92,19 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 /// from prior `run(...)` calls read through. Semantic errors surface via `read_result`,
 /// not `execute` — use [`run_one_err`] when the test expects a `KError`.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().expect("scheduler should succeed");
-    extract_terminal(&sched, scope, id).object()
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().expect("scheduler should succeed");
+    extract_terminal(&runtime, scope, id).object()
 }
 
 /// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
 /// its [`Carried::Type`] arm. Panics if the expression produced a runtime value instead.
 pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType<'a> {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().expect("scheduler should succeed");
-    match extract_terminal(&sched, scope, id) {
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().expect("scheduler should succeed");
+    match extract_terminal(&runtime, scope, id) {
         Carried::Type(kt) => kt,
         Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
     }
@@ -112,12 +112,12 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
 
 /// Like [`run_one`] but returns the `KError` produced by the dispatched node.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.result_error(id) {
+    match runtime.result_error(id) {
         Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }
@@ -128,11 +128,11 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
 /// *ordering* (e.g. forward-ref-fails behavior) call `enter_block` directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for expr in exprs {
-        sched.dispatch_in_scope(expr, scope);
+        runtime.dispatch_in_scope(expr, scope);
     }
-    sched.execute().expect("scheduler should succeed");
+    runtime.execute().expect("scheduler should succeed");
 }
 
 /// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`.

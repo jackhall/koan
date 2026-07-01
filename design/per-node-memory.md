@@ -83,14 +83,18 @@ allocs through the witnessed object surface (`alloc_object_witnessed`), born und
 brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
 embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness the type encodes.
 
-What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
+The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
+region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
+widens into the region *set* the aggregate accumulates in through a distinct [`into_set`](../src/witnessed.rs)
+lift, kept separate from `yoke` so minting stays a one-region act and combining regions stays `merge`'s
+job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
 `Rc`. The object family's region-pure leaves and aggregates are built this way — a single-part
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
 dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
 / [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
-brand enforces, never asserted. The carrier-self-building object constructions climb off `Witnessed::new`
-the same way: the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
+brand enforces, never asserted. The carrier-self-building object constructions are built the same way:
+the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
 and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge`, and FN
 def [`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located `KObject::KFunction` onto a
 carrier witnessed by the defining scope's frame. The value-embedding sites that take a *bare arg* —
@@ -100,24 +104,34 @@ climb off it the same way: each receives the value it embeds as a delivered
 [`Sealed`](#storage-and-access-seal-open-transfer_into) carrier (`attr` / `FROM` through
 [`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs), the Resolved arm through the binding
 scope's own [`Scope::seal_value`](../src/machine/core/scope.rs)) and `merge`s it, so the projected object
-names every region it reaches by construction. `Witnessed::new`, which pairs an *already-built* value
-with an asserted witness, enforces no co-location — it asserts it in prose at the call site — so it
-backs no construction terminal: the **type** family seals the same way — a region-pure or owned `KType`
+names every region it reaches by construction. No construction terminal pairs an *already-built* value
+with a separately-asserted witness: the **type** family seals the same way — a region-pure or owned `KType`
 through [`Scope::seal_value`](../src/machine/core/scope.rs), a region-referencing `KType::Module` through
-[`Scope::seal_module`](../src/machine/core/scope.rs) (which folds its child scope's reach) — so every
-multi-dep constructed value, object or type, is born co-located by the `yoke` brand. The region-pure
+[`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
+construction ([`Scope::reach_of_child`](../src/machine/core/scope.rs), from the child scope the birth
+site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
+`yoke` brand. The region-pure
 carrier is built by the purpose-built [`Witnessed::resident`](../src/witnessed.rs), which fixes the
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
 within-step transient, the producing frame folded in at close ([`reseal_under`](../src/witnessed.rs))
-before the carrier is stored. `Witnessed::new` keeps **no** blessed home: its surviving callers — the
-bare-[`Done`](../src/machine/core/kfunction/action.rs)
-[`finalize_terminal`](../src/machine/execute/finalize.rs) forward, the type / region operand bundles,
-and [`Scope::resident_object_carrier`](../src/machine/core/scope.rs) (the read that wraps an
-*already-built* region-resident object — a bound name, an `ATTR` value member, a defined FN object —
-which pre-exists its carrier, so it cannot be born inside an alloc brand and a deep clone would drop a
-closure's captured reach) — are transitional, asserting in prose the co-location the `yoke` / `merge` /
-`resident` constructors enforce structurally.
+before the carrier is stored. A node's own value terminal is witnessed the same way — a region-pure
+result (a spliced value, a builtin's synchronous result) through `resident`, a dep-reaching result by
+folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
+the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
+producing frame into that carrier's own reach at close rather than asserting a separately-computed
+witness set; an error carries no value and finalizes bare. The type / region construction operands are
+computed carriers too — the newtype / tagged-union / `CATCH` build `merge`s a delivered type-identity
+carrier under the binding's stored reach ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)),
+the contract-home operand is born region-pure via `resident` and folded by `merge`, and the relocate
+destination rides a `yoke`d-or-`resident` carrier — so no site pairs an already-built value with a
+separately-asserted witness. A read of an
+*already-built* region-resident value — a bound name, an `ATTR` value member, a defined FN object —
+does **not** rebuild a witness: it pre-exists its carrier, so the read bundles it through the confined
+[`RegionBrand::seal_resident`](../src/machine/core/arena.rs) surface
+([`Scope::resident_value_carrier`](../src/machine/core/scope.rs) / `resident_type_carrier`) under the
+reach stored on its binding (see [Storage and access](#storage-and-access-seal-open-transfer_into)), so
+`Witnessed::resident` is never reached from a builtin and no read walks a value to recover its reach.
 
 **`merge` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
@@ -235,12 +249,13 @@ aggregate and region-pure inversions, the newtype / tagged-union constructors, a
 dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
 Resolved arm) `merge` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
 they project; and a `let` or user-fn arg bind folds the bound value's carrier into the scope reach-set
-(below). The **type** channel rides the same construction: a type terminal seals via
-[`Scope::seal_type`](../src/machine/core/scope.rs) — a region-pure or owned `KType` under the
-producer's home frame, a region-referencing `KType::Module` via
-[`Scope::seal_module`](../src/machine/core/scope.rs), which folds the child scope's home frame and its
-sealed reach-set onto the carrier. A relocated module therefore names every region it reaches on its
-own witness, read back at the consumer rather than reconstructed from the value. No finish reads a live
+(below). The **type** channel rides the same construction: a region-pure or owned `KType` seals via
+[`Scope::seal_value`](../src/machine/core/scope.rs) under the producer's home frame; a
+region-referencing `KType::Module` seals via [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
+under the child-scope reach folded once at construction from the child scope the birth site holds
+directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recovered by walking the built
+`KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
+back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
 [`relocate_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
 carrier, and only a *bound* value deposits onto the scope reach-set (below).
@@ -268,9 +283,29 @@ close a `region → scope → set → frame` cycle and defeat the `Rc::get_mut` 
 it realizes [`fold_foreign`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors"
 intent while keeping a region-pure or ancestor-bound value depositing nothing.
 
-With both channels' construction carried and binds folded, reach lives entirely on the node carrier
-and, for bindings, on the per-scope sealed reach-set: a relocated value's reach is read off its own
-carrier witness, never recovered from the value.
+The same reach is also stored **per binding**, so a later read hands its carrier back structurally.
+[`Bindings`](../src/machine/core/bindings.rs)' `data` and `types` entries each carry the bound value's
+home-omitted foreign [`FrameSet`](../src/machine/core/arena.rs) alongside the reference — captured at
+bind time from the delivered carrier for a value or alias
+([`Scope::foreign_reach_of`](../src/machine/core/scope.rs)), and folded from the child scope held
+directly at construction for a module ([`Scope::reach_of_child`](../src/machine/core/scope.rs)). A
+carrier-oriented lookup (`lookup_value_carrier` / `lookup_type_carrier`) or an `ATTR` member read hands
+that stored reach back, and the read builds a self-contained terminal — home frame fetched fresh, ∪ the
+stored foreign reach — through [`Scope::resident_value_carrier`](../src/machine/core/scope.rs) /
+`resident_type_carrier`, witnessing the existing `&'a KObject` / `&'a KType` **in place**. A bare type
+leaf rides the reach through the whole resolve chain (the `type_identifier_memo`,
+`resolve_type_identifier`, `resolve_type_leaf_carrier`), recomputing it at the memo miss by name
+([`Scope::resolve_type_reach`](../src/machine/core/scope.rs)). The stored reach is home-omitted for the
+same cycle-safety rule the scope reach-set obeys — the region's own home frame `Rc` never lands
+in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built FN-def
+/ LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its
+*terminal* carrier through the confined resident surface, so the registered reference and the returned
+carrier share one allocation.
+
+With both channels' construction carried, binds folded, and each binding's reach stored, reach lives
+entirely on the node carrier and — for bindings — on the per-scope sealed reach-set and each binding's
+stored `FrameSet`: a value's reach is read off its own carrier witness or its stored reach, never
+recovered by walking the value.
 
 ## Why reads are safe
 
@@ -345,13 +380,3 @@ door [`build_frame_child_witnessed`](../src/machine/core/arena.rs), which brands
 the foreign parent at one `for<'b>` and erases the child witness-less. No scope re-anchor survives
 outside the witnessed substrate and the access surface is `open` alone, so "always witnessed" is a
 closed type rule.
-
-## Open work
-
-- [Structural witnesses](../roadmap/per-node-memory/structural-witnesses.md) — the construction
-  terminals this doc describes as born witnessed (the FN-def `yoke`, the object resident read) still
-  route the asserted [`Witnessed::new`](../src/witnessed.rs) at the object resident read, the
-  bare-`Done` terminal, and the `RegionTypeFamily` operand bundles; the single-region `yoke` witness
-  is only narrowingly satisfied by `WitnessRegion for FrameSet`; and `Option<W>: Witness` is an unused
-  pre-`FrameSet` residue. The item makes every witness structural and adds the multi-region tests that
-  would flag an under-counting one.

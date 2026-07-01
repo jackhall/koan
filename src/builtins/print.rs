@@ -24,7 +24,7 @@ pub fn body<'a>(
         .scope
         .brand()
         .alloc_object_witnessed(KObject::KString(rendered));
-    Action::DoneWitnessed(carrier)
+    Action::Done(Ok(carrier))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

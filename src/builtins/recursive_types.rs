@@ -17,6 +17,7 @@
 //! guarantees every forward reference resolved.
 
 use crate::machine::model::types::KKind;
+use crate::machine::FrameSet;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -146,22 +147,26 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             };
-            if let Err(e) = fctx
-                .scope
-                .register_type_upsert(name.clone(), member_ref, bind_index)
-            {
+            if let Err(e) = fctx.scope.register_type_upsert(
+                name.clone(),
+                member_ref,
+                bind_index,
+                FrameSet::empty(),
+            ) {
                 return Action::Done(Err(e.with_frame(frame())));
             }
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
-        match fctx
-            .scope
-            .register_type_upsert(group_name.clone(), handle, bind_index)
-        {
-            Ok(kt_ref) => Action::DoneWitnessed(fctx.scope.seal_value(
+        match fctx.scope.register_type_upsert(
+            group_name.clone(),
+            handle,
+            bind_index,
+            FrameSet::empty(),
+        ) {
+            Ok(kt_ref) => Action::Done(Ok(fctx.scope.seal_value(
                 fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
                 None,
-            )),
+            ))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });
@@ -190,7 +195,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "RECURSIVE TYPES",
         signature,
         body,
-        Some(super::type_part_binder_name),
+        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
         false,
     );

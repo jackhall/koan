@@ -15,16 +15,16 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
          FN (AA) -> Null = (BB)",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("AA"), scope);
-    sched.execute().expect("AA should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
     assert_eq!(
-        sched.len(),
+        runtime.len(),
         1,
         "tail-call slot reuse = AA -> BB -> PRINT should collapse into one slot, got {}",
-        sched.len(),
+        runtime.len(),
     );
 }
 
@@ -41,21 +41,21 @@ fn chained_tail_calls_reuse_frames() {
          FN (AA) -> Null = (BB)",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("AA"), scope);
-    sched.execute().expect("AA should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
-    assert_eq!(sched.len(), 1, "tail chain should collapse to one slot");
+    assert_eq!(runtime.len(), 1, "tail chain should collapse to one slot");
     // Reuse draws from the per-slot reserve, which is seeded by the *previous* per-call frame.
     // The top-level→first-FN transition parks the non-dying run frame, which is never reusable,
     // so the first FN frame allocates fresh and reuse kicks in from the third call onward —
     // two reuses across AA -> BB -> CC -> DD. Steady-state tail recursion still ping-pongs two
     // frames with no further allocation.
     assert!(
-        sched.tail_reuse_count() >= 2,
+        runtime.tail_reuse_count() >= 2,
         "expected at least 2 reuses across AA -> BB -> CC -> DD, got {}",
-        sched.tail_reuse_count(),
+        runtime.tail_reuse_count(),
     );
 }
 
@@ -77,9 +77,9 @@ fn leading_statements_run_before_tail_across_chain() {
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("AA"), scope);
-    sched.execute().expect("AA should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.execute().expect("AA should run");
 
     assert_eq!(
         String::from_utf8_lossy(&captured.borrow()),
@@ -93,7 +93,7 @@ fn leading_statements_run_before_tail_across_chain() {
 /// frame stays uniquely owned and `try_reset_for_tail` keeps reusing it. The chain peaks at two
 /// slots — the tail-replaced main slot plus a single leading-PRINT slot recycled through the
 /// free-list across all four calls — and frame reuse still kicks in. Fire-and-forget leading
-/// would instead leave one orphan PRINT slot per call aliasing its frame (`sched.len()` would
+/// would instead leave one orphan PRINT slot per call aliasing its frame (`runtime.len()` would
 /// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
@@ -108,23 +108,23 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("AA"), scope);
-    sched.execute().expect("AA should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("AA"), scope);
+    runtime.execute().expect("AA should run");
 
     assert_eq!(
-        sched.len(),
+        runtime.len(),
         2,
         "leading statements are owned and cascade-free, so each PRINT slot is recycled via the \
          free-list rather than orphaned — the chain peaks at the main slot plus one reused \
          leading slot (a leak would climb to 5), got {}",
-        sched.len(),
+        runtime.len(),
     );
     assert!(
-        sched.tail_reuse_count() >= 2,
+        runtime.tail_reuse_count() >= 2,
         "leading statements cascade-free before each tail continues, so the frame stays unique \
          and reuse still kicks in across AA -> BB -> CC -> DD, got {}",
-        sched.tail_reuse_count(),
+        runtime.tail_reuse_count(),
     );
 }
 
@@ -145,9 +145,9 @@ fn match_driven_tail_recursion_completes() {
          ))",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
-    sched.execute().expect("HOP should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
+    runtime.execute().expect("HOP should run");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
 }
@@ -171,9 +171,9 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
          ))",
     );
 
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
-    sched.execute().expect("HOP should run");
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
+    runtime.execute().expect("HOP should run");
 
     assert_eq!(
         String::from_utf8_lossy(&captured.borrow()),
@@ -196,12 +196,12 @@ fn tail_call_enforces_first_callers_return_contract() {
         "FN (GG) -> Str = (\"hello\")\n\
          FN (FF) -> Number = (GG)",
     );
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FF"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FF"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("FF -> Number tail-calling GG -> Str must fail FF's return contract"),
     };
@@ -275,12 +275,12 @@ fn body_subexpression_slots_recycle_across_calls() {
          ))",
     );
 
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
 
     // Warmup: populates the free-list with the body's transient pool.
-    sched.dispatch_in_scope(parse_one("LOOK (Bit (One null))"), scope);
-    sched.execute().expect("LOOK should run");
-    let after_warmup = sched.len();
+    runtime.dispatch_in_scope(parse_one("LOOK (Bit (One null))"), scope);
+    runtime.execute().expect("LOOK should run");
+    let after_warmup = runtime.len();
 
     let n = 30;
     for i in 1..=n {
@@ -289,10 +289,10 @@ fn body_subexpression_slots_recycle_across_calls() {
         } else {
             "LOOK (Bit (Zero null))"
         };
-        sched.dispatch_in_scope(parse_one(src), scope);
-        sched.execute().expect("LOOK should run");
+        runtime.dispatch_in_scope(parse_one(src), scope);
+        runtime.execute().expect("LOOK should run");
     }
-    let after_batch = sched.len();
+    let after_batch = runtime.len();
 
     assert_eq!(
         captured.borrow().iter().filter(|&&b| b == b'\n').count(),

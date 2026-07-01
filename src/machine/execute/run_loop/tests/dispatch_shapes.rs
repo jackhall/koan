@@ -22,6 +22,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::FrameSet;
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
@@ -35,12 +36,12 @@ fn dispatch_one_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>)
 }
 
 fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().expect("scheduler should succeed");
-    // The frameless top-level terminal outlives the local `sched`; widen the scheduler's `'node`
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().expect("scheduler should succeed");
+    // The frameless top-level terminal outlives the local `runtime`; widen the scheduler's `'node`
     // read to the scope lifetime (see `test_support::extract_terminal`).
-    crate::builtins::test_support::extract_terminal(&sched, scope, id)
+    crate::builtins::test_support::extract_terminal(&runtime, scope, id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
@@ -48,9 +49,9 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
 /// using it only inspect routing, never the call outcome.
 fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
-        Some(obj) => Action::Done(Ok(Carried::Object(
+        Some(obj) => Action::done_resident(Carried::Object(
             ctx.scope.brand().alloc_object(obj.deep_clone()),
-        ))),
+        )),
         None => Action::Done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
         ))),
@@ -74,7 +75,12 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     ));
     let obj = scope.brand().alloc_object(KObject::KFunction(f));
     scope
-        .bind_value("f".to_string(), obj, BindingIndex::BUILTIN)
+        .bind_value(
+            "f".to_string(),
+            obj,
+            BindingIndex::BUILTIN,
+            FrameSet::empty(),
+        )
         .expect("bind_value should succeed");
 }
 
@@ -169,12 +175,12 @@ fn function_value_call_named_args_missing_short_circuits() {
     );
     let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match sched.read_result_with(id, |v| v.summarize()) {
+    let err = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
     };
@@ -536,7 +542,7 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
 fn function_value_call_forward_ref_routes_via_placeholder() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
 
     // The producer is a `FunctionValueCall` on a non-function value: the fast lane
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
@@ -548,17 +554,23 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             "producer_target".to_string(),
             producer_target,
             BindingIndex::BUILTIN,
+            FrameSet::empty(),
         )
         .expect("bind_value should succeed");
-    let producer = sched.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
+    let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);
     scope
-        .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
+        .install_placeholder(
+            "f".to_string(),
+            producer,
+            BindingIndex::BUILTIN,
+            crate::machine::BindKind::Value,
+        )
         .expect("install_placeholder should succeed");
 
-    let f_call_id = sched.dispatch_in_scope(parse_one("f {x = 7}"), scope);
+    let f_call_id = runtime.dispatch_in_scope(parse_one("f {x = 7}"), scope);
 
     reset_resolve_dispatch_entry_count();
-    let _ = sched.execute();
+    let _ = runtime.execute();
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -566,7 +578,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
          before any args-shape inspection — never entering resolve_dispatch",
     );
     assert!(
-        sched.result_error(f_call_id).is_err(),
+        runtime.result_error(f_call_id).is_err(),
         "the head-Placeholder arm must propagate the ready producer's error to the call slot",
     );
 }
@@ -660,9 +672,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(expr_a, scope);
-    let _ = sched.execute();
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(expr_a, scope);
+    let _ = runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "(List MAYBE Number) must route to Keyworded (keyword in body); count was {}",
@@ -671,9 +683,9 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
-    let mut sched = KoanRuntime::new();
-    sched.dispatch_in_scope(expr_b, scope);
-    let _ = sched.execute();
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(expr_b, scope);
+    let _ = runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "(f IF x) must route to Keyworded (keyword in body); count was {}",
@@ -695,12 +707,12 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     crate::builtins::test_support::run(scope, "FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched
+    runtime
         .execute()
         .expect("LET with eager-sub RHS runs cleanly on the stateful driver");
     assert!(
@@ -726,12 +738,12 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         scope,
         "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched
+    runtime
         .execute()
         .expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
     match scope.lookup("out") {
@@ -781,10 +793,12 @@ fn classifier_single_operator_stays_keyworded() {
 fn operator_chain_undeclared_errors_cleanly() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
-    sched.execute().expect("scheduler drains without deadlock");
-    let msg = match sched.read_result_with(id, |v| v.summarize()) {
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let msg = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
         Ok(summary) => {
             panic!("an undeclared operator chain must terminate with an error; got {summary}")
@@ -821,10 +835,12 @@ fn operator_chain_registered_reaches_fold_seam() {
         .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");
 
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("a + b + c"), scope);
-    sched.execute().expect("scheduler drains without deadlock");
-    let msg = match sched.read_result_with(id, |v| v.summarize()) {
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let msg = match runtime.read_result_with(id, |v| v.summarize()) {
         Err(e) => e.to_string(),
         Ok(summary) => panic!("a registered chain reaches the fold seam (an error); got {summary}"),
     };
@@ -1020,12 +1036,12 @@ fn non_callable_list_head_errors() {
     use crate::machine::KErrorKind;
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
+    runtime
         .execute()
         .expect("a non-callable head is slot-terminal, not a fatal execute error");
-    let err = sched
+    let err = runtime
         .result_error(root)
         .expect_err("a non-callable head must finalize the slot with an error");
     match &err.kind {

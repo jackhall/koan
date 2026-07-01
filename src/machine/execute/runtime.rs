@@ -20,15 +20,17 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{
-    Action, Dep, DepPlacement, FinishCtx, FramePlacement,
+    Action, BlockEntry, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
 use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
+use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, FrameSet, KError, NodeId, Scope};
+use crate::witnessed::SealedExtern;
 
-use super::dispatch::DepRequest;
+use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::relocate_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
@@ -128,12 +130,13 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Relocate `producer`'s terminal into `dest` and re-seal it under the set union of every region
-    /// it reaches and `dest`'s `dest_witness` — routing the merge-form
+    /// it reaches and `dest`'s own witness — routing the merge-form
     /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), so the relocation re-anchors
     /// with **no fabricated lifetime** at this call site. The spine is copied into `dest` natively at
     /// the merge brand; the surviving closure / module borrows ride the producer's own witness, folded
-    /// into the result set by the merge. `dest_witness` pins `dest`'s backing — the consuming slot's
-    /// frame for a `Forward`-ready pull, the empty set for the run region a drained root re-homes into.
+    /// into the result set by the merge. `dest` arrives as a witnessed carrier — its witness pins its
+    /// own backing: the consuming slot's frame for a `Forward`-ready pull (`yoke`d there), the empty
+    /// set for the run region a drained root re-homes into (externally pinned).
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -142,10 +145,8 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: crate::machine::core::RegionBrand<'_>,
-        dest_witness: FrameSet,
+        dest: Witnessed<RegionRefFamily, FrameSet>,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
-        let dest = Witnessed::<RegionRefFamily, FrameSet>::new(dest, dest_witness);
         self.sched
             .transfer_lifted(producer, dest, |value, region, _brand| {
                 relocate_carried(value, region)
@@ -199,12 +200,10 @@ impl<'run> KoanRuntime<'run> {
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
 pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
     match action {
-        // Terminal: the value the builtin already computed (scope was mutated in place first).
-        Action::Done(Ok(c)) => Outcome::Done(Ok(c)),
-        Action::Done(Err(e)) => Outcome::Done(Err(e)),
-        // Object-family terminal: the carrier the builtin built inside its witness closure rides
-        // straight through — `finalize` seals it, no asserted-co-location bundle.
-        Action::DoneWitnessed(carrier) => Outcome::DoneWitnessed(carrier),
+        // Terminal: the witnessed carrier (or error) the builtin already computed inside its witness
+        // closure (scope was mutated in place first) rides straight through — `finalize` seals it, no
+        // asserted-co-location bundle.
+        Action::Done(result) => Outcome::Done(result),
 
         Action::Tail {
             leading,
@@ -215,13 +214,13 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
         } => {
             // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
             // frameless continuation keeps the slot's block at index `0`.
-            let body_index = if block_entry.is_some() {
-                leading.len() + 1
-            } else {
+            let body_index = if matches!(block_entry, BlockEntry::None) {
                 0
+            } else {
+                leading.len() + 1
             };
             if leading.is_empty() {
-                // No leading statements: tail-replace directly into the arm body.
+                // No leading statements: tail-replace directly into the tail body.
                 return Outcome::Continue {
                     work: super::dispatch::decide(tail),
                     frame: frame_placement,
@@ -230,31 +229,55 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     body_index,
                 };
             }
-            // Leading statements become owned siblings in the arm's frame (one `BodyBlock` dep);
-            // the slot parks on them so they run — and cascade-free — before the tail continues,
-            // keeping the side-effect order and the frame uniqueness TCO reuse needs. An arm that
-            // carries leading statements always mints its own `FreshChild` frame (`branch_walk`),
-            // so the placement resolves to a concrete cart here without a scheduler write.
-            let frame = match frame_placement {
-                FramePlacement::FreshChild { frame } => frame,
-                _ => unreachable!(
-                    "an action Tail with leading statements always carries a FreshChild frame"
-                ),
+            // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
+            // parks on them so they run — and cascade-free — before the tail continues, keeping the
+            // side-effect order and (for a fresh frame) the uniqueness TCO reuse needs. Two block
+            // shapes carry leading statements: a `FreshChild` frame whose own scope is the block
+            // (MATCH / TRY arms — fan out via `dispatch_body`), or an `Inherit` overlay entered
+            // without a fresh frame (USING — fan out via `enter_block`). The tail re-enters the same
+            // block: a `FreshChild` re-installs the frame, an `Inherit` keeps the call-site cart.
+            let overlay = match &block_entry {
+                BlockEntry::Overlay(scope) => Some(*scope),
+                _ => None,
             };
-            let body_frame = frame.clone();
+            let (body_block, continue_frame): (DepRequest<'step>, FramePlacement<'step>) =
+                match frame_placement {
+                    FramePlacement::FreshChild { frame } => {
+                        let body_frame = frame.clone();
+                        (
+                            DepRequest::BodyBlock {
+                                statements: leading,
+                                placement: BodyPlacement::Frame(frame),
+                            },
+                            FramePlacement::FreshChild { frame: body_frame },
+                        )
+                    }
+                    FramePlacement::Inherit => {
+                        let overlay = overlay.expect(
+                            "a leading-carrying Inherit tail carries an overlay block (USING)",
+                        );
+                        (
+                            DepRequest::BodyBlock {
+                                statements: leading,
+                                placement: BodyPlacement::Overlay(overlay),
+                            },
+                            FramePlacement::Inherit,
+                        )
+                    }
+                    FramePlacement::ReuseReserve { .. } => unreachable!(
+                        "a leading-carrying tail is a FreshChild frame or an Inherit overlay"
+                    ),
+                };
             let finish: DepFinish<'step> =
                 Box::new(move |_view, _results, _carriers| Outcome::Continue {
                     work: super::dispatch::decide(tail),
-                    frame: FramePlacement::FreshChild { frame: body_frame },
+                    frame: continue_frame,
                     contract,
                     block_entry,
                     body_index,
                 });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock {
-                    frame,
-                    statements: leading,
-                }],
+                deps: vec![body_block],
                 park_count: 0,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
@@ -321,10 +344,9 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
 /// graph in response to a dispatch decide.
 impl<'run> KoanRuntime<'run> {
     /// Realize a single-statement dispatch dep at `placement` to its producer slot. `OwnScope`
-    /// re-dispatches against the executing slot's own scope; `ActiveFrame` inherits the ambient
-    /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
-    /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
-    /// and [`Self::dispatch_body`].
+    /// re-dispatches against the executing slot's own scope; `InScope` enters a fresh
+    /// **single-statement** block (so an inner `LET` stays local). A multi-statement body splits
+    /// separately — see the `InScope` arm of [`Self::apply_outcome`] and [`Self::dispatch_body`].
     fn realize_dispatch<'a>(
         &mut self,
         expr: KExpression<'a>,
@@ -332,10 +354,6 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeId {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
-            DepPlacement::ActiveFrame => {
-                let chain = self.ambient_or_detached_chain();
-                self.dispatch_in_active_frame(expr, chain)
-            }
             DepPlacement::InScope(scope) => self
                 .enter_block(scope.id, vec![expr], scope)
                 .into_iter()
@@ -387,7 +405,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
-    /// (a `Done` / `DoneWitnessed` return, or a tail `Continue` retiring this iteration), so the scope
+    /// (a `Done` return, or a tail `Continue` retiring this iteration), so the scope
     /// takes no further binds and its reach-set seals. A `Yoked` sub-expression slot owns no frame
     /// (its `owner` never names this slot), so its `Done` is a no-op here.
     fn close_owned_scope(&self, idx: usize) {
@@ -405,19 +423,17 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep<'step> {
+    ) -> NodeStep {
         match outcome {
-            // The terminal stays live at `'step`; `run_step` contract-checks it (value and contract
-            // share `'step`) and only then bundles it with its witness set and finalizes.
-            Outcome::Done(output) => {
+            // The value terminal: a construction carrier already naming its reach rides straight
+            // through to the Done boundary, where the workload hook seals it (a declared-return
+            // re-stamp aside, untouched). An error carries no value and finalizes bare.
+            Outcome::Done(result) => {
                 self.close_owned_scope(idx);
-                NodeStep::Done(output)
-            }
-            // The object-family carrier rides straight through to the Done boundary, where the
-            // workload hook seals it (a declared-return re-stamp aside, untouched).
-            Outcome::DoneWitnessed(carrier) => {
-                self.close_owned_scope(idx);
-                NodeStep::DoneWitnessed(carrier)
+                match result {
+                    Ok(carrier) => NodeStep::DoneWitnessed(carrier),
+                    Err(error) => NodeStep::Error(error),
+                }
             }
             Outcome::Continue {
                 work,
@@ -439,16 +455,29 @@ impl<'run> KoanRuntime<'run> {
                 if let Some(installed) = frame.as_ref() {
                     installed.set_owner(NodeId(idx));
                 }
-                // Decide the chain reshape from the still-live contract variant, then erase the
-                // contract — so the `Replace` step carries no `'run` (the variant is frozen into the
-                // lifetime-free [`ChainOp`]). The run loop assembles the chain against the post-step
-                // frame and keeps the slot's prior contract first over `contract`.
-                let chain = ChainOp::decide(block_entry, contract.as_ref(), body_index);
+                // Decide the chain reshape from the block scope id + the still-live contract variant,
+                // then erase the contract — so the `Replace` step carries no `'run` (the variant is
+                // frozen into the lifetime-free [`ChainOp`]). The run loop assembles the chain against
+                // the post-step frame and keeps the slot's prior contract first over `contract`. An
+                // `Overlay` block entry also rides the tail slot's scope: erased to a cart-witnessed
+                // carrier here (where the overlay is still live) so the frameless `Replace` installs
+                // it as the slot's `YokedChild` — the frameless analogue of the `Yoked` a framed tail
+                // re-projects from its own cart.
+                let (block_scope_id, overlay_scope) = match block_entry {
+                    BlockEntry::None => (None, None),
+                    BlockEntry::FrameScope(id) => (Some(id), None),
+                    BlockEntry::Overlay(overlay) => (
+                        Some(overlay.id),
+                        Some(SealedExtern::<ScopeRefFamily>::erase(overlay)),
+                    ),
+                };
+                let chain = ChainOp::decide(block_scope_id, contract.as_ref(), body_index);
                 NodeStep::Replace {
                     work,
                     frame,
                     contract: contract.map(ErasedContract::erase),
                     chain,
+                    overlay_scope,
                 }
             }
             Outcome::ParkThenContinue {
@@ -465,8 +494,8 @@ impl<'run> KoanRuntime<'run> {
                 for dep in deps {
                     match dep {
                         // An `InScope` body fans out one producer per statement (multi-statement
-                        // split); `OwnScope` / `ActiveFrame` realize as a single producer via the
-                        // shared [`Self::realize_dispatch`].
+                        // split); `OwnScope` realizes as a single producer via the shared
+                        // [`Self::realize_dispatch`].
                         DepRequest::Dispatch {
                             expr,
                             placement: DepPlacement::InScope(scope),
@@ -486,9 +515,18 @@ impl<'run> KoanRuntime<'run> {
                         DepRequest::RecordLit(fields) => {
                             dep_ids.push(self.schedule_record_literal(fields))
                         }
-                        DepRequest::BodyBlock { frame, statements } => {
-                            dep_ids.extend(self.dispatch_body(&frame, statements))
-                        }
+                        // A body block fans out one owned producer per statement: into a fresh
+                        // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
+                        // caller-allocated overlay via the same `enter_block` fan-out the leading
+                        // statements of an `InScope` body use (USING).
+                        DepRequest::BodyBlock {
+                            statements,
+                            placement: BodyPlacement::Frame(frame),
+                        } => dep_ids.extend(self.dispatch_body(&frame, statements)),
+                        DepRequest::BodyBlock {
+                            statements,
+                            placement: BodyPlacement::Overlay(overlay),
+                        } => dep_ids.extend(self.enter_block(overlay.id, statements, overlay)),
                         DepRequest::Existing(id) => dep_ids.push(id),
                     }
                 }
@@ -522,7 +560,7 @@ impl<'run> KoanRuntime<'run> {
                     ),
                     // The construction-inversion sibling: same realized deps and edges, but the
                     // continuation folds the resolved terminals (value + reach) into one witnessed
-                    // carrier and seals as `DoneWitnessed` (see [`short_circuit_witnessed`]).
+                    // carrier and seals as `Done(Ok)` (see [`short_circuit_witnessed`]).
                     Continuation::FinishWitnessed(finish) => NodeWork::new(
                         dep_ids,
                         park_count,
@@ -549,6 +587,7 @@ impl<'run> KoanRuntime<'run> {
                     frame: None,
                     contract: None,
                     chain: ChainOp::Unchanged,
+                    overlay_scope: None,
                 }
             }
             Outcome::Forward(producer) => {

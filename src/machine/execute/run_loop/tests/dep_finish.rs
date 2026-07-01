@@ -17,9 +17,9 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     use crate::machine::execute::DepFinish;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
-    let dep_a = sched.dispatch_in_scope(let_expr("ca", 7.0), scope);
-    let dep_b = sched.dispatch_in_scope(let_expr("cb", 11.0), scope);
+    let mut runtime = KoanRuntime::new();
+    let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
+    let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
     let finish: DepFinish = Box::new(|_sched, results, _carriers| {
         let a = match results[0] {
             Carried::Object(KObject::Number(n)) => *n,
@@ -41,11 +41,11 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             .current_scope()
             .brand()
             .alloc_object(KObject::KString(format!("{a}+{b}")));
-        Outcome::Done(Ok(Carried::Object(allocated)))
+        Outcome::done_resident(Carried::Object(allocated))
     });
-    let dep_finish_id = sched.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
-    sched.execute().unwrap();
-    assert!(sched
+    let dep_finish_id = runtime.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
+    runtime.execute().unwrap();
+    assert!(runtime
         .read_result_with(
             dep_finish_id,
             |v| matches!(v.object(), KObject::KString(s) if s == "7+11")
@@ -63,14 +63,14 @@ fn dep_finish_short_circuits_on_dep_error() {
     use std::rc::Rc;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
     let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
-    let dep_ok = sched.add(mk_dispatch(), scope);
-    let dep_err = sched.add(mk_dispatch(), scope);
-    let store = sched.scheduler_mut();
+    let dep_ok = runtime.add(mk_dispatch(), scope);
+    let dep_err = runtime.add(mk_dispatch(), scope);
+    let store = runtime.scheduler_mut();
     store.clear_node(dep_ok);
     store.clear_node(dep_err);
     let _ = store.pop_next();
@@ -88,13 +88,13 @@ fn dep_finish_short_circuits_on_dep_error() {
     let invoked_clone = Rc::clone(&invoked);
     let finish: DepFinish = Box::new(move |_sched, _results, _carriers| {
         invoked_clone.set(true);
-        Outcome::Done(Ok(Carried::Object(value)))
+        Outcome::done_resident(Carried::Object(value))
     });
-    let dep_finish_id = sched.add_dep_finish(vec![dep_ok, dep_err], vec![], scope, finish);
-    sched.execute().unwrap();
+    let dep_finish_id = runtime.add_dep_finish(vec![dep_ok, dep_err], vec![], scope, finish);
+    runtime.execute().unwrap();
 
     assert!(!invoked.get(), "finish must not run when a dep errored");
-    let result = sched.result_error(dep_finish_id);
+    let result = runtime.result_error(dep_finish_id);
     let err = match result {
         Err(e) => e.clone(),
         Ok(()) => panic!("combine should have errored"),
@@ -121,7 +121,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
                 .scope
                 .brand()
                 .alloc_object(KObject::KString("from-combine".into()));
-            Action::Done(Ok(Carried::Object(v)))
+            Action::done_resident(Carried::Object(v))
         });
         Action::AwaitDeps {
             deps: Vec::new(),
@@ -141,16 +141,16 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         body,
     );
 
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(
         KExpression::new(vec![crate::source::Spanned::bare(ExpressionPart::Keyword(
             "DEFERTEST".into(),
         ))]),
         scope,
     );
-    sched.execute().unwrap();
+    runtime.execute().unwrap();
     assert!(
-        sched
+        runtime
             .read_result_with(
                 id,
                 |v| matches!(v.object(), KObject::KString(s) if s == "from-combine")
@@ -163,25 +163,25 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
 #[test]
 fn tail_call_reuses_node_slot_in_place() {
     // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
-    // than spawning a fresh one (verified via sched.len() == 1 below).
+    // than spawning a fresh one (verified via runtime.len() == 1 below).
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
         .expect("parse should succeed");
     assert_eq!(exprs.len(), 1);
-    let id = sched.dispatch_in_scope(exprs.into_iter().next().unwrap(), root);
+    let id = runtime.dispatch_in_scope(exprs.into_iter().next().unwrap(), root);
 
-    sched.execute().unwrap();
+    runtime.execute().unwrap();
 
-    assert!(sched
+    assert!(runtime
         .read_result_with(
             id,
             |v| matches!(v.object(), KObject::KString(s) if s == "hi")
         )
         .expect("value"));
     assert_eq!(
-        sched.len(),
+        runtime.len(),
         1,
         "tail-call slot reuse = the MATCH's original slot should have been rewritten \
          to evaluate the matched branch's body, not allocate a new slot",

@@ -21,12 +21,12 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse("LET hello = 1").unwrap();
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched.execute().unwrap();
+    runtime.execute().unwrap();
     assert!(scope.bindings().placeholders().get("hello").is_none());
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
 }
@@ -43,13 +43,13 @@ fn let_t_cycle_errors() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse("LET Ty = Ty").unwrap();
-    let ids = sched.enter_block(scope.id, exprs, scope);
-    sched
+    let ids = runtime.enter_block(scope.id, exprs, scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
+    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -74,13 +74,13 @@ fn let_type_class_with_non_type_value_errors() {
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let region = FrameStorage::run_root();
         let scope = default_scope(&region, Box::new(std::io::sink()));
-        let mut sched = KoanRuntime::new();
+        let mut runtime = KoanRuntime::new();
         let exprs = parse(src).unwrap();
-        let id = sched.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
-        sched
+        let id = runtime.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
+        runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match sched.read_result_with(id, |v| format!("{:?}", v.ktype())) {
+        match runtime.read_result_with(id, |v| format!("{:?}", v.ktype())) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
@@ -100,16 +100,16 @@ fn let_type_class_with_type_value_still_binds() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse("LET Foo = Number").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(e, scope));
     }
-    sched
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.result_error(ids[0]);
+    let res = runtime.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
         .resolve_type("Foo")
@@ -125,19 +125,19 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse("LET foo = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(e, scope));
     }
-    sched
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.result_error(ids[0]);
+    let res = runtime.result_error(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
-    let (entry, _) = data.get("foo").expect("expected binding 'foo'");
+    let (entry, _, _) = data.get("foo").expect("expected binding 'foo'");
     assert!(
         matches!(entry, KObject::Number(n) if *n == 1.0),
         "expected Number(1.0), got {:?}",
@@ -154,16 +154,16 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(e, scope));
     }
-    sched
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
+    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),
@@ -189,13 +189,13 @@ fn let_aliases_struct_preserves_type_identity() {
          LET Pt = Point",
     );
     let types = scope.bindings().types();
-    let (pt, _): (&KType, _) = types
+    let pt: &KType = types
         .get("Pt")
-        .copied()
+        .map(|(kt, _, _)| *kt)
         .expect("Pt should be in bindings.types after alias");
-    let (point, _): (&KType, _) = types
+    let point: &KType = types
         .get("Point")
-        .copied()
+        .map(|(kt, _, _)| *kt)
         .expect("Point should be in bindings.types");
     assert_eq!(*pt, *point, "alias must preserve type identity field-wise");
 }

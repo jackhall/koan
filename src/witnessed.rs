@@ -181,8 +181,9 @@ impl<T: Reattachable> Copy for Erased<T> where T::At<'static>: Copy {}
 ///
 /// An implementor asserts that, for as long as a value of `Self` is held, the storage the carrier's
 /// erased pointee refers to stays live and at a fixed address. A `Rc<F>` qualifies (it owns an `F`
-/// at a stable heap address — a [`StableDeref`]); a frameless terminal whose pointee is backed by a
-/// region that outlives the carrier qualifies via [`Option`] (`None`).
+/// at a stable heap address — a [`StableDeref`]). A witness that pins *nothing* — the empty element
+/// of a set witness — also qualifies for a frameless terminal, whose pointee is backed by storage (a
+/// run-global region) that outlives the carrier, so no held pin is required.
 pub unsafe trait Witness {}
 
 // SAFETY: `Rc<F>` is `StableDeref` — the `F` it owns lives at a fixed heap address for the whole
@@ -193,11 +194,6 @@ const _: fn() = || {
     fn assert_stable_deref<P: StableDeref>() {}
     let _ = assert_stable_deref::<Rc<()>>;
 };
-
-// SAFETY: `Some(w)` pins through the inner witness `w`; `None` carries no witness because its
-// pointee is backed by a region that outlives the carrier (the frameless / run-region terminal),
-// so no held pin is required. Either way the carrier's pointee outlives a read bounded by `&self`.
-unsafe impl<W: Witness> Witness for Option<W> {}
 
 /// A [`Witness`] that exposes the region it pins, so a value built *solely* from that region is
 /// co-located with the witness by construction. This is the seam [`Witnessed::yoke`] routes: the
@@ -238,6 +234,23 @@ pub unsafe trait MergeWitness: Witness + Sized {
     fn merge(left: &Self, right: &Self) -> Option<Self>;
 }
 
+/// A set witness a single-region [`WitnessRegion`] widens into: it holds the single witness as a
+/// member, so it pins (at least) that witness's region. The boundary where a
+/// [`yoke`](Witnessed::yoke)ed leaf joins the [`merge`](Witnessed::merge) / set world — kept distinct
+/// from `yoke` so yoke's *source == bundle* identity (the carrier is witnessed by the very witness it
+/// sourced its region from) stays intact: `yoke` mints one region and witnesses by it; widening that
+/// single witness into a set is this separate [`Witnessed::into_set`] lift, not a parameter of the mint.
+///
+/// # Safety
+///
+/// `singleton(s)` must return a witness that pins `s`'s region for as long as it is held — by
+/// retaining `s`, or an equivalent pin. Holding the result therefore keeps live every region the
+/// widened single-region carrier reaches (exactly the one `s` pinned).
+pub unsafe trait SetWitness<S: WitnessRegion>: Witness {
+    /// The set witness holding `single` as its sole member.
+    fn singleton(single: S) -> Self;
+}
+
 /// An erased carrier bundled with the liveness [`Witness`] that keeps its pointee alive — the
 /// consolidation of the old `(Erased<T>, witness)` pair into one value, so the witness-pins-the-value
 /// relationship is structural. Reads go through [`Self::with`]; an advance/transform that may
@@ -250,35 +263,27 @@ pub struct Witnessed<T: Reattachable, W> {
 }
 
 impl<T: Reattachable, W: Witness> Witnessed<T, W> {
-    /// Bundle a live carrier with the witness that pins it, erasing the carrier for storage. Safe:
-    /// the erase cannot fabricate a lifetime, and the witness records the liveness obligation the
-    /// later re-anchor relies on.
+    /// Bundle an **already-erased** carrier with its witness. The `'static`-erased input carries no
+    /// lifetime, so it leaves no input lifetime for inference to pick: it is the constructor for a
+    /// `Result::map(Erased::erase)` pipeline, where threading the live value's lifetime through a
+    /// closure would otherwise let it default to `'static`.
     ///
     /// Co-location — that the witness pins *this* value's references — is **caller-asserted** here: the
-    /// value and witness arrive independently. Reserve `new` for carriers whose co-location is already
-    /// structural (lifetime-free carriers, or a value already living in a region the witness pins);
-    /// prefer [`Self::yoke`], which sources the carrier from the witness's region and so discharges
-    /// co-location by construction.
-    pub fn new(value: T::At<'_>, witness: W) -> Self {
-        Self::from_erased(Erased::erase(value), witness)
-    }
-
-    /// Bundle an **already-erased** carrier with its witness. The `'static`-erased input carries no
-    /// lifetime, so unlike [`Self::new`] it leaves no input lifetime for inference to pick: it is the
-    /// constructor for a `Result::map(Erased::erase)` pipeline, where threading the live value's
-    /// lifetime through a closure would otherwise let it default to `'static`.
+    /// value and witness arrive independently, so this is the crate-private substrate primitive, never
+    /// a production construction path. Every production carrier is born co-located instead — via
+    /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
+    /// region-pure value under the empty witness), or [`merge`](Self::merge) (folding two co-located
+    /// carriers) — so no site pairs an arbitrary value with an arbitrary witness.
     pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
 
     /// Bundle a **region-pure** value under the default (empty / pins-nothing) witness — the honest
-    /// constructor for a value built inside an alloc brand that references no foreign region. Where
-    /// [`Self::new`] pairs an *arbitrary* value with an *arbitrary* witness (co-location asserted in
-    /// prose), `resident` fixes the witness to `W::default()` — the empty set for a [`FrameSet`]-style
-    /// set witness, `None` for an [`Option`] witness — so it **cannot** pair a value with a *wrong*
-    /// non-empty witness; the only obligation it carries is that `value`'s foreign reach is genuinely
-    /// empty. It is what lets the brand-confined region allocator return a witnessed carrier without
-    /// reaching for `new`'s open-ended assertion.
+    /// constructor for a value built inside an alloc brand that references no foreign region. `resident`
+    /// fixes the witness to `W::default()` — the empty set for a [`FrameSet`]-style set witness — so it
+    /// **cannot** pair a value with a *wrong* non-empty witness; the only obligation it carries is that
+    /// `value`'s foreign reach is genuinely empty. It is what lets the brand-confined region allocator
+    /// return a witnessed carrier without an open-ended co-location assertion.
     ///
     /// Because the default witness pins nothing, the carrier is a **within-step transient**: sound only
     /// while the active frame pins its region externally, until the producer is folded into the witness
@@ -286,8 +291,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// *references* another region is the [`yoke`](Self::yoke) / [`merge`](Self::merge) path, which
     /// sources or folds that region's pin instead.
     ///
-    /// Safe for the same reason as [`Self::new`]: the erase cannot fabricate a lifetime. `W::default()`
-    /// is the pins-nothing element of the witness type (the empty set / `None`).
+    /// Safe because the erase cannot fabricate a lifetime, and `W::default()` is the pins-nothing
+    /// element of the witness type (the empty set).
     pub(crate) fn resident(value: T::At<'_>) -> Self
     where
         W: Default,
@@ -313,25 +318,26 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     ///
     /// ```compile_fail
     /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
-    /// use std::rc::Rc;
     ///
     /// struct RefFamily;
     /// // SAFETY: `&'r u32` is one type generic only in `'r`.
     /// unsafe impl Reattachable for RefFamily {
     ///     type At<'r> = &'r u32;
     /// }
+    /// // A local witness owning its region — the `Vec`'s heap buffer stays at a fixed address
+    /// // across the witness's move, so a value built from `region()` stays pinned.
     /// struct Cart(Vec<u32>);
-    /// // SAFETY: `Rc<Cart>` is `StableDeref`; its region is the owned `Vec`.
-    /// unsafe impl Witness for Rc<Cart> {}
-    /// unsafe impl WitnessRegion for Rc<Cart> {
+    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
+    /// unsafe impl Witness for Cart {}
+    /// unsafe impl WitnessRegion for Cart {
     ///     type Region = [u32];
     ///     fn region(&self) -> &[u32] { &self.0 }
     /// }
     ///
     /// let outside: u32 = 7;
-    /// let cart: Rc<Cart> = Rc::new(Cart(vec![1, 2, 3]));
+    /// let cart = Cart(vec![1, 2, 3]);
     /// // Try to yoke a borrow of `outside` (not region-derived) — rejected by the `for<'b>` brand.
-    /// let _: Witnessed<RefFamily, Rc<Cart>> = Witnessed::yoke(cart, |_region| &outside);
+    /// let _: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |_region| &outside);
     /// ```
     pub fn yoke<F>(witness: W, f: F) -> Self
     where
@@ -356,19 +362,24 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// because `R` cannot mention the universally-quantified `'b`.
     ///
     /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Witnessed};
+    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
     /// use std::cell::Cell;
-    /// use std::rc::Rc;
     ///
     /// struct InvFamily;
     /// // SAFETY: `Cell<&'r u32>` is one type generic only in `'r`.
     /// unsafe impl Reattachable for InvFamily {
     ///     type At<'r> = Cell<&'r u32>;
     /// }
+    /// struct Cart(Vec<u32>);
+    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
+    /// unsafe impl Witness for Cart {}
+    /// unsafe impl WitnessRegion for Cart {
+    ///     type Region = [u32];
+    ///     fn region(&self) -> &[u32] { &self.0 }
+    /// }
     ///
-    /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
-    /// let w: Witnessed<InvFamily, Rc<Vec<u32>>> =
-    ///     Witnessed::new(Cell::new(&backing[0]), Rc::clone(&backing));
+    /// let cart = Cart(vec![42]);
+    /// let w: Witnessed<InvFamily, Cart> = Witnessed::yoke(cart, |region| Cell::new(&region[0]));
     /// // Try to smuggle a long-lived `&u32` OUT of `with` — rejected by the `for<'b>` brand.
     /// let escaped: &u32 = w.with(|c| c.get());
     /// drop(w);
@@ -396,17 +407,23 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// to be read after the witness drops — the `for<'b>` quantifier rejects it at compile time.
     ///
     /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Witnessed};
-    /// use std::rc::Rc;
+    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
     ///
     /// struct RefFamily;
     /// // SAFETY: `&'r u32` is one type generic only in `'r`.
     /// unsafe impl Reattachable for RefFamily {
     ///     type At<'r> = &'r u32;
     /// }
+    /// struct Cart(Vec<u32>);
+    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
+    /// unsafe impl Witness for Cart {}
+    /// unsafe impl WitnessRegion for Cart {
+    ///     type Region = [u32];
+    ///     fn region(&self) -> &[u32] { &self.0 }
+    /// }
     ///
-    /// let backing: Rc<Vec<u32>> = Rc::new(vec![5]);
-    /// let w: Witnessed<RefFamily, Rc<Vec<u32>>> = Witnessed::new(&backing[0], Rc::clone(&backing));
+    /// let cart = Cart(vec![5]);
+    /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
     /// let mut stolen: Option<&u32> = None;
     /// // Try to capture the branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
     /// let _ = w.map::<RefFamily>(|r, _brand| {
@@ -449,25 +466,31 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// witness pins the sealed carrier's backing thereafter.
     ///
     /// ```compile_fail
-    /// use koan::witnessed::{MergeWitness, Reattachable, Witness, Witnessed};
+    /// use koan::witnessed::{MergeWitness, Reattachable, Witness, WitnessRegion, Witnessed};
     /// use std::marker::PhantomData;
-    /// use std::rc::Rc;
     ///
     /// struct RefFamily;
     /// // SAFETY: `&'r u32` is one type generic only in `'r`.
     /// unsafe impl Reattachable for RefFamily {
     ///     type At<'r> = &'r u32;
     /// }
-    /// // SAFETY: `Rc<Vec<u32>>` is `StableDeref`; ancestry is trivial (every cart pins itself), so
-    /// // the combined witness is just a clone of the left operand.
-    /// unsafe impl MergeWitness for Rc<Vec<u32>> {
-    ///     fn merge(left: &Self, _right: &Self) -> Option<Self> { Some(Rc::clone(left)) }
+    /// struct Cart(Vec<u32>);
+    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
+    /// unsafe impl Witness for Cart {}
+    /// unsafe impl WitnessRegion for Cart {
+    ///     type Region = [u32];
+    ///     fn region(&self) -> &[u32] { &self.0 }
+    /// }
+    /// // SAFETY: ancestry is trivial (every cart pins itself), so the combined witness is just a
+    /// // clone of the left operand's region.
+    /// unsafe impl MergeWitness for Cart {
+    ///     fn merge(left: &Self, _right: &Self) -> Option<Self> { Some(Cart(left.0.clone())) }
     /// }
     ///
-    /// let a: Rc<Vec<u32>> = Rc::new(vec![1]);
-    /// let b: Rc<Vec<u32>> = Rc::new(vec![2]);
-    /// let wa: Witnessed<RefFamily, Rc<Vec<u32>>> = Witnessed::new(&a[0], Rc::clone(&a));
-    /// let wb: Witnessed<RefFamily, Rc<Vec<u32>>> = Witnessed::new(&b[0], Rc::clone(&b));
+    /// let a = Cart(vec![1]);
+    /// let b = Cart(vec![2]);
+    /// let wa: Witnessed<RefFamily, Cart> = Witnessed::yoke(a, |region| &region[0]);
+    /// let wb: Witnessed<RefFamily, Cart> = Witnessed::yoke(b, |region| &region[0]);
     /// let mut stolen: Option<&u32> = None;
     /// // Try to capture a branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
     /// let _ = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| {
@@ -543,7 +566,10 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// result is `T::At<'self>`, which the borrow checker keeps inside the `&self` borrow over which
     /// the bundled witness holds the pointee live. `At<'static>: Copy` copies the erased carrier out
     /// before re-anchoring.
-    pub fn read(&self) -> T::At<'_>
+    ///
+    /// Module-private: the sole caller is [`Sealed::open`], the rank-2 access verb, so the
+    /// borrow-bounded escape here is never a public surface.
+    fn read(&self) -> T::At<'_>
     where
         T::At<'static>: Copy,
     {
@@ -568,11 +594,23 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         }
     }
 
-    /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
-    /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive
-    /// while the value is copied into the consumer's frame.
+    /// The bundled witness — the set of producer frame `Rc`s that pin the carrier's pointee. Cloned
+    /// out by the consumer-pull lift to keep the backing region alive while the value is copied into
+    /// the consumer's frame.
     pub fn witness(&self) -> &W {
         &self.witness
+    }
+}
+
+impl<T: Reattachable, S: WitnessRegion> Witnessed<T, S> {
+    /// Lift a freshly-[`yoke`](Self::yoke)d single-region carrier into the set witness the aggregate
+    /// accumulates in — the boundary where a minted leaf joins the [`merge`](Self::merge) / set world.
+    /// The value is untouched; only the witness type widens (`S` → `W`), the pin preserved by
+    /// [`SetWitness::singleton`]. Kept distinct from `yoke` so yoke's *source == bundle* identity is
+    /// not diluted by a widening parameter: `yoke` mints one region and witnesses by it; widening that
+    /// single witness into a set is this lift.
+    pub fn into_set<W: SetWitness<S>>(self) -> Witnessed<T, W> {
+        Witnessed::from_erased(self.value, W::singleton(self.witness))
     }
 }
 
@@ -609,18 +647,24 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// [`Witnessed::map`] guards.
     ///
     /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Sealed, Witnessed};
-    /// use std::rc::Rc;
+    /// use koan::witnessed::{Reattachable, Sealed, Witness, WitnessRegion, Witnessed};
     ///
     /// struct RefFamily;
     /// // SAFETY: `&'r u32` is one type generic only in `'r`.
     /// unsafe impl Reattachable for RefFamily {
     ///     type At<'r> = &'r u32;
     /// }
+    /// struct Cart(Vec<u32>);
+    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
+    /// unsafe impl Witness for Cart {}
+    /// unsafe impl WitnessRegion for Cart {
+    ///     type Region = [u32];
+    ///     fn region(&self) -> &[u32] { &self.0 }
+    /// }
     ///
-    /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
-    /// let sealed: Sealed<RefFamily, Rc<Vec<u32>>> =
-    ///     Sealed::seal(Witnessed::new(&backing[0], Rc::clone(&backing)));
+    /// let cart = Cart(vec![42]);
+    /// let sealed: Sealed<RefFamily, Cart> =
+    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
     /// // Try to smuggle the branded value OUT of `open` — rejected by the `for<'b>` brand.
     /// let escaped: &u32 = sealed.open(|live| live);
     /// drop(sealed);
@@ -666,7 +710,7 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// Duplicate the sealed carrier — copy the erased value (a `Copy` carrier family) and clone the
     /// witness — leaving this seal intact. The consumer-pull lift hands each construction finish a
     /// duplicate of the producer slot's own carrier (so the dep arrives **witnessed**, its reach named,
-    /// rather than re-wrapped via an asserted [`Witnessed::new`]); the producer keeps its terminal for
+    /// rather than re-wrapped by pairing the value with a separately-asserted witness); the producer keeps its terminal for
     /// other consumers. Routes [`Witnessed::duplicate`], so it adds no `unsafe`.
     pub(crate) fn duplicate(&self) -> Self
     where
@@ -678,10 +722,9 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         }
     }
 
-    /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
-    /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive while
-    /// the value is copied into the consumer's frame. Hands back the witness, not the value, so it
-    /// does not weaken opacity.
+    /// The bundled witness — the set of producer frame `Rc`s that pin the carrier's pointee. Cloned
+    /// out by the consumer-pull lift to keep the backing region alive while the value is copied into
+    /// the consumer's frame. Hands back the witness, not the value, so it does not weaken opacity.
     pub fn witness(&self) -> &W {
         self.inner.witness()
     }
@@ -829,4 +872,3 @@ pub struct OptionOf<T>(PhantomData<T>);
 unsafe impl<T: Reattachable> Reattachable for OptionOf<T> {
     type At<'r> = Option<T::At<'r>>;
 }
-
