@@ -28,7 +28,8 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    MergeWitness, Reattachable, Region, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    MergeWitness, Reattachable, Region, SetWitness, StorageProfile, Stored, Witness, WitnessRegion,
+    Witnessed,
 };
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -278,17 +279,18 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     }
 }
 
-/// The Koan witnessed-allocation entry that takes a witness rather than a region — the `yoke`
-/// primitive — plus the region identity/read queries. Every co-located `alloc_*` lives on
-/// [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare `&KoanRegion` keeps only the
-/// identity surface here.
+/// The Koan witnessed-allocation entry that takes an **owner** frame `Rc` rather than a region — it
+/// `yoke`s into the owner's own region under the single-owner [`WitnessRegion`] witness, then lifts to
+/// the [`FrameSet`] the aggregate world accumulates in — plus the region identity/read queries. Every
+/// co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
+/// `&KoanRegion` keeps only the identity surface here.
 impl Region<KoanStorageProfile> {
-    /// The alloc-witnessed construction inversion's region-pure primitive: build a value into the
-    /// witness frame's region *inside* the `yoke` closure, returning it bundled with `witness` (the set
-    /// of regions it reaches) so it is co-located by construction rather than paired with an asserted
-    /// witness. The closure receives a per-construction [`RegionBrand`] confined to the `for<'b>` brand
-    /// (it cannot escape the closure), so it allocates through the same handle as every other site. One
-    /// primitive for both value families — the closure returns a `Carried::Object` (an
+    /// The alloc-witnessed construction inversion's region-pure primitive: build a value into
+    /// `owner`'s region *inside* the `yoke` closure, returning it bundled with the [`FrameSet`]
+    /// singleton pinning `owner` so it is co-located by construction rather than paired with an
+    /// asserted witness. The closure receives a per-construction [`RegionBrand`] confined to the
+    /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same handle as every
+    /// other site. One primitive for both value families — the closure returns a `Carried::Object` (an
     /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (an
     /// [`alloc_ktype`](RegionBrand::alloc_ktype)). A value that *references* another region's resident
     /// value folds that in with [`Witnessed::merge`] instead, unioning its reach; this primitive covers
@@ -302,13 +304,13 @@ impl Region<KoanStorageProfile> {
     // Drives the object-family construction inversion
     // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
     pub(crate) fn alloc_witnessed(
-        witness: FrameSet,
+        owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
-        Self::yoke_branded::<CarriedFamily, _>(witness, build)
+        Self::yoke_branded::<CarriedFamily, _>(owner, build)
     }
 
-    /// `yoke` a value of **any** carrier family into the witness's region, handing the build closure a
+    /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
     /// one capability. Generalizes [`alloc_witnessed`](Self::alloc_witnessed) (the `CarriedFamily`
     /// case) for the aggregate-accumulator yokes (`AggBuildFamily`) whose closures alloc into the dest
@@ -316,16 +318,20 @@ impl Region<KoanStorageProfile> {
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
     pub(crate) fn yoke_branded<T: Reattachable, F>(
-        witness: FrameSet,
+        owner: Rc<FrameStorage>,
         build: F,
     ) -> Witnessed<T, FrameSet>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
-        // Turbofish `T` explicitly at the call: inference does not drive `yoke`'s `T` from the return
-        // type early enough to check `build`'s `-> T::At<'b>` bound, so it sees `<_ as Reattachable>::At`
-        // and fails to match the projection.
-        Witnessed::<T, FrameSet>::yoke(witness, |region| build(RegionBrand(region)))
+        // `yoke` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
+        // ([`WitnessRegion`]), then [`into_set`](Witnessed::into_set) widens that one pin into the
+        // `FrameSet` the aggregate world accumulates in — `yoke`'s source == bundle identity preserved,
+        // the single→set widening a separate lift. Turbofish `T` at the yoke: inference does not drive
+        // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so it
+        // sees `<_ as Reattachable>::At` and fails to match the projection.
+        Witnessed::<T, Rc<FrameStorage>>::yoke(owner, |region| build(RegionBrand(region)))
+            .into_set::<FrameSet>()
     }
 
     /// Whether `ptr` was returned by a prior `alloc_object` on this region.
@@ -540,20 +546,29 @@ impl FrameSet {
 // SAFETY: each member `Rc<FrameStorage>` keeps its `KoanRegion` — and the arena pages a value lives in
 // — at a fixed heap address for the whole life of the `Rc` (`Rc` is `StableDeref`), so holding the set
 // pins every member region. The empty set carries no pin: a frameless value is backed by a region (the
-// run region) that outlives the carrier, so no held pin is required — the `Option<W>::None` role.
+// run region) that outlives the carrier, so no held pin is required.
 unsafe impl Witness for FrameSet {}
 
-// SAFETY: `region()` returns the first member's `KoanRegion`, a reference into storage this set's
-// `Witness` impl pins (the member's `Rc` keeps it live and fixed-address), so a value built solely from
-// that region is pinned by the set. `yoke` calls this on a singleton (a single-region construction) in
-// this item's pilot; an empty set has no region to expose and panics — a `yoke` needs a region owner.
-unsafe impl WitnessRegion for FrameSet {
+// SAFETY: a held `Rc<FrameStorage>` keeps its owned `FrameStorage` — and the `KoanRegion` field within
+// it, along with the arena pages a value lives in — at a fixed heap address for the whole life of the
+// `Rc` (`Rc` is `StableDeref`), so `region()` returns a reference into storage this `Rc`'s `Witness`
+// impl pins: a value built solely from that region is pinned by holding the `Rc`. A single held
+// `Rc<FrameStorage>` pins exactly one region — its own — which *is* the single-region `yoke`
+// precondition, now a type rather than a runtime narrowing of a set that could be empty or multi.
+// `region()` deref-coerces `&Rc<FrameStorage>` → `&FrameStorage`.
+unsafe impl WitnessRegion for Rc<FrameStorage> {
     type Region = KoanRegion;
     fn region(&self) -> &KoanRegion {
-        self.frames
-            .first()
-            .expect("WitnessRegion::region on an empty FrameSet — yoke needs a region owner")
-            .region()
+        FrameStorage::region(self)
+    }
+}
+
+// SAFETY: `singleton(owner)` holds `owner` as the set's sole member, so the `Witness for FrameSet` impl
+// above pins `owner`'s region for as long as the set is held — exactly the region `owner: WitnessRegion`
+// pins, and no other. The single→set lift asserts nothing beyond the existing `FrameSet` witness fact.
+unsafe impl SetWitness<Rc<FrameStorage>> for FrameSet {
+    fn singleton(single: Rc<FrameStorage>) -> FrameSet {
+        FrameSet::singleton(single)
     }
 }
 

@@ -13,7 +13,7 @@ use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
-use crate::machine::{FrameSet, KError, KErrorKind, TypeResolution, ValueCarrierResolution};
+use crate::machine::{KError, KErrorKind, TypeResolution, ValueCarrierResolution};
 use crate::source::Spanned;
 
 use super::super::DepFinish;
@@ -172,7 +172,7 @@ pub(super) fn literal_pass_through<'step>(
                 .region_owner()
                 .upgrade()
                 .expect("the dispatching scope's region owner is held for the step");
-            let carrier = KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
+            let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
                 Carried::Object(region.alloc_object(lit.to_kobject()))
             });
             Outcome::DoneWitnessed(carrier)

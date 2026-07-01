@@ -209,10 +209,13 @@ fn finish_witnessed<'step>(
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
             check_newtype_repr(identity, &KObject::record(probe))?;
-            let acc0 = Witnessed::<RecordFieldsFamily, FrameSet>::yoke(
-                FrameSet::singleton(dest_frame.clone()),
-                |_region| Vec::with_capacity(field_names.len()),
-            );
+            // The fold accumulator is region-pure — an owned `Vec` of deep-cloned fields, reaching no
+            // region until the field carriers fold their reach in below — so it is born under the empty
+            // set via `resident` rather than `yoke`d over the dest frame; the dest frame's pin arrives
+            // with the `home` operand at the closing `merge`.
+            let acc0 = Witnessed::<RecordFieldsFamily, FrameSet>::resident(Vec::with_capacity(
+                field_names.len(),
+            ));
             let fields = terminals
                 .iter()
                 .zip(field_names)

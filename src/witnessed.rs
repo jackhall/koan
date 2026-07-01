@@ -181,8 +181,9 @@ impl<T: Reattachable> Copy for Erased<T> where T::At<'static>: Copy {}
 ///
 /// An implementor asserts that, for as long as a value of `Self` is held, the storage the carrier's
 /// erased pointee refers to stays live and at a fixed address. A `Rc<F>` qualifies (it owns an `F`
-/// at a stable heap address — a [`StableDeref`]); a frameless terminal whose pointee is backed by a
-/// region that outlives the carrier qualifies via [`Option`] (`None`).
+/// at a stable heap address — a [`StableDeref`]). A witness that pins *nothing* — the empty element
+/// of a set witness — also qualifies for a frameless terminal, whose pointee is backed by storage (a
+/// run-global region) that outlives the carrier, so no held pin is required.
 pub unsafe trait Witness {}
 
 // SAFETY: `Rc<F>` is `StableDeref` — the `F` it owns lives at a fixed heap address for the whole
@@ -193,11 +194,6 @@ const _: fn() = || {
     fn assert_stable_deref<P: StableDeref>() {}
     let _ = assert_stable_deref::<Rc<()>>;
 };
-
-// SAFETY: `Some(w)` pins through the inner witness `w`; `None` carries no witness because its
-// pointee is backed by a region that outlives the carrier (the frameless / run-region terminal),
-// so no held pin is required. Either way the carrier's pointee outlives a read bounded by `&self`.
-unsafe impl<W: Witness> Witness for Option<W> {}
 
 /// A [`Witness`] that exposes the region it pins, so a value built *solely* from that region is
 /// co-located with the witness by construction. This is the seam [`Witnessed::yoke`] routes: the
@@ -238,6 +234,23 @@ pub unsafe trait MergeWitness: Witness + Sized {
     fn merge(left: &Self, right: &Self) -> Option<Self>;
 }
 
+/// A set witness a single-region [`WitnessRegion`] widens into: it holds the single witness as a
+/// member, so it pins (at least) that witness's region. The boundary where a
+/// [`yoke`](Witnessed::yoke)ed leaf joins the [`merge`](Witnessed::merge) / set world — kept distinct
+/// from `yoke` so yoke's *source == bundle* identity (the carrier is witnessed by the very witness it
+/// sourced its region from) stays intact: `yoke` mints one region and witnesses by it; widening that
+/// single witness into a set is this separate [`Witnessed::into_set`] lift, not a parameter of the mint.
+///
+/// # Safety
+///
+/// `singleton(s)` must return a witness that pins `s`'s region for as long as it is held — by
+/// retaining `s`, or an equivalent pin. Holding the result therefore keeps live every region the
+/// widened single-region carrier reaches (exactly the one `s` pinned).
+pub unsafe trait SetWitness<S: WitnessRegion>: Witness {
+    /// The set witness holding `single` as its sole member.
+    fn singleton(single: S) -> Self;
+}
+
 /// An erased carrier bundled with the liveness [`Witness`] that keeps its pointee alive — the
 /// consolidation of the old `(Erased<T>, witness)` pair into one value, so the witness-pins-the-value
 /// relationship is structural. Reads go through [`Self::with`]; an advance/transform that may
@@ -275,7 +288,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// constructor for a value built inside an alloc brand that references no foreign region. Where
     /// [`Self::new`] pairs an *arbitrary* value with an *arbitrary* witness (co-location asserted in
     /// prose), `resident` fixes the witness to `W::default()` — the empty set for a [`FrameSet`]-style
-    /// set witness, `None` for an [`Option`] witness — so it **cannot** pair a value with a *wrong*
+    /// set witness — so it **cannot** pair a value with a *wrong*
     /// non-empty witness; the only obligation it carries is that `value`'s foreign reach is genuinely
     /// empty. It is what lets the brand-confined region allocator return a witnessed carrier without
     /// reaching for `new`'s open-ended assertion.
@@ -287,7 +300,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// sources or folds that region's pin instead.
     ///
     /// Safe for the same reason as [`Self::new`]: the erase cannot fabricate a lifetime. `W::default()`
-    /// is the pins-nothing element of the witness type (the empty set / `None`).
+    /// is the pins-nothing element of the witness type (the empty set).
     pub(crate) fn resident(value: T::At<'_>) -> Self
     where
         W: Default,
@@ -543,7 +556,10 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// result is `T::At<'self>`, which the borrow checker keeps inside the `&self` borrow over which
     /// the bundled witness holds the pointee live. `At<'static>: Copy` copies the erased carrier out
     /// before re-anchoring.
-    pub fn read(&self) -> T::At<'_>
+    ///
+    /// Module-private: the sole caller is [`Sealed::open`], the rank-2 access verb, so the
+    /// borrow-bounded escape here is never a public surface.
+    fn read(&self) -> T::At<'_>
     where
         T::At<'static>: Copy,
     {
@@ -568,11 +584,23 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         }
     }
 
-    /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
-    /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive
-    /// while the value is copied into the consumer's frame.
+    /// The bundled witness — the set of producer frame `Rc`s that pin the carrier's pointee. Cloned
+    /// out by the consumer-pull lift to keep the backing region alive while the value is copied into
+    /// the consumer's frame.
     pub fn witness(&self) -> &W {
         &self.witness
+    }
+}
+
+impl<T: Reattachable, S: WitnessRegion> Witnessed<T, S> {
+    /// Lift a freshly-[`yoke`](Self::yoke)d single-region carrier into the set witness the aggregate
+    /// accumulates in — the boundary where a minted leaf joins the [`merge`](Self::merge) / set world.
+    /// The value is untouched; only the witness type widens (`S` → `W`), the pin preserved by
+    /// [`SetWitness::singleton`]. Kept distinct from `yoke` so yoke's *source == bundle* identity is
+    /// not diluted by a widening parameter: `yoke` mints one region and witnesses by it; widening that
+    /// single witness into a set is this lift.
+    pub fn into_set<W: SetWitness<S>>(self) -> Witnessed<T, W> {
+        Witnessed::from_erased(self.value, W::singleton(self.witness))
     }
 }
 
@@ -678,10 +706,9 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         }
     }
 
-    /// The bundled witness — the producer frame `Rc` (possibly wrapped in [`Option`]) that pins the
-    /// carrier's pointee. Cloned out by the consumer-pull lift to keep the backing region alive while
-    /// the value is copied into the consumer's frame. Hands back the witness, not the value, so it
-    /// does not weaken opacity.
+    /// The bundled witness — the set of producer frame `Rc`s that pin the carrier's pointee. Cloned
+    /// out by the consumer-pull lift to keep the backing region alive while the value is copied into
+    /// the consumer's frame. Hands back the witness, not the value, so it does not weaken opacity.
     pub fn witness(&self) -> &W {
         self.inner.witness()
     }

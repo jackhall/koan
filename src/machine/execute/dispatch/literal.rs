@@ -73,10 +73,9 @@ fn fold_cells(
         .region_owner()
         .upgrade()
         .expect("the consumer scope's region owner is held for the step");
-    let acc0 =
-        KoanRegion::yoke_branded::<AggBuildFamily, _>(FrameSet::singleton(dest_frame), |region| {
-            (region, Vec::with_capacity(capacity))
-        });
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
+        (region, Vec::with_capacity(capacity))
+    });
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc,
@@ -260,10 +259,9 @@ impl<'step> KoanRuntime<'step> {
                         .upgrade()
                         .expect("the classify scope's region owner is held for the step")
                 });
-                let carrier =
-                    KoanRegion::alloc_witnessed(FrameSet::singleton(frame), move |region| {
-                        Carried::Object(region.alloc_object(other.resolve_region_pure()))
-                    });
+                let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
+                    Carried::Object(region.alloc_object(other.resolve_region_pure()))
+                });
                 Slot::Static(Sealed::seal(carrier))
             }
         }

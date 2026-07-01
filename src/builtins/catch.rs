@@ -100,7 +100,7 @@ pub fn body<'a>(
             // The error payload is built region-pure into the scope region (it reaches no foreign
             // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
             Err(e) => {
-                let payload = KoanRegion::alloc_witnessed(FrameSet::singleton(frame), |region| {
+                let payload = KoanRegion::alloc_witnessed(frame, |region| {
                     Carried::Object(region.alloc_object(e.to_tagged(region)))
                 });
                 payload

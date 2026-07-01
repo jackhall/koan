@@ -71,7 +71,7 @@ enum SlotState<W: Workload> {
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with the
-    /// producer frame `Rc` that backs it (`None` for a frameless / run-region value). A read opens the
+    /// producer frame `Rc` set that backs it (empty for a frameless / run-region value). A read opens the
     /// value at a rank-2 brand through `Sealed::open`, witnessed by the bundled frame, so the
     /// re-anchored carrier nests inside the access rather than escaping up-stack. Holding the frame
     /// `Rc` inside the carrier pins the producer's per-call memory until the slot is freed, so frame
@@ -415,9 +415,9 @@ mod tests {
         type Cart = ();
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
-        // A trivial finalized-value witness: `Option<Rc<()>>` is a `Witness` (the blanket `Rc<F>` /
-        // `Option<W>` impls), `Clone`, and `Default` (`None` = the empty / frameless witness).
-        type Witness = Option<Rc<()>>;
+        // A trivial finalized-value witness: `Rc<()>` is a `Witness` (the blanket `Rc<F>` impl),
+        // `Clone`, and `Default` (`Rc::new(())` — a pin the white-box store tests never inspect).
+        type Witness = Rc<()>;
     }
 
     fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {

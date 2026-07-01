@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 4
+src/machine/core/arena.rs: 5
 src/machine/model/types/ktype_predicates.rs: 1
 src/witnessed.rs: 20
 src/witnessed/region.rs: 1
@@ -82,7 +82,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-41 tests, grouped by the unsafe site each pins down. Names below are the exact
+44 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
@@ -130,6 +130,25 @@ under the stored carrier. The only `unsafe` it routes is the shared `retype` in 
 `Sealed::open` and `reseal_under`'s `merge`).
 
 - `empty_witness_carrier_survives_producer_shell_reset_after_fold`
+
+**Honest single-region witness — multi-region union** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— the single-region `yoke` seam is `WitnessRegion for Rc<FrameStorage>` (a held owner pins exactly its
+own region — a compile-time type, not `FrameSet::region`'s panicking `.first()` narrowing), and a
+freshly-yoked carrier lifts to the aggregate `FrameSet` through `SetWitness for FrameSet`
+(`Witnessed::into_set`). These tests hand-build genuinely multi-region carriers — a value reaching
+several *independently-dying* per-call regions — through the born-witnessed verbs only (`resident` +
+`reseal_under` for a region-pure closure leaf, `yoke_branded` + `transfer_into` / `merge` to derive the
+reach union, never a hand-assembled witness), free every producing frame, then read a reached closure's
+captured scope back: a use-after-free under tree borrows the instant the witness under-counts (a single
+frame witnessing the whole aggregate frees the others' regions). The three shapes are the design's
+multi-region cases — a list of closures, a closure capturing closures (the reach tree), and a record
+whose fields reach distinct regions. The only `unsafe` routed is the shared `retype` in `witnessed.rs`
+(through `yoke` / `merge` / `map` / `reseal_under` / `with`); the `WitnessRegion` / `SetWitness` impls
+assert only their region-pin contracts.
+
+- `multi_region_list_of_closures_survives_frame_free`
+- `multi_region_closure_capturing_closures_survives_frame_free`
+- `multi_region_record_of_closures_survives_frame_free`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
@@ -429,9 +448,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-06-30: 143s — 44 tests, 0 leaks, 0 UB
 - 2026-06-30: 140s — 41 tests, 0 leaks, 0 UB
 - 2026-06-29: 297s — 42 tests, 0 leaks, 0 UB
 - 2026-06-29: 141s — 42 tests, 0 leaks, 0 UB
 - 2026-06-29: 137s — 42 tests, 0 leaks, 0 UB
-- 2026-06-29: 141s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

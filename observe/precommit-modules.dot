@@ -478,9 +478,11 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];

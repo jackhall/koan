@@ -6,6 +6,7 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
+use crate::machine::model::Record;
 use crate::machine::BindingIndex;
 use crate::witnessed::{Sealed, Witnessed};
 use std::marker::PhantomData;
@@ -69,12 +70,15 @@ fn frameset_merge_keeps_unrelated() {
     assert_eq!(merged.frames.len(), 2, "unrelated regions both kept");
 }
 
-/// A singleton set exposes its sole owner's region (the `yoke` seam) and its sole frame.
+/// The single-owner `Rc<FrameStorage>` witness exposes exactly its own region — the `yoke` seam, now a
+/// total single-region type rather than a runtime narrowing of a set. A singleton `FrameSet` exposes
+/// its sole frame; the empty set exposes none.
 #[test]
-fn frameset_singleton_exposes_region_and_sole() {
+fn single_owner_exposes_region_and_frameset_sole() {
     let root = FrameStorage::run_root();
+    // The `yoke` seam is `WitnessRegion for Rc<FrameStorage>`: a held owner pins exactly one region.
+    assert!(std::ptr::eq(WitnessRegion::region(&root), root.region()));
     let set = FrameSet::singleton(Rc::clone(&root));
-    assert!(std::ptr::eq(set.region(), root.region()));
     assert!(set.sole().is_some());
     assert!(FrameSet::empty().sole().is_none());
     assert!(FrameSet::empty().is_empty());
@@ -342,7 +346,7 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 fn alloc_witnessed_yokes_a_co_located_value() {
     let frame = FrameStorage::run_root();
     let w: Witnessed<CarriedFamily, FrameSet> =
-        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&frame)), |region| {
+        KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
             Carried::Object(region.alloc_object(KObject::Number(7.0)))
         });
     drop(frame); // the bundled witness now solely owns the region the value lives in.
@@ -365,11 +369,11 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
     let here_frame = FrameStorage::run_root();
     let foreign_frame = FrameStorage::run_root(); // unrelated — a sibling producer's frame.
     let foreign: Witnessed<CarriedFamily, FrameSet> =
-        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&foreign_frame)), |r| {
+        KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
         });
     let here: Witnessed<CarriedFamily, FrameSet> =
-        KoanRegion::alloc_witnessed(FrameSet::singleton(Rc::clone(&here_frame)), |r| {
+        KoanRegion::alloc_witnessed(Rc::clone(&here_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(2.0)))
         });
     // Fold the foreign element in at the shared brand; re-seal under the union of both regions.
@@ -412,21 +416,21 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // this consumer aggregates.
     let frame_a = FrameStorage::run_root();
     let frame_b = FrameStorage::run_root();
-    let dep_a: Sealed<CarriedFamily, FrameSet> = Sealed::seal(KoanRegion::alloc_witnessed(
-        FrameSet::singleton(Rc::clone(&frame_a)),
-        |r| Carried::Object(r.alloc_object(KObject::Number(1.0))),
-    ));
-    let dep_b: Sealed<CarriedFamily, FrameSet> = Sealed::seal(KoanRegion::alloc_witnessed(
-        FrameSet::singleton(Rc::clone(&frame_b)),
-        |r| Carried::Object(r.alloc_object(KObject::Number(2.0))),
-    ));
+    let dep_a: Sealed<CarriedFamily, FrameSet> =
+        Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&frame_a), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        }));
+    let dep_b: Sealed<CarriedFamily, FrameSet> =
+        Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&frame_b), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(2.0)))
+        }));
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = FrameStorage::run_root();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
-    let acc0: Witnessed<AggBuildFamily, FrameSet> = KoanRegion::yoke_branded::<AggBuildFamily, _>(
-        FrameSet::singleton(Rc::clone(&dest_frame)),
-        |region| (region, Vec::new()),
-    );
+    let acc0: Witnessed<AggBuildFamily, FrameSet> =
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
+            (region, Vec::new())
+        });
     // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
     // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
     // the union. `transfer_into` borrows the dep's seal (does not consume it — other consumers keep
@@ -583,4 +587,264 @@ fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
         _ => panic!("expected a Number object"),
     });
     assert_eq!(got, 7.0);
+}
+
+/// A `KObject::KFunction` whose captured scope lives in `home`'s own region — a closure value genuinely
+/// reaching that per-call region, so dereferencing the returned `&KObject` (its inner `&KFunction`, or
+/// that function's captured scope) touches the region's memory. Both the function and its wrapping
+/// object land in `home`'s region. Built for the multi-region reach tests; the body is never run.
+/// Mirrors `alloc_local_kf` in the lift slate.
+fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
+    use crate::machine::{Body, KFunction};
+    // Capture `home`'s child scope (read at the brand), alloc the closure into `home`'s own region —
+    // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
+    // `&KObject` reaches exactly that region.
+    home.with_scope(|child| {
+        let kf = KFunction::new(
+            ExpressionSignature {
+                return_type: ReturnType::Resolved(KType::Null),
+                elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            },
+            Body::Builtin(|ctx| {
+                Action::Done(Ok(Carried::Object(
+                    ctx.scope.brand().alloc_object(KObject::Null),
+                )))
+            }),
+            child,
+        );
+        let kf_ref = home.brand().alloc_function(kf);
+        home.brand().alloc_object(KObject::KFunction(kf_ref))
+    })
+}
+
+/// A closure carrier born witnessed by its home frame — the born-witnessed `resident` / `reseal_under`
+/// path (production's finalize seal / [`Scope::seal_value`](super::super::scope::Scope)), never an
+/// asserted `Witnessed::new`. A closure captures only its home frame's own scope, so it is region-pure
+/// there: `resident` bundles it under the empty set and `reseal_under` folds in its producer frame (a
+/// witness-only `merge`). A closure can't be `yoke`d — yoke's `for<'b>` build closure can't capture the
+/// frame's existing scope, and minting a fresh one needs the frame's storage `Rc` a `for<'b>` forbids.
+fn witnessed_closure(home: &Rc<CallFrame>) -> Witnessed<CarriedFamily, FrameSet> {
+    Witnessed::<CarriedFamily, FrameSet>::resident(Carried::Object(alloc_home_closure(home)))
+        .reseal_under(FrameSet::singleton(home.storage_rc()))
+}
+
+/// Record-fold accumulator family: the dest region plus the named field cells built so far — the record
+/// twin of [`AggBuildFamily`]. Each closure cell `transfer_into`s (a `merge`) its value and reach onto
+/// the accumulator; the final `map` builds the record from the region.
+struct RecordCellFamily;
+crate::witnessed::reattachable!(RecordCellFamily => (RegionBrand<'r>, Vec<(String, Held<'r>)>));
+
+/// **Multi-region shape 1 — a list of closures over distinct, independently-dying per-call regions.**
+/// Each closure is `transfer_into`d into a list accumulator, relocating the value into the dest region
+/// and *unioning its reach* onto the carrier; the source carrier drops at the end of its statement, so
+/// after the fold only the aggregate's own witness set keeps the closure regions alive. Every producing
+/// frame is then freed and each closure's captured scope read back — a use-after-free the instant the
+/// witness under-counts (a single frame witnessing the whole list would free the others' regions).
+/// Fails on UB, not values.
+#[test]
+fn multi_region_list_of_closures_survives_frame_free() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    // Three independent per-call frames — distinct regions, no shared ancestry, each dying on its own.
+    let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_b: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None); // the list node lands here.
+
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
+        (region, Vec::new())
+    });
+    // Fold each closure terminal (born witnessed by its own frame) into the accumulator; the temporary
+    // source carrier drops after each statement, leaving only the aggregate witness holding the region.
+    let acc1 = Sealed::seal(witnessed_closure(&frame_a))
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc0,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let acc2 = Sealed::seal(witnessed_closure(&frame_b))
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc1,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let list: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
+        Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+    });
+
+    // Free every producing frame: the list's own witness set (dest ∪ frame_a ∪ frame_b) is now the sole
+    // owner of all three regions. Under-count any one and the read below touches freed memory.
+    drop(frame_a);
+    drop(frame_b);
+    drop(dest_frame);
+
+    // Read every closure's captured scope back — each deref rides a `&KFunction` in its (now
+    // witness-only-pinned) region.
+    let ids: Vec<_> = list.with(|c| match c.object() {
+        KObject::List(items, _) => items
+            .iter()
+            .map(|h| match h.object() {
+                KObject::KFunction(f) => f.captured_scope().id,
+                other => panic!("expected a KFunction cell, got {}", other.ktype().name()),
+            })
+            .collect(),
+        other => panic!("expected a List, got {}", other.ktype().name()),
+    });
+    assert_eq!(
+        ids.len(),
+        2,
+        "both closures read back after their frames freed"
+    );
+}
+
+/// **Multi-region shape 2 — a closure capturing closures across several regions (the reach tree).** The
+/// outer closure captures a scope binding two inner closures, each home to its own region; its reach
+/// branches into three independent lineages, flattened into the witness union. Every frame is freed and
+/// the outer closure followed through its bindings to each inner closure's captured scope — a
+/// use-after-free the moment an inner region is dropped from the union. Fails on UB, not values.
+#[test]
+fn multi_region_closure_capturing_closures_survives_frame_free() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    // A capturing frame and two capture-target frames — three distinct regions forming a reach tree.
+    let frame_outer: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_1: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_2: Rc<CallFrame> = CallFrame::new_test(scope, None);
+
+    // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
+    // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
+    let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(frame_outer.storage_rc(), |region| {
+        (region, Vec::new())
+    });
+    let acc1 = Sealed::seal(witnessed_closure(&frame_1))
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc0,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let acc2 = Sealed::seal(witnessed_closure(&frame_2))
+        .transfer_into::<AggBuildFamily, AggBuildFamily>(
+            acc1,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let inners: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
+        Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+    });
+
+    // The outer closure (born region-pure in frame_outer) `merge`s the inners list, binding it into the
+    // outer closure's captured scope at the shared brand — the design's "a closure folds the
+    // captured-scope operand" merge. The merged witness unions the outer frame with the list's reach, so
+    // the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
+    let captured: Witnessed<CarriedFamily, FrameSet> = witnessed_closure(&frame_outer)
+        .merge::<CarriedFamily, CarriedFamily>(inners, |outer_v, list_v, _brand| {
+            if let KObject::KFunction(kf) = outer_v.object() {
+                kf.captured_scope()
+                    .bind_value("inners".to_string(), list_v.object(), BindingIndex::BUILTIN)
+                    .expect("bind the inners list into the outer closure's scope");
+            }
+            outer_v
+        })
+        .expect("frame_outer and the inners list share a region, so their witnesses merge");
+
+    drop(frame_outer);
+    drop(frame_1);
+    drop(frame_2);
+
+    // Follow the outer closure's captured scope to the bound list and deref each inner closure's
+    // captured scope — touching all three regions after they would have died without the union pin.
+    let ids: Vec<_> = captured.with(|c| match c.object() {
+        KObject::KFunction(outer) => match outer.captured_scope().lookup("inners") {
+            Some(KObject::List(items, _)) => items
+                .iter()
+                .map(|h| match h.object() {
+                    KObject::KFunction(f) => f.captured_scope().id,
+                    other => panic!("expected a KFunction cell, got {}", other.ktype().name()),
+                })
+                .collect(),
+            _ => panic!("`inners` must be bound to a list of closures"),
+        },
+        other => panic!("expected a KFunction, got {}", other.ktype().name()),
+    });
+    assert_eq!(
+        ids.len(),
+        2,
+        "both inner closures reached through the captured scope after frames freed",
+    );
+}
+
+/// **Multi-region shape 3 — a record whose field values reach distinct regions.** An owned record
+/// `{a, b}` whose two field cells ride bare `&KFunction` borrows into separate per-call regions; its
+/// witness is the union of both. Both frames are freed and each field's closure read back — a
+/// use-after-free if either field's region is dropped from the union. Fails on UB, not values.
+#[test]
+fn multi_region_record_of_closures_survives_frame_free() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    // Two independent frames whose closures the record's fields reach, plus the dest it lands in.
+    let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_b: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+
+    // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
+    // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
+    let acc0 = KoanRegion::yoke_branded::<RecordCellFamily, _>(dest_frame.storage_rc(), |region| {
+        (region, Vec::new())
+    });
+    let acc1 = Sealed::seal(witnessed_closure(&frame_a))
+        .transfer_into::<RecordCellFamily, RecordCellFamily>(
+            acc0,
+            |dep, (region, mut cells), _brand| {
+                cells.push(("a".to_string(), Held::from_carried(dep)));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let acc2 = Sealed::seal(witnessed_closure(&frame_b))
+        .transfer_into::<RecordCellFamily, RecordCellFamily>(
+            acc1,
+            |dep, (region, mut cells), _brand| {
+                cells.push(("b".to_string(), Held::from_carried(dep)));
+                (region, cells)
+            },
+        )
+        .expect("a FrameSet set witness always represents the union");
+    let record: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
+        Carried::Object(region.alloc_object(KObject::record_of_held(Record::from_pairs(cells))))
+    });
+
+    drop(frame_a);
+    drop(frame_b);
+    drop(dest_frame);
+
+    // Read each field's closure back, dereferencing its captured scope — a use-after-free if either
+    // field's region were dropped from the union.
+    let ids: Vec<_> = record.with(|c| match c.object() {
+        KObject::Record(fields, _) => fields
+            .values()
+            .map(|h| match h.object() {
+                KObject::KFunction(f) => f.captured_scope().id,
+                other => panic!("expected a KFunction field, got {}", other.ktype().name()),
+            })
+            .collect(),
+        other => panic!("expected a Record, got {}", other.ktype().name()),
+    });
+    assert_eq!(
+        ids.len(),
+        2,
+        "both record fields read back after their frames freed"
+    );
 }
