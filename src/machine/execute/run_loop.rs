@@ -11,8 +11,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{FrameSet, KError, KErrorKind, NodeId, RegionBrand};
-use crate::witnessed::{erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern};
+use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
+use crate::witnessed::{
+    erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern, Witnessed,
+};
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
@@ -224,8 +226,8 @@ impl<'run> KoanRuntime<'run> {
                     // continuation relocates each into `dest` — `short_circuit` / `catch` for a
                     // value-copy finish, the construction inversion's `transfer_into` fold for an
                     // aggregate (which relocates once and names every reached region on the carrier).
-                    // The lift itself no longer pre-relocates.
-                    let dest: RegionBrand = scope.brand();
+                    // The lift itself no longer pre-relocates. A `ForwardReady` relocation below builds
+                    // its own witnessed destination carrier from this same scope's brand.
                     let outcome = continuation(
                         &SchedulerView::new(&self.sched, &self.ambient, scope),
                         &dep_sources,
@@ -278,12 +280,22 @@ impl<'run> KoanRuntime<'run> {
                         NodeStep::ForwardReady(producer) => {
                             // Relocate `producer`'s terminal into this slot's region via the merge-form
                             // transfer — re-sealed under the producer's own reached sources ∪ this slot's
-                            // frame (the `dest_witness` pinning `dest`); no contract re-check (the
-                            // producer enforced its own). A ready-but-errored producer relocates to an
-                            // `Err`, clearing this slot's placeholders as the `Done` error path does.
-                            let dest_witness = frame
-                                .map_or(FrameSet::empty(), |f| FrameSet::singleton(f.storage_rc()));
-                            let result = self.relocate_terminal(producer, dest, dest_witness);
+                            // frame (the `dest` carrier's witness pinning its backing); no contract
+                            // re-check (the producer enforced its own). A ready-but-errored producer
+                            // relocates to an `Err`, clearing this slot's placeholders as the `Done`
+                            // error path does. Framed: the dest brand is `yoke`d into its owning frame,
+                            // witnessed by it. Frameless: the dest region is externally pinned for the
+                            // step, so a confined empty-set `resident` carries it.
+                            let dest = match frame {
+                                Some(f) => KoanRegion::yoke_branded::<RegionRefFamily, _>(
+                                    f.storage_rc(),
+                                    |b| b,
+                                ),
+                                None => {
+                                    Witnessed::<RegionRefFamily, FrameSet>::resident(scope.brand())
+                                }
+                            };
+                            let result = self.relocate_terminal(producer, dest);
                             if result.is_err() {
                                 scope.clear_placeholders_for_producer(id);
                             }

@@ -822,6 +822,7 @@ digraph {
     "koan::machine::execute::runtime::interpret" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::interpret" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::machine::execute::runtime::interpret" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute" [label="uses", style="dashed"];

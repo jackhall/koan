@@ -208,10 +208,9 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .region_owner()
             .upgrade()
             .expect("the consumer scope's region owner is held for the step");
-        let dest = Witnessed::<RegionRefFamily, FrameSet>::new(
-            scope.brand(),
-            FrameSet::singleton(dest_frame),
-        );
+        // The dest brand is `yoke`d into the frame that owns `scope`'s region, witnessed by it —
+        // co-located by construction rather than paired with an asserted singleton.
+        let dest = KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b);
         Ok(deps[0]
             .carrier
             .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {

@@ -97,10 +97,11 @@ impl NodeFinalize for KoanRuntime<'_> {
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::new(
-            (home, declared),
-            carrier.witness().clone(),
-        );
+        // `home` and `declared` both live in the contract's home region, which the producer's own
+        // witness — folded by the merge just below — already pins via its `outer` chain. So bundle
+        // under the empty set and let the merge supply the pin: a within-step transient, immediately
+        // merged, whose result witness is identical (`merge(carrier.witness, ∅) == carrier.witness`).
+        let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::resident((home, declared));
         let mut mismatch: Option<KError> = None;
         let checked = carrier
             .merge::<ContractHomeFamily, CarriedFamily>(

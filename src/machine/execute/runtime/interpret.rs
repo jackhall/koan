@@ -4,12 +4,13 @@
 //! the scheduler to quiescence, and rejects a bare top-level expression that resolved to an
 //! unstamped empty container. All values allocated by the program die when these return.
 
-use super::KoanRuntime;
+use super::{KoanRuntime, RegionRefFamily};
 use crate::builtins::default_scope;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{FrameSet, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
+use crate::witnessed::Witnessed;
 
 /// Parse Koan source and run it on a fresh `KoanRegion`; all values allocated by the
 /// program die when this returns.
@@ -70,10 +71,15 @@ impl<'run> KoanRuntime<'run> {
             let pin = self.sched.dep_witness(id);
             if !pin.is_empty() {
                 // Relocate into the surviving run region via the merge-form transfer: the spine is
-                // copied there and the result re-sealed under the root's own reached sources (the run
-                // region's `dest_witness` is empty — it outlives the run, so needs no held pin),
-                // dropping the per-call frame the producer kept the terminal in.
-                if let Ok(witnessed) = self.relocate_terminal(id, root.brand(), FrameSet::empty()) {
+                // copied there and the result re-sealed under the root's own reached sources. The dest
+                // rides an empty-set `resident` carrier — the run region outlives everything and is
+                // externally pinned, so it needs no held pin. Yoking the run-root frame here would
+                // re-form a reference cycle into a drained value's witness, so the empty set is the
+                // sound source. Dropping the per-call frame the producer kept the terminal in.
+                if let Ok(witnessed) = self.relocate_terminal(
+                    id,
+                    Witnessed::<RegionRefFamily, FrameSet>::resident(root.brand()),
+                ) {
                     // Deposit the rehomed terminal's reach (a returned closure's / module's captured
                     // regions, named on the carrier with the producer frame already dropped by the
                     // relocate) onto the run-root scope's reach-set. The run root lives in the run

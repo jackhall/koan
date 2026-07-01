@@ -130,12 +130,13 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Relocate `producer`'s terminal into `dest` and re-seal it under the set union of every region
-    /// it reaches and `dest`'s `dest_witness` — routing the merge-form
+    /// it reaches and `dest`'s own witness — routing the merge-form
     /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), so the relocation re-anchors
     /// with **no fabricated lifetime** at this call site. The spine is copied into `dest` natively at
     /// the merge brand; the surviving closure / module borrows ride the producer's own witness, folded
-    /// into the result set by the merge. `dest_witness` pins `dest`'s backing — the consuming slot's
-    /// frame for a `Forward`-ready pull, the empty set for the run region a drained root re-homes into.
+    /// into the result set by the merge. `dest` arrives as a witnessed carrier — its witness pins its
+    /// own backing: the consuming slot's frame for a `Forward`-ready pull (`yoke`d there), the empty
+    /// set for the run region a drained root re-homes into (externally pinned).
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -144,10 +145,8 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: crate::machine::core::RegionBrand<'_>,
-        dest_witness: FrameSet,
+        dest: Witnessed<RegionRefFamily, FrameSet>,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
-        let dest = Witnessed::<RegionRefFamily, FrameSet>::new(dest, dest_witness);
         self.sched
             .transfer_lifted(producer, dest, |value, region, _brand| {
                 relocate_carried(value, region)
