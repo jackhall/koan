@@ -35,32 +35,32 @@ fn parse_one<'run>(src: &str) -> KExpression<'run> {
 
 fn run<'run>(scope: &'run Scope<'run>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for expr in exprs {
-        sched.dispatch_in_scope(expr, scope);
+        runtime.dispatch_in_scope(expr, scope);
     }
-    sched.execute().expect("scheduler should succeed");
+    runtime.execute().expect("scheduler should succeed");
 }
 
 fn run_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched.execute().expect("scheduler should succeed");
-    // The frameless top-level terminal outlives the local `sched`; widen the scheduler's `'node`
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime.execute().expect("scheduler should succeed");
+    // The frameless top-level terminal outlives the local `runtime`; widen the scheduler's `'node`
     // read to the scope lifetime (see `test_support::extract_terminal`).
-    crate::builtins::test_support::extract_terminal(&sched, scope, id).object()
+    crate::builtins::test_support::extract_terminal(&runtime, scope, id).object()
 }
 
 fn run_one_err<'run>(
     scope: &'run Scope<'run>,
     expr: KExpression<'run>,
 ) -> crate::machine::core::KError {
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(expr, scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(expr, scope);
+    runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    match sched.result_error(id) {
+    match runtime.result_error(id) {
         Ok(()) => panic!("expected error"),
         Err(e) => e.clone(),
     }

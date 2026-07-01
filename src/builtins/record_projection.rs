@@ -218,12 +218,12 @@ mod tests {
 
         let region = FrameStorage::run_root();
         let scope = run_root_silent(&region);
-        let mut sched = KoanRuntime::new();
-        let root = sched.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
-        sched
+        let mut runtime = KoanRuntime::new();
+        let root = runtime.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
+        runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = sched
+        let err = runtime
             .result_error(root)
             .expect_err("a non-record operand must fail dispatch");
         assert!(
@@ -250,12 +250,12 @@ mod tests {
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let mut sched = KoanRuntime::new();
-        let root = sched.dispatch_in_scope(parse_one("PICK r"), scope);
-        sched
+        let mut runtime = KoanRuntime::new();
+        let root = runtime.dispatch_in_scope(parse_one("PICK r"), scope);
+        runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let error = sched
+        let error = runtime
             .result_error(root)
             .expect_err("the bare call must tie across both incomparable arms");
         assert!(

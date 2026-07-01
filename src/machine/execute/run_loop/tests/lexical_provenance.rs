@@ -21,13 +21,13 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
-    let ids = sched.enter_block(
+    let mut runtime = KoanRuntime::new();
+    let ids = runtime.enter_block(
         root.id,
         vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
         root,
     );
-    let chains: Vec<_> = ids.iter().map(|id| sched.chain_of(*id).unwrap()).collect();
+    let chains: Vec<_> = ids.iter().map(|id| runtime.chain_of(*id).unwrap()).collect();
     for (i, chain) in chains.iter().enumerate() {
         assert!(
             chain.parent.is_none(),
@@ -45,10 +45,10 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 fn sibling_statements_in_inner_block_share_parent_rc() {
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
-    let ids = sched.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
-    let chain_a = sched.chain_of(ids[0]).unwrap();
-    let chain_b = sched.chain_of(ids[1]).unwrap();
+    let mut runtime = KoanRuntime::new();
+    let ids = runtime.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
+    let chain_a = runtime.chain_of(ids[0]).unwrap();
+    let chain_b = runtime.chain_of(ids[1]).unwrap();
     assert!(chain_a.parent.is_none());
     assert!(chain_b.parent.is_none());
     let parent_chain = chain_a.clone();
@@ -67,15 +67,15 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::values::Module;
     let region = FrameStorage::run_root();
     let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let module_expr = parse_one("MODULE Foo = (LET x = 1)");
-    let ids = sched.enter_block(root.id, vec![module_expr], root);
+    let ids = runtime.enter_block(root.id, vec![module_expr], root);
     let top_id = ids[0];
-    let top_chain = sched.chain_of(top_id).expect("module statement chain");
+    let top_chain = runtime.chain_of(top_id).expect("module statement chain");
     assert_eq!(top_chain.scope_id, root.id);
     assert_eq!(top_chain.index, 1);
     assert!(top_chain.parent.is_none());
-    sched.execute().expect("module runs");
+    runtime.execute().expect("module runs");
     // Body slot has terminalized by now and dropped its chain; the body-chain
     // shape is exercised end-to-end by the recursive smoke tests below. MODULE is
     // type-only, so the `&Module` rides the identity in `types`.
@@ -147,8 +147,8 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 fn add_with_chain_without_chain_panics() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
-    sched.add_with_chain(
+    let mut runtime = KoanRuntime::new();
+    runtime.add_with_chain(
         crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
             ExpressionPart::Literal(KLiteral::Number(1.0)),
         )])),

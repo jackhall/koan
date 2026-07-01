@@ -45,12 +45,12 @@ fn self_referential_let_surfaces_unbound_name() {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    let ids = sched.enter_block(scope.id, exprs, scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let ids = runtime.enter_block(scope.id, exprs, scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(ids[0]) {
+    let err = match runtime.result_error(ids[0]) {
         Err(e) => e.clone(),
         Ok(()) => panic!("self-referential LET should surface UnboundName"),
     };
@@ -76,9 +76,9 @@ fn forward_reference_parks_then_resolves_on_wake() {
          PRINT Fwd",
     )
     .expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    sched.enter_block(scope.id, exprs, scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    runtime.enter_block(scope.id, exprs, scope);
+    runtime
         .execute()
         .expect("dispatch with bare-name park should complete");
     let captured = buf.borrow().clone();

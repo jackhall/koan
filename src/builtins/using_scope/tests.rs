@@ -163,12 +163,12 @@ fn using_on_non_module_fails_dispatch() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET n = 5");
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("USING n SCOPE (1)"), scope);
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let err = sched
+    let err = runtime
         .result_error(root)
         .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(

@@ -39,9 +39,9 @@ impl Write for SharedBuf {
 fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> &'run Scope<'run> {
     let scope = default_scope(region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    sched.enter_block(scope.id, exprs, scope);
-    let _ = sched.execute();
+    let mut runtime = KoanRuntime::new();
+    runtime.enter_block(scope.id, exprs, scope);
+    let _ = runtime.execute();
     scope
 }
 
@@ -49,13 +49,13 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
-    let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
-    if let Err(e) = sched.execute() {
+    let mut runtime = KoanRuntime::new();
+    let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
+    if let Err(e) = runtime.execute() {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = sched.result_error(id) {
+        if let Err(e) = runtime.result_error(id) {
             return Some(e.clone());
         }
     }
@@ -148,11 +148,11 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
          LET out = (PING 42 (Tick (More null)))",
     )
     .expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched
+    runtime
         .execute()
         .expect("mutual FN recursion via body chain should succeed");
     assert!(

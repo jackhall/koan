@@ -44,11 +44,11 @@ fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> &'a Scope<'a> {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(region, Box::new(SharedBuf(captured)));
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched.execute().expect("scheduler should run to completion");
+    runtime.execute().expect("scheduler should run to completion");
     scope
 }
 

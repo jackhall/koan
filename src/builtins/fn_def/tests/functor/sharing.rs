@@ -195,12 +195,12 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "FN (MAKEBAD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
          (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
     );
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("MAKEBAD IntOrdView"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("MAKEBAD IntOrdView"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = sched.read_result_with(id, |v| format!("{:?}", v.ktype()));
+    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype()));
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin or unascribed module), \

@@ -27,11 +27,11 @@ fn fn_without_return_type_annotation_does_not_register() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     for expr in exprs {
-        sched.dispatch_in_scope(expr, scope);
+        runtime.dispatch_in_scope(expr, scope);
     }
-    let _ = sched.execute();
+    let _ = runtime.execute();
     assert!(
         !fn_is_registered(scope, "DOUBLE"),
         "DOUBLE should not be registered without -> Type"
@@ -42,12 +42,12 @@ fn fn_without_return_type_annotation_does_not_register() {
 fn fn_with_unknown_return_type_name_errors() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };
@@ -62,12 +62,12 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (LIE) -> Number = (\"oops\")");
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("LIE"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("LIE"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("LIE should fail return-type check"),
     };
@@ -117,12 +117,12 @@ fn fn_with_forward_user_bound_return_type_works() {
 fn fn_return_type_surface_name_preserved_in_error() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };

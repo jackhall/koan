@@ -29,16 +29,16 @@ fn build_scope<'a>(region: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
 
 fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(), KError>> {
     let exprs = parse(source).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(sched.dispatch_in_scope(e, scope));
+        ids.push(runtime.dispatch_in_scope(e, scope));
     }
-    let _ = sched.execute();
+    let _ = runtime.execute();
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.
     ids.into_iter()
-        .map(|id| sched.result_error(id).map_err(|e| e.clone()))
+        .map(|id| runtime.result_error(id).map_err(|e| e.clone()))
         .collect()
 }
 

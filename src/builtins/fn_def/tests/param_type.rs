@@ -43,12 +43,12 @@ fn fn_typed_param_rejects_mismatched_call() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
-    let mut sched = KoanRuntime::new();
-    let root = sched.dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let root = runtime.dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
+    runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let err = sched
+    let err = runtime
         .result_error(root)
         .expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
@@ -74,12 +74,12 @@ fn fn_overloads_dispatch_by_param_type() {
 fn fn_param_without_annotation_is_rejected() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("untyped parameter should error"),
     };
@@ -97,12 +97,12 @@ fn fn_param_without_annotation_is_rejected() {
 fn fn_param_with_unknown_type_name_is_rejected() {
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown param type should error"),
     };

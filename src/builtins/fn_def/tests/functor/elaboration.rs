@@ -89,16 +89,16 @@ fn let_then_fn_in_same_batch_works() {
     use crate::parse::parse;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let exprs = parse(
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {
-        sched.dispatch_in_scope(e, scope);
+        runtime.dispatch_in_scope(e, scope);
     }
-    sched.execute().unwrap();
+    runtime.execute().unwrap();
     assert!(
         scope.resolve_type("MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",

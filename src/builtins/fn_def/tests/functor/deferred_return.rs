@@ -197,21 +197,21 @@ fn deferred_return_tail_call_stays_tco_flat() {
         "FN (BB Er :Signature) -> Er = (Ints :| Er)\n\
          FN (AA Er :Signature) -> Er = (BB Er)",
     );
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("AA Seq"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("AA Seq"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.result_error(id).is_ok(),
+        runtime.result_error(id).is_ok(),
         "AA Seq should succeed: {:?}",
-        sched.result_error(id).err(),
+        runtime.result_error(id).err(),
     );
     assert_eq!(
-        sched.len(),
+        runtime.len(),
         1,
         "deferred-return tail chain AA -> BB -> (Er) must collapse to one slot, got {}",
-        sched.len(),
+        runtime.len(),
     );
 }
 
@@ -238,21 +238,21 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
          FN (BB Er :Seq) -> Er.Carrier = (CC Er)\n\
          FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
     );
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("AA View"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("AA View"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        sched.result_error(id).is_ok(),
+        runtime.result_error(id).is_ok(),
         "AA should succeed: {:?}",
-        sched.result_error(id).err(),
+        runtime.result_error(id).err(),
     );
     // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a dep-finish.
     assert!(
-        sched.tail_reuse_count() >= 1,
+        runtime.tail_reuse_count() >= 1,
         "deferred-Expression tail chain must reuse a frame (tail-replace), got {}",
-        sched.tail_reuse_count(),
+        runtime.tail_reuse_count(),
     );
 }
 
@@ -277,12 +277,12 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
     run(scope, "FN (BAD Er :OrderedSig) -> Er.Carrier = (1)");
-    let mut sched = KoanRuntime::new();
-    let id = sched.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
-    sched
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
+    runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match sched.result_error(id) {
+    let err = match runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("BAD should fail per-call return-type check"),
     };

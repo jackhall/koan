@@ -51,14 +51,14 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
          LET FirstAbstract = (IntOrd :| OrderedSig)\n\
          LET SecondAbstract = (IntOrd :| OrderedSig)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut sched = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(sched.dispatch_in_scope(expr, scope));
+        ids.push(runtime.dispatch_in_scope(expr, scope));
     }
-    sched.execute().expect("scheduler should succeed");
+    runtime.execute().expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = sched.result_error(*id) {
+        if let Err(e) = runtime.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }
