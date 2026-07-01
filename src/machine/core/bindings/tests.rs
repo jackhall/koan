@@ -8,6 +8,62 @@ use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::{KKind, KType};
 use crate::machine::model::values::KObject;
 
+/// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
+/// read hands back exactly the `FrameSet` stored at bind time, so the read wrapper can name the
+/// value's reach without reconstructing it from the value.
+#[test]
+fn data_binding_round_trips_stored_reach() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let obj: &KObject = region.alloc_object(KObject::Number(1.0));
+    // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
+    let foreign = FrameStorage::run_root();
+    let reach = FrameSet::singleton(foreign.clone());
+    bindings
+        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach)
+        .expect("value bind should succeed");
+    match bindings.lookup_value_carrier("x", None) {
+        Some(CarrierHit::Bound { obj: got, reach }) => {
+            assert!(std::ptr::eq(got, obj));
+            assert!(
+                reach
+                    .sole()
+                    .is_some_and(|f| std::rc::Rc::ptr_eq(f, &foreign)),
+                "stored reach should round-trip the foreign frame",
+            );
+        }
+        _ => panic!("expected a bound value carrier hit"),
+    }
+}
+
+/// The type-channel mirror: a type binding round-trips its stored foreign reach (a module's
+/// child-scope reach in production) through the carrier-oriented read.
+#[test]
+fn type_binding_round_trips_stored_reach() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    let foreign = FrameStorage::run_root();
+    let reach = FrameSet::singleton(foreign.clone());
+    bindings
+        .try_register_type("T", kt, BindingIndex::BUILTIN, reach)
+        .expect("type register should succeed");
+    match bindings.lookup_type_carrier("T", None) {
+        Some(TypeCarrierHit::Bound { kt: got, reach }) => {
+            assert!(std::ptr::eq(got, kt));
+            assert!(
+                reach
+                    .sole()
+                    .is_some_and(|f| std::rc::Rc::ptr_eq(f, &foreign)),
+                "stored type reach should round-trip the foreign frame",
+            );
+        }
+        _ => panic!("expected a bound type carrier hit"),
+    }
+}
+
 #[test]
 fn try_register_type_inserts_into_types_map() {
     let storage = FrameStorage::run_root();
