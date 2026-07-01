@@ -114,10 +114,14 @@ carrier is built by the purpose-built [`Witnessed::resident`](../src/witnessed.r
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
 within-step transient, the producing frame folded in at close ([`reseal_under`](../src/witnessed.rs))
-before the carrier is stored. `Witnessed::new` keeps **no** blessed home: its surviving callers — the
-bare-[`Done`](../src/machine/core/kfunction/action.rs)
-[`finalize_terminal`](../src/machine/execute/finalize.rs) forward, the type / region operand bundles,
-and [`Scope::resident_object_carrier`](../src/machine/core/scope.rs) (the read that wraps an
+before the carrier is stored. A node's own value terminal is witnessed the same way — a region-pure
+result (a spliced value, a builtin's synchronous result) through `resident`, a dep-reaching result by
+folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
+the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
+producing frame into that carrier's own reach at close rather than asserting a separately-computed
+witness set; an error carries no value and finalizes bare. `Witnessed::new` keeps **no** blessed home:
+its surviving callers — the type / region operand bundles, and
+[`Scope::resident_object_carrier`](../src/machine/core/scope.rs) (the read that wraps an
 *already-built* region-resident object — a bound name, an `ATTR` value member, a defined FN object —
 which pre-exists its carrier, so it cannot be born inside an alloc brand and a deep clone would drop a
 closure's captured reach) — are transitional, asserting in prose the co-location the `yoke` / `merge` /
@@ -352,13 +356,16 @@ closed type rule.
 
 ## Open work
 
-- [Object read-site carrier](../roadmap/per-node-memory/object-read-carrier.md) — a name / ATTR lookup
-  re-wraps a bare `&KObject` as an asserted [`Witnessed::new`](../src/witnessed.rs) because `Bindings`
-  stores no carrier; this stores each value binding's reach and births the FN-def / LET-RHS object
-  witnessed through one alloc-and-seal.
-- [Bare-`Done` terminal collapse](../roadmap/per-node-memory/bare-done-collapse.md) — the non-construction
-  terminal routes an asserted [`Witnessed::new`](../src/witnessed.rs) under a separately-threaded
-  `dep_reached` set; this finalizes every node through the `resident` / dep-carrier-fold path.
+- [Object and type read-site carrier](../roadmap/per-node-memory/object-read-carrier.md) — a name /
+  ATTR lookup re-derives its carrier by walking the value (objects assert
+  [`Witnessed::new`](../src/witnessed.rs) over a bare `&KObject`; a module rebuilds its reach through
+  [`Scope::seal_module`](../src/machine/core/scope.rs)'s `child_scope()` walk) because `Bindings`
+  stores no reach. This stores each value and type binding's reach at its bind site — a value's
+  from its delivered carrier, a module's from the child scope its birth site holds directly — and
+  witnesses the resident value in place on read, so no site walks a value to rebuild a witness:
+  `resident_object_carrier` and `seal_module` are deleted, and a freshly-built FN-def / LET-RHS object
+  registers through its scope's frame-lifetime `&'a` and seals only its terminal carrier through the
+  confined witnessed surface, so `Witnessed::resident` is never called from a builtin.
 - [Witnessed type and region operands](../roadmap/per-node-memory/type-operand-carriers.md) — the
   `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands still assert
   [`Witnessed::new`](../src/witnessed.rs); this yokes + merges a delivered type-identity carrier and, as

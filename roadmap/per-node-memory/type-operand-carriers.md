@@ -37,18 +37,17 @@ once those and these are retired, it has no caller.
   `merge`d, not asserted; reuses the type channel's existing `seal_type` delivery. The `yoke` of the
   destination brand goes through the foundation's `yoke_branded` + `into_set`, then `merge`s the identity
   carrier.
-- *`Witnessed::new` deletion — decided.* Owned here as the capstone: once the object read, the
-  bare-`Done` terminal, and these operands are retired, delete `Witnessed::new`.
+- *`Witnessed::new` deletion — decided.* Owned here as the capstone: once the object read and these
+  operands are retired — the bare-`Done` terminal caller already is — delete `Witnessed::new`.
 
 ## Dependencies
 
 The operand retyping needs only the foundation; the final `Witnessed::new` deletion additionally needs
-the object-read and bare-`Done` items to have retired their callers.
+the object-read item to have retired its callers (the bare-`Done` terminal caller is already gone).
 
 **Requires:**
 
 - [The honest single-region witness substrate](../../src/witnessed.rs) — the operand `yoke` + `into_set` + `merge` builds on the honest witness surface.
-- [Object read-site carrier](object-read-carrier.md) — its object-read `Witnessed::new` callers must be gone before the deletion.
-- [Bare-`Done` terminal collapse](bare-done-collapse.md) — its bare-`Done` `Witnessed::new` caller must be gone before the deletion.
+- [Object and type read-site carrier](object-read-carrier.md) — its object-read `Witnessed::new` callers must be gone before the deletion.
 
 **Unblocks:** none.
