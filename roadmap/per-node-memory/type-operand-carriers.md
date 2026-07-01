@@ -5,49 +5,70 @@ remaining caller — is deleted.
 
 **Problem.** The construction operands pair a destination region / brand with a foreign `&KType`
 identity via an asserted `Witnessed::new`, stating in prose that the identity's region is pinned by the
-dest frame's `outer` chain. Six sites across three carrier families: `RegionTypeFamily` in the newtype /
+dest frame's `outer` chain. Seven sites across three carrier families: `RegionTypeFamily` in the newtype /
 tagged-union constructors ([`dispatch/constructors.rs`](../../src/machine/execute/dispatch/constructors.rs),
 three sites) and the `CATCH` `Result` build ([`catch.rs`](../../src/builtins/catch.rs)),
 `ContractHomeFamily` in the declared-return contract home
 ([`finalize.rs`](../../src/machine/execute/finalize.rs)), and `RegionRefFamily` in the relocate
-destination region ([`runtime.rs`](../../src/machine/execute/runtime.rs)). Each asserts co-location the
-constructor cannot check. [`Witnessed::new`](../../src/witnessed.rs) — the asserted-co-location
-constructor — survives only to back these operands plus the object read and the bare-`Done` terminal;
-once those and these are retired, it has no caller.
+destination region — both the storage-bound relocate ([`runtime.rs`](../../src/machine/execute/runtime.rs))
+and the literal-consumer pull ([`single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)). Each
+asserts co-location the constructor cannot check. [`Witnessed::new`](../../src/witnessed.rs) — the
+asserted-co-location constructor — survives only to back these operands; the object-read and bare-`Done`
+callers are already retired, so once these are, it has no caller.
 
 **Acceptance criteria.**
 
-- The `RegionTypeFamily` / `ContractHomeFamily` operand is assembled by `yoke`ing the destination brand
-  into its single region, lifting with `into_set`, and `merge`ing a delivered type-identity carrier; the
-  `RegionRefFamily` destination likewise rides a witnessed carrier — so the nominal identity crosses the
-  build brand witnessed by its own region, not asserted. This reuses the type channel's `seal_type` /
-  `seal_module` delivery of
-  [§Storage and access](../../design/per-node-memory.md#storage-and-access-seal-open-transfer_into).
-- The operand `Witnessed::new` sites — `constructors.rs` (three), `catch.rs`, `finalize.rs`
-  (`ContractHomeFamily`), and `runtime.rs` (`RegionRefFamily`) — no longer exist.
-- `Witnessed::new` does not exist. No carrier is built by pairing an already-built value with an
-  independently-supplied witness anywhere in the workload — the transitional constructor
-  [§Construction](../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)
-  describes as keeping no blessed home is removed.
+- The newtype / tagged-union / `CATCH` construction operand `merge`s a delivered type-identity carrier
+  whose witness names the identity's own reach — sourced from the binding's stored per-binding type reach
+  ([`Bindings.types`](../../src/machine/core/bindings.rs)), never re-derived by walking the `SetRef` — so
+  the nominal identity crosses the build brand witnessed by its own region, `merge`d rather than asserted.
+- The declared-return contract-home operand ([`finalize.rs`](../../src/machine/execute/finalize.rs)) is
+  born region-pure in the contract's home region and folded by [`merge`](../../src/witnessed.rs) under the
+  producer's own witness — which pins the home ancestor via its `outer` chain — with no witness supplied by
+  assertion and no change to the `Copy` `ReturnContract`.
+- The `RegionRefFamily` relocate destination rides a witnessed carrier: `yoke`d into its owning frame
+  where one owns it, or born under the empty set where the destination region is externally pinned (the
+  drained run root).
+- The seven operand `Witnessed::new` sites no longer exist.
+- `Witnessed::new` does not exist; no production site pairs an already-built value with a
+  separately-asserted witness.
 
 **Directions.**
 
-- *Type-identity carrier delivery — decided.* The nominal identity in `CtorKind` (and `catch`'s `Result`
-  build, and the declared-return contract home) rides a delivered type carrier so the operand is
-  `merge`d, not asserted; reuses the type channel's existing `seal_type` delivery. The `yoke` of the
-  destination brand goes through the foundation's `yoke_branded` + `into_set`, then `merge`s the identity
-  carrier.
-- *`Witnessed::new` deletion — decided.* Owned here as the capstone: once the object read and these
-  operands are retired — the bare-`Done` terminal caller already is — delete `Witnessed::new`.
+- *Type-identity carrier delivery — decided.* The construction identity rides a delivered type carrier
+  whose witness carries the identity's reach (from [`Bindings.types`](../../src/machine/core/bindings.rs)),
+  `merge`d into the operand. Chosen over re-minting the identity region-pure under the dest frame: that is
+  sound only while `RecursiveSet` is heap-`Rc`'d (identity reach empty), and rots the day `RecursiveSet`
+  becomes region-allocated — the identity would then reach its set's region, which the dest frame need not
+  pin. The delivered carrier folds that reach automatically (empty today, the set's region after the
+  migration) with no site change, so this item is also the groundwork that de-risks that future migration.
+- *Construction-identity threading — decided.* Thread the identity's stored reach from its binding
+  through `CtorKind` and build the operand's identity carrier via
+  [`resident_type_carrier`](../../src/machine/core/scope.rs); do **not** stage a hardcoded-empty-reach
+  local build. The construction identity resolves through the *lexical* chain, but a per-call frame's
+  *storage* `outer` chain omits lexical ancestors under TCO — so the value carrier's own witness need not
+  pin the identity's region once `RecursiveSet` is region-allocated, making a born-empty operand a latent
+  TCO-dependent use-after-free. Naming the reach from the binding is the only sound source. Only the
+  `Constructor` dispatch arm reaches the construction operand, so the reach threads without touching the
+  functor / placeholder branches that share `resolve_type_with_chain`.
+- *Contract-home operand — decided.* Born region-pure in the home region via
+  [`resident`](../../src/witnessed.rs) and folded by `merge` under the producer's witness; the declared
+  type is always a producer lexical/outer ancestor, so no reach threads through `ReturnContract` and its
+  `Copy` is preserved.
+- *`RegionRefFamily` destination — decided.* `yoke_branded` where a frame owns the destination; a confined
+  empty-set `resident` where the destination outlives the carrier (the drained run root).
+- *`Witnessed::new` deletion — decided.* Owned here as the capstone: once these operands are retyped — the
+  object-read and bare-`Done` callers already gone — delete `Witnessed::new`.
 
 ## Dependencies
 
-The operand retyping needs only the foundation; the final `Witnessed::new` deletion additionally needs
-the object-read item to have retired its callers (the bare-`Done` terminal caller is already gone).
+The object-read item has shipped, so the `Witnessed::new` deletion is unblocked. The construction-identity
+carrier consumes the per-binding type reach that item stored on `Bindings.types`. A future region-allocated
+`RecursiveSet` builds on the delivered-carrier reach landed here; it is not yet filed as a roadmap item.
 
 **Requires:**
 
 - [The honest single-region witness substrate](../../src/witnessed.rs) — the operand `yoke` + `into_set` + `merge` builds on the honest witness surface.
-- [Object and type read-site carrier](object-read-carrier.md) — its object-read `Witnessed::new` callers must be gone before the deletion.
+- [Per-binding type reach](../../src/machine/core/bindings.rs) — the delivered identity carrier's witness is the reach stored on `Bindings.types`.
 
 **Unblocks:** none.

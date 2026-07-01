@@ -113,6 +113,12 @@ What's shipped that the open items below build on:
   `Witnessed::new`, its `dep_reached` threading, and the bare-`Done` / `DoneWitnessed` split; EVAL,
   MATCH / TRY arms, and USING each build their block tail through one shared
   [`block_tail`](../src/builtins/block_tail.rs) constructor.
+  Reads join the same surface: each value and type binding stores its home-omitted reach on its
+  [`Bindings`](../src/machine/core/bindings.rs) entry (a value's captured from its delivered carrier, a
+  module's folded from the child scope its birth site holds directly), so a name / `ATTR` read witnesses
+  the resident `&KObject` / `&KType` in place from that stored reach rather than rebuilding a witness by
+  walking the value — retiring `resident_object_carrier`, `seal_module`, and `seal_type`'s Module
+  dispatch, and confining `Witnessed::resident` behind the arena's `seal_resident`.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -367,7 +373,7 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Object and type read-site carrier](per-node-memory/object-read-carrier.md)
+- [Witnessed type and region operands](per-node-memory/type-operand-carriers.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
@@ -504,10 +510,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 Substrate follow-up the per-node-memory project left behind — closing the last asserted
 witnesses so co-location is computed by the type system, not stated in prose:
 
-- [Object and type read-site carrier](per-node-memory/object-read-carrier.md) — store each value and
-  type binding's reach on `Bindings` so a name / ATTR lookup returns a witnessed carrier, and birth the
-  FN-def / LET-RHS object witnessed through one alloc-and-seal, retiring
-  `Scope::resident_object_carrier`'s asserted `Witnessed::new` and `seal_module`'s read-side walk.
 - [Witnessed type and region operands](per-node-memory/type-operand-carriers.md) — yoke + `into_set` +
   merge the `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands from a delivered
   type-identity carrier, and, as the capstone, delete `Witnessed::new`.
