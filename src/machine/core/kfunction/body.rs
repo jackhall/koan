@@ -36,7 +36,7 @@ pub enum ReturnContract<'a> {
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
-    /// lexical chain like any FN — preserving TCO — while `check_declared_return` checks the
+    /// lexical chain like any FN — preserving TCO — while `finalize_terminal` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
     /// the frame). `ret` is region-borrowed like `Arm`'s, so the contract stays `Copy`.
     PerCall {

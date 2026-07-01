@@ -4,7 +4,6 @@ use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::model::Carried;
 use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NodeId};
 use crate::witnessed::{SealedExtern, Witnessed};
 
@@ -21,27 +20,27 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 /// entering — kept-first against the slot's prior contract by the reinstall site; any error
 /// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
 /// (see [`ChainOp`]), already lowered from the contract variant so this whole variant is
-/// lifetime-free — the only `'`-bearing arm is `Done`.
+/// lifetime-free. Every `NodeStep` arm is now lifetime-free — a value terminal is a
+/// [`Witnessed`](crate::witnessed::Witnessed) carrier (already `'step`-erased) and an error carries
+/// no value — so the enum itself needs no `'step`.
 // `Replace` is intrinsically the large variant (it carries `NodeWork` plus the
-// frame/contract/chain tail-call payload); `Done` only grows with the cached
-// `KExpression` it indirectly holds. Boxing a short-lived return value's hot tail-call
-// path to balance the variants is the wrong trade — the imbalance is inherent.
+// frame/contract/chain tail-call payload). Boxing the hot tail-call path to balance the
+// variants is the wrong trade — the imbalance is inherent.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep<'step> {
-    /// The finalized terminal, live at the step lifetime `'step`. `run_step` checks it against the
-    /// declared return contract (while value and contract share `'step`), then bundles it with the
-    /// witness set ([`FrameSet`]) of every region it reaches — the producer frame ∪ the dep sources
-    /// accumulated over the step — and finalizes it into the slot store, erasing `'step` before the
-    /// frame drops.
-    Done(Result<Carried<'step>, KError>),
-    /// The finalized terminal **already bundled with its witness set** — a
-    /// [`Witnessed`](crate::witnessed::Witnessed) carrier the object-family construction inversion
-    /// built inside the witness closure, naming every region it reaches. `run_step` seals it through
-    /// [`finalize_terminal_witnessed`](super::finalize::NodeFinalize::finalize_terminal_witnessed)
-    /// (a declared-return re-stamp aside, a pass-through — no `Witnessed::new`). The type channel and
-    /// errors stay on [`Done`](Self::Done); the carrier is lifetime-free, so this arm carries no
-    /// `'step`.
+pub(super) enum NodeStep {
+    /// The finalized value terminal — a [`Witnessed`](crate::witnessed::Witnessed) carrier naming
+    /// every region it reaches, built inside its witness closure (a construction inversion, a
+    /// `seal_value` / `seal_type`, or a region-pure [`resident`](crate::witnessed::Witnessed::resident)
+    /// seal of a bare terminal). `run_step` seals it through
+    /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal): fold the producing
+    /// frame into the witness (the scope-reach seal at close), a declared-return re-stamp aside. The
+    /// **sole** value terminal — object and type both — so no terminal recomputes a witness beside its
+    /// value. The carrier is lifetime-free, so this arm carries no `'step`.
     DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
+    /// The finalized **error** terminal. An error carries no value, so it needs no witness — it
+    /// finalizes bare. `run_step` labels it with the frame-gated contract's trace frame (a callee's
+    /// declared-return frame) and stores it as the slot's `Err`.
+    Error(KError),
     /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
     /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
     /// re-check, the producer already enforced its own contract. (`Alias` is the not-yet-ready twin.)

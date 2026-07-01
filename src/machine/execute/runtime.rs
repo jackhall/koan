@@ -431,16 +431,23 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep<'step> {
+    ) -> NodeStep {
         match outcome {
-            // The terminal stays live at `'step`; `run_step` contract-checks it (value and contract
-            // share `'step`) and only then bundles it with its witness set and finalizes.
-            Outcome::Done(output) => {
+            // A bare terminal. A value is region-pure relative to its producer frame (a builtin's
+            // direct `Action::Done(Ok)` — its args resolved synchronously, nothing born reaching a
+            // dep region): seal it region-pure through `resident` (born under the empty set, the
+            // producer frame folded in at finalize/close) so it joins the sole witnessed value
+            // terminal. An error carries no value and finalizes bare.
+            Outcome::Done(Ok(value)) => {
                 self.close_owned_scope(idx);
-                NodeStep::Done(output)
+                NodeStep::DoneWitnessed(Witnessed::<CarriedFamily, FrameSet>::resident(value))
             }
-            // The object-family carrier rides straight through to the Done boundary, where the
-            // workload hook seals it (a declared-return re-stamp aside, untouched).
+            Outcome::Done(Err(error)) => {
+                self.close_owned_scope(idx);
+                NodeStep::Error(error)
+            }
+            // A construction carrier rides straight through to the Done boundary, where the workload
+            // hook seals it (a declared-return re-stamp aside, untouched).
             Outcome::DoneWitnessed(carrier) => {
                 self.close_owned_scope(idx);
                 NodeStep::DoneWitnessed(carrier)
