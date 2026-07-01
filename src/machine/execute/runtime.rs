@@ -20,15 +20,17 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{
-    Action, Dep, DepPlacement, FinishCtx, FramePlacement,
+    Action, BlockEntry, Dep, DepPlacement, FinishCtx, FramePlacement,
 };
 use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
 };
+use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, FrameSet, KError, NodeId, Scope};
+use crate::witnessed::SealedExtern;
 
-use super::dispatch::DepRequest;
+use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::relocate_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Continuation, Outcome};
@@ -215,13 +217,13 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
         } => {
             // A block-entering tail sits above the params (`1`) or the leading siblings (`N`); a
             // frameless continuation keeps the slot's block at index `0`.
-            let body_index = if block_entry.is_some() {
-                leading.len() + 1
-            } else {
+            let body_index = if matches!(block_entry, BlockEntry::None) {
                 0
+            } else {
+                leading.len() + 1
             };
             if leading.is_empty() {
-                // No leading statements: tail-replace directly into the arm body.
+                // No leading statements: tail-replace directly into the tail body.
                 return Outcome::Continue {
                     work: super::dispatch::decide(tail),
                     frame: frame_placement,
@@ -230,31 +232,55 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     body_index,
                 };
             }
-            // Leading statements become owned siblings in the arm's frame (one `BodyBlock` dep);
-            // the slot parks on them so they run — and cascade-free — before the tail continues,
-            // keeping the side-effect order and the frame uniqueness TCO reuse needs. An arm that
-            // carries leading statements always mints its own `FreshChild` frame (`branch_walk`),
-            // so the placement resolves to a concrete cart here without a scheduler write.
-            let frame = match frame_placement {
-                FramePlacement::FreshChild { frame } => frame,
-                _ => unreachable!(
-                    "an action Tail with leading statements always carries a FreshChild frame"
-                ),
+            // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
+            // parks on them so they run — and cascade-free — before the tail continues, keeping the
+            // side-effect order and (for a fresh frame) the uniqueness TCO reuse needs. Two block
+            // shapes carry leading statements: a `FreshChild` frame whose own scope is the block
+            // (MATCH / TRY arms — fan out via `dispatch_body`), or an `Inherit` overlay entered
+            // without a fresh frame (USING — fan out via `enter_block`). The tail re-enters the same
+            // block: a `FreshChild` re-installs the frame, an `Inherit` keeps the call-site cart.
+            let overlay = match &block_entry {
+                BlockEntry::Overlay(scope) => Some(*scope),
+                _ => None,
             };
-            let body_frame = frame.clone();
+            let (body_block, continue_frame): (DepRequest<'step>, FramePlacement<'step>) =
+                match frame_placement {
+                    FramePlacement::FreshChild { frame } => {
+                        let body_frame = frame.clone();
+                        (
+                            DepRequest::BodyBlock {
+                                statements: leading,
+                                placement: BodyPlacement::Frame(frame),
+                            },
+                            FramePlacement::FreshChild { frame: body_frame },
+                        )
+                    }
+                    FramePlacement::Inherit => {
+                        let overlay = overlay.expect(
+                            "a leading-carrying Inherit tail carries an overlay block (USING)",
+                        );
+                        (
+                            DepRequest::BodyBlock {
+                                statements: leading,
+                                placement: BodyPlacement::Overlay(overlay),
+                            },
+                            FramePlacement::Inherit,
+                        )
+                    }
+                    FramePlacement::ReuseReserve { .. } => unreachable!(
+                        "a leading-carrying tail is a FreshChild frame or an Inherit overlay"
+                    ),
+                };
             let finish: DepFinish<'step> =
                 Box::new(move |_view, _results, _carriers| Outcome::Continue {
                     work: super::dispatch::decide(tail),
-                    frame: FramePlacement::FreshChild { frame: body_frame },
+                    frame: continue_frame,
                     contract,
                     block_entry,
                     body_index,
                 });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock {
-                    frame,
-                    statements: leading,
-                }],
+                deps: vec![body_block],
                 park_count: 0,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
@@ -439,16 +465,29 @@ impl<'run> KoanRuntime<'run> {
                 if let Some(installed) = frame.as_ref() {
                     installed.set_owner(NodeId(idx));
                 }
-                // Decide the chain reshape from the still-live contract variant, then erase the
-                // contract — so the `Replace` step carries no `'run` (the variant is frozen into the
-                // lifetime-free [`ChainOp`]). The run loop assembles the chain against the post-step
-                // frame and keeps the slot's prior contract first over `contract`.
-                let chain = ChainOp::decide(block_entry, contract.as_ref(), body_index);
+                // Decide the chain reshape from the block scope id + the still-live contract variant,
+                // then erase the contract — so the `Replace` step carries no `'run` (the variant is
+                // frozen into the lifetime-free [`ChainOp`]). The run loop assembles the chain against
+                // the post-step frame and keeps the slot's prior contract first over `contract`. An
+                // `Overlay` block entry also rides the tail slot's scope: erased to a cart-witnessed
+                // carrier here (where the overlay is still live) so the frameless `Replace` installs
+                // it as the slot's `YokedChild` — the frameless analogue of the `Yoked` a framed tail
+                // re-projects from its own cart.
+                let (block_scope_id, overlay_scope) = match block_entry {
+                    BlockEntry::None => (None, None),
+                    BlockEntry::FrameScope(id) => (Some(id), None),
+                    BlockEntry::Overlay(overlay) => (
+                        Some(overlay.id),
+                        Some(SealedExtern::<ScopeRefFamily>::erase(overlay)),
+                    ),
+                };
+                let chain = ChainOp::decide(block_scope_id, contract.as_ref(), body_index);
                 NodeStep::Replace {
                     work,
                     frame,
                     contract: contract.map(ErasedContract::erase),
                     chain,
+                    overlay_scope,
                 }
             }
             Outcome::ParkThenContinue {
@@ -486,9 +525,18 @@ impl<'run> KoanRuntime<'run> {
                         DepRequest::RecordLit(fields) => {
                             dep_ids.push(self.schedule_record_literal(fields))
                         }
-                        DepRequest::BodyBlock { frame, statements } => {
-                            dep_ids.extend(self.dispatch_body(&frame, statements))
-                        }
+                        // A body block fans out one owned producer per statement: into a fresh
+                        // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
+                        // caller-allocated overlay via the same `enter_block` fan-out the leading
+                        // statements of an `InScope` body use (USING).
+                        DepRequest::BodyBlock {
+                            statements,
+                            placement: BodyPlacement::Frame(frame),
+                        } => dep_ids.extend(self.dispatch_body(&frame, statements)),
+                        DepRequest::BodyBlock {
+                            statements,
+                            placement: BodyPlacement::Overlay(overlay),
+                        } => dep_ids.extend(self.enter_block(overlay.id, statements, overlay)),
                         DepRequest::Existing(id) => dep_ids.push(id),
                     }
                 }
@@ -549,6 +597,7 @@ impl<'run> KoanRuntime<'run> {
                     frame: None,
                     contract: None,
                     chain: ChainOp::Unchanged,
+                    overlay_scope: None,
                 }
             }
             Outcome::Forward(producer) => {

@@ -307,6 +307,7 @@ impl<'run> KoanRuntime<'run> {
                             frame: new_frame,
                             contract: new_contract,
                             chain,
+                            overlay_scope,
                         } => {
                             let prev_frame = post.prev_frame;
                             let post_step_reserve = post.post_step_reserve;
@@ -327,6 +328,12 @@ impl<'run> KoanRuntime<'run> {
                             let new_chain = chain.apply(prev_chain_carrier, body_frame);
                             match new_frame {
                                 Some(f) => {
+                                    // A framed tail re-projects `Yoked` from its own cart, so it never
+                                    // carries an overlay scope — that is the frameless (`Inherit`) path.
+                                    debug_assert!(
+                                        overlay_scope.is_none(),
+                                        "a framed tail-replace carries no overlay scope"
+                                    );
                                     // Rotate the ping-pong reserve: the post-step reserve is superseded by
                                     // today's post-step frame (which we park as the new reserve).
                                     drop(post_step_reserve);
@@ -360,12 +367,18 @@ impl<'run> KoanRuntime<'run> {
                                 None => {
                                     // A frameless Replace keeps the prior cart — an invoke reuses the
                                     // reserve, never the active cart, so the slot's cart is always present.
+                                    // A tail entering an overlay without a fresh frame (USING) installs
+                                    // the overlay as the slot's scope — a `YokedChild` opened at read
+                                    // against the inherited cart, whose `outer` chain pins the overlay's
+                                    // cart-ancestor region — otherwise the slot keeps its existing scope.
+                                    let scope =
+                                        overlay_scope.map_or(node_scope, NodeScope::YokedChild);
                                     self.sched.replace(
                                         id,
                                         Node {
                                             work: new_work,
                                             payload: NodePayload {
-                                                scope: node_scope,
+                                                scope,
                                                 chain: new_chain,
                                             },
                                             frame: NodeFrame {

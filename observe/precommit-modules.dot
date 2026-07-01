@@ -3,6 +3,7 @@ digraph {
     "koan::builtins" [label="koan::builtins"];
     "koan::builtins::ascribe" [label="koan::builtins::ascribe"];
     "koan::builtins::attr" [label="koan::builtins::attr"];
+    "koan::builtins::block_tail" [label="koan::builtins::block_tail"];
     "koan::builtins::branch_walk" [label="koan::builtins::branch_walk"];
     "koan::builtins::catch" [label="koan::builtins::catch"];
     "koan::builtins::eval" [label="koan::builtins::eval"];
@@ -126,6 +127,7 @@ digraph {
     "koan" -> "koan::witnessed" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::ascribe" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::attr" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::block_tail" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::branch_walk" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::eval" [label="owns", style="solid"];
@@ -265,6 +267,11 @@ digraph {
     "koan::builtins::attr" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::witnessed" [label="uses", style="dashed"];
+    "koan::builtins::block_tail" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::block_tail" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::block_tail" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
+    "koan::builtins::block_tail" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::branch_walk" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::branch_walk" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
@@ -278,6 +285,7 @@ digraph {
     "koan::builtins::catch" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::eval" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -448,6 +456,7 @@ digraph {
     "koan::builtins::union" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::using_scope" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -713,9 +722,13 @@ digraph {
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::dispatch::apply_callable" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::single_poll" -> "koan::machine::execute::run_loop" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::single_poll" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::single_poll" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::single_poll" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
@@ -783,6 +796,7 @@ digraph {
     "koan::machine::execute::run_loop" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::runtime" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::runtime" -> "koan::machine::execute" [label="uses", style="dashed"];

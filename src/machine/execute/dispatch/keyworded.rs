@@ -1,7 +1,7 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
-use crate::machine::core::kfunction::action::FramePlacement;
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
@@ -182,7 +182,7 @@ pub(super) fn redispatch_continue<'step>(
         work,
         frame: FramePlacement::Inherit,
         contract: None,
-        block_entry: None,
+        block_entry: BlockEntry::None,
         body_index: 0,
     }
 }

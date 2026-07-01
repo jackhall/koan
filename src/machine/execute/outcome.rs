@@ -17,9 +17,8 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{CatchOk, Dep, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, Dep, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::ScopeId;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
@@ -62,7 +61,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         work: NodeWork<KoanWorkload>,
         frame: FramePlacement<'step>,
         contract: Option<ReturnContract<'step>>,
-        block_entry: Option<ScopeId>,
+        block_entry: BlockEntry<'step>,
         body_index: usize,
     },
     /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is

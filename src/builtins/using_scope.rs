@@ -14,11 +14,12 @@
 //! `Bindings`, so abstract ascriptions stay opaque inside the block.
 //!
 //! Functor-result escape soundness: the opened module's child scope lives in a
-//! per-call `CallFrame` kept alive by an `Rc` on the eager `m`. That `Rc` would
-//! drop when `m` drops at body return, so we root a copy of the module value
-//! in the call-site region. An escaping closure captures the transparent scope,
-//! which anchors the call-site frame, which keeps the rooted `Rc` alive.
-//! Top-level modules carry no `Rc` and need no rooting.
+//! per-call region pinned only by the eager `m` dep across the USING step. The
+//! body runs in later steps, so the seed folds the `m` carrier's reach onto the
+//! overlay (which lives in the call-site region), keeping that region alive for
+//! the window's life. An escaping closure captures the transparent overlay,
+//! which anchors the call-site frame, which pins the folded region. A top-level
+//! module reaches no per-call region and needs no fold.
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::KType;
@@ -26,15 +27,19 @@ use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
 
-/// Mint the transparent child scope and dispatch the body into it as a block (`InScope` — a
-/// multi-statement body fans out one sub-dispatch per statement), forwarding the final
-/// statement's value as the USING result. The window's surfaced members resolve through
-/// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
+/// Mint the transparent overlay and tail-replace into the body run inside it through the shared
+/// [`block_tail`](super::block_tail::block_tail) constructor: `Inherit` (the overlay's binds persist
+/// in the call-site cart), the overlay as its block, a module-carrier seed, and the body split into
+/// leading statements + a tail. USING's result is that tail — the block's last statement's own
+/// witnessed terminal, finalized through the ordinary `DoneWitnessed` path, not a forwarded dep. The
+/// window's surfaced members resolve through [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for
+/// a borrowed window.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::core::kfunction::action::{
-        arg_held, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
+        arg_held, require_kexpression, Action, FramePlacement,
     };
     use crate::machine::model::values::Held;
 
@@ -57,36 +62,32 @@ pub fn body<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
     };
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "USING", "body"));
-    // Root the opened module's reach on the call-site scope. Its child-scope region (a functor
-    // result's per-call frame) is pinned only by the eager `m` dep across this step, but the
-    // transparent `child` window below borrows that region and outlives the step — and any closure
-    // escaping the block captures `child`. Folding the `m` carrier's reach onto `ctx.scope` (where
-    // `child` lives) keeps the region alive for the window's life, the carrier-delivered analogue of
-    // the old relocate-seam reach reconstruction. A top-level module reaches no per-call region, so
-    // `fold_reach`'s home/ancestor omission folds nothing.
-    if let Some(carrier) = ctx.arg_carrier("m") {
-        ctx.scope.fold_reach(carrier.witness());
-    }
-    // Transparent scope lives in the call-site region so forwarded binds and block-defined
-    // functions outlive the block.
+    // Transparent overlay in the call-site region so forwarded binds and block-defined functions
+    // outlive the block. Under `Inherit` the USING node runs in it while keeping the call-site cart.
     let module_bindings = module.child_scope().bindings();
-    let child: &'a Scope<'a> = ctx
+    let overlay: &'a Scope<'a> = ctx
         .scope
         .brand()
         .alloc_scope(Scope::child_transparent(ctx.scope, module_bindings));
-    let finish: AwaitContinue<'a> = Box::new(move |_fctx, results| {
-        // The body block's final statement value is the USING result.
-        Action::Done(Ok(*results
-            .last()
-            .expect("USING body yields at least one value")))
+    // Seed: root the opened module's reach on the overlay. Its child-scope region (a functor result's
+    // per-call frame) is pinned only by the eager `m` dep across this step, but the overlay borrows
+    // that region and outlives the step — and any closure escaping the block captures the overlay.
+    // Folding the `m` carrier's reach onto the overlay (which lives in the same region) keeps the
+    // region alive for the window's life. A top-level module reaches no per-call region, so
+    // `fold_reach`'s home/ancestor omission folds nothing; a module with no delivered carrier (no
+    // reach to root) needs no seed.
+    let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
+        let witness = carrier.witness().clone();
+        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| overlay.fold_reach(&witness));
+        seed
     });
-    Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
-            expr: body_expr,
-            placement: DepPlacement::InScope(child),
-        }],
-        finish,
-    }
+    block_tail(
+        FramePlacement::Inherit,
+        BlockScope::Overlay(overlay),
+        seed,
+        BlockBody::Block(body_expr),
+        None,
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

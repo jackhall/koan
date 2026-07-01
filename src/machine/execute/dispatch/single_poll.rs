@@ -16,10 +16,17 @@ use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, TypeResolution, ValueCarrierResolution};
 use crate::source::Spanned;
 
-use super::super::DepFinish;
+use super::super::lift::relocate_carried;
+use super::super::run_loop::RegionRefFamily;
+use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, forward_to_producer, park_on_deps, park_resume, DepRequest, Outcome};
+use super::{
+    become_dispatch, forward_to_producer, park_on_deps_witnessed, park_resume, DepRequest, Outcome,
+};
+use crate::machine::model::values::CarriedFamily;
+use crate::machine::FrameSet;
+use crate::witnessed::Witnessed;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -177,7 +184,13 @@ pub(super) fn literal_pass_through<'step>(
             });
             Outcome::DoneWitnessed(carrier)
         }
-        ExpressionPart::Spliced(c) => Outcome::Done(Ok(c)),
+        // A spliced value is already resolved and region-pure relative to its producer frame (as the
+        // bare terminal it replaces was, pinned by that frame alone). Seal it region-pure through
+        // `Witnessed::resident` — born under the empty set, the producer frame folded in at
+        // finalize/close — the exact witness the retired bare path computed.
+        ExpressionPart::Spliced(c) => {
+            Outcome::DoneWitnessed(Witnessed::<CarriedFamily, FrameSet>::resident(c))
+        }
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
@@ -187,12 +200,29 @@ pub(super) fn literal_pass_through<'step>(
 }
 
 /// Park the slot on a single literal-producer dep as a [`Outcome::ParkThenContinue`] whose finish
-/// lifts the producer's resolved value straight through. The harness submits the literal and owns
-/// it; a dep error short-circuits frameless before the finish runs.
+/// folds the producer's carrier into this slot's own witnessed terminal — relocating the value into
+/// the consumer region (`transfer_into`) and naming its reach on the carrier, so the literal's reach
+/// rides the terminal by construction rather than being recomputed beside it. The harness submits the
+/// literal and owns it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
-    let finish: DepFinish<'step> =
-        Box::new(|_ctx, results, _carriers| Outcome::Done(Ok(results[0])));
-    park_on_deps(vec![dep], None, finish)
+    let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
+        let scope = view.current_scope();
+        let dest_frame = scope
+            .region_owner()
+            .upgrade()
+            .expect("the consumer scope's region owner is held for the step");
+        let dest = Witnessed::<RegionRefFamily, FrameSet>::new(
+            scope.brand(),
+            FrameSet::singleton(dest_frame),
+        );
+        Ok(deps[0]
+            .carrier
+            .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {
+                relocate_carried(value, region)
+            })
+            .expect("a FrameSet set witness always represents the union"))
+    });
+    park_on_deps_witnessed(vec![dep], None, finish)
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,

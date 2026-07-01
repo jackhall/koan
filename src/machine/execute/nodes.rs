@@ -51,6 +51,12 @@ pub(super) enum NodeStep<'step> {
         frame: Option<Rc<CallFrame>>,
         contract: Option<ErasedContract>,
         chain: ChainOp,
+        /// A block overlay the tail slot runs in, erased to a cart-witnessed carrier (lifetime-free,
+        /// so `Replace` stays `'run`-free). `Some` only for a frameless tail entering a
+        /// caller-allocated overlay without a per-call frame (USING): the run loop installs it as the
+        /// slot's [`NodeScope::YokedChild`]. `None` keeps the slot's existing scope (every framed
+        /// tail re-projects `Yoked` from its own cart).
+        overlay_scope: Option<SealedExtern<ScopeRefFamily>>,
     },
     /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
     /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this

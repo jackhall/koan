@@ -238,16 +238,15 @@ pub enum Action<'a> {
     /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
     /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
     /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before
-    /// the tail continues (a leading-carrying arm always mints a `FreshChild` frame). `block_entry`
-    /// is the body/arm scope id when the tail enters a fresh lexical block (MATCH / TRY arms,
-    /// FN-body tails) — `None` for a frameless / current-block continuation (EVAL). The harness
-    /// derives the body-statement chains and the tail's `body_index` from `block_entry` + `leading`.
+    /// the tail continues. `block_entry` names the lexical block the tail enters (see
+    /// [`BlockEntry`]); the harness derives the body-statement chains and the tail's `body_index`
+    /// from it + `leading`.
     Tail {
         leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,
         contract: Option<ReturnContract<'a>>,
         frame_placement: FramePlacement<'a>,
-        block_entry: Option<ScopeId>,
+        block_entry: BlockEntry<'a>,
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
     AwaitDeps {
@@ -298,6 +297,24 @@ pub enum DepPlacement<'a> {
     /// (`split_body_statements` + `enter_block`); in a `Catch` a single watched expr enters a
     /// fresh lexical block (`enter_block`).
     InScope(&'a Scope<'a>),
+}
+
+/// The lexical block a [`Action::Tail`] enters — the block whose scope its `body_index` positions
+/// and whose reshape the harness applies. The block scope is named one of two ways: projected from
+/// the installed frame (`FrameScope`), or carried directly (`Overlay`) when the tail runs under an
+/// inherited cart with no fresh frame to project from.
+pub enum BlockEntry<'a> {
+    /// No lexical block push; the tail continues in the slot's current block with the chain
+    /// unchanged (EVAL, frameless continuations).
+    None,
+    /// The installed frame's own scope is the block; the run loop projects it from the frame at the
+    /// tail-replace. Carries the scope id for the chain push / FN-body assembly (MATCH / TRY arms,
+    /// FN-body tails).
+    FrameScope(ScopeId),
+    /// A caller-allocated overlay scope in a cart-ancestor region, entered without a fresh frame —
+    /// the tail runs in it under the inherited call-site cart (USING). Carries the overlay so the
+    /// harness fans the leading statements into it and installs it as the tail slot's scope.
+    Overlay(&'a Scope<'a>),
 }
 
 /// The cart a `Tail` runs in.

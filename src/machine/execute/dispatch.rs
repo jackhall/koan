@@ -32,7 +32,7 @@ use crate::source::Spanned;
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 use super::{ignore_results, DepFinish, WitnessedDepFinish};
-use crate::machine::core::kfunction::action::{DepPlacement, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, DepPlacement, FramePlacement};
 use crate::scheduler::Scheduler;
 
 pub(in crate::machine::execute) mod apply_callable;
@@ -171,16 +171,30 @@ pub(in crate::machine::execute) enum DepRequest<'step> {
     ListLit(Vec<ExpressionPart<'step>>),
     DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
     RecordLit(Vec<(String, ExpressionPart<'step>)>),
-    /// A deferred-return FN's first-call body: dispatch `statements` (its non-tail body + the
-    /// return-type expression, in that order) as body-chain siblings in the freshly acquired
-    /// per-call `frame`, fanning out to one owned producer per statement. The combine reads the
-    /// last (the resolved return type) to build the `PerCall` contract; the earlier statements'
-    /// scope binds feed the tail body. The only dep that carries its own frame.
+    /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
+    /// statement (the harness `extend`s them in declaration order). `placement` picks where they
+    /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
+    /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
+    /// inherited-cart overlay.
     BodyBlock {
-        frame: Rc<CallFrame>,
         statements: Vec<KExpression<'step>>,
+        placement: BodyPlacement<'step>,
     },
     Existing(NodeId),
+}
+
+/// Where a [`DepRequest::BodyBlock`]'s statements bind — the two block fan-outs a leading-carrying
+/// tail chooses between.
+pub(in crate::machine::execute) enum BodyPlacement<'step> {
+    /// Dispatch as body-chain siblings in `frame`'s own scope
+    /// ([`dispatch_body`](super::runtime::KoanRuntime::dispatch_body)) — a deferred-return FN's
+    /// first-call body (its non-tail body + the return-type expression) and MATCH / TRY arm leading
+    /// statements. The only dep that carries its own frame.
+    Frame(Rc<CallFrame>),
+    /// Enter `overlay` as a fresh lexical block without a per-call frame
+    /// ([`enter_block`](super::runtime::KoanRuntime::enter_block)) — USING's leading statements,
+    /// which bind into the transparent overlay inside the inherited call-site cart.
+    Overlay(&'step Scope<'step>),
 }
 
 /// Result of a successful keyworded part walk.
@@ -328,7 +342,7 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
         work: decide(inner),
         frame: FramePlacement::Inherit,
         contract: None,
-        block_entry: None,
+        block_entry: BlockEntry::None,
         body_index: 0,
     }
 }

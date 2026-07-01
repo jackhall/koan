@@ -8,6 +8,7 @@ use crate::machine::model::values::KObject;
 
 mod ascribe;
 mod attr;
+mod block_tail;
 mod branch_walk;
 mod catch;
 mod eval;
