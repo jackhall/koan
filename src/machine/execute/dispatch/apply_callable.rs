@@ -23,7 +23,7 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::{KError, KErrorKind};
+use crate::machine::{FrameSet, KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::ctx::SchedulerView;
@@ -37,8 +37,13 @@ use super::{
 /// branches on the body surface and launches.
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
-    /// `TypeConstructor`).
-    Constructor(&'step KType<'step>),
+    /// `TypeConstructor`). `reach` is the identity's stored per-binding type reach (home-omitted),
+    /// threaded to the construction finish so the built value's operand names the identity's own
+    /// region — empty while `RecursiveSet` is heap-`Rc`'d, the set's region once it is region-allocated.
+    Constructor {
+        identity: &'step KType<'step>,
+        reach: FrameSet,
+    },
     /// Call a `KFunction` by name — functor or not; a functor's result is a module.
     Function(&'step KFunction<'step>),
 }
@@ -56,7 +61,9 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
         // admits; the newtype arm in particular takes the trailing parts directly (so
         // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
         // rather than here.
-        ResolvedCallable::Constructor(identity) => apply_constructor(ctx, identity, expr),
+        ResolvedCallable::Constructor { identity, reach } => {
+            apply_constructor(ctx, identity, reach, expr)
+        }
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
@@ -77,6 +84,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: &'step KType<'step>,
+    reach: FrameSet,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     let KType::SetRef { set, index } = identity else {
@@ -96,8 +104,10 @@ fn apply_constructor<'step>(
                     value: ExpressionPart::RecordLiteral(fields),
                     ..
                 }],
-            ) => constructors::dispatch_construct_record_newtype(identity, fields.clone()),
-            _ => constructors::dispatch_construct_newtype(identity, expr.parts[1..].to_vec()),
+            ) => constructors::dispatch_construct_record_newtype(identity, reach, fields.clone()),
+            _ => {
+                constructors::dispatch_construct_newtype(identity, reach, expr.parts[1..].to_vec())
+            }
         },
         // A bare variant-tag token with no payload (`Maybe Some`) names the variant
         // *type*, reached through its union — distinct from construction `Maybe (Some v)`,
@@ -134,6 +144,7 @@ fn apply_constructor<'step>(
                     Rc::clone(set),
                     *index,
                     Rc::new(schema),
+                    reach,
                     parts,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -145,6 +156,7 @@ fn apply_constructor<'step>(
                 Rc::clone(set),
                 *index,
                 Rc::new(schema),
+                reach,
                 parts,
             ),
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),

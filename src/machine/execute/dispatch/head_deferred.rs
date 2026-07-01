@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, KErrorKind};
+use crate::machine::{FrameSet, KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::super::DepFinish;
@@ -68,7 +68,15 @@ fn park_on_head<'step>(
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: DepFinish<'step> = Box::new(move |ctx, results, carriers| {
-        let callable = match classify_head(results[0], type_only) {
+        // The head's reach — the regions its computed identity/callable points into — named on its
+        // delivered carrier's witness. A `SetRef` constructor identity threads it to the construction
+        // finish (the operand names the identity's own region); a callable ignores it and rides the
+        // bind fold below instead.
+        let reach = carriers
+            .first()
+            .map(|c| c.witness().clone())
+            .unwrap_or_default();
+        let callable = match classify_head(results[0], type_only, reach) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -101,6 +109,7 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
+    reach: FrameSet,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         // A runtime value head. A functor (`KFunction` with `is_functor`) is admitted in
@@ -132,7 +141,10 @@ fn classify_head<'step>(
                 expected: "constructible Type or bound functor".to_string(),
                 got: kt.name(),
             })),
-            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor(kt)),
+            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor {
+                identity: kt,
+                reach,
+            }),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),

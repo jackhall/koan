@@ -35,21 +35,32 @@ use crate::witnessed::Witnessed;
 pub(in crate::machine::execute) enum CtorKind<'step> {
     /// NewType construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
-    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    NewType { identity: &'step KType<'step> },
+    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`. `reach` is the
+    /// identity's stored per-binding type reach, folded into the construction operand's witness so
+    /// it names the identity's own region.
+    NewType {
+        identity: &'step KType<'step>,
+        reach: FrameSet,
+    },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
     /// matching the retired struct path) instead of deferring the whole record literal; the
-    /// finish builds the `KObject::Record` and wraps it with `identity`.
+    /// finish builds the `KObject::Record` and wraps it with `identity`. `reach` carries the
+    /// identity's stored per-binding type reach for the construction operand's witness.
     RecordNewType {
         identity: &'step KType<'step>,
         field_names: Vec<String>,
+        reach: FrameSet,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'step>>>,
         set: Rc<RecursiveSet<'step>>,
         index: usize,
         tag: String,
+        /// The identity's stored per-binding type reach, folded into the construction operand's
+        /// witness. The `Tagged` identity is a fresh dest-region `SetRef`, so `reach` is empty
+        /// today; it names the set's region once `RecursiveSet` is region-allocated.
+        reach: FrameSet,
     },
 }
 
@@ -293,6 +304,17 @@ pub(super) fn type_call<'step>(
                 got: identity.name(),
             })))
         }
-        _ => apply_callable(ctx, ResolvedCallable::Constructor(identity), &expr),
+        _ => {
+            // The identity's stored per-binding type reach (home-omitted), resolved through the same
+            // lexical chain as the identity: threaded to the construction finish so its operand names
+            // the identity's own region rather than relying on the dest frame's storage `outer` chain,
+            // which omits lexical ancestors under TCO. Empty while `RecursiveSet` is heap-`Rc`'d.
+            let reach = scope.resolve_type_reach(head_t.as_str(), chain);
+            apply_callable(
+                ctx,
+                ResolvedCallable::Constructor { identity, reach },
+                &expr,
+            )
+        }
     }
 }

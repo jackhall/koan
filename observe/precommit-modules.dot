@@ -281,9 +281,9 @@ digraph {
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::catch" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model::values" [label="uses", style="dashed"];
-    "koan::builtins::catch" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];
@@ -603,12 +603,14 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::constructors" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::single_poll" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::run_loop" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::model::types" [label="uses", style="dashed"];

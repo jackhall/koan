@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
+use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
@@ -20,6 +21,7 @@ use crate::source::Spanned;
 use crate::witnessed::{reattachable, Witnessed};
 
 use super::super::outcome::DepTerminal;
+use super::super::run_loop::RegionRefFamily;
 use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
@@ -41,6 +43,7 @@ pub(in crate::machine::execute) mod tagged_union;
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     identity: &'step KType<'step>,
+    reach: FrameSet,
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     if let [Spanned {
@@ -64,7 +67,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(vec![value_cell], CtorKind::NewType { identity })
+    launch(vec![value_cell], CtorKind::NewType { identity, reach })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -73,6 +76,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     identity: &'step KType<'step>,
+    reach: FrameSet,
     record_fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
@@ -83,6 +87,7 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
         CtorKind::RecordNewType {
             identity,
             field_names,
+            reach,
         },
     )
 }
@@ -118,6 +123,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     set: Rc<RecursiveSet<'step>>,
     index: usize,
     schema: Rc<HashMap<String, KType<'step>>>,
+    reach: FrameSet,
     args_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
@@ -131,6 +137,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
             set,
             index,
             tag,
+            reach,
         },
     )
 }
@@ -158,12 +165,40 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
     park_on_deps_witnessed(deps, None, combine_finish)
 }
 
+/// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
+/// The dest brand is `yoke`d into the frame that owns the dest region — witnessed by it — and `merge`d
+/// with the identity wrapped by [`Scope::resident_type_carrier`] under its stored per-binding `reach`,
+/// so the operand's witness is the dest region's pin ∪ the identity's own reach — folded, never paired
+/// with an asserted witness. `reach` is empty while `RecursiveSet` is heap-`Rc`'d (the identity points
+/// into no region) and names the set's region once it is region-allocated.
+pub(crate) fn build_type_operand<'step>(
+    scope: &'step Scope<'step>,
+    identity: &'step KType<'step>,
+    reach: &FrameSet,
+) -> Witnessed<RegionTypeFamily, FrameSet> {
+    let dest_frame = scope
+        .region_owner()
+        .upgrade()
+        .expect("the consumer scope's region owner is held for the step");
+    let dest_brand = KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b);
+    let identity_carrier = scope.resident_type_carrier(identity, reach);
+    dest_brand
+        .merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
+            let kt = match carried {
+                Carried::Type(t) => t,
+                _ => unreachable!("the identity carrier is always a Type"),
+            };
+            (brand, kt)
+        })
+        .expect("a FrameSet union always represents")
+}
+
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
 /// value carriers' reach onto the result so the constructed object names every region it reaches by
-/// construction (no `Witnessed::new` over a read-out value). The nominal type identity is type-channel
-/// data the consumer frame's `outer` chain pins; it crosses the brand as a non-object operand
-/// ([`RegionTypeFamily`]). Type-checks run before the build (read out of the carrier), so the
-/// closure is infallible.
+/// construction. The nominal type identity crosses the brand as a non-object operand
+/// ([`RegionTypeFamily`]), `merge`d in via [`build_type_operand`] so it rides the brand witnessed by
+/// its own reach rather than an asserted co-location. Type-checks run before the build (read out of
+/// the carrier), so the closure is infallible.
 fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind<'step>,
@@ -171,18 +206,11 @@ fn finish_witnessed<'step>(
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let scope = view.current_scope();
     let region = scope.brand();
-    let dest_frame = scope
-        .region_owner()
-        .upgrade()
-        .expect("the consumer scope's region owner is held for the step");
     match kind {
-        CtorKind::NewType { identity } => {
+        CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
             check_newtype_repr(identity, terminals[0].value.object())?;
-            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
-                (region, identity),
-                FrameSet::singleton(dest_frame),
-            );
+            let home = build_type_operand(scope, identity, reach);
             Ok(terminals[0]
                 .carrier
                 .transfer_into::<RegionTypeFamily, CarriedFamily>(
@@ -199,6 +227,7 @@ fn finish_witnessed<'step>(
         CtorKind::RecordNewType {
             identity,
             field_names,
+            reach,
         } => {
             // Check the assembled record against the newtype repr first (read out of the carriers),
             // then fold the field carriers into the witnessed record and wrap it.
@@ -231,10 +260,7 @@ fn finish_witnessed<'step>(
                         )
                         .expect("a FrameSet set witness always represents the union")
                 });
-            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
-                (region, identity),
-                FrameSet::singleton(dest_frame),
-            );
+            let home = build_type_operand(scope, identity, reach);
             Ok(fields
                 .merge::<RegionTypeFamily, CarriedFamily>(
                     home,
@@ -253,6 +279,7 @@ fn finish_witnessed<'step>(
             set,
             index,
             tag,
+            reach,
         } => {
             debug_assert_eq!(terminals.len(), 1);
             let expected = schema.get(tag).ok_or_else(|| {
@@ -270,16 +297,13 @@ fn finish_witnessed<'step>(
                 }));
             }
             // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
-            // its set/index at the brand; re-homed in the consumer region (a strict ancestor of the
-            // value's, pinned by the dest frame's `outer` chain).
+            // its set/index at the brand. Freshly minted in the dest region, so `reach` is empty
+            // today; the operand `merge`s it under the dest frame's yoke plus that reach.
             let identity: &KType<'step> = region.alloc_ktype(KType::SetRef {
                 set: Rc::clone(set),
                 index: *index,
             });
-            let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
-                (region, identity),
-                FrameSet::singleton(dest_frame),
-            );
+            let home = build_type_operand(scope, identity, reach);
             let tag = tag.clone();
             Ok(terminals[0]
                 .carrier

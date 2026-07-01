@@ -41,10 +41,10 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_kexpression, scope_frame, Action, CatchContinue, Dep, DepPlacement,
     };
+    use crate::machine::execute::build_type_operand;
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
-    use crate::machine::{FrameSet, KoanRegion, RegionTypeFamily};
-    use crate::witnessed::Witnessed;
+    use crate::machine::{KoanRegion, RegionTypeFamily};
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
@@ -52,6 +52,9 @@ pub fn body<'a>(
         Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
+    // The `Result` identity's stored per-binding type reach, captured at body time so the
+    // construction operand's witness names its own region. Empty while `RecursiveSet` is heap-`Rc`'d.
+    let reach = ctx.scope.resolve_type_reach("Result", None);
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
         // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.
@@ -69,18 +72,16 @@ pub fn body<'a>(
             }
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
-        // wrapped value reaches. The `Result` `SetRef` identity is type-channel data the scope's frame
-        // pins (its `outer` chain); it crosses the build brand as a [`RegionTypeFamily`] operand.
+        // wrapped value reaches. The `Result` `SetRef` identity — freshly minted in the scope region —
+        // crosses the build brand as a [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke
+        // plus its stored reach rather than paired with an asserted singleton.
         let region = fctx.scope.brand();
         let frame = scope_frame(fctx.scope);
         let identity: &KType<'a> = region.alloc_ktype(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
         });
-        let home = Witnessed::<RegionTypeFamily, FrameSet>::new(
-            (region, identity),
-            FrameSet::singleton(frame.clone()),
-        );
+        let home = build_type_operand(fctx.scope, identity, &reach);
         let witnessed = match result {
             // The watched value's carrier folds onto the result: `transfer_into` relocates it into the
             // consumer region and unions its reach onto the `Ok` carrier.
