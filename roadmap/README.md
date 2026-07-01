@@ -100,6 +100,13 @@ What's shipped that the open items below build on:
   and `QUOTE` allocs it through the witnessed object surface
   ([`KoanRegion::alloc_object_witnessed`](../src/machine/core/arena.rs)) — the object born under the
   empty foreign-reach set — rather than asserting it via `Witnessed::new`.
+  The single-region `yoke` precondition is now a *type*: [`WitnessRegion`](../src/witnessed.rs) is held
+  by a lone frame owner (`Rc<FrameStorage>`) rather than by the `FrameSet` whose `region()` narrowed a
+  set that could be empty or multi, and a minted leaf widens into the aggregate `FrameSet` through a
+  distinct [`Witnessed::into_set`](../src/witnessed.rs) lift — so the latent multi-region under-count
+  (now covered by the Miri slate) is a compile-time impossibility; the unused `Option<W>: Witness`
+  residue is deleted (the frameless terminal is the empty set) and [`Witnessed::read`](../src/witnessed.rs)
+  is module-private.
   See [design/memory-model.md § Region lifetime erasure](../design/memory-model.md#region-lifetime-erasure).
 - *Shell-over-storage frame reuse.* `CallFrame` is now a thin shell over a refcounted
   [`FrameStorage`](../src/machine/core/arena.rs) (the per-call `KoanRegion` plus the ancestor
@@ -354,7 +361,8 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
-- [Structural witnesses](per-node-memory/structural-witnesses.md)
+- [Bare-`Done` terminal collapse](per-node-memory/bare-done-collapse.md)
+- [Object read-site carrier](per-node-memory/object-read-carrier.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Fold `Dep` into `DepRequest`](refactor/fold-dep-into-deprequest.md)
@@ -491,10 +499,13 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 Substrate follow-up the per-node-memory project left behind — closing the last asserted
 witnesses so co-location is computed by the type system, not stated in prose:
 
-- [Structural witnesses](per-node-memory/structural-witnesses.md) — retire `Witnessed::new`
-  (the asserted-co-location constructor still backing the object resident read, the bare-`Done`
-  terminal, and the `RegionTypeFamily` operand bundles), make every witness structural via
-  `yoke` / `merge` / a retained carrier, split off a single-region yoke witness so
-  `WitnessRegion for FrameSet` stops narrowing-and-panicking on a multi-region set, delete the
-  unused `Option<W>: Witness`, and add the multi-region Miri cases that would flag an
-  under-counting witness.
+- [Object read-site carrier](per-node-memory/object-read-carrier.md) — store each value binding's reach
+  on `Bindings` so a name / ATTR lookup returns a witnessed carrier, and birth the FN-def / LET-RHS
+  object witnessed through one alloc-and-seal, retiring `Scope::resident_object_carrier`'s asserted
+  `Witnessed::new`.
+- [Bare-`Done` terminal collapse](per-node-memory/bare-done-collapse.md) — finalize every node through
+  the `resident` / delivered-dep-carrier-fold path, collapsing `finalize_terminal`, the `dep_reached`
+  threading, and the `NodeStep::Done` / `DoneWitnessed` split.
+- [Witnessed type and region operands](per-node-memory/type-operand-carriers.md) — yoke + `into_set` +
+  merge the `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands from a delivered
+  type-identity carrier, and, as the capstone, delete `Witnessed::new`.

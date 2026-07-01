@@ -450,7 +450,7 @@ impl FrameStorage {
 /// the common case — and larger for a multi-region value (a lifted closure reaching several source
 /// regions, once [`transfer_into`](crate::witnessed) lands). Holding it pins every member region; the
 /// empty set pins nothing — a frameless / run-region terminal is backed by a region that outlives the
-/// carrier, so no held pin is required (the role the result slot's `None` played).
+/// carrier, so no held pin is required.
 ///
 /// Composition ([`MergeWitness::merge`]) is set **union** with `outer`-chain subsumption: a member is
 /// dropped when another member's [`FrameStorage::pins_region`] chain already keeps its region alive, so

@@ -83,7 +83,11 @@ allocs through the witnessed object surface (`alloc_object_witnessed`), born und
 brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
 embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness the type encodes.
 
-What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
+The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
+region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
+widens into the region *set* the aggregate accumulates in through a distinct [`into_set`](../src/witnessed.rs)
+lift, kept separate from `yoke` so minting stays a one-region act and combining regions stays `merge`'s
+job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
 `Rc`. The object family's region-pure leaves and aggregates are built this way — a single-part
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
@@ -348,10 +352,14 @@ closed type rule.
 
 ## Open work
 
-- [Structural witnesses](../roadmap/per-node-memory/structural-witnesses.md) — the construction
-  terminals this doc describes as born witnessed (the FN-def `yoke`, the object resident read) still
-  route the asserted [`Witnessed::new`](../src/witnessed.rs) at the object resident read, the
-  bare-`Done` terminal, and the `RegionTypeFamily` operand bundles; the single-region `yoke` witness
-  is only narrowingly satisfied by `WitnessRegion for FrameSet`; and `Option<W>: Witness` is an unused
-  pre-`FrameSet` residue. The item makes every witness structural and adds the multi-region tests that
-  would flag an under-counting one.
+- [Object read-site carrier](../roadmap/per-node-memory/object-read-carrier.md) — a name / ATTR lookup
+  re-wraps a bare `&KObject` as an asserted [`Witnessed::new`](../src/witnessed.rs) because `Bindings`
+  stores no carrier; this stores each value binding's reach and births the FN-def / LET-RHS object
+  witnessed through one alloc-and-seal.
+- [Bare-`Done` terminal collapse](../roadmap/per-node-memory/bare-done-collapse.md) — the non-construction
+  terminal routes an asserted [`Witnessed::new`](../src/witnessed.rs) under a separately-threaded
+  `dep_reached` set; this finalizes every node through the `resident` / dep-carrier-fold path.
+- [Witnessed type and region operands](../roadmap/per-node-memory/type-operand-carriers.md) — the
+  `RegionTypeFamily` / `ContractHomeFamily` / `RegionRefFamily` operands still assert
+  [`Witnessed::new`](../src/witnessed.rs); this yokes + merges a delivered type-identity carrier and, as
+  the capstone, deletes `Witnessed::new`.
