@@ -346,10 +346,9 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
 /// graph in response to a dispatch decide.
 impl<'run> KoanRuntime<'run> {
     /// Realize a single-statement dispatch dep at `placement` to its producer slot. `OwnScope`
-    /// re-dispatches against the executing slot's own scope; `ActiveFrame` inherits the ambient
-    /// per-call frame; `InScope` enters a fresh **single-statement** block (so an inner `LET` stays
-    /// local). A multi-statement body splits separately — see the `InScope` arm of [`Self::apply_outcome`]
-    /// and [`Self::dispatch_body`].
+    /// re-dispatches against the executing slot's own scope; `InScope` enters a fresh
+    /// **single-statement** block (so an inner `LET` stays local). A multi-statement body splits
+    /// separately — see the `InScope` arm of [`Self::apply_outcome`] and [`Self::dispatch_body`].
     fn realize_dispatch<'a>(
         &mut self,
         expr: KExpression<'a>,
@@ -357,10 +356,6 @@ impl<'run> KoanRuntime<'run> {
     ) -> NodeId {
         match placement {
             DepPlacement::OwnScope => self.dispatch_in_own_scope(expr),
-            DepPlacement::ActiveFrame => {
-                let chain = self.ambient_or_detached_chain();
-                self.dispatch_in_active_frame(expr, chain)
-            }
             DepPlacement::InScope(scope) => self
                 .enter_block(scope.id, vec![expr], scope)
                 .into_iter()
@@ -510,8 +505,8 @@ impl<'run> KoanRuntime<'run> {
                 for dep in deps {
                     match dep {
                         // An `InScope` body fans out one producer per statement (multi-statement
-                        // split); `OwnScope` / `ActiveFrame` realize as a single producer via the
-                        // shared [`Self::realize_dispatch`].
+                        // split); `OwnScope` realizes as a single producer via the shared
+                        // [`Self::realize_dispatch`].
                         DepRequest::Dispatch {
                             expr,
                             placement: DepPlacement::InScope(scope),

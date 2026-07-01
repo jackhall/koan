@@ -290,8 +290,6 @@ pub enum Dep<'a> {
 pub enum DepPlacement<'a> {
     /// The slot's own `NodeScope` (`add_dispatch_here`) — binders' type sub-dispatches.
     OwnScope,
-    /// The active frame's child (`dispatch_in_active_frame`) — FN-body leading statements.
-    ActiveFrame,
     /// A builtin-minted child scope (module/sig/recursive/using body), carried by reference. In a
     /// `AwaitDeps` a multi-statement body fans out one sub-dispatch per top-level statement
     /// (`split_body_statements` + `enter_block`); in a `Catch` a single watched expr enters a
