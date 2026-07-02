@@ -87,7 +87,7 @@ pub(crate) fn register_builtin_full<'a>(
     is_functor: bool,
 ) {
     let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
         signature,
         Body::Builtin(body),
         scope,
@@ -122,7 +122,7 @@ pub(crate) fn register_overload_at<'a>(
     index: BindingIndex,
 ) {
     let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
         signature,
         Body::Builtin(body),
         scope,

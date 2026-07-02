@@ -128,6 +128,9 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -168,14 +171,22 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f_late =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f_early = region.brand().alloc_function(KFunction::new(
+        sig_num,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let f_late = region.brand().alloc_function(KFunction::new(
+        sig_str,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
     let obj_early = region.brand().alloc_object(KObject::KFunction(f_early));
     let obj_late = region.brand().alloc_object(KObject::KFunction(f_late));
     scope
@@ -228,6 +239,9 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -252,6 +266,9 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope

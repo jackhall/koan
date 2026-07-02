@@ -639,7 +639,6 @@ digraph {
     "koan::machine::execute::dispatch::exec" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::bind_by_name" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::core::kfunction::exec" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine::execute" [label="uses", style="dashed"];

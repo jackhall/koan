@@ -15,7 +15,6 @@ use super::super::{ignore_results, DepFinish};
 use super::SchedulerView;
 use super::{BodyPlacement, DepRequest};
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
-use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::exec::{
     home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
@@ -116,7 +115,7 @@ pub(super) fn invoke<'step>(
         }
     };
 
-    let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
+    let bound = match picked.bind_by_name(args) {
         Ok(record) => record,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -325,9 +324,11 @@ fn run_action_builtin<'step>(
     super::super::runtime::run_action(action)
 }
 
-/// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
-/// `None` if any value part isn't a resolved `Carried` (a `Spliced`-splice or a literal) — the
-/// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
+/// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`
+/// part contributes its carried value, a literal is resolved into the run region, and keyword parts
+/// (the signature's own literals) contribute nothing. Returns `None` if a value part is neither
+/// spliced nor a literal — unreachable by construction (the bind sites resolve value parts first),
+/// which the caller surfaces as a diagnostic.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
     working_expr: &KExpression<'step>,

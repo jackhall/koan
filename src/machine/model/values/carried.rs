@@ -41,14 +41,6 @@ impl<'a> Carried<'a> {
         }
     }
 
-    /// The `Type` arm, if this is one.
-    pub fn as_type(self) -> Option<&'a KType<'a>> {
-        match self {
-            Carried::Type(t) => Some(t),
-            Carried::Object(_) => None,
-        }
-    }
-
     /// The `Object` arm, panicking on a `Type` arm. For value-consumers — a site that by
     /// construction only ever handles a runtime object (not a type flowing in the type
     /// channel).

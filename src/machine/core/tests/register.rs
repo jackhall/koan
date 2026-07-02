@@ -121,6 +121,9 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
@@ -130,6 +133,9 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
@@ -152,6 +158,9 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
@@ -161,6 +170,9 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
@@ -188,6 +200,9 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f));
@@ -233,14 +248,22 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f2 =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f1 = region.brand().alloc_function(KFunction::new(
+        sig_num,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let f2 = region.brand().alloc_function(KFunction::new(
+        sig_str,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     scope
@@ -270,6 +293,9 @@ fn register_function_coexists_with_same_name_value() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -304,6 +330,9 @@ fn register_function_coexists_with_same_name_type() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope

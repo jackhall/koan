@@ -61,12 +61,18 @@ fn drain_debug_asserts_on_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
 
@@ -97,6 +103,9 @@ fn register_function_defers_and_drains_through_function_arm() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
@@ -150,6 +159,9 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(kfn));
     let key = kfn.signature.untyped_key();
@@ -200,12 +212,18 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
 

@@ -61,23 +61,6 @@ pub struct KFunction<'a> {
 
 impl<'a> KFunction<'a> {
     pub fn new(
-        signature: ExpressionSignature<'a>,
-        body: Body<'a>,
-        captured: &'a Scope<'a>,
-    ) -> Self {
-        Self::with_binder_name(signature, body, captured, None)
-    }
-
-    pub fn with_binder_name(
-        signature: ExpressionSignature<'a>,
-        body: Body<'a>,
-        captured: &'a Scope<'a>,
-        binder_name: Option<(BinderNameFn, BindKind)>,
-    ) -> Self {
-        Self::with_binder_and_functor(signature, body, captured, binder_name, None, false)
-    }
-
-    pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,

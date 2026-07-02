@@ -623,6 +623,9 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
                 ))
             }),
             child,
+            None,
+            None,
+            false,
         );
         let kf_ref = home.brand().alloc_function(kf);
         home.brand().alloc_object(KObject::KFunction(kf_ref))

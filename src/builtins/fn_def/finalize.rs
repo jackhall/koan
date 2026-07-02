@@ -235,7 +235,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     };
 
     let region = scope.brand();
-    let f: &'a KFunction<'a> = region.alloc_function(KFunction::with_binder_and_functor(
+    let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
         user_sig,
         Body::UserDefined(body_expr),
         scope,

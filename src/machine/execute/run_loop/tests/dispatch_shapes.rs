@@ -72,6 +72,9 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
         sig,
         crate::machine::core::kfunction::Body::Builtin(body_identity),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = scope.brand().alloc_object(KObject::KFunction(f));
     scope
