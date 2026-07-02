@@ -4,10 +4,9 @@ use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
 use crate::source::{FileId, Span, Spanned};
-use std::rc::Rc;
 
 use crate::machine::model::{
-    ArgValue, Carried, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
+    Carried, Held, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
 use crate::witnessed::reattachable;
 
@@ -194,9 +193,10 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// Slot-aware resolve producing the bundle's owned [`ArgValue`]. A type rides the `Type`
-    /// arm raw; a runtime value rides the `Object` arm. Runs at `KFunction::bind` time, which
-    /// has no `Scope` in hand.
+    /// Slot-aware resolve producing an owned [`Held`] cell. A type rides the `Type` arm raw; a
+    /// runtime value rides the `Object` arm. Runs at [`KFunction::bind_args`] time (an already-picked
+    /// builtin call), which has no `Scope` in hand and no region to borrow from — so each cell is
+    /// owned by value.
     ///
     /// - A `Spliced(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
     /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
@@ -204,23 +204,25 @@ impl<'a> ExpressionPart<'a> {
     ///   name (a name not in the builtin table) — scope-aware elaboration defers to
     ///   [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
-    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> ArgValue<'a> {
+    ///
+    /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
+    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced(Carried::Type(kt)) = self {
-            return ArgValue::Type((*kt).clone());
+            return Held::Type((*kt).clone());
         }
         if let (ExpressionPart::Type(t), KType::OfKind(KKind::ProperType)) = (self, slot) {
             let kt = KType::<'a>::from_type_identifier(t)
                 .unwrap_or_else(|_| KType::Unresolved(t.clone()));
-            return ArgValue::Type(kt);
+            return Held::Type(kt);
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
-            return ArgValue::Object(Rc::new(KObject::KExpression((**inner).clone())));
+            return Held::Object(KObject::KExpression((**inner).clone()));
         }
         if let (ExpressionPart::RecordType(inner), KType::RecordType) = (self, slot) {
-            return ArgValue::Object(Rc::new(KObject::KExpression((**inner).clone())));
+            return Held::Object(KObject::KExpression((**inner).clone()));
         }
-        ArgValue::Object(Rc::new(self.resolve()))
+        Held::Object(self.resolve())
     }
 
     pub fn resolve(&self) -> KObject<'a> {

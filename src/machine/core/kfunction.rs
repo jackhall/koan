@@ -5,9 +5,9 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
-use crate::machine::core::{BindKind, KError, KErrorKind, KFuture, Scope};
+use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
 use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
-use crate::machine::model::values::{ArgValue, NamedPairs};
+use crate::machine::model::values::{Held, NamedPairs};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.
@@ -118,7 +118,7 @@ impl<'a> KFunction<'a> {
     }
 
     /// Validate a positional call `expr` against this signature: arity, keyword spellings, and each
-    /// argument's type ([`Argument::matches`]). Shared by [`Self::bind`] and the `exec` executor —
+    /// argument's type ([`Argument::matches`]). Shared by [`Self::bind_args`] and the `exec` executor —
     /// the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for a
     /// uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
     /// argument becomes a hard `TypeMismatch` rather than slipping through.
@@ -160,19 +160,26 @@ impl<'a> KFunction<'a> {
         Ok(())
     }
 
-    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
-        self.validate_call_args(&expr)?;
-        let mut args: Record<ArgValue<'a>> = Record::new();
+    /// Bind a builtin call's positional arguments to this signature's parameters, producing the
+    /// owned argument record [`Record<Held>`] directly. Each argument is resolved against its
+    /// declared parameter type by the slot-aware [`ExpressionPart::resolve_for`], which lowers a raw
+    /// `Type` / `SigiledTypeExpr` / `RecordType` part into the matching [`Held`] arm.
+    ///
+    /// This is the builtin counterpart to [`Self::bind_by_name`] (the user-defined-call binder).
+    /// The two hold *different currencies for a reason*: this binder produces owned `Held` cells
+    /// because a builtin receives raw un-`Spliced` argument parts that `resolve_for` resolves into
+    /// fresh values with no region to borrow from; `bind_by_name` produces borrowed `Record<Carried>`
+    /// because a user-defined call arrives with its value parts already resolved into `Carried` by
+    /// dispatch, so it is a trusted rename of existing region values.
+    pub fn bind_args(&'a self, expr: &KExpression<'a>) -> Result<Record<Held<'a>>, KError> {
+        self.validate_call_args(expr)?;
+        let mut args: Record<Held<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
                 args.insert(arg.name.clone(), part.value.resolve_for(&arg.ktype));
             }
         }
-        Ok(KFuture {
-            parsed: expr,
-            function: self,
-            args,
-        })
+        Ok(args)
     }
 
     /// Reorder a call's named arguments (the `{name = value}` record literal's fields)

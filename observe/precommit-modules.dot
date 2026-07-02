@@ -572,7 +572,6 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::lexical_frame" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::pending" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
-    "koan::machine::core::scope" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::witnessed" [label="uses", style="dashed"];
@@ -752,7 +751,6 @@ digraph {
     "koan::machine::execute::lift" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::lift" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::nodes" -> "koan::builtins" [label="uses", style="dashed"];

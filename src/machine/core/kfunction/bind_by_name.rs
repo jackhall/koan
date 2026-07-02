@@ -1,8 +1,8 @@
 //! Bind a user-defined call's already-resolved arguments to a function's parameters *by name* — the
 //! binder the `exec` body executor uses, subsuming both call forms (named `f {x = a}` and positional
-//! `f a b`). (Builtins bind via [`KFunction::bind`], which produces a `Record<ArgValue>`.) The
+//! `f a b`). (Builtins bind via [`KFunction::bind_args`], which produces an owned `Record<Held>`.) The
 //! arguments arrive as [`Carried`] values (resolved into the region by dispatch), so binding is a
-//! pure rename map into a `Record<Carried>`: no `ArgValue` wrapping and no per-argument type-check —
+//! pure rename map into a `Record<Carried>`: no owned-value wrapping and no per-argument type-check —
 //! that is the picker's job, and the carried type is trusted here.
 
 use super::KFunction;

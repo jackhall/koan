@@ -5,8 +5,6 @@
 //!
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use std::rc::Rc;
-
 use crate::machine::model::types::{KType, Parseable};
 use crate::witnessed::reattachable;
 
@@ -81,57 +79,12 @@ impl<'a> Carried<'a> {
     }
 }
 
-/// Owned form of the value currency, for storage that must survive a [`KFuture`] lift: the
-/// `Object` arm rides an [`Rc`] (lift-stable, like the bundle's pre-existing `Rc<KObject>`),
-/// the `Type` arm is an owned [`KType`] (`Clone`-stable — recursive sets ride `Rc`, module
-/// refs carry their own frame anchor). The form a bound argument record (`Record<ArgValue>`) holds,
-/// and that [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
-/// produces. The borrowed [`Carried`] is the channel currency; this is its owned dual.
-///
-/// [`KFuture`]: crate::machine::core::KFuture
-pub enum ArgValue<'a> {
-    Object(Rc<KObject<'a>>),
-    Type(KType<'a>),
-}
-
-impl<'a> ArgValue<'a> {
-    /// Independent copy: `Rc::clone` the object arm, `clone` the type arm.
-    pub fn deep_clone(&self) -> ArgValue<'a> {
-        match self {
-            ArgValue::Object(rc) => ArgValue::Object(Rc::new(rc.deep_clone())),
-            ArgValue::Type(kt) => ArgValue::Type(kt.clone()),
-        }
-    }
-
-    /// The `Object` arm as a borrow, if this is one.
-    pub fn as_object(&self) -> Option<&KObject<'a>> {
-        match self {
-            ArgValue::Object(rc) => Some(rc),
-            ArgValue::Type(_) => None,
-        }
-    }
-
-    /// The `Type` arm, if this is one.
-    pub fn as_type(&self) -> Option<&KType<'a>> {
-        match self {
-            ArgValue::Type(kt) => Some(kt),
-            ArgValue::Object(_) => None,
-        }
-    }
-
-    /// Surface rendering of either arm — an object's `summarize` or a type's `name`.
-    pub fn summarize(&self) -> String {
-        match self {
-            ArgValue::Object(o) => Parseable::summarize(&**o),
-            ArgValue::Type(t) => t.name(),
-        }
-    }
-}
-
-/// Owned by-value cell of a `List` / `Dict` / `Record`: a runtime object or a type carried
-/// as a first-class aggregate element. The by-value dual of [`Carried`] for aggregate
-/// storage — distinct from [`ArgValue`], whose `Object` arm is `Rc`-shared for per-call
-/// bundle cloning; an aggregate owns its cells inline (by value, not `Rc`-shared).
+/// Owned by-value cell: a runtime object or a type carried as a first-class value. The owned
+/// dual of the borrowed channel currency [`Carried`], holding each arm inline (by value, no `Rc`).
+/// It is the cell type of a `List` / `Dict` / `Record` and the currency a builtin's bound argument
+/// record (`Record<Held>`) holds — produced by
+/// [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for), which
+/// resolves each already-picked argument part into an owned value with no region to borrow from.
 pub enum Held<'a> {
     Object(KObject<'a>),
     Type(KType<'a>),

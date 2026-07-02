@@ -4,8 +4,6 @@ use std::rc::{Rc, Weak};
 
 use crate::machine::model::types::RecursiveSet;
 
-use crate::machine::model::ast::KExpression;
-
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
 pub use super::bindings::Resolution;
 use super::bindings::{
@@ -16,28 +14,8 @@ use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::types::Record;
-use crate::machine::model::values::{ArgValue, Carried, CarriedFamily, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::witnessed::{Sealed, Witnessed};
-
-/// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
-/// and the resolved argument record from `KFunction::bind`. Unit of deferred work in dispatch.
-pub struct KFuture<'a> {
-    pub parsed: KExpression<'a>,
-    pub function: &'a KFunction<'a>,
-    pub args: Record<ArgValue<'a>>,
-}
-
-impl<'a> KFuture<'a> {
-    /// `function` is shared (region-allocated, immutable); `parsed` and `args` clone deeply.
-    pub fn deep_clone(&self) -> KFuture<'a> {
-        KFuture {
-            parsed: self.parsed.clone(),
-            function: self.function,
-            args: Record::from_pairs(self.args.iter().map(|(k, v)| (k.clone(), v.deep_clone()))),
-        }
-    }
-}
 
 /// Lexical environment. Only the root scope holds a writer in `out`; child scopes
 /// have `None` and `write_out` walks `outer` to find one.
