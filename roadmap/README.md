@@ -36,7 +36,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
-- [Merge the raw-type-part slot markers](refactor/merge-raw-type-part-slots.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
