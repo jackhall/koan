@@ -15,7 +15,8 @@ share design constraints and ship together. Each has a README naming what the pr
 buys the language and listing its ready-to-start items:
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
 [operator_chaining/](operator_chaining/README.md), [type_language/](type_language/README.md),
-[editor_tooling/](editor_tooling/README.md), and [refactor/](refactor/README.md).
+[editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md), and
+[scheduler_library/](scheduler_library/README.md).
 
 Design rationale for what's already in the language lives in [design/](../design/) — five
 topical docs covering the execution model, memory model, functional programming,
@@ -34,12 +35,22 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
+- [Own the chain-reaches-region predicate](refactor/fold-chain-reaches-region-predicate.md)
+- [Fold the two type-write paths](refactor/fold-type-write-paths.md)
+- [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
+- [Own singleton nominal-set construction](refactor/own-singleton-nominal-set-construction.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
+- [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
+- [One chain-walk for scope name resolution](refactor/unify-scope-lookup-ladders.md)
+- [One producer-disposition primitive and the `Deps` builder](scheduler_library/disposition-and-deps-builder.md)
+- [The step owns region liveness](scheduler_library/step-held-region.md)
+- [A compile-enforced boundary for the substrate](scheduler_library/substrate-crate-boundary.md)
+- [Shrink witnessed.rs's raw retype surface](scheduler_library/witnessed-retype-hygiene.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
