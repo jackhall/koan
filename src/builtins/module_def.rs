@@ -11,7 +11,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{Scope, TraceFrame, TypeCarrierHit};
+use crate::machine::{NameLookup, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
@@ -42,12 +42,12 @@ pub fn body<'a>(
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
         // `&KType` in place from its **stored** reach.
-        if let Some(TypeCarrierHit::Bound { kt, reach }) = fctx
+        if let Some(NameLookup::Bound(hit)) = fctx
             .scope
             .bindings()
             .lookup_type_carrier(&name_for_finish, None)
         {
-            return Action::Done(Ok(fctx.scope.resident_type_carrier(kt, &reach)));
+            return Action::Done(Ok(fctx.scope.resident_type_carrier(hit.kt, &hit.reach)));
         }
         // The module's home-omitted foreign reach, folded from the child scope held **directly** here
         // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal

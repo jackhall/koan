@@ -9,7 +9,7 @@ use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::Carried;
-use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
+use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
 use crate::source::Spanned;
 
 fn body_a<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -47,7 +47,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     ))]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Resolved(r) => {
+        DispatchOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
             assert!(r.slots.ref_name_indices.is_empty());
             assert!(!r.slots.picked_has_binder_name);
@@ -69,7 +69,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     ]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Ambiguous(n) => assert_eq!(n, 2),
+        DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
     }
 }
@@ -99,7 +99,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     ]);
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Ambiguous(_) => {}
+        DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
     }
 }
@@ -148,7 +148,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
     ]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Resolved(r) => {
+        DispatchOutcome::Resolved(r) => {
             assert_eq!(r.placeholder.as_ref().map(|(n, _)| n.as_str()), Some("foo"));
             assert!(r.slots.picked_has_binder_name);
         }
@@ -174,7 +174,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     let chain = LexicalFrame::detached();
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[]),
-        ResolveOutcome::Unmatched
+        DispatchOutcome::Unmatched
     ));
 }
 
@@ -204,7 +204,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let chain = LexicalFrame::detached();
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[]),
-        ResolveOutcome::Deferred
+        DispatchOutcome::Deferred
     ));
 }
 
@@ -231,7 +231,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     ]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&bare, Some(&chain), &[]) {
-        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
             std::any::type_name_of_val(&other)
@@ -247,7 +247,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     assert!(
         matches!(
             scope.resolve_dispatch(&multi, Some(&chain), &[]),
-            ResolveOutcome::Unmatched
+            DispatchOutcome::Unmatched
         ),
         "different-bucket call must not park on a lead-keyword sibling",
     );
@@ -292,7 +292,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
 
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![NodeId(55)],
             "inner pending must shadow the outer strict Pick",
@@ -337,7 +337,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     assert!(
         matches!(
             inner.resolve_dispatch(&expr, Some(&chain), &[]),
-            ResolveOutcome::Deferred
+            DispatchOutcome::Deferred
         ),
         "inner eager-lean must Defer at its scope, not fall through to outer",
     );
@@ -368,7 +368,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
     let chain = LexicalFrame::detached();
     match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes) {
-        ResolveOutcome::Resolved(r) => assert!(
+        DispatchOutcome::Resolved(r) => assert!(
             matches!(
                 r.function.signature.elements.first(),
                 Some(SignatureElement::Argument(arg)) if arg.ktype == KType::Identifier
@@ -434,7 +434,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
 
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(
+        DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![NodeId(77)],
             "finalized Pick must park on the in-flight pending sibling",
@@ -477,7 +477,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         .expect("register sibling overload");
 
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::Resolved(_) => {}
+        DispatchOutcome::Resolved(_) => {}
         other => panic!(
             "bucket must resolve once the pending sibling finalizes; got {}",
             std::any::type_name_of_val(&other),
@@ -528,7 +528,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     ]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
-        ResolveOutcome::ParkOnProducers(ps) => {
+        DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
                 ps,
                 vec![NodeId(101)],

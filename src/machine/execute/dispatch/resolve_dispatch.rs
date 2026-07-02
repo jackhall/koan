@@ -67,7 +67,7 @@ pub struct Resolved<'step> {
     pub slots: ClassifiedSlots,
 }
 
-pub enum ResolveOutcome<'step> {
+pub enum DispatchOutcome<'step> {
     Resolved(Resolved<'step>),
     Ambiguous(usize),
     Deferred,
@@ -102,7 +102,7 @@ impl<'step> Scope<'step> {
         expr: &KExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<NameOutcome<'e>>],
-    ) -> ResolveOutcome<'step> {
+    ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         let key = expr.untyped_key();
@@ -137,8 +137,8 @@ impl<'step> Scope<'step> {
             }
         }
         match dead_lean {
-            Some(name) => ResolveOutcome::UnboundName(name),
-            None => ResolveOutcome::Unmatched,
+            Some(name) => DispatchOutcome::UnboundName(name),
+            None => DispatchOutcome::Unmatched,
         }
     }
 }
@@ -148,7 +148,7 @@ impl<'step> Scope<'step> {
 /// outer scope may strict-Pick the bare name); `Continue` means this scope
 /// raised nothing.
 enum ScopeDecision<'step> {
-    Terminal(ResolveOutcome<'step>),
+    Terminal(DispatchOutcome<'step>),
     DeadLean(String),
     Continue,
 }
@@ -183,11 +183,11 @@ fn decide_scope<'step, 'e>(
                 producers.push(p);
             }
         }
-        return ScopeDecision::Terminal(ResolveOutcome::ParkOnProducers(producers));
+        return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(producers));
     }
     match bucket.pick_strict(expr, bare_outcomes) {
         PickPass::Picked(f) => {
-            ScopeDecision::Terminal(ResolveOutcome::Resolved(build_resolved(f, expr)))
+            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(f, expr)))
         }
         // Tie with an unevaluated eager part may break once it evaluates: a
         // typed `Spliced(List …)` re-dispatch is element-aware where the bare
@@ -195,9 +195,9 @@ fn decide_scope<'step, 'e>(
         // on the post-eager-subs pass.
         PickPass::Tie(n) if expr_has_eager_part(expr) => {
             let _ = n;
-            ScopeDecision::Terminal(ResolveOutcome::Deferred)
+            ScopeDecision::Terminal(DispatchOutcome::Deferred)
         }
-        PickPass::Tie(n) => ScopeDecision::Terminal(ResolveOutcome::Ambiguous(n)),
+        PickPass::Tie(n) => ScopeDecision::Terminal(DispatchOutcome::Ambiguous(n)),
         PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes),
     }
 }
@@ -237,10 +237,10 @@ fn decide_relaxed<'step, 'e>(
         }
     }
     if !parked.is_empty() {
-        return ScopeDecision::Terminal(ResolveOutcome::ParkOnProducers(parked));
+        return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(parked));
     }
     if any_eager_lean {
-        return ScopeDecision::Terminal(ResolveOutcome::Deferred);
+        return ScopeDecision::Terminal(DispatchOutcome::Deferred);
     }
     match dead_name {
         Some(name) => ScopeDecision::DeadLean(name),

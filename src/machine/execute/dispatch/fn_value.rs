@@ -7,7 +7,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
-use crate::machine::{KError, KErrorKind, NodeId, Resolution};
+use crate::machine::{KError, KErrorKind, NameLookup, NodeId};
 
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -25,29 +25,29 @@ pub(super) fn initial<'step>(
     match ctx.current_scope().resolve_with_chain(&head, chain) {
         // `obj` resolves against the cart scope at `'step` directly — the cart pins its storage for
         // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
-        Resolution::Value(obj) => dispatch_callable_value(ctx, expr, obj),
+        Some(NameLookup::Bound(obj)) => dispatch_callable_value(ctx, expr, obj),
         // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
         // producer has *already* finalized splits two ways:
         // - `Err`: the binder errored before binding the head, so the name never became a value —
         //   propagate the producer's error.
         // - `Ok`: unreachable. A binder's successful finalize always registers its name (the
-        //   `Value` then shadows the placeholder), so a ready-Ok producer resolves to `Value`,
-        //   never `Placeholder`. Reaching here means that invariant broke.
-        Resolution::Placeholder(producer) => {
+        //   `Bound` then shadows the placeholder), so a ready-Ok producer resolves to `Bound`,
+        //   never `Parked`. Reaching here means that invariant broke.
+        Some(NameLookup::Parked(producer)) => {
             if ctx.is_result_ready(producer) {
                 match ctx.result_error(producer) {
                     Err(e) => Outcome::Done(Err(e.clone_for_propagation())),
                     Ok(()) => unreachable!(
                         "head placeholder `{head}` producer finalized Ok without registering the \
                          name — a binder's successful finalize always binds its name, so a \
-                         ready-Ok producer must resolve to a Value, not a Placeholder",
+                         ready-Ok producer must resolve to a Bound, not a Parked",
                     ),
                 }
             } else {
                 install_head_park(producer, expr)
             }
         }
-        Resolution::UnboundName => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),
     }
 }
 

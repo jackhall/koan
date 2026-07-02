@@ -4,8 +4,8 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
-    FrameSet, KError, KErrorKind, KoanRegion, NameOutcome, NodeId, RegionBrand, TraceFrame,
-    ValueCarrierResolution,
+    FrameSet, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome, NodeId, RegionBrand,
+    TraceFrame,
 };
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Sealed, Witnessed};
@@ -285,7 +285,7 @@ impl<'step> KoanRuntime<'step> {
             let resolved = with_current_node_scope(&self.ambient, |s| {
                 s.resolve_value_carrier(name, active_chain.map(|c| &**c))
             });
-            if let ValueCarrierResolution::Value(carrier) = resolved {
+            if let Some(NameLookup::Bound(carrier)) = resolved {
                 return Slot::Static(Sealed::seal(carrier));
             }
         }

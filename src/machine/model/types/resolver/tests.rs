@@ -27,7 +27,7 @@ fn value_language_leaf_names_layering() {
         .expect("bind_value");
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("Gee")) {
-        ElabResult::Unbound(msg) => assert!(
+        TypeResolution::Unbound(msg) => assert!(
             msg.contains("value-language only") && msg.contains("Gee"),
             "expected a value-language layering message naming `Gee`, got: {msg}",
         ),
@@ -41,7 +41,7 @@ fn unbound_leaf_names_unknown_type() {
     let scope = run_root_silent(&region);
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType")) {
-        ElabResult::Unbound(msg) => assert!(
+        TypeResolution::Unbound(msg) => assert!(
             msg.contains("unknown type name") && msg.contains("NopeType"),
             "expected an unknown-type-name message naming `NopeType`, got: {msg}",
         ),
@@ -65,14 +65,14 @@ fn recursive_group_member_lowers_to_recursive_ref() {
         .alloc_scope(Scope::child_recursive_group(parent, set));
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B")) {
-        ElabResult::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
+        TypeResolution::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
         other => panic!("expected a RecursiveRef back-edge for a group member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child);
     assert!(
         matches!(
             elaborate_type_identifier(&mut el2, &leaf("Nope")),
-            ElabResult::Unbound(_)
+            TypeResolution::Unbound(_)
         ),
         "a non-member must fall through to ordinary resolution",
     );

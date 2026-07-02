@@ -154,7 +154,7 @@ mod tests {
             .decl_scope()
             .bindings()
             .lookup_type("x", None)
-            .and_then(crate::machine::TypeResolution::finalized)
+            .and_then(crate::machine::NameLookup::bound)
             .expect("VAL slot `x` must live in SIG's type table");
         assert!(
             matches!(x, KType::Number),

@@ -4,7 +4,7 @@
 //! short-circuits to the transient [`KType::RecursiveRef`] via the threaded binder name, and
 //! a co-declared `RECURSIVE TYPES` member via the scope's shared set; both seal to a
 //! [`KType::SetLocal`] index at finalize. A reference to an *earlier* type still finalizing
-//! returns [`ElabResult::Park`] so the caller re-runs the elaboration on wake.
+//! returns [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
 //! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_type_identifier`]
@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::core::{FrameSet, LexicalFrame, Resolution, Scope, ScopeId, TypeResolution};
+use crate::machine::core::{FrameSet, LexicalFrame, NameLookup, Scope, ScopeId};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
@@ -24,17 +24,31 @@ use super::recursive_set::{NominalMember, RecursiveSet};
 #[cfg(test)]
 mod tests;
 
-/// Outcome of one elaboration walk over a `TypeIdentifier`.
+/// Outcome of resolving a `TypeIdentifier` to a `T` — the shared spine of the type-name
+/// resolution path. `Done` carries the resolved payload (an owned `KType` at the model layer, as
+/// `TypeResolution<KType>`; a region reference plus reach at the execute layer, as
+/// `TypeResolution<TypeHit>`); `Park` the producer `NodeId`s a still-finalizing referent waits
+/// on; `Unbound` the miss diagnostic. The `Park`/`Unbound` arms are payload-free, so a layer lifts
+/// the `Done` payload through [`Self::and_then_done`] while forwarding the other two unchanged — no
+/// hand-written per-layer re-wrap.
 #[derive(Debug)]
-pub enum ElabResult<'a> {
-    /// Fully elaborated. Self / forward-sibling references appear as transient
-    /// `RecursiveRef(name)` leaves, sealed into `SetLocal` indices at the member's finalize.
-    Done(KType<'a>),
-    /// Referenced type-binding placeholders haven't finalized. Caller installs park
-    /// edges on every producer and re-runs the elaboration when they terminalize.
+pub enum TypeResolution<T> {
+    Done(T),
     Park(Vec<NodeId>),
-    /// Bare leaf didn't resolve and isn't a builtin.
     Unbound(String),
+}
+
+impl<T> TypeResolution<T> {
+    /// Transform the `Done` payload, which may itself resolve to a `Park` / `Unbound` — the
+    /// execute layer's finalize gate turns a `Done` into a `Park` when a referenced type is
+    /// still in flight. `Park` / `Unbound` forward unchanged.
+    pub fn and_then_done<U>(self, f: impl FnOnce(T) -> TypeResolution<U>) -> TypeResolution<U> {
+        match self {
+            TypeResolution::Done(payload) => f(payload),
+            TypeResolution::Park(producers) => TypeResolution::Park(producers),
+            TypeResolution::Unbound(message) => TypeResolution::Unbound(message),
+        }
+    }
 }
 
 /// Per-elaboration-walk state.
@@ -83,12 +97,12 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 pub fn elaborate_type_identifier<'a>(
     el: &mut Elaborator<'_, 'a>,
     t: &TypeIdentifier,
-) -> ElabResult<'a> {
+) -> TypeResolution<KType<'a>> {
     let name = t.as_str();
     if el.threaded.contains(name) {
         // Self / forward-sibling reference inside a type-definition body: a transient
         // `RecursiveRef`, sealed into a `SetLocal` index when the member finalizes.
-        return ElabResult::Done(KType::RecursiveRef(name.to_string()));
+        return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
     }
     if let Some(set) = el.scope.nearest_recursive_set() {
         // A bare leaf naming a member of the enclosing `RECURSIVE TYPES` block is a
@@ -98,17 +112,17 @@ pub fn elaborate_type_identifier<'a>(
         // order, with no forward placeholder. Checked before `resolve_type` so a member
         // lowers to the back-edge rather than the set's pre-installed external `SetRef`.
         if set.index_of(name).is_some() {
-            return ElabResult::Done(KType::RecursiveRef(name.to_string()));
+            return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
         // A finalized type resolves directly.
-        Some(TypeResolution::Type(kt)) => return ElabResult::Done(kt.clone()),
+        Some(NameLookup::Bound(kt)) => return TypeResolution::Done(kt.clone()),
         // A *visible* type placeholder is an earlier-declared type still finalizing: park on
         // its producer and re-elaborate when it terminalizes. A forward reference (a later
         // sibling) is filtered out by the chain before reaching here — a position error, not a
         // park. Mutual recursion across the cut uses a `RECURSIVE TYPES` block, threaded above.
-        Some(TypeResolution::Placeholder(id)) => return ElabResult::Park(vec![id]),
+        Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }
     // Not a type (finalized or in flight). Consult the value side only to sharpen the miss
@@ -116,16 +130,18 @@ pub fn elaborate_type_identifier<'a>(
     // diagnostic; an unknown name gets the unknown-name failure. `from_name` is tried first in
     // both arms so fixture scopes that skip builtin registration still resolve builtin names.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
-        Resolution::Value(_) | Resolution::Placeholder(_) => match KType::<'a>::from_name(name) {
-            Some(kt) => ElabResult::Done(kt),
-            None => ElabResult::Unbound(format!(
-                "`{name}` is value-language only — a type slot needs a type-language \
-                 binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
-            )),
-        },
-        Resolution::UnboundName => match KType::<'a>::from_name(name) {
-            Some(kt) => ElabResult::Done(kt),
-            None => ElabResult::Unbound(format!("unknown type name `{name}`")),
+        Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
+            match KType::<'a>::from_name(name) {
+                Some(kt) => TypeResolution::Done(kt),
+                None => TypeResolution::Unbound(format!(
+                    "`{name}` is value-language only — a type slot needs a type-language \
+                     binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
+                )),
+            }
+        }
+        None => match KType::<'a>::from_name(name) {
+            Some(kt) => TypeResolution::Done(kt),
+            None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
         },
     }
 }
@@ -175,7 +191,7 @@ pub fn finalize_nominal_member<'a>(
     let pre_installed = match scope
         .bindings()
         .lookup_type(name, None)
-        .and_then(TypeResolution::finalized)
+        .and_then(NameLookup::bound)
     {
         Some(KType::SetRef { set, index }) if !set.member(*index).is_filled() => {
             Some((Rc::clone(set), *index))

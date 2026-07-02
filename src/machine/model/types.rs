@@ -21,8 +21,8 @@ pub use recursive_set::{
     seal_recursive_refs, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
 pub use resolver::{
-    elaborate_type_identifier, finalize_nominal_member, ElabResult, Elaborator, SchemaSealResult,
-    SealOutcome,
+    elaborate_type_identifier, finalize_nominal_member, Elaborator, SchemaSealResult, SealOutcome,
+    TypeResolution,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;

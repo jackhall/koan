@@ -24,7 +24,7 @@ fn collect_param_types<'a>(
     signature: &KExpression<'a>,
     scope: &Scope<'a>,
 ) -> std::collections::HashMap<String, KType<'a>> {
-    use crate::machine::model::types::{elaborate_type_identifier, ElabResult};
+    use crate::machine::model::types::{elaborate_type_identifier, TypeResolution};
     let mut map = std::collections::HashMap::new();
     let mut el = Elaborator::new(scope);
     let parts = &signature.parts;
@@ -38,7 +38,7 @@ fn collect_param_types<'a>(
         if let Some(name) = param_name {
             if let Some(next_part) = parts.get(i + 1) {
                 if let ExpressionPart::Type(t) = &next_part.value {
-                    if let ElabResult::Done(kt) = elaborate_type_identifier(&mut el, t) {
+                    if let TypeResolution::Done(kt) = elaborate_type_identifier(&mut el, t) {
                         map.insert(name, kt);
                     }
                 }

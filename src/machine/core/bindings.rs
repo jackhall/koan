@@ -52,35 +52,31 @@ pub enum BindKind {
     Type,
 }
 
-/// Outcome of a value-side name lookup. `Resolution::Placeholder` carries the
-/// producer `NodeId` the consumer should park on.
+/// Outcome of a single-scope name lookup: the name is `Bound` to a `T`, or `Parked` on the
+/// producer `NodeId` of an earlier still-finalizing binder the consumer waits on. A miss is the
+/// enclosing `Option`'s `None` — the caller keeps walking ancestors — so "unbound" is not a
+/// variant here; the terminal unbound disposition (with its diagnostic) is materialized one level
+/// up on the resolution path ([`crate::machine::model::types::TypeResolution`] /
+/// [`crate::machine::NameOutcome`]). Every single-scope lookup instantiates this one shape: a bare
+/// value lookup is `NameLookup<&KObject>`, a bare type lookup `NameLookup<&KType>`, and the
+/// reach-carrying reads are `NameLookup<ValueHit>` / `NameLookup<TypeHit>` (value / type) or
+/// `NameLookup<Witnessed<…>>` (the witnessed value carrier the read site seals from).
 ///
-/// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry
-/// never both hold the same name — every successful value write path clears its
-/// matching value placeholder.
-pub enum Resolution<'a> {
-    Value(&'a KObject<'a>),
-    Placeholder(NodeId),
-    UnboundName,
-}
-
-/// Outcome of a per-scope type-side lookup — the type-language mirror of
-/// [`Resolution`]. `Placeholder` carries the producer `NodeId` of an earlier
-/// still-finalizing type binder the consumer parks on. A miss is `None` (the caller
-/// keeps walking ancestors), matching how [`Bindings::lookup_value`] returns `None`.
+/// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry never both
+/// hold the same name — every successful value write path clears its matching value placeholder.
 #[derive(Copy, Clone, Debug)]
-pub enum TypeResolution<'a> {
-    Type(&'a KType<'a>),
-    Placeholder(NodeId),
+pub enum NameLookup<T> {
+    Bound(T),
+    Parked(NodeId),
 }
 
-impl<'a> TypeResolution<'a> {
-    /// The resolved type, or `None` for an in-flight placeholder — for callers that act
-    /// only on a finalized type and treat a still-running producer as "not bound yet".
-    pub fn finalized(self) -> Option<&'a KType<'a>> {
+impl<T> NameLookup<T> {
+    /// The bound payload, or `None` for an in-flight placeholder — for callers that act only on a
+    /// finalized binding and treat a still-running producer as "not bound yet".
+    pub fn bound(self) -> Option<T> {
         match self {
-            TypeResolution::Type(kt) => Some(kt),
-            TypeResolution::Placeholder(_) => None,
+            NameLookup::Bound(payload) => Some(payload),
+            NameLookup::Parked(_) => None,
         }
     }
 }
@@ -107,30 +103,24 @@ pub enum MemberResolution<'a> {
     },
 }
 
-/// The value-side carrier hit for a name — the reach-carrying twin of [`Resolution`]'s value arm.
-/// Produced by [`Bindings::lookup_value_carrier`] so a name read builds a self-contained witness
-/// from the binding's stored reach. `Placeholder` mirrors [`Resolution::Placeholder`].
-pub enum CarrierHit<'a> {
-    Bound {
-        obj: &'a KObject<'a>,
-        /// The binding's home-omitted foreign reach, cloned out so the read wrapper does not hold
-        /// the `data` `RefCell` borrow across the carrier build.
-        reach: FrameSet,
-    },
-    Placeholder(NodeId),
+/// The value-side reach-carrying payload of a `NameLookup<ValueHit>`: the bound value plus the
+/// binding's home-omitted foreign reach, cloned out so the read wrapper does not hold the `data`
+/// `RefCell` borrow across the carrier build. Produced by [`Bindings::lookup_value_carrier`] so a
+/// name read builds a self-contained witness from the stored reach.
+pub struct ValueHit<'a> {
+    pub obj: &'a KObject<'a>,
+    pub reach: FrameSet,
 }
 
-/// The type-side carrier hit for a name — the type-channel mirror of [`CarrierHit`]. Produced by
-/// [`Bindings::lookup_type_carrier`] so a type read witnesses the existing `&KType` in place from
-/// the binding's stored reach. `Placeholder` mirrors [`TypeResolution::Placeholder`].
-pub enum TypeCarrierHit<'a> {
-    Bound {
-        kt: &'a KType<'a>,
-        /// The binding's home-omitted foreign reach (empty for owned data, the child-scope reach for
-        /// a module), cloned out so the read wrapper does not hold the `types` `RefCell` borrow.
-        reach: FrameSet,
-    },
-    Placeholder(NodeId),
+/// The type-side reach-carrying payload of a `NameLookup<TypeHit>`: the bound `&KType` witnessed in
+/// place plus the binding's home-omitted foreign reach (empty for owned data, the child-scope reach
+/// for a module), cloned out so the read wrapper does not hold the `types` `RefCell` borrow.
+/// Produced by [`Bindings::lookup_type_carrier`] so a type read witnesses the existing `&KType` in
+/// place from the stored reach, and reused as the `Done` payload of the type-identifier resolution
+/// memo (`TypeResolution<TypeHit>`), which carries the same `&KType` + stored reach.
+pub struct TypeHit<'a> {
+    pub kt: &'a KType<'a>,
+    pub reach: FrameSet,
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -262,15 +252,20 @@ impl<'a> Bindings<'a> {
     /// returning the first visible hit. `chain_cutoff = None` means the scope
     /// is off-chain (or unfiltered) — everything is visible. `None` return
     /// means no visible entry at this scope; the caller keeps walking
-    /// ancestors and surfaces `UnboundName` on chain exhaustion.
-    pub fn lookup_value(&self, name: &str, chain_cutoff: Option<usize>) -> Option<Resolution<'a>> {
+    /// ancestors, and chain exhaustion stays `None` (the terminal unbound
+    /// disposition is materialized on the resolution path, not here).
+    pub fn lookup_value(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<NameLookup<&'a KObject<'a>>> {
         if let Some((obj, idx, _reach)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(Resolution::Value(obj));
+                return Some(NameLookup::Bound(obj));
             }
         }
         self.value_placeholder(name, chain_cutoff)
-            .map(Resolution::Placeholder)
+            .map(NameLookup::Parked)
     }
 
     /// The value-side placeholder producer for `name`, or `None` — shared by
@@ -287,19 +282,19 @@ impl<'a> Bindings<'a> {
 
     /// Per-scope type-side lookup. The type-language mirror of [`Self::lookup_value`]:
     /// consults `types` then the `BindKind::Type` `placeholders` entries, returning the
-    /// first visible hit as a [`TypeResolution`], or `None` so the caller keeps walking.
+    /// first visible hit as a [`NameLookup`], or `None` so the caller keeps walking.
     pub fn lookup_type(
         &self,
         name: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<TypeResolution<'a>> {
+    ) -> Option<NameLookup<&'a KType<'a>>> {
         if let Some((kt, idx, _reach)) = self.types.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(TypeResolution::Type(kt));
+                return Some(NameLookup::Bound(kt));
             }
         }
         self.type_placeholder(name, chain_cutoff)
-            .map(TypeResolution::Placeholder)
+            .map(NameLookup::Parked)
     }
 
     /// The type-side placeholder producer for `name`, or `None` — shared by [`Self::lookup_type`]
@@ -314,23 +309,23 @@ impl<'a> Bindings<'a> {
     }
 
     /// Carrier-oriented type lookup — the reach-carrying twin of [`Self::lookup_type`]. A `types` hit
-    /// returns [`TypeCarrierHit::Bound`] with the binding's stored reach (cloned out); otherwise a
+    /// returns [`NameLookup::Bound`] with the binding's stored reach (cloned out); otherwise a
     /// visible type placeholder or a miss.
     pub fn lookup_type_carrier(
         &self,
         name: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<TypeCarrierHit<'a>> {
+    ) -> Option<NameLookup<TypeHit<'a>>> {
         if let Some((kt, idx, reach)) = self.types.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(TypeCarrierHit::Bound {
+                return Some(NameLookup::Bound(TypeHit {
                     kt,
                     reach: reach.clone(),
-                });
+                }));
             }
         }
         self.type_placeholder(name, chain_cutoff)
-            .map(TypeCarrierHit::Placeholder)
+            .map(NameLookup::Parked)
     }
 
     /// Classified per-scope member lookup for ATTR module / signature access: the value-or-type
@@ -364,23 +359,23 @@ impl<'a> Bindings<'a> {
     }
 
     /// Carrier-oriented value lookup — the reach-carrying twin of [`Self::lookup_value`]. A `data`
-    /// hit returns [`CarrierHit::Bound`] with the binding's stored reach (cloned out); otherwise a
+    /// hit returns [`NameLookup::Bound`] with the binding's stored reach (cloned out); otherwise a
     /// visible value placeholder or a miss, mirroring `lookup_value`'s data-then-placeholder order.
     pub fn lookup_value_carrier(
         &self,
         name: &str,
         chain_cutoff: Option<usize>,
-    ) -> Option<CarrierHit<'a>> {
+    ) -> Option<NameLookup<ValueHit<'a>>> {
         if let Some((obj, idx, reach)) = self.data.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(CarrierHit::Bound {
+                return Some(NameLookup::Bound(ValueHit {
                     obj,
                     reach: reach.clone(),
-                });
+                }));
             }
         }
         self.value_placeholder(name, chain_cutoff)
-            .map(CarrierHit::Placeholder)
+            .map(NameLookup::Parked)
     }
 
     /// The producer `NodeId` of a still-finalizing **type** binder named `name`, read straight

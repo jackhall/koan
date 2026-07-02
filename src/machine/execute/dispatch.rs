@@ -22,8 +22,9 @@
 //! names).
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
+use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::nodes::NodeWork;
@@ -62,9 +63,7 @@ pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
-pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
-pub use resolve_type_identifier::TypeIdentifierResolution;
-pub(crate) use resolve_type_identifier::{resolve_type_leaf_carrier, TypeLeafCarrier};
+pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -90,25 +89,25 @@ pub(super) fn resolve_name_part<'step>(
     };
     let chain = active_chain.map(|c| &**c);
     match scope.resolve_with_chain(name, chain) {
-        Resolution::Placeholder(producer) => {
+        Some(NameLookup::Parked(producer)) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
         }
-        Resolution::Value(obj) if is_type.is_none() => {
+        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
             return NameOutcome::Resolved(Carried::Object(obj));
         }
-        Resolution::Value(_) | Resolution::UnboundName => {}
+        Some(NameLookup::Bound(_)) | None => {}
     }
     match is_type {
         // The bare-leaf type token routes through the memoized, park-capable bridge. A
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match resolve_type_leaf_carrier(scope, t, active_chain.cloned()) {
+        Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
             // The `&KType` rides the type channel; its reach is recomputed at the read site
             // (`literal.rs`) via `resolve_type_reach`, since `NameOutcome` carries only the value.
-            TypeLeafCarrier::Resolved { kt, .. } => NameOutcome::Resolved(Carried::Type(kt)),
-            TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
-            TypeLeafCarrier::Park(producers) => match producers.first() {
+            TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
+            TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
+            TypeResolution::Park(producers) => match producers.first() {
                 Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),
                 None => NameOutcome::Unbound(name.to_string()),
             },

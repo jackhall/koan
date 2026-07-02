@@ -2,13 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
-use crate::machine::model::types::RecursiveSet;
+use crate::machine::model::types::{KType, RecursiveSet};
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
-pub use super::bindings::Resolution;
-use super::bindings::{
-    ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, TypeCarrierHit, TypeResolution,
-};
+use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
@@ -129,17 +126,6 @@ pub enum ScopeKind {
     Anonymous,
     Sig { name: String },
     Module { name: String },
-}
-
-/// The carrier form of a value-name resolution — the witnessed twin of [`Resolution`]. The `Value`
-/// arm hands back the bound value already wrapped in a [`Witnessed`] carrier naming its reach (the
-/// binding scope's home frame, which transitively pins that scope's sealed reach-set), so an
-/// object-value read site embeds a carrier rather than re-asserting co-location. The non-`Value` arms
-/// mirror [`Resolution`] verbatim.
-pub(crate) enum ValueCarrierResolution {
-    Value(Witnessed<CarriedFamily, FrameSet>),
-    Placeholder(NodeId),
-    UnboundName,
 }
 
 impl<'a> Scope<'a> {
@@ -506,7 +492,7 @@ impl<'a> Scope<'a> {
             // block, at the call site's statement position), carrying the value's reach.
             if matches!(
                 self.bindings.get().lookup_value(&name, None),
-                Some(Resolution::Value(_))
+                Some(NameLookup::Bound(_))
             ) {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "USING: local bind `{name}` collides with a surfaced module member; \
@@ -710,8 +696,8 @@ impl<'a> Scope<'a> {
         self.pending.drain(self.bindings.get());
     }
 
-    /// Nearest value binding of `name` up the `outer` chain. Collapses `Placeholder`
-    /// and `UnboundName` to `None`. Visibility unfiltered — use
+    /// Nearest value binding of `name` up the `outer` chain. Collapses a `Parked`
+    /// producer and a miss to `None`. Visibility unfiltered — use
     /// [`Self::lookup_with_chain`] from a dispatch-driven path.
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
         self.lookup_with_chain(name, None)
@@ -724,10 +710,8 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a KObject<'a>> {
-        match self.resolve_with_chain(name, chain) {
-            Resolution::Value(v) => Some(v),
-            Resolution::Placeholder(_) | Resolution::UnboundName => None,
-        }
+        self.resolve_with_chain(name, chain)
+            .and_then(NameLookup::bound)
     }
 
     /// Resolve `name` against this scope and the `outer` chain. Stops at the first
@@ -737,7 +721,7 @@ impl<'a> Scope<'a> {
     ///
     /// Type-side bindings are not consulted — see [`Self::resolve_type`].
     /// Visibility unfiltered; dispatch-driven reads use [`Self::resolve_with_chain`].
-    pub fn resolve(&self, name: &str) -> Resolution<'a> {
+    pub fn resolve(&self, name: &str) -> Option<NameLookup<&'a KObject<'a>>> {
         self.resolve_with_chain(name, None)
     }
 
@@ -760,42 +744,40 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn resolve_with_chain(&self, name: &str, chain: Option<&LexicalFrame>) -> Resolution<'a> {
-        self.ancestors()
-            .find_map(|scope| {
-                scope
-                    .bindings()
-                    .lookup_value(name, scope.binding_cutoff(chain))
-            })
-            .unwrap_or(Resolution::UnboundName)
+    pub fn resolve_with_chain(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<NameLookup<&'a KObject<'a>>> {
+        self.ancestors().find_map(|scope| {
+            scope
+                .bindings()
+                .lookup_value(name, scope.binding_cutoff(chain))
+        })
     }
 
     /// Carrier-returning twin of [`Self::resolve_with_chain`]: resolve `name` to the bound value
     /// wrapped in a [`Witnessed`] carrier naming its reach, so an object-value read embeds a carrier
     /// by construction instead of reconstructing the reach from the value. Walks the same `outer`
     /// chain, but at the **binding** scope wraps the value via [`Self::bound_value_carrier`] — the
-    /// witness is that scope's home frame, not the reading scope's. The non-`Value` dispositions mirror
+    /// witness is that scope's home frame, not the reading scope's. The non-`Bound` dispositions mirror
     /// [`Self::resolve_with_chain`].
     pub(crate) fn resolve_value_carrier(
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> ValueCarrierResolution {
-        self.ancestors()
-            .find_map(|scope| {
-                match scope
-                    .bindings()
-                    .lookup_value_carrier(name, scope.binding_cutoff(chain))?
-                {
-                    CarrierHit::Bound { obj, reach } => Some(ValueCarrierResolution::Value(
-                        scope.resident_value_carrier(obj, &reach),
-                    )),
-                    CarrierHit::Placeholder(producer) => {
-                        Some(ValueCarrierResolution::Placeholder(producer))
-                    }
-                }
-            })
-            .unwrap_or(ValueCarrierResolution::UnboundName)
+    ) -> Option<NameLookup<Witnessed<CarriedFamily, FrameSet>>> {
+        self.ancestors().find_map(|scope| {
+            match scope
+                .bindings()
+                .lookup_value_carrier(name, scope.binding_cutoff(chain))?
+            {
+                NameLookup::Bound(hit) => Some(NameLookup::Bound(
+                    scope.resident_value_carrier(hit.obj, &hit.reach),
+                )),
+                NameLookup::Parked(producer) => Some(NameLookup::Parked(producer)),
+            }
+        })
     }
 
     /// Build the terminal carrier for a value living **in this scope's region** from its binding's
@@ -961,25 +943,25 @@ impl<'a> Scope<'a> {
     }
 
     /// Resolve a *finalized* type, unfiltered. The `Option<&KType>` adapter over
-    /// [`Self::resolve_type_with_chain`]: an in-flight [`TypeResolution::Placeholder`]
+    /// [`Self::resolve_type_with_chain`]: an in-flight [`NameLookup::Parked`]
     /// collapses to `None` here, so callers that must park on the producer use
-    /// `resolve_type_with_chain` and match its `Placeholder` arm.
+    /// `resolve_type_with_chain` and match its `Parked` arm.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {
         self.resolve_type_with_chain(name, None)
-            .and_then(TypeResolution::finalized)
+            .and_then(NameLookup::bound)
     }
 
     /// Chain-gated type-side resolution — the type-language mirror of
     /// [`Self::resolve_with_chain`]. Per-scope `types` (and `BindKind::Type` placeholder)
     /// hits are filtered through [`visible`], so a type binding declared lexically later in
     /// the same block is invisible to an earlier sibling — a forward type reference is a
-    /// position error. Surfaces a still-finalizing producer as [`TypeResolution::Placeholder`]
+    /// position error. Surfaces a still-finalizing producer as [`NameLookup::Parked`]
     /// so a type consumer parks on it (rather than bootstrapping off the value-side lookup).
     pub fn resolve_type_with_chain(
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<TypeResolution<'a>> {
+    ) -> Option<NameLookup<&'a KType<'a>>> {
         // Builtins are unshadowable, so a builtin type is authoritative: consult the
         // immutable root in one hop and return it without walking the user chain. The
         // `idx == 0` gate keeps this to genuine builtins, so a synthetic root-position
@@ -1012,8 +994,8 @@ impl<'a> Scope<'a> {
                     .lookup_type_carrier(name, scope.binding_cutoff(chain))
             })
             .map(|hit| match hit {
-                TypeCarrierHit::Bound { reach, .. } => reach,
-                TypeCarrierHit::Placeholder(_) => FrameSet::empty(),
+                NameLookup::Bound(bound) => bound.reach,
+                NameLookup::Parked(_) => FrameSet::empty(),
             })
             .unwrap_or_default()
     }

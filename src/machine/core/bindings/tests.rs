@@ -24,10 +24,10 @@ fn data_binding_round_trips_stored_reach() {
         .try_bind_value("x", obj, BindingIndex::BUILTIN, reach)
         .expect("value bind should succeed");
     match bindings.lookup_value_carrier("x", None) {
-        Some(CarrierHit::Bound { obj: got, reach }) => {
-            assert!(std::ptr::eq(got, obj));
+        Some(NameLookup::Bound(hit)) => {
+            assert!(std::ptr::eq(hit.obj, obj));
             assert!(
-                reach
+                hit.reach
                     .sole()
                     .is_some_and(|f| std::rc::Rc::ptr_eq(f, &foreign)),
                 "stored reach should round-trip the foreign frame",
@@ -51,10 +51,10 @@ fn type_binding_round_trips_stored_reach() {
         .try_register_type("T", kt, BindingIndex::BUILTIN, reach)
         .expect("type register should succeed");
     match bindings.lookup_type_carrier("T", None) {
-        Some(TypeCarrierHit::Bound { kt: got, reach }) => {
-            assert!(std::ptr::eq(got, kt));
+        Some(NameLookup::Bound(hit)) => {
+            assert!(std::ptr::eq(hit.kt, kt));
             assert!(
-                reach
+                hit.reach
                     .sole()
                     .is_some_and(|f| std::rc::Rc::ptr_eq(f, &foreign)),
                 "stored type reach should round-trip the foreign frame",

@@ -88,7 +88,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
 }
 
 /// `(Number)` — single bare leaf Type token. Classifies as `BareTypeLeaf`; the
-/// fast-lane handler routes through `resolve_type_leaf_carrier`.
+/// fast-lane handler routes through `Scope::resolve_type_identifier`.
 #[test]
 fn bare_type_leaf_short_circuits() {
     let region = FrameStorage::run_root();

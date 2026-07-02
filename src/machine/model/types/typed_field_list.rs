@@ -3,7 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
-use super::resolver::{elaborate_type_identifier, ElabResult, Elaborator};
+use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
@@ -77,14 +77,14 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
         match part {
             ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
-                ElabResult::Done(kt) => Ok(kt),
-                ElabResult::Park(producers) => {
+                TypeResolution::Done(kt) => Ok(kt),
+                TypeResolution::Park(producers) => {
                     parks.extend(producers);
                     // Placeholder; discarded under the Pending outcome. Lets the walk
                     // continue so every parking producer is collected in one pass.
                     Ok(KType::Any)
                 }
-                ElabResult::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),
+                TypeResolution::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),
             },
             // Sigils (`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch through the
             // standalone dispatcher, which carries no SCC context, so self-references
