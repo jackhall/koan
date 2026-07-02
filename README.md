@@ -254,6 +254,7 @@ effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked 
 [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
-`Unblocks:` cross-links. Its [README](roadmap/README.md) curates the open items by project
-and derives a "Next items" list — everything with no still-open prerequisite — from those
-cross-links (`tools/doclinks.py sync-next`).
+`Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project
+subdirectories — each with its own README naming the project and listing its ready-to-start
+items — and derives a "Next items" list, everything with no still-open prerequisite, from
+those cross-links (`tools/doclinks.py sync-next`).
