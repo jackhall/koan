@@ -90,8 +90,9 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 
 /// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the
 /// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
-/// `Scope::resolve` for the placeholder path, and finally `KType::from_name` so
-/// fixture scopes that skip builtin registration still resolve builtin names.
+/// `Scope::resolve` for the placeholder path, and finally the builtin-table fallback via
+/// [`KType::from_type_identifier`] so fixture scopes that skip builtin registration still
+/// resolve builtin names.
 /// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
 /// walk — they sub-Dispatch through the standalone dispatcher.
 pub fn elaborate_type_identifier<'a>(
@@ -127,21 +128,24 @@ pub fn elaborate_type_identifier<'a>(
     }
     // Not a type (finalized or in flight). Consult the value side only to sharpen the miss
     // message: a name bound — or still binding — in the value language gets the layering
-    // diagnostic; an unknown name gets the unknown-name failure. `from_name` is tried first in
-    // both arms so fixture scopes that skip builtin registration still resolve builtin names.
+    // diagnostic; an unknown name gets the unknown-name failure. The builtin-table fallback is
+    // reached through `KType::from_type_identifier` (the scopeless owner `resolve_for` also
+    // lowers through), so the `from_name` consult lives in one place; it is tried in both arms
+    // so fixture scopes that skip builtin registration still resolve builtin names.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
         Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
-            match KType::<'a>::from_name(name) {
-                Some(kt) => TypeResolution::Done(kt),
-                None => TypeResolution::Unbound(format!(
+            match KType::<'a>::from_type_identifier(t) {
+                Ok(kt) => TypeResolution::Done(kt),
+                Err(_) => TypeResolution::Unbound(format!(
                     "`{name}` is value-language only — a type slot needs a type-language \
                      binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
                 )),
             }
         }
-        None => match KType::<'a>::from_name(name) {
-            Some(kt) => TypeResolution::Done(kt),
-            None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
+        // The plain miss reuses `from_type_identifier`'s `unknown type name` message verbatim.
+        None => match KType::<'a>::from_type_identifier(t) {
+            Ok(kt) => TypeResolution::Done(kt),
+            Err(msg) => TypeResolution::Unbound(msg),
         },
     }
 }

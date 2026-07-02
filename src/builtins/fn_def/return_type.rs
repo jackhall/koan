@@ -110,20 +110,18 @@ pub(crate) fn classify_return_type<'a>(
                 };
                 return Ok((ReturnTypeState::Deferred(DeferredReturn::Type(te)), verdict));
             }
-            let name = te.render();
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
             let state = match scope.resolve_type_identifier(&te, chain) {
                 TypeResolution::Done(resolved) => ReturnTypeState::Done(resolved.kt.clone()),
                 TypeResolution::Park(producers) => ReturnTypeState::Pending { te, producers },
-                TypeResolution::Unbound(msg) => match KType::from_name(&name) {
-                    Some(kt) => ReturnTypeState::Done(kt),
-                    None => {
-                        return Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN return-type slot: {msg}"
-                        ))));
-                    }
-                },
+                // `resolve_type_identifier` already tries the builtin fallback internally, so an
+                // `Unbound` here is neither a type binder nor a builtin — a hard miss.
+                TypeResolution::Unbound(msg) => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                        "FN return-type slot: {msg}"
+                    ))));
+                }
             };
             let verdict = match &state {
                 ReturnTypeState::Done(kt) => {
@@ -241,12 +239,10 @@ pub(super) fn resolve_capture_at_finish<'a>(
                 TypeResolution::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after dep-finish wake".to_string(),
                 ))),
-                TypeResolution::Unbound(msg) => match KType::from_name(&name) {
-                    Some(kt) => Ok(ReturnType::Resolved(kt)),
-                    None => Err(KError::new(KErrorKind::ShapeError(format!(
-                        "FN return-type slot: {msg}"
-                    )))),
-                },
+                // The builtin fallback is already tried inside `resolve_type_identifier`.
+                TypeResolution::Unbound(msg) => Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FN return-type slot: {msg}"
+                )))),
             }
         }
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),

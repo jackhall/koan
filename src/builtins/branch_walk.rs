@@ -24,12 +24,14 @@ pub(crate) fn resolve_arm_contract<'a>(
         Some(KType::Unresolved(te)) => {
             match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
                 TypeResolution::Done(resolved) => resolved.kt.clone(),
-                _ => KType::from_name(&te.render()).ok_or_else(|| {
-                    KError::new(KErrorKind::ShapeError(format!(
+                // The builtin fallback is already tried inside `resolve_type_identifier`; a
+                // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
+                _ => {
+                    return Err(KError::new(KErrorKind::ShapeError(format!(
                         "{kind} return type `{}` is not a known type",
                         te.render()
-                    )))
-                })?,
+                    ))))
+                }
             }
         }
         Some(other) => other.clone(),
