@@ -54,7 +54,7 @@ The pipeline is three stages, split across two top-level modules:
 
 ```
 source ──▶ parse ──▶ dispatch ──▶ execute
-        KExpression   KFuture      KObject
+        KExpression  ResolveOutcome  KObject
 ```
 
 `parse`, `builtins`, and `machine` are sibling crate-top modules; `machine` owns dispatch and execute. [src/main.rs](src/main.rs) reads the source and hands it to `interpret_with_writer_path`, which builds a `default_scope` of builtins and drains the scheduler.
@@ -71,11 +71,11 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 
 The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
-### dispatch — `KExpression` → `KFuture` against a `Scope`
+### dispatch — `KExpression` → `ResolveOutcome` against a `Scope`
 
 A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. [`resolve_dispatch`](src/machine/execute/dispatch/resolve_dispatch.rs) walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/machine/execute/dispatch/resolve_dispatch.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/machine/model/types/signature.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the resolved function binds its arguments, ready to run but not yet executed.
 
-Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Serializable`) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
+Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, function references); cross-cutting traits (`Parseable`, `Serializable`) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
 Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `Done(Err(KError))` outcome propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. `TRY (<expr>) WITH (<branches>)` catches in-language; uncaught errors short-circuit to the top level and the CLI formats them with frames. See [design/error-handling.md](design/error-handling.md) for the per-arm `it` shape and the privilege boundary that keeps builtin and user errors disjoint.
 
@@ -110,7 +110,7 @@ eponymous Koan-runtime type: [kobject.rs](src/machine/model/values/kobject.rs) d
 [ktraits.rs](src/machine/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/machine/core/arena.rs) (allocation),
-[scope.rs](src/machine/core/scope.rs) (lexical environment and `KFuture`),
+[scope.rs](src/machine/core/scope.rs) (lexical environment),
 [resolve_dispatch.rs](src/machine/execute/dispatch/resolve_dispatch.rs) (the
 overload-resolution walk returning a `ResolveOutcome`),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
@@ -201,7 +201,7 @@ src/
     │   ├── bindings/pending.rs   per-binding pending-overload state
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
     │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
-    │   ├── scope.rs       Scope, KFuture — lexical environment and dispatch-result handle
+    │   ├── scope.rs       Scope — lexical environment
     │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for region-stored carriers
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types

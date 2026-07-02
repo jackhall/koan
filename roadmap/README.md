@@ -285,8 +285,9 @@ What's shipped that the open items below build on:
   [`Carried<'a> { Object(&KObject) | Type(&KType) }`](../src/machine/model/values/carried.rs)
   — a type-operator returns a raw `&KType` and a type argument arrives in the `Type` arm,
   retiring the `KObject::KTypeValue` / `KObject::TypeNameRef` transport boxes and their
-  box/unbox round-trip at the binding seam. The bundle dual is `ArgValue` and an aggregate
-  cell is `Held` (a list/dict/record element may be a first-class type). A deferred bare
+  box/unbox round-trip at the binding seam. The owned dual is `Held` — both a builtin's
+  bound-argument cell and an aggregate cell (a list/dict/record element may be a first-class
+  type). A deferred bare
   user-name leaf is now the `KType::Unresolved(TypeName)` transient (sibling to
   `RecursiveRef`), consumed by `Scope::resolve_type_identifier`. Modules and signatures travel in
   the `Type` arm (projected by `require_module` / `require_signature`), and a shallow
@@ -367,6 +368,16 @@ What's shipped that the open items below build on:
   harness is read-only" is now structurally enforced by the type, not a naming convention. The
   `apply_outcome` cluster migrated up to `execute/runtime.rs` (the old `dispatch/harness.rs` is
   gone), unifying "the harness" at the `execute/` level above both `dispatch/` and `scheduler/`.
+- *One builtin arg-binder, `KFuture` and `ArgValue` retired.* The builtin dispatch path binds a
+  resolved call's arguments through [`KFunction::bind_args`](../src/machine/core/kfunction.rs) — a
+  direct arg-walk producing `Record<Held>` — rather than building a whole `KFuture` and discarding
+  every field but its `args`. With the gutted-future round-trip gone, the never-in-production
+  `KFuture` struct and its `KObject::KFuture` variant fall away, and `ArgValue` (the `Rc`-shared
+  owned form the lift once justified) folds into `Held`, dropping a per-argument `Rc::new` +
+  `deep_clone` in `run_action_builtin`. The two binders differ by ownership, not call kind: owned
+  `Held` (freshly-resolved builtin args, no region to borrow) versus borrowed `Carried`
+  (already-region-resolved user-fn args). See
+  [design/execution/README.md](../design/execution/README.md).
 
 ## Next items
 
@@ -387,7 +398,6 @@ not edit by hand. Per-item descriptions live in the Open items subsections below
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
-- [Unify the two argument binders](refactor/unify-argument-binders.md)
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
 - [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
@@ -487,9 +497,6 @@ shrinking the unsafe surface, and cutting hot-path overhead:
 - [Memoized subtype matching](refactor/memoized-subtype-matching.md) — cache dispatch
   admissibility outcomes per type, keyed by the candidate supertype's digest, so a repeat
   subtype check is an O(1) lookup instead of a structural walk.
-- [Unify the two argument binders](refactor/unify-argument-binders.md) — stop the builtin
-  dispatch path building a whole `KFuture` just to gut `future.args`; one arg-binding path
-  instead of `bind` (`Record<ArgValue>`) beside `bind_by_name` (`Record<Carried>`).
 - [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md) — name the
   bound/parked/unbound disposition shared by core `Resolution` and execute `NameOutcome` once,
   without minting a third `ResolveOutcome`.

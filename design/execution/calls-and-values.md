@@ -14,8 +14,8 @@ runtime value type — the `Object` arm of the scheduler's value currency
 (`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`, `Tagged`,
 `Record`, `Null`) carry no references into
 [`machine::core`](../../src/machine/core.rs). The runtime-reference
-variants do — `KFunction`, `KFuture`, and `Wrapped`
-embed `&'a KFunction<'a>`, `KFuture<'a>`, `&'a KType`, and an
+variants do — `KFunction` and `Wrapped`
+embed `&'a KFunction<'a>`, `&'a KType`, and an
 `Option<Rc<FrameStorage>>` lifecycle anchor. (A module / signature value
 travels the `Type` arm as `KType::Module { &Module, .. }` /
 `KType::Signature { &Signature, .. }`, so those references live on `KType`,

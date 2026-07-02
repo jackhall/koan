@@ -23,11 +23,11 @@ than ownership trees. The structural edges:
   definition scope as a plain `&'a Scope<'a>`, re-anchored to `'a` with the rest
   of the `KFunction` when the holder is read out of its region. Multiple
   `KFunction`s share one captured scope when they were defined in the same body.
-- `KObject::KFunction(&'a KFunction<'a>)` and `KObject::KFuture(KFuture<'a>)`
-  hold a bare value-side reference to a function-region slot and reach the
+- `KObject::KFunction(&'a KFunction<'a>)`
+  holds a bare value-side reference to a function-region slot and reaches the
   per-call region that owns the function's captured scope only through that
-  reference's scope `region_owner`. They carry no per-value liveness anchor:
-  the region an escaping closure / future reaches is pinned by the carrier's
+  reference's scope `region_owner`. It carries no per-value liveness anchor:
+  the region an escaping closure reaches is pinned by the carrier's
   witness [`FrameSet`](../src/machine/core/arena.rs) while it rides a scheduler
   slot, then carried on the relocated value's own witness and folded onto the
   consumer scope's reach-set when the value is bound (see

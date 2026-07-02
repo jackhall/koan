@@ -55,7 +55,7 @@ through the same channel as builtin errors:
 [`Scope::resolve_dispatch`](../src/machine/core/scope.rs) returns a
 `ResolveOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
 converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
-`DispatchFailed`, and `KFunction::bind` returns `Result<KFuture, KError>` on
+`DispatchFailed`, and `KFunction::bind_args` returns `Result<Record<Held>, KError>` on
 arity mismatch.
 [`Scheduler::execute`](../src/machine/execute/run_loop.rs) and
 [`interpret`](../src/machine/execute/runtime/interpret.rs) return `Result<(), KError>` to
