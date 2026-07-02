@@ -103,7 +103,7 @@ identity is the carried `&KType` itself rather than a synthesized shadow.
 `bindings.data` holds only runtime instances. A value-position reference to a
 nominal type token (passing `Outcome` to a constructor or ATTR call) surfaces the
 [`bindings.types` identity in the `Type` arm](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-on demand via `resolve_type_leaf_carrier` — no
+on demand via `Scope::resolve_type_identifier` — no
 value-side schema carrier exists for newtype / union / module / Result.
 
 ## Tagged-union variants

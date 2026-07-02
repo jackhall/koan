@@ -293,8 +293,8 @@ carrier-oriented lookup (`lookup_value_carrier` / `lookup_type_carrier`) or an `
 that stored reach back, and the read builds a self-contained terminal — home frame fetched fresh, ∪ the
 stored foreign reach — through [`Scope::resident_value_carrier`](../src/machine/core/scope.rs) /
 `resident_type_carrier`, witnessing the existing `&'a KObject` / `&'a KType` **in place**. A bare type
-leaf rides the reach through the whole resolve chain (the `type_identifier_memo`,
-`resolve_type_identifier`, `resolve_type_leaf_carrier`), recomputing it at the memo miss by name
+leaf rides the reach through the whole resolve chain (the `type_identifier_memo` and
+`resolve_type_identifier`), recomputing it at the memo miss by name
 ([`Scope::resolve_type_reach`](../src/machine/core/scope.rs)). The stored reach is home-omitted for the
 same cycle-safety rule the scope reach-set obeys — the region's own home frame `Rc` never lands
 in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built FN-def

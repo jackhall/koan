@@ -85,17 +85,23 @@ clears an in-flight type producer's placeholder (nor the reverse).
 
 - [`Bindings::lookup_value`](../../src/machine/core/bindings.rs)
   consults `data` then the `BindKind::Value` `placeholders`. Returns
-  `Resolution::Value(&KObject)` for a finalized visible binding,
-  `Resolution::Placeholder(NodeId)` for a still-running visible
-  producer (the caller parks on it), or `None` (the caller surfaces
-  `Resolution::UnboundName` on chain exhaustion). A same-name
-  `BindKind::Type` placeholder is invisible here — it belongs to the type
-  language.
+  `Some(NameLookup::Bound(&KObject))` for a finalized visible binding,
+  `Some(NameLookup::Parked(NodeId))` for a still-running visible
+  producer (the caller parks on it), or `None` on a miss — the caller keeps
+  walking ancestors. The terminal unbound disposition is not a lookup variant:
+  it is materialized one level up on the resolution path, where
+  [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) is the
+  merge point that adds `Unbound` plus the execute-only `ProducerErrored` / `Cycle`
+  states. A same-name `BindKind::Type` placeholder is invisible here — it belongs to
+  the type language.
 - [`Bindings::lookup_type`](../../src/machine/core/bindings.rs) is the
   type-side symmetry: consults `types` then the `BindKind::Type`
-  `placeholders`, surfacing the three-arm result as a
-  [`TypeResolution`](../../src/machine/core/bindings.rs) — `Type(&KType)`,
-  `Placeholder(NodeId)`, or `None`. The finalize gate that must park on an
+  `placeholders`, surfacing the result as the same
+  [`NameLookup`](../../src/machine/core/bindings.rs) shape instantiated for the type
+  channel (`NameLookup<&KType>`) — `Bound(&KType)`, `Parked(NodeId)`, or `None`. Every
+  single-scope lookup — value, type, and the reach-carrying `NameLookup<ValueHit>` /
+  `NameLookup<TypeHit>` reads — shares this one bound-or-parked-or-miss shape. The
+  finalize gate that must park on an
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` reads the placeholder directly through
   [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),

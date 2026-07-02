@@ -17,7 +17,7 @@ invisible, so a forward type reference is a *position error*, not a silent
 success or a park.
 [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs) takes the chain and
 the `type_expr_memo` re-keys by `(TypeName, cutoff)`, so a forward and a backward
-consumer at the same scope never share a cached verdict. The `Resolution::Placeholder`
+consumer at the same scope never share a cached verdict. The `NameLookup::Parked`
 arm parks only on an *earlier still-finalizing* type (a binder visible at the
 consumer's position whose body has not finished); `pending_types` survives only
 to mark which binders are in flight. This composes with value-name forward
@@ -118,7 +118,7 @@ cross-link this section rather than restating its slice.
   (which sees it bound) from sharing a verdict. Reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
   chain and returns the three-outcome
-  `ResolveTypeExprOutcome::{Done, Park, Unbound}`. See
+  `TypeResolution<TypeHit>::{Done, Park, Unbound}`. See
   [Strict admission rules](#strict-admission-rules) for the gate and
   the monotonicity argument.
 - **Layer 3 — the elaborator** in
@@ -127,8 +127,10 @@ cross-link this section rather than restating its slice.
   consumer's `LexicalFrame` chain so each candidate is gated by `idx < cutoff`: a
   threaded binder name (its own, or a `RECURSIVE TYPES` group sibling) turns into
   a transient `KType::RecursiveRef`, an *earlier still-finalizing* binder parks via
-  `ElabResult::Park(producers)`, a later-than-the-consumer binding is a position
-  error, and a builtin name falls back to `KType::from_name`. Parameterized shapes
+  `TypeResolution::Park(producers)`, a later-than-the-consumer binding is a position
+  error, and a builtin name falls back to the builtin table through
+  [`KType::from_type_identifier`](../../src/machine/model/types/ktype_resolution.rs) —
+  the single owner of that fallback on the resolution path. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
   FN-signature, NEWTYPE/UNION field-type, and FUNCTOR per-call return-type dep-finishes
@@ -137,15 +139,14 @@ cross-link this section rather than restating its slice.
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
   [`resolve_type_identifier.rs`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
-  [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-  is the shared seam from a bare-`Type` token to a dispatch-time carrier,
-  called from the dispatcher's `BareTypeLeaf` fast lane and the keyworded
-  splice walk's eager name-resolve pass. It wraps the same memoized,
-  park-capable `Scope::resolve_type_identifier` bridge (Layer 2) every compound type
-  form uses, returning `TypeLeafCarrier::{Resolved, Park, Unbound}`: `Resolved`
-  carries the bridge's cached `&KType` raw in the value channel's `Type` arm, and `Park`
-  lets a leaf naming an earlier still-finalizing binder park on its producer and
-  re-resolve on wake. See
+  The bare-`Type` token call sites — the dispatcher's `BareTypeLeaf` fast lane and the
+  keyworded splice walk's eager name-resolve pass — call
+  [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+  directly, the same memoized, park-capable bridge (Layer 2) every compound type form
+  uses. It returns `TypeResolution<TypeHit>::{Done, Park, Unbound}`: `Done` carries the
+  bridge's cached `&KType` plus its stored reach, witnessed in place on the value
+  channel's `Type` arm; `Park` lets a leaf naming an earlier still-finalizing binder park
+  on its producer and re-resolve on wake; `Unbound` is a miss. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
 - **Layer 5 — surface-form-survives-bind transient** in
@@ -272,15 +273,15 @@ a bare user name can still be pending:
 The single-part bare-`Type` lookup that those consumers' siblings need is
 folded into the dispatcher's `BareTypeLeaf` fast lane
 ([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
-which calls
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-— the shared seam also called from the keyworded splice walk's eager
-name-resolve pass
+which calls the memoized, park-capable
+[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+bridge directly — the same bridge the keyworded splice walk's eager
+name-resolve pass calls
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
-The seam wraps the memoized, park-capable `Scope::resolve_type_identifier` bridge: on
-a resolved leaf it surfaces the bridge's cached `&KType` in the value channel's `Type` arm
-for every type-only nominal — struct / union / module / Result *and* signature; on an
-earlier still-finalizing binder it parks; on a miss it surfaces `Unbound`.
+On a resolved leaf its `TypeResolution::Done(TypeHit)` surfaces the bridge's cached
+`&KType` in the value channel's `Type` arm for every type-only nominal — struct / union /
+module / Result *and* signature; on an earlier still-finalizing binder it parks; on a
+miss it surfaces `Unbound`.
 
 FN's deferred return-type slot is parsed at definition time via
 [`extract_return_type_raw`](../../src/builtins/fn_def/return_type.rs), which reads any
@@ -292,9 +293,9 @@ inline against the per-call child scope (`elaborate_type_expr`), where the param
 already finalized every parameter-name identity; type-denoting parameters themselves bind via
 `register_type` from an already-resolved type argument, so there is no transient identity
 elaboration at the bind site. The sole bare-leaf resolution site for dispatch transport
-lives in
-[`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs),
-which surfaces the bridge's resolved `&KType`. Bare leaves resolve through the same
+is the
+[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+bridge, which surfaces the resolved `&KType`. Bare leaves resolve through the same
 memo and parking discipline as compound type forms — there is no separate
 synchronous bare-leaf path.
 
@@ -336,8 +337,9 @@ it hot. The scope-bound resolution memo is therefore the only cache:
   Reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which
   returns the three-outcome
-  `ResolveTypeExprOutcome::{Done(&'a KType), Park(Vec<NodeId>),
-  Unbound(String)}`. Cache miss runs the elaborator against `self`, then
+  `TypeResolution<TypeHit>::{Done(TypeHit), Park(Vec<NodeId>),
+  Unbound(String)}` (`TypeHit` carrying the region `&'a KType` plus its stored reach).
+  Cache miss runs the elaborator against `self`, then
   checks a **finalize gate** before writing: every user-type referenced by the
   result must be fully finalized (its name absent from the owning scope's
   `bindings.pending_types`) or the outcome becomes `Park(producers)` and the

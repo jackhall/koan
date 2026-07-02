@@ -94,8 +94,8 @@ walks ancestors, the `Bindings::lookup_*` accessors apply the
 `chain_cutoff`-gated `visible` predicate per entry, and `KType`
 predicates accept or reject the candidate. The placeholder mechanism
 extends the value- and function-side lookups so a still-running visible
-producer surfaces as `Resolution::Placeholder(NodeId)` /
-`FunctionLookup { pending: Some(_), .. }` rather than `UnboundName` —
+producer surfaces as `NameLookup::Parked(NodeId)` /
+`FunctionLookup { pending: Some(_), .. }` rather than a miss —
 [`Bindings::lookup_value`](../../src/machine/core/bindings.rs) consults
 `data` then `placeholders`, and
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) surfaces

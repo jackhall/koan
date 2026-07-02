@@ -41,8 +41,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
-- [Unify the value-name lookup outcomes](refactor/unify-name-lookup-outcome.md)
-- [Unify the type-name resolution path](refactor/unify-resolution-outcome.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)

@@ -115,7 +115,7 @@ loops. What it can't do cheaply:
   rewrites a slot in place. A tree-walker needs explicit trampolining
   with a worklist (which is roughly the slot table reinvented).
 - **Forward references.** `LET y = (x); LET x = …` parks `y`'s
-  sub-Dispatch on `x`'s producer via `Resolution::Placeholder` and
+  sub-Dispatch on `x`'s producer via `NameLookup::Parked` and
   wakes when `x` finalizes. A tree-walker would need a pre-pass to
   resolve names or fail on out-of-order definitions.
 - **Replay-park on pending types.** Type-elaboration can suspend on a
