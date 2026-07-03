@@ -23,7 +23,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::Spanned;
-use crate::witnessed::Sealed;
+use crate::witnessed::{Sealed, StepContext};
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -162,6 +162,14 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// (`alloc_witnessed` / `yoke_branded`) and relocation.
     pub(in crate::machine::execute) fn dest_frame(&self) -> Rc<FrameStorage> {
         Rc::clone(&self.dest_frame)
+    }
+
+    /// The step construction context wrapping [`Self::dest_frame`] — the library-owned
+    /// `ctx.region()` / `ctx.alloc()` / `ctx.alloc_with()` surface (`design/scheduler-library.md`
+    /// guarantees 3 and 5), handed to a finish through
+    /// [`FinishCtx`](crate::machine::core::kfunction::action::FinishCtx).
+    pub(in crate::machine::execute) fn step_ctx(&self) -> StepContext<FrameStorage> {
+        StepContext::new(self.dest_frame())
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call within an

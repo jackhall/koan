@@ -239,6 +239,7 @@ fn run_action_builtin<'step>(
             chain,
             args: args_obj,
             arg_carriers: &arg_carriers,
+            ctx: view.step_ctx(),
         };
         f(&body_ctx)
     };

@@ -16,7 +16,7 @@ use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Sealed, StepContext, Witnessed};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -185,6 +185,9 @@ pub struct BodyCtx<'a, 'c> {
     /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
     /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach".
     pub arg_carriers: &'c Record<Sealed<CarriedFamily, FrameSet>>,
+    /// The step construction context for this slot's own scope — the same `ctx.region()` /
+    /// `ctx.alloc()` / `ctx.alloc_with()` surface a wake-time [`FinishCtx`] carries.
+    pub ctx: StepContext<FrameStorage>,
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {
@@ -203,14 +206,26 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     pub fn arg_carrier(&self, name: &str) -> Option<&Sealed<CarriedFamily, FrameSet>> {
         self.arg_carriers.get(name)
     }
+
+    /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
+    /// resolve/dispatch continuation the same shape a wake-time finish receives (e.g.
+    /// `resolve_or_await`'s synchronous arm).
+    pub fn finish_ctx(&self) -> FinishCtx<'a> {
+        FinishCtx {
+            scope: self.scope,
+            ctx: self.ctx.clone(),
+        }
+    }
 }
 
 /// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.region`)
-/// re-projected at wake — a deferred binder `register_*`s on it here — plus the frame storage owning
-/// that scope's region, resolved by the step machinery so a finish allocates with no failure path.
+/// re-projected at wake — a deferred binder `register_*`s on it here — plus the step construction
+/// context wrapping the frame storage owning that scope's region, resolved by the step machinery so
+/// a finish allocates with no failure path (`ctx.region()` / `ctx.alloc()` / `ctx.alloc_with()`;
+/// `design/scheduler-library.md` guarantees 3 and 5).
 pub struct FinishCtx<'a> {
     pub scope: &'a Scope<'a>,
-    pub frame: Rc<FrameStorage>,
+    pub ctx: StepContext<FrameStorage>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep values as a [`DepResults`] view

@@ -318,7 +318,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             let wrapped: DepFinish<'step> = Box::new(move |view, results, _carriers| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
-                    frame: view.dest_frame(),
+                    ctx: view.step_ctx(),
                 };
                 run_action(finish(&fctx, results))
             });
@@ -333,7 +333,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             let wrapped: CatchFinish<'step> = Box::new(move |view, result| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
-                    frame: view.dest_frame(),
+                    ctx: view.step_ctx(),
                 };
                 run_action(finish(&fctx, result))
             });
