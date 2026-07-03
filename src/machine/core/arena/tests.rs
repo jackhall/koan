@@ -8,7 +8,7 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
 use crate::machine::BindingIndex;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{MergeWitness, Sealed, Witnessed};
 use std::marker::PhantomData;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
@@ -51,13 +51,13 @@ fn frameset_merge_subsumes_ancestor() {
 
     let merged =
         FrameSet::merge(&descendant, &ancestor).expect("a set always represents the union");
-    assert_eq!(merged.frames.len(), 1, "ancestor subsumed by descendant");
-    assert!(std::ptr::eq(merged.frames[0].region(), child.region()));
+    let sole = merged.sole().expect("ancestor subsumed by descendant");
+    assert!(std::ptr::eq(sole.region(), child.region()));
 
     // Order-independent: the antichain is the same either way.
     let merged_rev = FrameSet::merge(&ancestor, &descendant).expect("union always represents");
-    assert_eq!(merged_rev.frames.len(), 1);
-    assert!(std::ptr::eq(merged_rev.frames[0].region(), child.region()));
+    let sole_rev = merged_rev.sole().expect("ancestor subsumed by descendant");
+    assert!(std::ptr::eq(sole_rev.region(), child.region()));
 }
 
 /// `FrameSet::merge` over unrelated carts keeps both — neither `outer` chain pins the other.
@@ -67,7 +67,7 @@ fn frameset_merge_keeps_unrelated() {
     let b = FrameStorage::run_root();
     let merged = FrameSet::merge(&FrameSet::singleton(a), &FrameSet::singleton(b))
         .expect("a set always represents the union");
-    assert_eq!(merged.frames.len(), 2, "unrelated regions both kept");
+    assert!(merged.sole().is_none(), "unrelated regions both kept");
 }
 
 /// The single-owner `Rc<FrameStorage>` witness exposes exactly its own region — the `yoke` seam, now a
@@ -485,11 +485,12 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     assert_eq!(got, vec![1.0, 2.0]); // both foreign elements survived the fold and every handle drop.
 }
 
-/// [`FrameSet::fold_foreign`] is the per-scope reach-set's fold: it merges a bound value's carrier
+/// [`FrameSet::fold_omitting`] is the per-scope reach-set's fold: it merges a bound value's carrier
 /// witness into the builder but **omits** any frame the scope's home frame already pins, so a resident
 /// value never witnesses its own home frame — the `region → scope → set → frame` cycle the reach-set
 /// forbids (and the source of the `let rec` self-bind no-op). A same-region (home) singleton folds to
-/// nothing; a foreign frame is kept; `None` (a frameless scope with no home to omit) keeps everything.
+/// nothing; a foreign frame is kept; an always-false predicate (a frameless scope with no home to omit)
+/// keeps everything.
 #[test]
 fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
     let home = FrameStorage::run_root();
@@ -498,29 +499,35 @@ fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
     // A same-region value's witness names the home frame itself — folding it contributes no foreign
     // reach (the self-bind / home-frame omission).
     let mut set = FrameSet::empty();
-    set.fold_foreign(&FrameSet::singleton(Rc::clone(&home)), Some(&home));
+    set.fold_omitting(&FrameSet::singleton(Rc::clone(&home)), |region| {
+        home.pins_region(region)
+    });
     assert!(
         set.is_empty(),
         "the home frame must be omitted from the reach-set"
     );
 
     // A foreign frame is kept — the region a bound closure / module borrows into.
-    set.fold_foreign(&FrameSet::singleton(Rc::clone(&foreign)), Some(&home));
+    set.fold_omitting(&FrameSet::singleton(Rc::clone(&foreign)), |region| {
+        home.pins_region(region)
+    });
     assert!(
         set.sole().is_some_and(|f| Rc::ptr_eq(f, &foreign)),
         "a foreign frame must fold into the reach-set",
     );
 
     // Re-folding the same foreign frame is idempotent (subsumption dedups by region).
-    set.fold_foreign(&FrameSet::singleton(Rc::clone(&foreign)), Some(&home));
+    set.fold_omitting(&FrameSet::singleton(Rc::clone(&foreign)), |region| {
+        home.pins_region(region)
+    });
     assert!(
         set.sole().is_some(),
         "a duplicate fold stays a singleton, not a double entry",
     );
 
-    // With no home frame (a frameless scope owning no escapable region), nothing is omitted.
+    // With no home frame to omit (a frameless scope owning no escapable region), nothing is omitted.
     let mut frameless = FrameSet::empty();
-    frameless.fold_foreign(&FrameSet::singleton(Rc::clone(&home)), None);
+    frameless.fold_omitting(&FrameSet::singleton(Rc::clone(&home)), |_region| false);
     assert!(
         !frameless.is_empty(),
         "with no home frame to omit, the full witness folds in",

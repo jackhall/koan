@@ -72,7 +72,7 @@ pub struct Scope<'a> {
     closed: Cell<bool>,
     /// The scope's **reach-set**: the foreign per-call regions its bound values still borrow into,
     /// folded as each bind lands ([`Self::fold_reach`]). Each bound value's full carrier [`FrameSet`]
-    /// folds in via [`FrameSet::fold_foreign`], which omits the scope's own home frame so a resident
+    /// folds in via [`Self::fold_reach`], which omits the scope's own home frame so a resident
     /// value never witnesses the frame it lives in (the `region → scope → set → frame` cycle). The
     /// set is a mutable builder while the scope is open and frozen once [`closed`](Self::closed) flips
     /// — `close` is the seal point (folds past it are rejected like binds are). Held inside the
@@ -192,7 +192,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Fold a value's reach (a [`FrameSet`]) into this scope's reach-set, omitting any frame the home
-    /// frame already pins (its own region or an ancestor) — see [`FrameSet::fold_foreign`]. Called as a
+    /// frame already pins (its own region or an ancestor). Called as a
     /// value is bound under the scope (a `let` / user-fn arg / applied-here closure) and at the
     /// run-root drain, so the foreign regions it borrows into stay alive for the scope's life. A bind
     /// folds the value's full carried union, so a multi-region value contributes *every* region it
@@ -205,9 +205,7 @@ impl<'a> Scope<'a> {
             self.id,
         );
         let home = self.region_owner.upgrade();
-        self.reach
-            .borrow_mut()
-            .fold_foreign_omitting(witness, |region| {
+        self.reach.borrow_mut().fold_omitting(witness, |region| {
                 // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
                 // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
                 // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
@@ -799,7 +797,7 @@ impl<'a> Scope<'a> {
             .upgrade()
             .expect("the binding scope's region owner is held while its value is read");
         let mut witness = FrameSet::singleton(home.clone());
-        witness.fold_foreign(foreign, Some(&home));
+        witness.fold_omitting(foreign, |region| home.pins_region(region));
         self.brand().seal_resident(Carried::Object(obj), witness)
     }
 
@@ -812,7 +810,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn foreign_reach_of(&self, witness: &FrameSet) -> FrameSet {
         let home = self.region_owner.upgrade();
         let mut foreign = FrameSet::empty();
-        foreign.fold_foreign_omitting(witness, |region| {
+        foreign.fold_omitting(witness, |region| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
                 || self
                     .ancestors()
@@ -828,9 +826,9 @@ impl<'a> Scope<'a> {
     /// pins every foreign region the value reaches, so a single-frame fold names the full reach. An
     /// `embedded` carrier — a computed value the sealed value was projected out of, whose reach the
     /// read-site frame may not pin (an attr field of a delivered `Wrapped`, a FROM record's shared
-    /// backing) — folds its foreign reach on top, omitting any frame the home already pins (see
-    /// [`FrameSet::fold_foreign`]). Folds onto the received carrier via [`Witnessed::reseal_under`], so
-    /// it carries no re-anchor of an externally-built value.
+    /// backing) — folds its foreign reach on top, omitting any frame the home already pins. Folds
+    /// onto the received carrier via [`Witnessed::reseal_under`], so it carries no re-anchor of an
+    /// externally-built value.
     pub(crate) fn seal_value(
         &self,
         carrier: Witnessed<CarriedFamily, FrameSet>,
@@ -842,7 +840,7 @@ impl<'a> Scope<'a> {
             .expect("the sealing scope's region owner is held while its value is read");
         let mut witness = FrameSet::singleton(home.clone());
         if let Some(embedded) = embedded {
-            witness.fold_foreign(embedded.witness(), Some(&home));
+            witness.fold_omitting(embedded.witness(), |region| home.pins_region(region));
         }
         carrier.reseal_under(witness)
     }
@@ -864,7 +862,7 @@ impl<'a> Scope<'a> {
             .upgrade()
             .expect("the binding scope's region owner is held while its type is read");
         let mut witness = FrameSet::singleton(home.clone());
-        witness.fold_foreign(foreign, Some(&home));
+        witness.fold_omitting(foreign, |region| home.pins_region(region));
         self.brand().seal_resident(Carried::Type(kt), witness)
     }
 
@@ -879,9 +877,13 @@ impl<'a> Scope<'a> {
         let home = self.region_owner().upgrade();
         let mut foreign = FrameSet::empty();
         if let Some(child_home) = child.region_owner().upgrade() {
-            foreign.fold_foreign(&FrameSet::singleton(child_home), home.as_ref());
+            foreign.fold_omitting(&FrameSet::singleton(child_home), |region| {
+                home.as_ref().is_some_and(|h| h.pins_region(region))
+            });
         }
-        foreign.fold_foreign(&child.reach.borrow(), home.as_ref());
+        foreign.fold_omitting(&child.reach.borrow(), |region| {
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+        });
         foreign
     }
 

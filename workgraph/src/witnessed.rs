@@ -30,6 +30,9 @@ use stable_deref_trait::StableDeref;
 mod region;
 pub use region::{Region, StorageProfile, Stored};
 
+mod region_set;
+pub use region_set::{PinsRegion, RegionSet};
+
 #[doc(hidden)]
 pub mod doctest_fixture;
 
