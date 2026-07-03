@@ -25,9 +25,9 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+use crate::machine::model::values::{CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NameLookup, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -121,8 +121,9 @@ fn finalize_record_newtype<'a>(
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, DepRequest,
+        arg_object, arg_type, require_bare_type_name, Action,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
@@ -132,43 +133,17 @@ pub fn body<'a>(
         match repr_kt {
             KType::Unresolved(te) => {
                 let te = te.clone();
-                match ctx
-                    .scope
-                    .resolve_type_with_chain(te.as_str(), chain.as_deref())
-                {
-                    Some(NameLookup::Bound(kt)) => {
-                        Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index))
-                    }
-                    // The repr names a type still finalizing in this scheduler: park on its
-                    // producer and re-resolve at dep-finish.
-                    Some(NameLookup::Parked(producer)) => {
-                        let chain_for_finish = chain.clone();
-                        let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| match fctx
-                            .scope
-                            .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
-                        {
-                            Some(NameLookup::Bound(kt)) => Action::Done(finalize_newtype(
-                                fctx.scope,
-                                name,
-                                kt.clone(),
-                                bind_index,
-                            )),
-                            _ => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                                "NEWTYPE repr slot = unknown type name `{}`",
-                                te.as_str()
-                            ))))),
-                        });
-                        Action::AwaitDeps {
-                            deps: vec![DepRequest::Existing(producer)],
-                            finish,
-                        }
-                    }
-                    // A name with no in-flight producer is a genuine forward/unknown reference.
-                    None => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                        "NEWTYPE repr slot = unknown type name `{}`",
-                        te.as_str(),
-                    ))))),
-                }
+                resolve_or_await(
+                    ctx.scope,
+                    "NEWTYPE repr slot",
+                    move |scope| {
+                        classify_name_lookup(
+                            scope.resolve_type_with_chain(te.as_str(), chain.as_deref()),
+                            te.as_str(),
+                        )
+                    },
+                    move |scope, kt| Action::Done(finalize_newtype(scope, name, kt, bind_index)),
+                )
             }
             other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
         }
@@ -188,28 +163,14 @@ fn defer_resolved_sigil<'a>(
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        Action, AwaitContinue, DepPlacement, DepRequest,
-    };
+    use crate::builtins::resolve_or_await::dispatch_type_then;
+    use crate::machine::core::kfunction::action::Action;
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match *results.owned(0) {
-        Carried::Type(kt) => {
-            Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
-        }
-        Carried::Object(other) => Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-            "NEWTYPE repr sigil resolved to a non-type value `{}`",
-            other.ktype().name(),
-        ))))),
-    });
-    Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
-            expr: wrapped,
-            placement: DepPlacement::OwnScope,
-        }],
-        finish,
-    }
+    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |scope, kt| {
+        Action::Done(finalize_newtype(scope, name, kt, bind_index))
+    })
 }
 
 /// Body of the record-repr overload `NEWTYPE <name> = :{…}`: elaborate the `:{…}` field list

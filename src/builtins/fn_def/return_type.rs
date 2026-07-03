@@ -3,6 +3,9 @@
 
 use std::collections::HashMap;
 
+use crate::builtins::resolve_or_await::{
+    classify_type_hit, expect_type_result, resolve_at_wake, unbound_error,
+};
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
@@ -114,15 +117,13 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            let state = match scope.resolve_type_identifier(&te, chain) {
-                TypeResolution::Done(resolved) => ReturnTypeState::Done(resolved.kt.clone()),
+            let state = match classify_type_hit(scope.resolve_type_identifier(&te, chain)) {
+                TypeResolution::Done(kt) => ReturnTypeState::Done(kt),
                 TypeResolution::Park(producers) => ReturnTypeState::Pending { te, producers },
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
                 // `Unbound` here is neither a type binder nor a builtin — a hard miss.
-                TypeResolution::Unbound(msg) => {
-                    return Err(KError::new(KErrorKind::ShapeError(format!(
-                        "FN return-type slot: {msg}"
-                    ))));
+                TypeResolution::Unbound(detail) => {
+                    return Err(unbound_error("FN return-type slot", &detail));
                 }
             };
             let verdict = match &state {
@@ -226,7 +227,7 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier) -> ReturnTypeCapture<'a> {
 
 /// Park-arm outcomes from `Scope::resolve_type_identifier` are protocol errors here: every
 /// parked producer is terminal by the dep-finish invariant, so a second park would
-/// loop forever and is surfaced as a structured error.
+/// loop forever and is surfaced as a structured error — see [`resolve_at_wake`].
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
@@ -235,26 +236,15 @@ pub(super) fn resolve_capture_at_finish<'a>(
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeIdentifier::leaf(name.clone());
-            match scope.resolve_type_identifier(&te, None) {
-                TypeResolution::Done(resolved) => Ok(ReturnType::Resolved(resolved.kt.clone())),
-                TypeResolution::Park(_) => Err(KError::new(KErrorKind::ShapeError(
-                    "FN return type parked after dep-finish wake".to_string(),
-                ))),
-                // The builtin fallback is already tried inside `resolve_type_identifier`.
-                TypeResolution::Unbound(msg) => Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN return-type slot: {msg}"
-                )))),
-            }
+            let te = TypeIdentifier::leaf(name);
+            resolve_at_wake(scope, "FN return-type slot", |s| {
+                classify_type_hit(s.resolve_type_identifier(&te, None))
+            })
+            .map(ReturnType::Resolved)
         }
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
-        ReturnTypeCapture::ReturnTypeExpr { owned_pos } => match *results.owned(owned_pos) {
-            Carried::Type(kt) => Ok(ReturnType::Resolved(kt.clone())),
-            Carried::Object(other) => Err(KError::new(KErrorKind::ShapeError(format!(
-                "FN return-type slot sub-Dispatch expected a type expression, \
-                 got a {} value",
-                other.ktype().name(),
-            )))),
-        },
+        ReturnTypeCapture::ReturnTypeExpr { owned_pos } => {
+            expect_type_result(&results, owned_pos, "FN return-type slot").map(ReturnType::Resolved)
+        }
     }
 }

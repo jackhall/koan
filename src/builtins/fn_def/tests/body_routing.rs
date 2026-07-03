@@ -150,8 +150,8 @@ fn fn_def_sigil_return_type_non_type_value_errors() {
         Ok(()) => panic!("non-type return-type expression should error"),
     };
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("return-type slot sub-Dispatch")),
-        "expected ShapeError mentioning 'return-type slot sub-Dispatch', got {err}",
+        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("return-type slot sub-dispatch resolved to a non-type")),
+        "expected ShapeError mentioning 'return-type slot sub-dispatch resolved to a non-type', got {err}",
     );
     assert!(!fn_is_registered(scope, "NOP"), "NOP should not register");
 }

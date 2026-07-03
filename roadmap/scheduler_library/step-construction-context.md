@@ -58,11 +58,12 @@ region" rather than the construction making it structural.
 
 ## Dependencies
 
-**Requires:**
+The `AwaitContinue` signature change now lands on the resolve-or-await
+combinator's internals
+([src/builtins/resolve_or_await.rs](../../src/builtins/resolve_or_await.rs))
+instead of per-builtin hand-rolled finishes.
 
-- [The resolve-or-await protocol combinator](protocol-combinators.md) — the
-  `AwaitContinue` signature change lands on combinator internals instead of
-  per-builtin hand-rolled finishes.
+**Requires:** none — foundation.
 
 **Unblocks:** none tracked — the remaining
 [design/scheduler-library.md](../../design/scheduler-library.md) objectives

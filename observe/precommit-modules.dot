@@ -24,6 +24,7 @@ digraph {
     "koan::builtins::quote" [label="koan::builtins::quote"];
     "koan::builtins::record_projection" [label="koan::builtins::record_projection"];
     "koan::builtins::recursive_types" [label="koan::builtins::recursive_types"];
+    "koan::builtins::resolve_or_await" [label="koan::builtins::resolve_or_await"];
     "koan::builtins::result" [label="koan::builtins::result"];
     "koan::builtins::sig_def" [label="koan::builtins::sig_def"];
     "koan::builtins::try_with" [label="koan::builtins::try_with"];
@@ -129,6 +130,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::quote" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::record_projection" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::recursive_types" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::resolve_or_await" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::result" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::sig_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::try_with" [label="owns", style="solid"];
@@ -288,6 +290,7 @@ digraph {
     "koan::builtins::fn_def::param_refs" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::builtins::fn_def::param_refs" [label="uses", style="dashed"];
+    "koan::builtins::fn_def::return_type" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::fn_def::return_type" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -333,6 +336,7 @@ digraph {
     "koan::builtins::newtype_def" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::builtins::nominal_schema" [label="uses", style="dashed"];
+    "koan::builtins::newtype_def" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -381,6 +385,13 @@ digraph {
     "koan::builtins::recursive_types" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::recursive_types" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::recursive_types" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -441,6 +452,7 @@ digraph {
     "koan::builtins::using_scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::val_decl" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];

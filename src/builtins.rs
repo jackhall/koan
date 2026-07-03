@@ -25,6 +25,7 @@ mod print;
 mod quote;
 mod record_projection;
 mod recursive_types;
+mod resolve_or_await;
 mod result;
 mod sig_def;
 mod try_with;

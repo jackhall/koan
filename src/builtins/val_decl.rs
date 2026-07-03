@@ -13,7 +13,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -53,9 +53,8 @@ enum CarrierForm<'a> {
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, Action, AwaitContinue, DepPlacement, DepRequest,
-    };
+    use crate::builtins::resolve_or_await::dispatch_type_then;
+    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
 
@@ -103,42 +102,21 @@ pub fn body<'a>(
 
     let bind_index = ctx.bind_index();
 
-    let (te, _) = match carrier {
+    let te = match carrier {
         CarrierForm::Direct(kt) => {
             return finalize_val(ctx.scope, name, kt, bind_index);
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
         // holds a bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
-        CarrierForm::Leaf(te) => (te, ()),
-        CarrierForm::Raw(te) => (te, ()),
+        CarrierForm::Leaf(te) => te,
+        CarrierForm::Raw(te) => te,
     };
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
-    let name_for_finish = name;
-    let te_for_finish = te;
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        debug_assert_eq!(results.len(), 1, "VAL dep-finish has exactly one dep");
-        let kt = match results.owned(0) {
-            Carried::Type(kt) => (*kt).clone(),
-            // Routing bug — surface structured, don't panic.
-            Carried::Object(other) => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "VAL type `{}` sub-dispatch resolved to a non-type value of kind `{}`",
-                    te_for_finish.render(),
-                    other.ktype().name(),
-                )))));
-            }
-        };
-        finalize_val(fctx.scope, name_for_finish.clone(), kt, bind_index)
-    });
-    Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
-            expr,
-            placement: DepPlacement::OwnScope,
-        }],
-        finish,
-    }
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
+    dispatch_type_then(expr, "VAL type slot", move |scope, kt| {
+        finalize_val(scope, name, kt, bind_index)
+    })
 }
 
 /// Records the value slot's declared type in `bindings.types` and returns the slot's carrier as
