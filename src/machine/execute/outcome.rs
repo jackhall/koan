@@ -451,7 +451,7 @@ mod erased_continuation_tests {
         SealedExtern::seal(erased)
             .zip(scope_carrier)
             .open(&cart, |(continuation, scope)| {
-                let view = SchedulerView::new(&sched, &ambient, scope);
+                let view = SchedulerView::new(&sched, &ambient, scope, cart.storage_rc());
                 let empty: &[Result<DepTerminal, KError>] = &[];
                 let out = continuation(&view, DepResults::new(empty, 0), 0);
                 assert!(matches!(out, Outcome::Done(Err(_))));

@@ -631,6 +631,7 @@ digraph {
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::ctx" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute" [label="uses", style="dashed"];
@@ -841,6 +842,7 @@ digraph {
     "koan::machine::execute::runtime::interpret" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::runtime::submit" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::runtime::submit" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];

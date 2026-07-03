@@ -16,8 +16,9 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::DepPlacement;
+use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NameOutcome, NodeId, Scope};
@@ -66,6 +67,15 @@ pub(in crate::machine::execute) fn with_current_node_scope<R>(
     with_node_scope(&payload.scope, ambient.active_frame_ref(), f)
 }
 
+/// The frame storage owning the active slot's scope region, read through the ambient payload — the
+/// `&mut self` classify path's analogue of [`SchedulerView::dest_frame`]. Routes `scope_frame`, the
+/// liveness invariant's single owner.
+pub(in crate::machine::execute) fn current_dest_frame(
+    ambient: &AmbientContext,
+) -> Rc<FrameStorage> {
+    with_current_node_scope(ambient, scope_frame)
+}
+
 /// Read-only dispatch view — the decide-phase context. It holds only `&Scheduler`, never `&mut`.
 /// A shape handler decides against this and *returns* a
 /// [`Outcome`](super::Outcome); the harness reborrows the scheduler
@@ -85,6 +95,10 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// pristine-AST lifetime `'ast` lives only at the submission boundary, where a borrowed
     /// `&KExpression<'ast>` is read against the cart scope.
     scope: &'step Scope<'step>,
+    /// The `Rc<FrameStorage>` owning the active scope's region — resolved once per step by the run
+    /// loop (via `scope_frame`, the invariant's single owner) while the step machinery holds it, so
+    /// step code reads a live frame with no failure path.
+    dest_frame: Rc<FrameStorage>,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
@@ -92,11 +106,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         sched: &'view Scheduler<KoanWorkload>,
         ambient: &'view AmbientContext,
         scope: &'step Scope<'step>,
+        dest_frame: Rc<FrameStorage>,
     ) -> Self {
         Self {
             sched,
             ambient,
             scope,
+            dest_frame,
         }
     }
 
@@ -139,6 +155,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// builtin's `BodyCtx`. `None` only outside any frame (top-level builtins).
     pub(in crate::machine::execute) fn current_frame(&self) -> Option<Rc<CallFrame>> {
         self.ambient.active_frame_ref().cloned()
+    }
+
+    /// The frame storage owning the active scope's region — infallible: resolved at step entry from
+    /// what the step machinery already holds. The destination frame for in-step allocation
+    /// (`alloc_witnessed` / `yoke_branded`) and relocation.
+    pub(in crate::machine::execute) fn dest_frame(&self) -> Rc<FrameStorage> {
+        Rc::clone(&self.dest_frame)
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call within an

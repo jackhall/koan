@@ -7,6 +7,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
@@ -94,10 +95,7 @@ impl<'run> KoanRuntime<'run> {
         if !self.has_run_frame() {
             // The run-root scope records a `Weak` to the run storage as its `region_owner`; adopting
             // it makes the run frame's region the run-root region (so top-level FN owners resolve).
-            let run_storage = scope
-                .region_owner()
-                .upgrade()
-                .expect("run-root scope has a live region owner");
+            let run_storage = scope_frame(scope);
             self.set_run_frame(CallFrame::adopting(scope, run_storage));
         }
     }

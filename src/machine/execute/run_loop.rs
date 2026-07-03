@@ -9,7 +9,9 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::ErasedContract;
+use crate::machine::core::FrameStorage;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
 use crate::witnessed::{
@@ -39,6 +41,15 @@ pub(in crate::machine::execute) struct RegionRefFamily;
 // `RegionBrand<'r>` is one type generic only in `'r` (a thin reference newtype); its layout is
 // identical for every `'r`, so the shared `reattachable!` macro discharges the obligation.
 reattachable!(RegionRefFamily => RegionBrand<'r>);
+
+/// The destination-region carrier for a relocation: `dest_frame`'s brand `yoke`d into that frame's
+/// own region, witnessed by it — co-located by construction rather than paired with an asserted
+/// singleton. The one owner of the `RegionRefFamily` dest-brand construction.
+pub(in crate::machine::execute) fn dest_brand(
+    dest_frame: Rc<FrameStorage>,
+) -> Witnessed<RegionRefFamily, FrameSet> {
+    KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b)
+}
 
 /// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
 /// zipped into the step `open` so they arrive at the brand `'b` alongside the continuation. This is
@@ -226,7 +237,7 @@ impl<'run> KoanRuntime<'run> {
                     // The lift itself no longer pre-relocates. A `ForwardReady` relocation below builds
                     // its own witnessed destination carrier from this same scope's brand.
                     let outcome = continuation(
-                        &SchedulerView::new(&self.sched, &self.ambient, scope),
+                        &SchedulerView::new(&self.sched, &self.ambient, scope, scope_frame(scope)),
                         deps.results(&dep_sources),
                         idx,
                     );
@@ -284,10 +295,7 @@ impl<'run> KoanRuntime<'run> {
                             // witnessed by it. Frameless: the dest region is externally pinned for the
                             // step, so a confined empty-set `resident` carries it.
                             let dest = match frame {
-                                Some(f) => KoanRegion::yoke_branded::<RegionRefFamily, _>(
-                                    f.storage_rc(),
-                                    |b| b,
-                                ),
+                                Some(f) => dest_brand(f.storage_rc()),
                                 None => {
                                     Witnessed::<RegionRefFamily, FrameSet>::resident(scope.brand())
                                 }

@@ -13,7 +13,7 @@ use crate::witnessed::{reattachable, Sealed, Witnessed};
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::WitnessedDepFinish;
-use super::ctx::{with_current_node_scope, SchedulerView};
+use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
 use super::resolve_name_part;
 use crate::scheduler::{DepResults, ResolvedDeps};
 
@@ -67,11 +67,7 @@ fn fold_cells(
     cells: impl Iterator<Item = Sealed<CarriedFamily, FrameSet>>,
     capacity: usize,
 ) -> Witnessed<AggBuildFamily, FrameSet> {
-    let dest_frame = view
-        .current_scope()
-        .region_owner()
-        .upgrade()
-        .expect("the consumer scope's region owner is held for the step");
+    let dest_frame = view.dest_frame();
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
         (region, Vec::with_capacity(capacity))
     });
@@ -268,11 +264,7 @@ impl<'step> KoanRuntime<'step> {
                 // scope's frame, born co-located with that frame as its reach rather than resolved at
                 // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free
                 // and folds uniformly with the dep cells.
-                let frame = with_current_node_scope(&self.ambient, |s| {
-                    s.region_owner()
-                        .upgrade()
-                        .expect("the classify scope's region owner is held for the step")
-                });
+                let frame = current_dest_frame(&self.ambient);
                 let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
                     Carried::Object(region.alloc_object(other.resolve_region_pure()))
                 });

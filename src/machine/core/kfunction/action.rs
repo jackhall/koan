@@ -36,13 +36,17 @@ macro_rules! try_action {
 /// The `Rc<FrameStorage>` that owns `scope`'s region — the witness a value built into that region is
 /// `yoke`d under (the object-family construction inversion: a region-resident object is born bundled
 /// with its frame as its reach). The scope's `region_owner` is `Weak` — an in-region value holds no
-/// owning `Rc` back to its frame — and upgrades for the whole of the scope's own step, while the
-/// producing node holds the frame live.
+/// owning `Rc` back to its frame — and upgrades for as long as the scope can run: a **producing**
+/// scope during its own step (the producing node holds the frame); a **consumer/current** scope
+/// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
+/// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
+/// root** (the run storage is held by the interpreter for the whole run). The single owner of this
+/// invariant's assertion; step-scoped callers should route through `SchedulerView::dest_frame` or
+/// `FinishCtx::frame` instead of upgrading directly.
 pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
-    scope
-        .region_owner()
-        .upgrade()
-        .expect("a producing scope's frame is live during its own step")
+    scope.region_owner().upgrade().expect(
+        "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
+    )
 }
 
 /// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
@@ -202,9 +206,11 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 }
 
 /// Wake-time context a finish receives: the slot's **own** scope (interior-mutable, with `.region`)
-/// re-projected at wake — a deferred binder `register_*`s on it here.
+/// re-projected at wake — a deferred binder `register_*`s on it here — plus the frame storage owning
+/// that scope's region, resolved by the step machinery so a finish allocates with no failure path.
 pub struct FinishCtx<'a> {
     pub scope: &'a Scope<'a>,
+    pub frame: Rc<FrameStorage>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep values as a [`DepResults`] view

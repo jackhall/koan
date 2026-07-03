@@ -17,7 +17,7 @@ use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
 use super::super::lift::relocate_carried;
-use super::super::run_loop::RegionRefFamily;
+use super::super::run_loop::{dest_brand, RegionRefFamily};
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -183,11 +183,7 @@ pub(super) fn literal_pass_through<'step>(
         // is scope-independent — it comes from `expr`, not a scope resolve — so it stays on the cart
         // region.)
         ExpressionPart::Literal(lit) => {
-            let frame = ctx
-                .current_scope()
-                .region_owner()
-                .upgrade()
-                .expect("the dispatching scope's region owner is held for the step");
+            let frame = ctx.dest_frame();
             let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
                 Carried::Object(region.alloc_object(lit.to_kobject()))
             });
@@ -215,14 +211,9 @@ pub(super) fn literal_pass_through<'step>(
 /// literal and owns it; a dep error short-circuits frameless before the finish runs.
 fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
     let finish: WitnessedDepFinish<'step> = Box::new(|view, deps| {
-        let scope = view.current_scope();
-        let dest_frame = scope
-            .region_owner()
-            .upgrade()
-            .expect("the consumer scope's region owner is held for the step");
-        // The dest brand is `yoke`d into the frame that owns `scope`'s region, witnessed by it —
-        // co-located by construction rather than paired with an asserted singleton.
-        let dest = KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b);
+        // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
+        // it — co-located by construction rather than paired with an asserted singleton.
+        let dest = dest_brand(view.dest_frame());
         Ok(deps
             .owned(0)
             .carrier

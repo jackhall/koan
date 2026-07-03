@@ -39,7 +39,7 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_kexpression, scope_frame, Action, CatchContinue, DepPlacement, DepRequest,
+        require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
     use crate::machine::execute::build_type_operand;
     use crate::machine::model::values::CarriedFamily;
@@ -76,12 +76,12 @@ pub fn body<'a>(
         // crosses the build brand as a [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke
         // plus its stored reach rather than paired with an asserted singleton.
         let region = fctx.scope.brand();
-        let frame = scope_frame(fctx.scope);
+        let frame = Rc::clone(&fctx.frame);
         let identity: &KType<'a> = region.alloc_ktype(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
         });
-        let home = build_type_operand(fctx.scope, identity, &reach);
+        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, &reach);
         let witnessed = match result {
             // The watched value's carrier folds onto the result: `transfer_into` relocates it into the
             // consumer region and unions its reach onto the `Ok` carrier.

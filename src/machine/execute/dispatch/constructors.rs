@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{KoanRegion, Scope};
+use crate::machine::core::{FrameStorage, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
@@ -21,7 +21,7 @@ use crate::source::Spanned;
 use crate::witnessed::{reattachable, Witnessed};
 
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::RegionRefFamily;
+use super::super::run_loop::dest_brand;
 use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
@@ -167,21 +167,18 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
-/// The dest brand is `yoke`d into the frame that owns the dest region — witnessed by it — and `merge`d
-/// with the identity wrapped by [`Scope::resident_type_carrier`] under its stored per-binding `reach`,
-/// so the operand's witness is the dest region's pin ∪ the identity's own reach — folded, never paired
+/// `dest_frame`'s brand is `yoke`d into that frame's own region — witnessed by it — and `merge`d with
+/// the identity wrapped by [`Scope::resident_type_carrier`] under its stored per-binding `reach`, so
+/// the operand's witness is the dest region's pin ∪ the identity's own reach — folded, never paired
 /// with an asserted witness. `reach` is empty while `RecursiveSet` is heap-`Rc`'d (the identity points
 /// into no region) and names the set's region once it is region-allocated.
 pub(crate) fn build_type_operand<'step>(
     scope: &'step Scope<'step>,
+    dest_frame: Rc<FrameStorage>,
     identity: &'step KType<'step>,
     reach: &FrameSet,
 ) -> Witnessed<RegionTypeFamily, FrameSet> {
-    let dest_frame = scope
-        .region_owner()
-        .upgrade()
-        .expect("the consumer scope's region owner is held for the step");
-    let dest_brand = KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b);
+    let dest_brand = dest_brand(dest_frame);
     let identity_carrier = scope.resident_type_carrier(identity, reach);
     dest_brand
         .merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
@@ -214,7 +211,7 @@ fn finish_witnessed<'step>(
         CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
             check_newtype_repr(identity, terminals[0].value.object())?;
-            let home = build_type_operand(scope, identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
             Ok(terminals[0]
                 .carrier
                 .transfer_into::<RegionTypeFamily, CarriedFamily>(
@@ -264,7 +261,7 @@ fn finish_witnessed<'step>(
                         )
                         .expect("a FrameSet set witness always represents the union")
                 });
-            let home = build_type_operand(scope, identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
             Ok(fields
                 .merge::<RegionTypeFamily, CarriedFamily>(
                     home,
@@ -307,7 +304,7 @@ fn finish_witnessed<'step>(
                 set: Rc::clone(set),
                 index: *index,
             });
-            let home = build_type_operand(scope, identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
             let tag = tag.clone();
             Ok(terminals[0]
                 .carrier
