@@ -76,7 +76,9 @@ a concept, not a final identifier.
   region-owner type pick up the library's `WitnessRegion`).
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
-- The reach set, as an opaque type (see Vocabulary).
+- The reach set, as an opaque type
+  ([witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs); see
+  Vocabulary).
 - Terminal storage and delivery: sealing results into slots, handing dep
   terminals to finishes, and the first-errored-dep short-circuit.
 - The consumer API: `producer_disposition`, the `Deps` builder, the `Await`

@@ -138,9 +138,8 @@ from references into *two* regions cannot be bundled with one witness by `yoke`
 alone. `merge` re-anchors two carriers at one shared brand, runs a projection that
 binds one into the other, and re-seals under the **combined** witness — the union of
 the two operands' regions, with `outer`-chain subsumption dropping a region another
-already pins (`MergeWitness::merge`, which returns `None` only when the witness type
-cannot represent the combination: a single-region witness whose operands are unrelated;
-a region *set* always can). This is what keeps
+already pins (`UnionWitness::union`, total because a region *set* can always
+represent the combined pin). This is what keeps
 witnessed-ness at the *boundary*: without it, an aggregate of independently-witnessed
 elements would nest `Witnessed<…Witnessed<…>>` wrappers with the data and be
 unstorable as a single node carrier. With it, the invariant holds:
@@ -280,7 +279,7 @@ omission is load-bearing under TCO: a per-call frame carries no storage `outer` 
 walk stops at its own region while a captured closure still pins its defining (lexical-ancestor) scope.
 Folding such an ancestor into the reach-set — paired with a sibling bind of the call's result — would
 close a `region → scope → set → frame` cycle and defeat the `Rc::get_mut` TCO frame-reuse gate; omitting
-it realizes [`fold_foreign`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors"
+it realizes [`fold_omitting`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors"
 intent while keeping a region-pure or ancestor-bound value depositing nothing.
 
 The same reach is also stored **per binding**, so a later read hands its carrier back structurally.

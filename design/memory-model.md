@@ -191,8 +191,8 @@ region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only re
 can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
 asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
 re-seals under the *combined* witness — the union of both operands' regions, with `outer`-chain
-subsumption dropping a region another already pins (the `MergeWitness` trait's `merge`), returning
-`None` only when a single-region witness cannot represent two unrelated regions. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
+subsumption dropping a region another already pins (the `UnionWitness` trait's `union`), total because
+a region set can always represent the combined pin. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single

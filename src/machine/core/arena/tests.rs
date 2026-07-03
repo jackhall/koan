@@ -484,7 +484,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
 /// nothing; a foreign frame is kept; an always-false predicate (a frameless scope with no home to omit)
 /// keeps everything.
 #[test]
-fn fold_foreign_omits_the_home_frame_and_keeps_foreign_reach() {
+fn fold_omitting_skips_the_home_frame_and_keeps_foreign_reach() {
     let home = FrameStorage::run_root();
     let foreign = FrameStorage::run_root();
 

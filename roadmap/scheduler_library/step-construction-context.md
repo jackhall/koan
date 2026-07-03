@@ -60,8 +60,6 @@ region" rather than the construction making it structural.
 
 **Requires:**
 
-- [The opaque reach set](opaque-reach-set.md) — `alloc_with`'s reach fold
-  mints and unions through the library set, infallibly.
 - [The resolve-or-await protocol combinator](protocol-combinators.md) — the
   `AwaitContinue` signature change lands on combinator internals instead of
   per-builtin hand-rolled finishes.
