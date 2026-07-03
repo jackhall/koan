@@ -66,7 +66,7 @@ overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
 `placeholders[name]` slot. The two channels are mutually exclusive per
 binder: each binder uses exactly one. The submission walk reifies the
 choice as a
-[`BinderKey`](../../src/scheduler/alloc.rs) enum
+[`BinderKey`](../../workgraph/src/scheduler/alloc.rs) enum
 (`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
 the type rather than as a two-Option convention.
 
@@ -179,7 +179,7 @@ Statement indices are per-`enter_block` call: each call to
 [`KoanRuntime::enter_block`](../../src/machine/execute/runtime/submit.rs) mints
 chain frames at indices `1..N` for the N statements it submits. A REPL
 or test fixture that submits without an ambient chain (the
-[`Scheduler::add`](../../src/scheduler/alloc.rs) auto-root
+[`Scheduler::add`](../../workgraph/src/scheduler/alloc.rs) auto-root
 branch) gets [`LexicalFrame::detached`](../../src/machine/core/lexical_frame.rs)
 — a chain that mentions no real scope, so the visibility predicate's
 `index_for → None ⇒ complete` arm makes every binding in the target

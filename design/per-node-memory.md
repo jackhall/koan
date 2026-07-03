@@ -362,7 +362,7 @@ reattaches) is shipped, as is the relocation of the generic `Region<P>` allocato
 beside its carrier in the `witnessed` module and the opaque [`Sealed`](../workgraph/src/witnessed.rs)
 storage form (`seal` / `open`), with the node result slot rerouted onto it. Its **value reads** now
 nest under the rank-2 `open`: two driver accessors copy out inside the brand — a value read
-([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
+([`read_result_with`](../workgraph/src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
 three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the transitional
 self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
 binds alike — fold onto `open` too, and the borrow-bounded `attach` is deleted. The witnessed

@@ -12,7 +12,7 @@ impl<W: Workload> Scheduler<W> {
     /// Wakes must all land before any queue push: a later wake re-reading the
     /// slot must observe the prior transition. The terminal arrives already bundled with its witness
     /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
-    pub(crate) fn finalize(
+    pub fn finalize(
         &mut self,
         idx: usize,
         output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
@@ -37,7 +37,7 @@ impl<W: Workload> Scheduler<W> {
     ///
     /// Idempotent and safe to call on a still-live slot. A value opened by a read lives in a region
     /// the carrier's frame pins, not in the slot, so freeing the slot cannot dangle it.
-    pub(crate) fn free(&mut self, idx: usize) {
+    pub fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {
             if self.store.is_live(id) {
@@ -57,7 +57,7 @@ impl<W: Workload> Scheduler<W> {
     /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
     /// here — see
     /// [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants).
-    pub(crate) fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
+    pub fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
             self.free(d);

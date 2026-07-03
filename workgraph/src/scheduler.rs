@@ -13,8 +13,8 @@
 //! a slot's steps), an inter-node value `W::Value` passed along dep edges, a terminal error
 //! `W::Error`, a per-node memory cart `W::Cart` managed by `Rc`, a per-node return `W::Contract`,
 //! and a one-shot `W::Continuation`. The scheduler stores all of these and hands them back but
-//! inspects none. The Koan interpreter ([`crate::machine`]) is the sole workload; it instantiates
-//! the scheduler and drives it through the inherent-method contract.
+//! inspects none. An embedder's interpreter instantiates the scheduler and drives it through the
+//! inherent-method contract; Koan's `machine` module is the first such instantiation.
 //!
 //! See design/execution/README.md and design/memory-model.md.
 
@@ -36,22 +36,23 @@ mod workload;
 
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
-pub(crate) use crate::witnessed::{Erased, MergeWitness, Reattachable, Sealed, Witnessed};
-pub(crate) use deps::{Deps, ProducerDisposition, ResolvedDeps};
+pub use crate::witnessed::{Erased, MergeWitness, Reattachable, Sealed, Witnessed};
+pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
 pub use node_id::NodeId;
-pub(crate) use workload::{Live, Workload};
+pub use workload::{Live, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
-/// kind); production driver code never names it.
-#[cfg(test)]
-pub(crate) use dep_graph::DepEdge;
+/// kind); production driver code never names it. Widened to `test-hooks` so the embedder's own
+/// white-box tests (compiled as a dependent crate, where `cfg(test)` is off) can reach it too.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use dep_graph::DepEdge;
 
 /// A dynamic DAG of dispatch and execution work. See the module docs for the queue-priority and
 /// cycle-detection contract.
-pub(crate) struct Scheduler<W: Workload> {
+pub struct Scheduler<W: Workload> {
     pub(in crate::scheduler) queues: WorkQueues,
     pub(in crate::scheduler) deps: DepGraph,
     pub(in crate::scheduler) store: NodeStore<W>,
@@ -68,19 +69,19 @@ impl<W: Workload> Scheduler<W> {
 
     /// Pop the next ready slot index — the run loop's iterator (in-flight slots ahead of fresh
     /// dispatches). `None` when the queue drains.
-    pub(crate) fn pop_next(&mut self) -> Option<usize> {
+    pub fn pop_next(&mut self) -> Option<usize> {
         self.queues.pop_next()
     }
 
     /// Take a slot's stored node to run it (`PreRun` → `Running`); the slot sits empty until the
     /// driver finalizes or [`replace`](Self::replace)s it.
-    pub(crate) fn take_for_run(&mut self, id: NodeId) -> Node<W> {
+    pub fn take_for_run(&mut self, id: NodeId) -> Node<W> {
         self.store.take_for_run(id)
     }
 
     /// Reinstall a tail-replaced slot's node and re-enqueue it if its deps are already satisfied —
     /// the whole `Replace` apply in one step.
-    pub(crate) fn replace(&mut self, id: NodeId, node: Node<W>) {
+    pub fn replace(&mut self, id: NodeId, node: Node<W>) {
         self.store.reinstall(id, node);
         // Replace return sites install their own edges (or clear the slot's dep edges for tail
         // rewrites), so the pending count is authoritative here.
@@ -92,13 +93,13 @@ impl<W: Workload> Scheduler<W> {
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
     /// longer fire (a dependency cycle). `(count, sample)` for the deadlock error, or `None` when
     /// every slot is terminal.
-    pub(crate) fn unresolved(&self) -> Option<(usize, String)> {
+    pub fn unresolved(&self) -> Option<(usize, String)> {
         self.store.unresolved()
     }
 
     /// The live slot's opaque workload payload, or `None` once it has terminalized — at which point
     /// `take_for_run` has moved the payload out. Test-only; the workload extracts the field it wants.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn payload_of(&self, id: NodeId) -> Option<&W::Payload> {
         self.store.payload_of(id)
     }
@@ -112,7 +113,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// An errored sub counts as ready — parents short-circuit on it. Follows a bare-name-forward
     /// alias to the real producer (see [`splice`](self::splice)).
-    pub(crate) fn is_result_ready(&self, id: NodeId) -> bool {
+    pub fn is_result_ready(&self, id: NodeId) -> bool {
         self.store.is_result_ready(self.resolve_alias(id))
     }
 
@@ -129,14 +130,14 @@ impl<W: Workload> Scheduler<W> {
 
     /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free success/failure
     /// probe that reads no value. Follows a bare-name-forward alias to the real producer.
-    pub(crate) fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
+    pub fn result_error(&self, id: NodeId) -> Result<(), &W::Error> {
         self.store.result_error(self.resolve_alias(id))
     }
 
     /// The finalized terminal's witness set — the regions it reaches, cloned out for the consumer-pull
     /// lift's `pin` accumulation (the empty set for a frameless / run-region terminal, or for an
     /// errored slot). Follows a bare-name-forward alias to the real producer.
-    pub(crate) fn dep_witness(&self, id: NodeId) -> W::Witness {
+    pub fn dep_witness(&self, id: NodeId) -> W::Witness {
         self.store.dep_witness(self.resolve_alias(id))
     }
 
@@ -144,7 +145,7 @@ impl<W: Workload> Scheduler<W> {
     /// own seal intact — the consumer-pull lift hands each dep this so a construction finish folds it
     /// witnessed, naming the reach on the carrier rather than reconstructing it. Follows a
     /// bare-name-forward alias to the real producer (which holds the sole copy).
-    pub(crate) fn dep_carrier(
+    pub fn dep_carrier(
         &self,
         id: NodeId,
     ) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
@@ -160,7 +161,7 @@ impl<W: Workload> Scheduler<W> {
     /// value). `None` only if the witness union is not representable — never for a set witness.
     // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn transfer_lifted<B: Reattachable>(
+    pub fn transfer_lifted<B: Reattachable>(
         &self,
         id: NodeId,
         dest: Witnessed<B, W::Witness>,
@@ -181,7 +182,7 @@ impl<W: Workload> Scheduler<W> {
     /// of any per-call source it still reaches), dropping the pinned producer frame. The drain
     /// boundary uses this for consumer-less roots. Resolves a bare-name alias so the real producer's
     /// frame — not the alias slot — is released.
-    pub(crate) fn rehome_terminal(
+    pub fn rehome_terminal(
         &mut self,
         id: NodeId,
         output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
@@ -192,7 +193,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// True iff `producer` is forward-reachable from `consumer`
     /// (`DepGraph::would_create_cycle`).
-    pub(crate) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+    pub fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.deps.would_create_cycle(producer, consumer)
     }
 
@@ -201,7 +202,7 @@ impl<W: Workload> Scheduler<W> {
     /// is `None` at a site with no consumer id in scope (a leaf park), where a cycle can never be
     /// classified. Follows a bare-name-forward alias through the `is_result_ready` / `result_error`
     /// facades. See [`ProducerDisposition`](self::deps::ProducerDisposition).
-    pub(crate) fn producer_disposition(
+    pub fn producer_disposition(
         &self,
         producer: NodeId,
         consumer: Option<NodeId>,
@@ -224,7 +225,7 @@ impl<W: Workload> Scheduler<W> {
     /// edge for an already-finalized producer. The apply harness uses this for an
     /// already-allocated consumer slot; the submit-time path installs its own edges in
     /// [`alloc`](self::alloc).
-    pub(crate) fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
+    pub fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
         for &producer in deps.parks() {
             self.add_park_edge(producer, consumer);
         }
@@ -240,39 +241,40 @@ impl<W: Workload> Default for Scheduler<W> {
     }
 }
 
-/// `#[cfg(test)]` forwarders that let the driver's white-box tests poke slot/edge state without
-/// exposing the `store` / `deps` / `queues` fields. Each wraps an already-test-only primitive on the
-/// inner store or dep graph.
-#[cfg(test)]
+/// `#[cfg(any(test, feature = "test-hooks"))]` forwarders that let the driver's white-box tests
+/// poke slot/edge state without exposing the `store` / `deps` / `queues` fields. Each wraps an
+/// already-test-only primitive on the inner store or dep graph. The `test-hooks` feature widens
+/// this for an embedder compiling as a dependent crate, where `cfg(test)` is off.
+#[cfg(any(test, feature = "test-hooks"))]
 impl<W: Workload> Scheduler<W> {
-    pub(crate) fn clear_node(&mut self, id: NodeId) {
+    pub fn clear_node(&mut self, id: NodeId) {
         self.store.clear_node(id);
     }
-    pub(crate) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
+    pub fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         self.store.set_result(id, output);
     }
-    pub(crate) fn result_is_none(&self, id: NodeId) -> bool {
+    pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)
     }
-    pub(crate) fn result_is_some(&self, id: NodeId) -> bool {
+    pub fn result_is_some(&self, id: NodeId) -> bool {
         self.store.result_is_some(id)
     }
-    pub(crate) fn is_live(&self, id: NodeId) -> bool {
+    pub fn is_live(&self, id: NodeId) -> bool {
         self.store.is_live(id)
     }
-    pub(crate) fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
+    pub fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
         self.deps.notify_list_iter()
     }
-    pub(crate) fn free_list_snapshot(&self) -> Vec<NodeId> {
+    pub fn free_list_snapshot(&self) -> Vec<NodeId> {
         self.store.free_list_snapshot()
     }
-    pub(crate) fn free_list_len(&self) -> usize {
+    pub fn free_list_len(&self) -> usize {
         self.store.free_list_len()
     }
-    pub(crate) fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
+    pub fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
         self.deps.set_dep_edges(idx, edges);
     }
-    pub(crate) fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
+    pub fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
         self.deps.dep_edges_at(idx)
     }
 }

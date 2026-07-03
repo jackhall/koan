@@ -27,7 +27,7 @@ use super::NodeId;
 /// Classification of "can I depend on this producer?" — the shared park-ladder check order. The
 /// caller keeps its own per-site policy for every arm (a ready-Ok producer means different things in
 /// different lanes); this owns only the order in which the checks run.
-pub(crate) enum ProducerDisposition<'a, E> {
+pub enum ProducerDisposition<'a, E> {
     /// Ready, and its terminal is an error — the caller propagates a clone.
     Errored(&'a E),
     /// Ready, and its terminal is a value (`Ok`).
@@ -42,7 +42,7 @@ pub(crate) enum ProducerDisposition<'a, E> {
 /// entries live in separate vecs, so `[park..., owned...]` is structural — there is no `park_count`
 /// for a caller to thread or get wrong. Generic in the owned-entry type `R`: a `DepRequest` before
 /// the apply harness realizes each owned request to its producer id, `NodeId` after ([`ResolvedDeps`]).
-pub(crate) struct Deps<R> {
+pub struct Deps<R> {
     /// Park producers, deduped, in first-occurrence order.
     parks: Vec<NodeId>,
     /// Owned entries, in insertion order.
@@ -50,7 +50,7 @@ pub(crate) struct Deps<R> {
 }
 
 impl<R> Deps<R> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Deps {
             parks: Vec::new(),
             owned: Vec::new(),
@@ -60,7 +60,7 @@ impl<R> Deps<R> {
     /// Add a dedup'ing park edge on `id`. Returns `id`'s park index — the existing position when `id`
     /// is already parked, else the newly-pushed one. Positional reads (a literal cell keyed on its
     /// park slot) stay correct when two consumers share one producer because the index is stable.
-    pub(crate) fn park_on(&mut self, id: NodeId) -> usize {
+    pub fn park_on(&mut self, id: NodeId) -> usize {
         if let Some(pos) = self.parks.iter().position(|p| *p == id) {
             return pos;
         }
@@ -71,7 +71,7 @@ impl<R> Deps<R> {
 
     /// Add an owned dep. Returns its owned index — the position *within* the owned vec, NOT within
     /// the concatenated `[park..., owned...]` delivery order (the read side adds the park prefix).
-    pub(crate) fn own(&mut self, entry: R) -> usize {
+    pub fn own(&mut self, entry: R) -> usize {
         let pos = self.owned.len();
         self.owned.push(entry);
         pos
@@ -79,7 +79,7 @@ impl<R> Deps<R> {
 
     /// Build a park-only dep list from an id sequence (re-dedup'ing harmlessly). The park-and-replay
     /// shapes that own no sub-work (`park_resume`) start here.
-    pub(crate) fn from_parks(ids: impl IntoIterator<Item = NodeId>) -> Self {
+    pub fn from_parks(ids: impl IntoIterator<Item = NodeId>) -> Self {
         let mut deps = Deps::new();
         for id in ids {
             deps.park_on(id);
@@ -89,7 +89,7 @@ impl<R> Deps<R> {
 
     /// Build a dep list whose every entry is owned — the all-owned shape a dispatch decide parks on
     /// when it has no notify-only producers to wait on.
-    pub(crate) fn from_owned(entries: impl IntoIterator<Item = R>) -> Self {
+    pub fn from_owned(entries: impl IntoIterator<Item = R>) -> Self {
         let mut deps = Deps::new();
         for entry in entries {
             deps.own(entry);
@@ -97,45 +97,45 @@ impl<R> Deps<R> {
         deps
     }
 
-    pub(crate) fn parks(&self) -> &[NodeId] {
+    pub fn parks(&self) -> &[NodeId] {
         &self.parks
     }
 
-    pub(crate) fn owned(&self) -> &[R] {
+    pub fn owned(&self) -> &[R] {
         &self.owned
     }
 
     /// The park-prefix length — the split point of the `[park..., owned...]` delivery order.
-    pub(crate) fn park_count(&self) -> usize {
+    pub fn park_count(&self) -> usize {
         self.parks.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.parks.is_empty() && self.owned.is_empty()
     }
 
     /// Decompose into `(parks, owned)` for the realization loop, which turns each owned `DepRequest`
     /// into a producer id and rebuilds a [`ResolvedDeps`] from the same parks.
-    pub(crate) fn into_parts(self) -> (Vec<NodeId>, Vec<R>) {
+    pub fn into_parts(self) -> (Vec<NodeId>, Vec<R>) {
         (self.parks, self.owned)
     }
 }
 
 /// A realized dep list — parks and owned deps are all producer ids. This is what
 /// [`NodeWork`](super::nodes::NodeWork) stores and the apply harness installs edges from.
-pub(crate) type ResolvedDeps = Deps<NodeId>;
+pub type ResolvedDeps = Deps<NodeId>;
 
 impl ResolvedDeps {
     /// The producer ids in delivery order: parks first, then owned. The run loop reads each dep's
     /// terminal in this order so a finish's [`DepResults`] lines up.
-    pub(crate) fn all_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn all_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.parks.iter().chain(self.owned.iter()).copied()
     }
 
     /// Wrap a delivered `[park..., owned...]` result slice as a [`DepResults`] view carrying this
     /// list's park prefix — the run loop's single crossing from the write side to the read side, so
     /// the prefix length never leaves the scheduler.
-    pub(crate) fn results<'a, T>(&self, items: &'a [T]) -> DepResults<'a, T> {
+    pub fn results<'a, T>(&self, items: &'a [T]) -> DepResults<'a, T> {
         DepResults::new(items, self.park_count())
     }
 }
@@ -161,39 +161,43 @@ pub struct DepResults<'a, T> {
 }
 
 impl<'a, T> DepResults<'a, T> {
-    pub(crate) fn new(items: &'a [T], park_count: usize) -> Self {
+    pub fn new(items: &'a [T], park_count: usize) -> Self {
         DepResults { items, park_count }
     }
 
     /// The `i`-th park result (`items[i]`).
-    pub(crate) fn park(&self, i: usize) -> &'a T {
+    pub fn park(&self, i: usize) -> &'a T {
         &self.items[i]
     }
 
     /// The `j`-th owned result (`items[park_count + j]`).
-    pub(crate) fn owned(&self, j: usize) -> &'a T {
+    pub fn owned(&self, j: usize) -> &'a T {
         &self.items[self.park_count + j]
     }
 
     /// The owned suffix (`items[park_count..]`) — a re-walk that consumes only its owned sub-results
     /// in order feeds off this.
-    pub(crate) fn owned_slice(&self) -> &'a [T] {
+    pub fn owned_slice(&self) -> &'a [T] {
         &self.items[self.park_count..]
     }
 
     /// The whole `[park..., owned...]` slice, for a finish that consumes every result in order.
-    pub(crate) fn all(&self) -> &'a [T] {
+    pub fn all(&self) -> &'a [T] {
         self.items
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     /// Re-wrap a different slice under this view's park prefix — the mediating continuation
     /// combinators map the resolved terminals to values/carriers, then re-wrap so the finish's
     /// `DepResults` keeps the same `[park..., owned...]` split without ever naming the prefix length.
-    pub(crate) fn rewrap<'b, U>(&self, items: &'b [U]) -> DepResults<'b, U> {
+    pub fn rewrap<'b, U>(&self, items: &'b [U]) -> DepResults<'b, U> {
         DepResults::new(items, self.park_count)
     }
 }

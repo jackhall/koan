@@ -54,9 +54,9 @@ and names no AST.
 
 ## The dispatcher / scheduler boundary
 
-The scheduler ([`scheduler`](../../src/scheduler.rs)) is a crate-root sibling of
+The scheduler ([`scheduler`](../../workgraph/src/scheduler.rs)) is a crate-root sibling of
 `machine`, not nested inside it: a workload-independent DAG of dependency-linked
-nodes, generic over a [`Workload`](../../src/scheduler/workload.rs) and naming no Koan
+nodes, generic over a [`Workload`](../../workgraph/src/scheduler/workload.rs) and naming no Koan
 value, error, scope, memory, or AST type. The Koan interpreter is the sole
 workload — `machine::execute` instantiates it as `Scheduler<KoanWorkload>` and
 drives it from the run loop
@@ -187,7 +187,7 @@ re-resolves reads its producers from the rebuilt scope, not a wakes list.
 enqueue-on-zero runs off a single drain.
 
 The run-set has two priority bands managed by
-[`WorkQueues`](../../src/scheduler/work_queues.rs). Internal
+[`WorkQueues`](../../workgraph/src/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
 nodes registered in `add()` — routes through `WorkQueues::push_internal` /
 `push_internal_front` / `push_woken`. Top-level `dispatch_in_scope` calls route
@@ -200,7 +200,7 @@ call site.
 
 ## Dependency graph invariants
 
-[`DepGraph`](../../src/scheduler/dep_graph.rs) stores one
+[`DepGraph`](../../workgraph/src/scheduler/dep_graph.rs) stores one
 `rows: Vec<DepRow>` parallel to the slot table; each `DepRow` bundles the
 three coordinated per-slot fields — `notify` (forward wake edges to this
 slot's dependents), `pending` (this slot's unresolved-dep counter), and
@@ -238,26 +238,26 @@ The push/notify model assumes a single producer slot per result. A bare-name slo
 binding-producer would otherwise become a *second* producer of that result. Instead
 the slot is **spliced out** as an alias of the producer, which stays the sole
 producer. All the graph logic lives in
-[`scheduler/splice.rs`](../../src/scheduler/splice.rs):
+[`scheduler/splice.rs`](../../workgraph/src/scheduler/splice.rs):
 
 - The bare-name decide returns [`Outcome::Forward(producer)`](../../src/machine/execute/outcome.rs).
   If `producer` is already ready, the harness finalizes the slot with the
   producer's terminal directly ([`NodeStep::Done`](../../src/machine/execute/nodes.rs)).
 - Otherwise the slot's step yields [`NodeStep::Alias(producer)`](../../src/machine/execute/nodes.rs),
-  and the execute loop calls [`Scheduler::splice_forward`](../../src/scheduler/splice.rs):
+  and the execute loop calls [`Scheduler::splice_forward`](../../workgraph/src/scheduler/splice.rs):
   the consumers already parked on the slot are moved onto the producer's notify
-  list ([`DepGraph::splice_notify`](../../src/scheduler/dep_graph.rs)),
-  and the slot's [`SlotState`](../../src/scheduler/node_store.rs)
+  list ([`DepGraph::splice_notify`](../../workgraph/src/scheduler/dep_graph.rs)),
+  and the slot's [`SlotState`](../../workgraph/src/scheduler/node_store.rs)
   becomes `Aliased(producer)`. The aliased slot never fires; the producer's fire
   wakes the moved consumers directly.
 
 Reads follow the alias to the real producer:
-[`Scheduler::resolve_alias`](../../src/scheduler/splice.rs) walks the
+[`Scheduler::resolve_alias`](../../workgraph/src/scheduler/splice.rs) walks the
 alias chain (iterative, always pointing downstream to a real producer, so it
 terminates and never cycles), and `read_result` / `is_result_ready` resolve
 through it. Edge installs resolve it too:
-[`add_owned_edge`](../../src/scheduler/splice.rs) /
-[`add_park_edge`](../../src/scheduler/splice.rs) wire a late consumer
+[`add_owned_edge`](../../workgraph/src/scheduler/splice.rs) /
+[`add_park_edge`](../../workgraph/src/scheduler/splice.rs) wire a late consumer
 to the *resolved* producer, and a producer that has already finalized adds no edge
 at all — the consumer reads its value directly when it runs, contributing nothing
 to its pending count. So neither the store nor the dep graph has to be
@@ -357,7 +357,7 @@ result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
-[`NodeStore`](../../src/scheduler/node_store.rs)
+[`NodeStore`](../../workgraph/src/scheduler/node_store.rs)
 sub-struct on `Scheduler` that owns a single `slots` vector of `SlotState`
 enums plus a `free_list: Vec<NodeId>` of recyclable indices. One enum encodes
 the per-slot lifecycle — `PreRun(Node)` (an un-run node payload), `Running`
@@ -370,7 +370,7 @@ write, and reclamation are each encapsulated; because payload and result are the
 same enum slot, no call site outside `NodeStore` can land a `Done` without the
 node having been taken, nor read a result before it is `Done`.
 Dependency bookkeeping lives alongside it in a single
-[`DepGraph`](../../src/scheduler/dep_graph.rs) sub-struct
+[`DepGraph`](../../workgraph/src/scheduler/dep_graph.rs) sub-struct
 that owns one `rows: Vec<DepRow>`, each `DepRow` bundling the three
 coordinated per-slot fields — `notify: Vec<NodeId>` (this slot's dependent
 list), `pending: usize` (its unresolved-dep counter), and `edges:
@@ -383,7 +383,7 @@ private and mutated only through a small surface (`install_for_slot`,
 invariant atomically — every forward edge in `rows[p].notify` has a matching
 backward entry in `rows[c].edges` and contributes 1 to `rows[c].pending`.
 `add_owned_edge` / `add_park_edge` (in
-[`splice.rs`](../../src/scheduler/splice.rs)) resolve the
+[`splice.rs`](../../workgraph/src/scheduler/splice.rs)) resolve the
 producer through any alias and short-circuit a producer that is already
 terminal; `splice_notify` moves a spliced-out slot's dependents onto its
 producer's row.

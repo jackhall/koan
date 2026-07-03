@@ -189,7 +189,7 @@ statements as dispatch nodes:
   lexical chain).
 
 The "every dispatched node has a chain" invariant is an `expect` in
-[`Scheduler::submit_node`](../../src/scheduler/alloc.rs); the
+[`Scheduler::submit_node`](../../workgraph/src/scheduler/alloc.rs); the
 public `dispatch_in_scope` entry auto-roots a chain when no ambient one is present
 via [`LexicalFrame::detached`](../../src/machine/core/lexical_frame.rs) (so
 REPL-style submissions outside `enter_block` see every prior bind in the target

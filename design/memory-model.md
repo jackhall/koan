@@ -196,7 +196,7 @@ subsumption dropping a region another already pins (the `MergeWitness` trait's `
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`Sealed<W::Value, W::Witness>` ([`node_store.rs`](../src/scheduler/node_store.rs)) — the
+`Sealed<W::Value, W::Witness>` ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the
 opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
 `merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
 the erased value with its producer frame's witness (a singleton `FrameSet`) and seals it (an empty set
@@ -338,7 +338,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 The push/notify scheduler ([execution/README.md § Push/notify dependency
 edges](execution/scheduler.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
-[`NodeStore`](../src/scheduler/node_store.rs)
+[`NodeStore`](../workgraph/src/scheduler/node_store.rs)
 sub-struct that owns `slots: SlotVec<SlotState<'run>>` (each slot a `PreRun(Node)`
 / `Running` / `Done(Result<Carried, KError>)` / `Aliased(NodeId)` / `Free`) and
 `free_list: Vec<NodeId>`, behind the slot lifecycle
@@ -347,7 +347,7 @@ the only path that picks an index (pulling from `free_list` before extending
 `slots`), `finalize` is the only path that lands a terminal `Done`, and
 `free_one` is the only path that returns a slot to `Free` and pushes its index
 onto `free_list`. Dependency bookkeeping lives alongside it in a
-[`DepGraph`](../src/scheduler/dep_graph.rs) sub-struct
+[`DepGraph`](../workgraph/src/scheduler/dep_graph.rs) sub-struct
 that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
 (each producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
 unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's

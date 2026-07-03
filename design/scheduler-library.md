@@ -61,7 +61,7 @@ a concept, not a final identifier.
 **The library owns:**
 
 - The scheduling core: slots, dep edges, notify wakeups, work queues,
-  splicing and alias resolution ([src/scheduler/](../src/scheduler.rs)).
+  splicing and alias resolution ([src/scheduler/](../workgraph/src/scheduler.rs)).
 - **Regions, wholesale**: arenas, region owners, liveness. The generic
   region engine of [arena.rs](../src/machine/core/arena.rs) is library
   code; embedders allocate only through it.

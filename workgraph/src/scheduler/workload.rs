@@ -3,11 +3,11 @@ use super::Reattachable;
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
 /// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
 /// pinned. `Live<'node, W>` is what a slot read hands back and what `finalize` is given.
-pub(crate) type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
+pub type Live<'node, W> = <<W as Workload>::Value as Reattachable>::At<'node>;
 
 /// The Koan-agnostic interface the generic DAG scheduler is parameterized over: the workload types
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
-pub(crate) trait Workload {
+pub trait Workload {
     /// The per-node name-resolution payload the scheduler stores, installs ambient, and hands back.
     type Payload: Clone;
     /// The inter-node value carried along dep edges. A one-lifetime [`Reattachable`] family: the

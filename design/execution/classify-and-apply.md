@@ -227,7 +227,7 @@ The rails the dispatch driver feeds:
   extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
   into `pending_overloads[bucket]` on the same scope. Each binder uses
   exactly one of the two channels — the `BinderKey` enum in
-  [`submit.rs`](../../src/scheduler/alloc.rs) makes the
+  [`submit.rs`](../../workgraph/src/scheduler/alloc.rs) makes the
   dichotomy a type-level fact. Both installs are lenient against the
   matching submission-time install (see [Submission-time binder install
   and recursive sub-Dispatch](name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch)
@@ -252,7 +252,7 @@ The rails the dispatch driver feeds:
 
   - **Wrap slot.** `Resolved(obj)` rewrites the slot to
     `ExpressionPart::Future(obj)` in place. `Parked(p)` cycle-checks
-    via [`DepGraph::would_create_cycle`](../../src/scheduler/dep_graph.rs)
+    via [`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs)
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
     `<name>`" }` on a self-park or pushes `p` onto the shared
     `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
@@ -376,7 +376,7 @@ finish closure splices each result into
 re-running the parameter-list walk against the spliced signature. NEWTYPE
 and UNION share the same elaborator-and-dep-finish shape for their
 field-type lists. The fused walk's per-park cycle check
-([`DepGraph::would_create_cycle`](../../src/scheduler/dep_graph.rs),
+([`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs),
 covered above) handles the simple trivially-cyclic cases proactively; the
 elaborator's threaded-set carry-through handles the recursive-type cases
 during NEWTYPE / UNION body elaboration.

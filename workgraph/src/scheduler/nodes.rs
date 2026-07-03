@@ -15,21 +15,21 @@ use super::{Erased, Reattachable, ResolvedDeps, Workload};
 /// sample (a workload-supplied expression summary, else `None`). The continuation is stored opaquely
 /// (`W::Continuation`) and handed back to run once; the node itself never branches and names no
 /// workload type.
-pub(crate) struct NodeWork<W: Workload> {
-    pub(crate) deps: ResolvedDeps,
+pub struct NodeWork<W: Workload> {
+    pub deps: ResolvedDeps,
     /// The slot's continuation, stored erased to `'static` (`Erased<W::Continuation>`) so the node it
     /// sits on pins no borrow. Handed back to run once; never inspected — the workload re-anchors it
     /// once per step via the consuming externally-witnessed
     /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open), against the held cart `Rc`.
-    pub(crate) continuation: Erased<W::Continuation>,
-    pub(crate) carrier: Option<String>,
+    pub continuation: Erased<W::Continuation>,
+    pub carrier: Option<String>,
 }
 
 impl<W: Workload> NodeWork<W> {
     /// Build node work from a **live** continuation, erasing it to `'static` for storage here — the
     /// scheduler owns the erase (peer of `finalize`'s value erase). The continuation is handed back
     /// re-anchored to run once; the scheduler never inspects it.
-    pub(crate) fn new(
+    pub fn new(
         deps: ResolvedDeps,
         continuation: <W::Continuation as Reattachable>::At<'_>,
         carrier: Option<String>,
@@ -43,7 +43,7 @@ impl<W: Workload> NodeWork<W> {
 
     /// Decompose a popped node's work by value for the run loop: the resolved dep list (read in
     /// delivery order), the erased continuation, and the deadlock-summary carrier.
-    pub(crate) fn into_run_parts(self) -> (ResolvedDeps, Erased<W::Continuation>, Option<String>) {
+    pub fn into_run_parts(self) -> (ResolvedDeps, Erased<W::Continuation>, Option<String>) {
         (self.deps, self.continuation, self.carrier)
     }
 }
@@ -53,27 +53,27 @@ impl<W: Workload> NodeWork<W> {
 /// stored opaquely as `W::Contract` (the workload re-anchors it at the Done boundary witnessed by
 /// `cart`). Every node owns a `NodeFrame`: the cart is the per-node memory the slot's step runs
 /// against. `reserve` and `contract` are sparse.
-pub(crate) struct NodeFrame<W: Workload> {
+pub struct NodeFrame<W: Workload> {
     /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
     /// step; the scheduler stores and hands it back but calls no method on it.
-    pub(crate) cart: Rc<W::Cart>,
+    pub cart: Rc<W::Cart>,
     /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
     /// across iterations.
-    pub(crate) reserve: Option<Rc<W::Cart>>,
+    pub reserve: Option<Rc<W::Cart>>,
     /// Return contract enforced at the Done boundary, stored erased to `'static`
     /// (`Erased<W::Contract>`). The workload re-anchors it against `cart` at the step brand — opened
     /// alongside the continuation by the consuming externally-witnessed
     /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open). `None` for slots with no
     /// declared-return obligation.
-    pub(crate) contract: Option<Erased<W::Contract>>,
+    pub contract: Option<Erased<W::Contract>>,
 }
 
-pub(crate) struct Node<W: Workload> {
-    pub(crate) work: NodeWork<W>,
+pub struct Node<W: Workload> {
+    pub work: NodeWork<W>,
     /// The slot's opaque workload payload, stored and handed back but never inspected by the
     /// scheduler.
-    pub(crate) payload: W::Payload,
+    pub payload: W::Payload,
     /// The slot's per-call frame state (cart + reserve + opaque contract) — never absent, see
     /// [`NodeFrame`].
-    pub(crate) frame: NodeFrame<W>,
+    pub frame: NodeFrame<W>,
 }

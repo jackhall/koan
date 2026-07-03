@@ -3,4 +3,5 @@
 //! Koan-agnostic by construction: this crate depends on nothing above it,
 //! so it cannot name an embedder type.
 
+pub mod scheduler;
 pub mod witnessed;

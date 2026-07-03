@@ -11,7 +11,7 @@ use super::{NodeId, Workload};
 /// `free` recurses into `Owned` children but stops at `Notify` so the walk
 /// cannot transit into unrelated subgraphs.
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum DepEdge {
+pub enum DepEdge {
     Owned(NodeId),
     Notify(NodeId),
 }
@@ -188,17 +188,17 @@ impl DepGraph {
         self.rows[idx].edges.is_empty()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
         &self.rows[idx].edges
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
         self.rows[idx].edges = edges;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
         self.rows
             .iter()

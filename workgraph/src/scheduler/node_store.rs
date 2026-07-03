@@ -19,7 +19,7 @@ use super::{Live, NodeId, Workload};
 use crate::witnessed::{MergeWitness, Reattachable, Sealed, Witnessed};
 // `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
 // pre-built `Witnessed`, so the import is test-scoped.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 use super::Erased;
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
@@ -341,12 +341,12 @@ impl<W: Workload> NodeStore<W> {
 
     // --- Test-only helpers for synthetic-state setup. ---
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn clear_node(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Running;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         self.slots[id] = SlotState::Done(
             output
@@ -355,29 +355,29 @@ impl<W: Workload> NodeStore<W> {
         );
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn result_is_some(&self, id: NodeId) -> bool {
         matches!(self.slots[id], SlotState::Done(..))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn result_is_none(&self, id: NodeId) -> bool {
         !matches!(self.slots[id], SlotState::Done(..))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn free_list_snapshot(&self) -> Vec<NodeId> {
         self.free_list.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn free_list_len(&self) -> usize {
         self.free_list.len()
     }
 
     /// The live slot's opaque payload, or `None` once it has terminalized. The workload extracts
     /// the field it wants (e.g. the lexical chain). Test-only.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn payload_of(&self, id: NodeId) -> Option<&W::Payload> {
         match self.slots.get(id) {
             Some(SlotState::PreRun(node)) => Some(&node.payload),

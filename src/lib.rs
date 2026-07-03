@@ -5,9 +5,8 @@
 pub mod builtins;
 pub mod machine;
 pub mod parse;
-pub mod scheduler;
 pub mod source;
-/// The lifetime-erasure carrier substrate (`Witnessed`, `Reattachable`, `Erased`), re-exported
-/// from the `workgraph` crate so `machine`, `scheduler`, and integration tests keep resolving
-/// `koan::witnessed::…` paths unchanged.
-pub use workgraph::witnessed;
+/// The lifetime-erasure carrier substrate (`Witnessed`, `Reattachable`, `Erased`) and the
+/// workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
+/// integration tests keep resolving `koan::witnessed::…` / `koan::scheduler::…` paths unchanged.
+pub use workgraph::{scheduler, witnessed};
