@@ -8,7 +8,7 @@
 //! circulation only wrapped by the Witnessed/Sealed abstraction, never as a bare region reference),
 //! and [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's `'a` as a co-located
 //! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are reachable only
-//! through a [`RegionBrand`](crate::machine::core::RegionBrand) — a bare `&Region` has no allocation
+//! through an embedder's brand type (Koan's `RegionBrand`) — a bare `&Region` has no allocation
 //! surface at all. No cycle gate: a stored value holds no
 //! owning `Rc` back to a region (a closure / future / module is a bare borrow into its defining
 //! region, kept alive by its carrier's witness set), so storing it where requested can never form an
@@ -16,10 +16,10 @@
 //! — no `&Arena` ever escapes.
 //!
 //! The Koan instantiation (`KoanRegion = Region<KoanStorageProfile>`, the family `Stored` impls)
-//! lives in [`crate::machine::core::arena`]. See
-//! [memory-model.md § Arena lifetime erasure](../../design/memory-model.md#region-lifetime-erasure)
+//! lives in the embedder's arena module (Koan's `machine::core::arena`). See
+//! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the lifetime-erasure soundness argument and
-//! [per-call-region/lifecycle.md § Escaping-value retention](../../design/per-call-region/lifecycle.md#escaping-value-retention)
+//! [per-call-region/lifecycle.md § Escaping-value retention](../../../design/per-call-region/lifecycle.md#escaping-value-retention)
 //! for how an escaped value's region stays alive.
 
 use std::cell::RefCell;

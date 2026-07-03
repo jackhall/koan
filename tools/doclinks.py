@@ -40,7 +40,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
-SRC_GLOBS = ("src/**/*.rs",)
+SRC_GLOBS = ("src/**/*.rs", "workgraph/src/**/*.rs")
 
 # [text](target) — target stops at the first ')' that isn't escaped, no nesting,
 # no whitespace, no '#' fragment included in the resolved path.
@@ -856,14 +856,14 @@ def cmd_dag(args: argparse.Namespace) -> int:
 #   C<score>\told\tnew
 # We only inspect the leading letter and the path columns.
 def _changed_src_files(base: str) -> list[tuple[str, Path, Path | None]]:
-    """Run `git diff --name-status -M <base> -- src` and return rows for `.rs`
-    files only. Each row is (status, current_path, old_path), where old_path is
-    set for renames/copies and for deletions (so callers can look up inbound
-    links to the path that no longer exists)."""
+    """Run `git diff --name-status -M <base> -- src workgraph/src` and return
+    rows for `.rs` files only. Each row is (status, current_path, old_path),
+    where old_path is set for renames/copies and for deletions (so callers can
+    look up inbound links to the path that no longer exists)."""
     try:
         proc = subprocess.run(
             ["git", "-C", str(REPO), "diff", "--name-status", "-M",
-             base, "--", "src"],
+             base, "--", "src", "workgraph/src"],
             capture_output=True, text=True, check=True,
         )
     except FileNotFoundError:

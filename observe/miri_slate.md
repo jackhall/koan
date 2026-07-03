@@ -51,7 +51,7 @@ group just to silence the stale-anchor check.
   The real `unsafe` is the `Erased::reattach` inside `SealedExtern::open` in
   `witnessed.rs`; the family's `unsafe impl` is `reattachable!`-generated, so outcome.rs
   carries none.
-- `src/scheduler/node_store.rs` — the slot-read group pins `Witnessed::read`
+- `workgraph/src/scheduler/node_store.rs` — the slot-read group pins `Witnessed::read`
   (the safe borrow-bounded accessor; the `unsafe` lives in
   `witnessed.rs`) via an end-to-end tail-chain return-contract-coarsening shape no
   minimal test reproduces. The file's only former `unsafe` was the test-family markers,
@@ -339,7 +339,7 @@ point (and transitively by user-fn TCO; that path is covered by the MATCH-on-
 - `lift_park_minimal_program_for_miri`
 - `replay_park_minimal_program_for_miri`
 
-**`Carried` slot read + dep re-anchor — `Witnessed::read`** ([src/scheduler/node_store.rs](../src/scheduler/node_store.rs))
+**`Carried` slot read + dep re-anchor — `Witnessed::read`** ([workgraph/src/scheduler/node_store.rs](../workgraph/src/scheduler/node_store.rs))
 — the scheduler stores a finalized terminal as a `Witnessed<W::Value, Option<Rc<W::Cart>>>` bundling
 the erased value with its producer-frame `Rc`, and `read_result` / `read` / `read_result_with_frame`
 hand it back through the **safe** `Witnessed::read` (the borrow-bounded accessor in the `witnessed`

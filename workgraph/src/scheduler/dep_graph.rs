@@ -1,7 +1,7 @@
 //! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the three coordinated fields
 //! (`notify`, `pending`, `edges`) that share the slot index — keeping them in one row makes Inv-A
 //! (wake-pending coherence) structural rather than enforced. See
-//! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants)
+//! [design/execution/scheduler.md § Dependency graph invariants](../../../design/execution/scheduler.md#dependency-graph-invariants)
 //! for the Inv-A / Inv-B / Inv-C contract.
 
 use super::nodes::NodeWork;

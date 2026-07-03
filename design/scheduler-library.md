@@ -2,8 +2,13 @@
 
 Koan's runtime substrate — the deferred-work scheduler, the region memory
 system, and the witnessed carrier machinery — is one self-contained library
-with no dependency on Koan's language semantics. Koan is its first embedder;
-the library is extractable for other projects. Its public surface is
+with no dependency on Koan's language semantics. It ships as the `workgraph`
+workspace crate: the dependency direction (`workgraph` does not depend on
+`koan`) is what makes "no Koan type in scope" compile-enforced rather than a
+convention. Koan is its first embedder, re-exporting `workgraph::witnessed`
+and `workgraph::scheduler` from its own crate root so internal
+`crate::witnessed::…` / `crate::scheduler::…` paths keep resolving unchanged;
+the library is extractable for other embedders. Its public surface is
 memory-safe **by construction**: an embedder can schedule work, allocate
 values, and pass borrow-carrying results between nodes without writing
 `unsafe` and without upholding any convention the compiler cannot check.
@@ -63,8 +68,12 @@ a concept, not a final identifier.
 - The scheduling core: slots, dep edges, notify wakeups, work queues,
   splicing and alias resolution ([src/scheduler/](../workgraph/src/scheduler.rs)).
 - **Regions, wholesale**: arenas, region owners, liveness. The generic
-  region engine of [arena.rs](../src/machine/core/arena.rs) is library
-  code; embedders allocate only through it.
+  region engine ([witnessed/region.rs](../workgraph/src/witnessed/region.rs))
+  is library code; [arena.rs](../src/machine/core/arena.rs) holds only
+  Koan's profile (`KoanStorageProfile`, `KoanRegion`, brand/type families,
+  `FrameSet`, `CallFrame`) and allocates through the generic engine via the
+  `RegionOwner` seam (the `Rc<F>` blanket impl that lets a foreign
+  region-owner type pick up the library's `WitnessRegion`).
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
 - The reach set, as an opaque type (see Vocabulary).
@@ -227,7 +236,3 @@ picture:
 - **Scope binding folds reaches through carriers.** Binding a value into a
   scope takes the value's carrier and unions its reach set into the
   scope's — policy code composing library values, never inspecting them.
-
-## Open work
-
-- [A compile-enforced boundary for the substrate](../roadmap/scheduler_library/substrate-crate-boundary.md)
