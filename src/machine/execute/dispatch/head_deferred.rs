@@ -68,15 +68,13 @@ fn park_on_head<'step>(
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: DepFinish<'step> = Box::new(move |ctx, results, carriers| {
-        // The head's reach — the regions its computed identity/callable points into — named on its
-        // delivered carrier's witness. A `SetRef` constructor identity threads it to the construction
-        // finish (the operand names the identity's own region); a callable ignores it and rides the
-        // bind fold below instead.
-        let reach = carriers
-            .first()
-            .map(|c| c.witness().clone())
-            .unwrap_or_default();
-        let callable = match classify_head(results[0], type_only, reach) {
+        // The head sub is the sole owned dep. Its reach — the regions its computed identity/callable
+        // points into — is named on its delivered carrier's witness. A `SetRef` constructor identity
+        // threads it to the construction finish (the operand names the identity's own region); a
+        // callable ignores it and rides the bind fold below instead.
+        let head_carrier = carriers.owned(0);
+        let reach = head_carrier.witness().clone();
+        let callable = match classify_head(*results.owned(0), type_only, reach) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -85,9 +83,7 @@ fn park_on_head<'step>(
         // reach into the consumer scope so the captured environment outlives the application: the head
         // value is applied (not embedded in a witnessed result), so its reach rides the bind fold here,
         // read straight off the delivered carrier.
-        if let Some(carrier) = carriers.first() {
-            ctx.current_scope().fold_reach(carrier.witness());
-        }
+        ctx.current_scope().fold_reach(head_carrier.witness());
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch

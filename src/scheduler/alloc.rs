@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::dep_graph::work_owned_edges;
-use super::nodes::{work_park_producers, Node, NodeFrame, NodeWork};
+use super::nodes::{Node, NodeFrame, NodeWork};
 use super::{NodeId, Scheduler, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -26,12 +26,14 @@ impl<W: Workload> Scheduler<W> {
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        let pending_park: Vec<NodeId> = work_park_producers(&work)
+        let pending_park: Vec<NodeId> = work
+            .deps
+            .parks()
             .iter()
             .copied()
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        let no_park = work_park_producers(&work).is_empty();
+        let no_park = work.deps.parks().is_empty();
         let id = self.store.alloc_slot(Node {
             work,
             payload,

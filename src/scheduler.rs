@@ -25,6 +25,7 @@ use work_queues::WorkQueues;
 
 mod alloc;
 mod dep_graph;
+mod deps;
 mod lifecycle;
 mod node_id;
 mod node_store;
@@ -36,6 +37,10 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub(crate) use crate::witnessed::{Erased, MergeWitness, Reattachable, Sealed, Witnessed};
+pub(crate) use deps::{Deps, ProducerDisposition, ResolvedDeps};
+// `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
+// type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
+pub use deps::DepResults;
 pub use node_id::NodeId;
 pub(crate) use workload::{Live, Workload};
 
@@ -189,6 +194,43 @@ impl<W: Workload> Scheduler<W> {
     /// (`DepGraph::would_create_cycle`).
     pub(crate) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.deps.would_create_cycle(producer, consumer)
+    }
+
+    /// Classify "can this consumer depend on `producer`?" — the shared park-ladder check order
+    /// (ready → errored → would-cycle → park), leaving the caller its own policy per arm. `consumer`
+    /// is `None` at a site with no consumer id in scope (a leaf park), where a cycle can never be
+    /// classified. Follows a bare-name-forward alias through the `is_result_ready` / `result_error`
+    /// facades. See [`ProducerDisposition`](self::deps::ProducerDisposition).
+    pub(crate) fn producer_disposition(
+        &self,
+        producer: NodeId,
+        consumer: Option<NodeId>,
+    ) -> ProducerDisposition<'_, W::Error> {
+        if self.is_result_ready(producer) {
+            match self.result_error(producer) {
+                Err(e) => ProducerDisposition::Errored(e),
+                Ok(()) => ProducerDisposition::Ready,
+            }
+        } else if consumer.is_some_and(|c| self.would_create_cycle(producer, c)) {
+            ProducerDisposition::Cycle
+        } else {
+            ProducerDisposition::Park
+        }
+    }
+
+    /// Install a resolved dep list's edges against `consumer`: each park a `Notify` edge (the
+    /// consumer reads the producer but does not own it), each owned dep an `Owned` edge (cascade-freed
+    /// on success). Both route the alias-resolving [`splice`](self::splice) facades, which drop the
+    /// edge for an already-finalized producer. The apply harness uses this for an
+    /// already-allocated consumer slot; the submit-time path installs its own edges in
+    /// [`alloc`](self::alloc).
+    pub(crate) fn install_edges(&mut self, deps: &ResolvedDeps, consumer: NodeId) {
+        for &producer in deps.parks() {
+            self.add_park_edge(producer, consumer);
+        }
+        for &producer in deps.owned() {
+            self.add_owned_edge(producer, consumer);
+        }
     }
 }
 

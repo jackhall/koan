@@ -14,6 +14,7 @@ use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
+use crate::scheduler::DepResults;
 use crate::witnessed::{Sealed, Witnessed};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
@@ -205,9 +206,11 @@ pub struct FinishCtx<'a> {
     pub scope: &'a Scope<'a>,
 }
 
-/// A `AwaitDeps` finish: re-entered at wake with the resolved dep values, yielding another `Action` the
-/// harness recurses into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
-pub type AwaitContinue<'a> = Box<dyn FnOnce(&FinishCtx<'a>, &[Carried<'a>]) -> Action<'a> + 'a>;
+/// A `AwaitDeps` finish: re-entered at wake with the resolved dep values as a [`DepResults`] view
+/// (addressed by `park` / `owned` position), yielding another `Action` the harness recurses into.
+/// Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
+pub type AwaitContinue<'a> =
+    Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, Carried<'a>>) -> Action<'a> + 'a>;
 
 /// The watched value as a `Catch` finish receives it on success: the value **relocated** into the
 /// consumer region (for a finish that reads it — TRY-WITH's `it` bind) plus the watched producer's own
@@ -275,14 +278,15 @@ impl<'a> Action<'a> {
 /// core so `Action` can carry it without core depending on the execute layer.
 ///
 /// `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a producer NodeId already in
-/// scope (a forward-ref / pending type) kept alive as a park-producer. These two arms are the whole
+/// scope (a forward-ref / pending type) the builder parks on. These two arms are the whole
 /// builtin-`Action` currency. The remaining arms are dispatcher-only lowerings a builtin never
 /// constructs: `ListLit` / `DictLit` / `RecordLit` schedule an aggregate literal as one owned
 /// producer, and `BodyBlock` fans a non-tail statement block out to one owned producer per statement
-/// (see [`BodyPlacement`] for where they bind). Deps resolve in declaration order, so a finish reads
-/// `results[k]` for the k-th dep — except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose
-/// multi-statement body each fan out to one resolved producer per statement (the harness `extend`s
-/// them in order).
+/// (see [`BodyPlacement`] for where they bind). The harness assembles the realized deps into a
+/// [`Deps`](crate::scheduler::Deps) builder — parks first, owned in declaration order — and a finish
+/// addresses their results through a [`DepResults`] view (`park` / `owned`), where an
+/// `InScope`-placed `Dispatch` and a `BodyBlock` each fan their multi-statement body out to one owned
+/// result per statement.
 pub enum DepRequest<'a> {
     Dispatch {
         expr: KExpression<'a>,

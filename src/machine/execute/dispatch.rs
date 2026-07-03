@@ -31,7 +31,7 @@ use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 use super::{ignore_results, DepFinish, WitnessedDepFinish};
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
-use crate::scheduler::Scheduler;
+use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
@@ -126,15 +126,11 @@ fn disposition_for_producer<'step>(
     producer: NodeId,
     consumer: Option<NodeId>,
 ) -> NameOutcome<'step> {
-    if scheduler.is_result_ready(producer) {
-        match scheduler.result_error(producer) {
-            Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
-            Ok(()) => NameOutcome::Unbound(name.to_string()),
-        }
-    } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
-        NameOutcome::Cycle(name.to_string())
-    } else {
-        NameOutcome::Parked(producer)
+    match scheduler.producer_disposition(producer, consumer) {
+        ProducerDisposition::Errored(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
+        ProducerDisposition::Ready => NameOutcome::Unbound(name.to_string()),
+        ProducerDisposition::Cycle => NameOutcome::Cycle(name.to_string()),
+        ProducerDisposition::Park => NameOutcome::Parked(producer),
     }
 }
 
@@ -238,15 +234,18 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 /// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
 /// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
-/// Every dep is owned (`park_count: 0`).
+/// Every dep is owned (the builder parks nothing).
 pub(in crate::machine::execute) fn park_on_deps<'step>(
     deps: Vec<DepRequest<'step>>,
     dep_error_frame: Option<TraceFrame>,
     finish: DepFinish<'step>,
 ) -> Outcome<'step> {
+    let mut built = Deps::new();
+    for dep in deps {
+        built.own(dep);
+    }
     Outcome::ParkThenContinue {
-        deps,
-        park_count: 0,
+        deps: built,
         continuation: Continuation::Finish(finish),
         dep_error_frame,
     }
@@ -261,9 +260,12 @@ pub(in crate::machine::execute) fn park_on_deps_witnessed<'step>(
     dep_error_frame: Option<TraceFrame>,
     finish: WitnessedDepFinish<'step>,
 ) -> Outcome<'step> {
+    let mut built = Deps::new();
+    for dep in deps {
+        built.own(dep);
+    }
     Outcome::ParkThenContinue {
-        deps,
-        park_count: 0,
+        deps: built,
         continuation: Continuation::FinishWitnessed(finish),
         dep_error_frame,
     }
@@ -280,8 +282,7 @@ pub(in crate::machine::execute) fn park_resume<'step>(
     resume: ResumeFn<'step>,
 ) -> Outcome<'step> {
     Outcome::ParkThenContinue {
-        park_count: producers.len(),
-        deps: producers.into_iter().map(DepRequest::Existing).collect(),
+        deps: Deps::from_parks(producers),
         continuation: Continuation::Resume { carrier, resume },
         dep_error_frame: None,
     }
@@ -407,8 +408,7 @@ pub(in crate::machine::execute) fn decide_with_presubs<'step>(
     // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
     // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeContinuation`.
     NodeWork::new(
-        Vec::new(),
-        0,
+        ResolvedDeps::new(),
         ignore_results(Box::new(move |view, idx| {
             classify_dispatch(view, expr, pre_subs, idx)
         })),

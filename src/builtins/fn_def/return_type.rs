@@ -9,6 +9,7 @@ use crate::machine::model::types::TypeResolution;
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::scheduler::DepResults;
 use std::rc::Rc;
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -44,9 +45,10 @@ pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
     Deferred(DeferredReturn<'a>),
-    /// `results_pos` indexes the dep-finish closure's `&[Carried<'a>]` slice.
+    /// `owned_pos` is the return-type sub's index within the dep-finish's owned results — it is
+    /// always the first owned dep, scheduled ahead of any signature subs, so `owned_pos == 0`.
     ReturnTypeExpr {
-        results_pos: usize,
+        owned_pos: usize,
     },
 }
 
@@ -228,7 +230,7 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier) -> ReturnTypeCapture<'a> {
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
-    results: &[Carried<'a>],
+    results: DepResults<'_, Carried<'a>>,
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
@@ -246,7 +248,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             }
         }
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
-        ReturnTypeCapture::ReturnTypeExpr { results_pos } => match results[results_pos] {
+        ReturnTypeCapture::ReturnTypeExpr { owned_pos } => match *results.owned(owned_pos) {
             Carried::Type(kt) => Ok(ReturnType::Resolved(kt.clone())),
             Carried::Object(other) => Err(KError::new(KErrorKind::ShapeError(format!(
                 "FN return-type slot sub-Dispatch expected a type expression, \

@@ -421,7 +421,7 @@ mod tests {
     }
 
     fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {
-        NodeWork::new(Vec::new(), 0, (), carrier)
+        NodeWork::new(super::super::ResolvedDeps::new(), (), carrier)
     }
 
     #[test]

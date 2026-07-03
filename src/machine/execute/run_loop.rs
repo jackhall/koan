@@ -18,7 +18,7 @@ use crate::witnessed::{
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
-use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep, NodeWork};
+use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep};
 use super::outcome::DepTerminal;
 use super::runtime::{KoanRuntime, KoanWorkload};
 
@@ -114,12 +114,7 @@ impl<'run> KoanRuntime<'run> {
             contract: prev_contract,
         } = node.frame;
         let prev_chain_carrier = node.payload.chain;
-        let NodeWork {
-            deps,
-            park_count,
-            continuation: erased_continuation,
-            carrier: _,
-        } = node.work;
+        let (deps, erased_continuation, _carrier) = node.work.into_run_parts();
         // Hold the cart as the step's open witness across the whole step: a step-confined clone,
         // dropped at return — before the next iteration's `try_reset_for_tail`, which resets a
         // *different* (the prior step's) cart — so it does not contend with the TCO `Rc::get_mut`
@@ -147,19 +142,19 @@ impl<'run> KoanRuntime<'run> {
         // that copies each dep into `dest` runs inside the consuming continuation (`short_circuit` /
         // `catch`), not here: the lift delivers deps un-relocated, so a construction finish folds their
         // carriers and a value-copy finish copies the spine.
-        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
+        let owned_indices: Vec<usize> = deps.owned().iter().map(|d| d.index()).collect();
         // Read each producer terminal out (borrow-bounded) into the dep slice — the resolved value
         // plus its `reach` set (its slot witness). The slice erases into one carrier that opens
         // **in-band** at `'b` alongside the continuation (the only sound route to the unbounded brand,
         // see `DepResultsFamily`); the sources stay pinned by `combined` across the open.
         let dep_sources: Vec<Result<DepTerminal<'static>, KError>> = deps
-            .iter()
+            .all_ids()
             .map(|d| {
                 // The producer slot's own `Sealed` carrier (duplicated, so a construction finish folds
                 // the dep witnessed), and the live value sourced from *it* — opened at a brand and
                 // erased for storage, re-anchored to the step brand by the open below for the bare
                 // value-copy relocate. One slot read: an errored slot short-circuits here.
-                let carrier = self.sched.dep_carrier(*d).map_err(|e| e.clone())?;
+                let carrier = self.sched.dep_carrier(d).map_err(|e| e.clone())?;
                 let value = carrier.open(|live| erase_to_static::<CarriedFamily>(live));
                 Ok(DepTerminal { value, carrier })
             })
@@ -176,11 +171,11 @@ impl<'run> KoanRuntime<'run> {
         let pin: FrameSet =
             dep_sources
                 .iter()
-                .zip(deps.iter())
+                .zip(deps.all_ids())
                 .fold(FrameSet::empty(), |acc, (src, d)| {
                     match src {
                         Ok(t) => FrameSet::merge(&acc, t.carrier.witness()),
-                        Err(_) => FrameSet::merge(&acc, &self.sched.dep_witness(*d)),
+                        Err(_) => FrameSet::merge(&acc, &self.sched.dep_witness(d)),
                     }
                     .expect("a set witness always represents the union")
                 });
@@ -230,7 +225,7 @@ impl<'run> KoanRuntime<'run> {
                     // its own witnessed destination carrier from this same scope's brand.
                     let outcome = continuation(
                         &SchedulerView::new(&self.sched, &self.ambient, scope),
-                        &dep_sources,
+                        deps.results(&dep_sources),
                         idx,
                     );
                     self.sched.reclaim_deps(idx, owned_indices);

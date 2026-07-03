@@ -46,9 +46,8 @@ re-couple the halves the extraction needs separate.
 
 ## Dependencies
 
-Coordinate with
-[disposition-and-deps-builder](disposition-and-deps-builder.md) and the
-[`Await` envelope builder](await-envelope-builder.md), which add code to the
+Coordinate with the
+[`Await` envelope builder](await-envelope-builder.md), which adds code to the
 same scheduler tree — pure file-motion conflicts, no logical dependency.
 
 **Requires:** none — the property it enforces already holds.

@@ -148,24 +148,27 @@ Working names throughout; shapes are the commitment, identifiers are not.
 **Disposition — one owner for "can I depend on this producer?"**
 
 ```rust
-enum ProducerDisposition { Errored(E), Ready, Cycle(E), Park }
-fn producer_disposition(&self, producer: NodeId, consumer: NodeId)
-    -> ProducerDisposition
+enum ProducerDisposition<'a, E> { Errored(&'a E), Ready, Cycle, Park }
+fn producer_disposition(&self, producer: NodeId, consumer: Option<NodeId>)
+    -> ProducerDisposition<'_, E>
 ```
 
 The single implementation of the ready / already-errored / would-cycle /
 must-park classification. Callers keep only their per-site `Ready` policy.
+`consumer` is `None` at a leaf-park site with no consumer id in scope, where a
+cycle can never be classified.
 
 **`Deps` — the dep-list builder.**
 
 ```rust
 let mut deps = Deps::new();
 deps.park_on(producer);                    // dedup'd notify-only edge
-let arg = deps.dispatch(request);          // owned edge, returns DepIndex
+let arg = deps.own(request);               // owned edge, returns owned index
 ```
 
-`Deps` owns the park/owned layout internally. Finishes address results by
-`DepIndex`, never by arithmetic over a shared vector.
+`Deps` owns the `[park..., owned...]` layout internally. A finish addresses
+results through a `DepResults` view — `park(i)` / `owned(j)` accessors — never
+by arithmetic over a shared vector.
 
 **`Await` — the envelope builder.**
 
@@ -224,7 +227,6 @@ picture:
 
 ## Open work
 
-- [One producer-disposition primitive and the `Deps` builder](../roadmap/scheduler_library/disposition-and-deps-builder.md)
 - [The `Await` envelope builder](../roadmap/scheduler_library/await-envelope-builder.md)
 - [`Action::Tail` covers every dispatch tail](../roadmap/scheduler_library/action-tail-single-lowering.md)
 - [One dep-finish delivery currency](../roadmap/scheduler_library/witnessed-only-dep-finish.md)

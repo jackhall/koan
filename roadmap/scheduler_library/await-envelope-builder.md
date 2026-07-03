@@ -55,10 +55,8 @@ consumer site:
 
 ## Dependencies
 
-**Requires:**
-
-- [One producer-disposition primitive and the `Deps` builder](disposition-and-deps-builder.md)
-  — the builder consumes `Deps` as its input currency.
+**Requires:** none — its `Deps` builder / producer-disposition foundation
+shipped (see [scheduler-library.md § The consumer API](../../design/scheduler-library.md#the-consumer-api)).
 
 **Unblocks:**
 

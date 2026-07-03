@@ -2,7 +2,7 @@
 //!
 //! [`SchedulerView`] is the surface every dispatch *decide* runs against: it holds `&Scheduler`
 //! (never `&mut`) for its reads — the static-over-the-step ones (`current_scope`, `chain_deref`,
-//! …) and the live reads of *pre-existing* producers (`is_result_ready`, `would_create_cycle`,
+//! …) and the live reads of *pre-existing* producers (`producer_disposition`, `would_create_cycle`,
 //! `read_result`) — and the decide *returns* a
 //! [`Outcome`](super::Outcome) the [`harness`](super::runtime) applies.
 //! [`KoanRuntime`](super::runtime::KoanRuntime) owns the scheduler and is the sole holder of `&mut
@@ -28,7 +28,7 @@ use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::runtime::KoanWorkload;
 use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
-use crate::scheduler::Scheduler;
+use crate::scheduler::{ProducerDisposition, Scheduler};
 
 /// Run `f` with a raw [`NodeScope`] handle's scope opened at a `for<'b>` brand — the Koan scope
 /// interpretation the scheduler does not own, folded onto `open` like the decide channel. The driver
@@ -102,7 +102,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 
     // Read surface (forwards on `&self`) — the static-over-the-step reads (`current_scope`,
     // `chain_deref`, `active_chain`) and the live reads of pre-existing producers
-    // (`is_result_ready`, `would_create_cycle`, `read_result`) all forward to the borrowed
+    // (`would_create_cycle`, `producer_disposition`, `read_result`) all forward to the borrowed
     // scheduler.
 
     /// Run `f` with the active slot's scope. The scope was opened at the step brand and handed to this
@@ -148,19 +148,19 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         self.ambient.active_in_contract_chain
     }
 
-    pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
-        self.sched.is_result_ready(id)
-    }
-
-    /// A pre-existing producer's terminal error, or `Ok(())` on success — the value-free probe a
-    /// decide uses to short-circuit on an errored dep. Decides never read a producer's *value* (a
-    /// resolved value rides the scope channel, not a slot read), so the view exposes only this.
-    pub(super) fn result_error(&self, id: NodeId) -> Result<(), &KError> {
-        self.sched.result_error(id)
-    }
-
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.sched.would_create_cycle(producer, consumer)
+    }
+
+    /// Classify whether this slot can depend on `producer` — the shared park ladder (ready → errored
+    /// → would-cycle → park). `consumer` is `None` at a leaf-park site with no consumer id in scope,
+    /// where a cycle can never be classified. Each caller keeps its own policy per arm.
+    pub(super) fn producer_disposition(
+        &self,
+        producer: NodeId,
+        consumer: Option<NodeId>,
+    ) -> ProducerDisposition<'_, KError> {
+        self.sched.producer_disposition(producer, consumer)
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,
@@ -245,7 +245,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // so the body receives every value arg's reach (inline plus eager-sub).
             let mut arg_carriers = inline_carriers;
             arg_carriers.reserve(part_indices.len());
-            for ((slot, value), carrier) in part_indices.iter().zip(values).zip(carriers) {
+            // Every eager sub is an owned dep, so its result lands in the owned suffix in staging
+            // order — 1:1 with `part_indices`.
+            for ((slot, value), carrier) in part_indices
+                .iter()
+                .zip(values.owned_slice())
+                .zip(carriers.owned_slice())
+            {
                 working_expr.parts[*slot].value = ExpressionPart::Spliced(*value);
                 arg_carriers.push((*slot, carrier.duplicate()));
             }

@@ -10,6 +10,7 @@
 
 use super::super::nodes::NodeWork;
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
+use crate::scheduler::{Deps, ResolvedDeps};
 use super::super::runtime::KoanWorkload;
 use super::super::{ignore_results, DepFinish};
 use super::SchedulerView;
@@ -61,8 +62,7 @@ fn invoke_work<'step>(
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
-        Vec::new(),
-        0,
+        ResolvedDeps::new(),
         ignore_results(Box::new(move |view, _idx| {
             invoke(view, picked, working_expr, arg_carriers)
         })),
@@ -195,12 +195,13 @@ pub(super) fn invoke<'step>(
                     block_entry: BlockEntry::FrameScope(block_entry),
                     body_index,
                 });
+            let mut deps = Deps::new();
+            deps.own(DepRequest::BodyBlock {
+                statements,
+                placement: BodyPlacement::Frame(frame),
+            });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock {
-                    statements,
-                    placement: BodyPlacement::Frame(frame),
-                }],
-                park_count: 0,
+                deps,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
             }
@@ -226,9 +227,10 @@ pub(super) fn invoke<'step>(
             // re-enters that already-installed cart with `Inherit`.
             let block_entry = frame.scope_id();
             let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
-                // The return-type expression is the last body statement, so its resolved value is
-                // the last result.
-                let kt = match results[results.len() - 1] {
+                // The return-type expression is the last body statement (all owned), so its resolved
+                // value is the last owned result.
+                let owned = results.owned_slice();
+                let kt = match owned[owned.len() - 1] {
                     Carried::Type(t) => t,
                     Carried::Object(other) => {
                         return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -257,12 +259,13 @@ pub(super) fn invoke<'step>(
                     body_index,
                 }
             });
+            let mut deps = Deps::new();
+            deps.own(DepRequest::BodyBlock {
+                statements,
+                placement: BodyPlacement::Frame(frame),
+            });
             Outcome::ParkThenContinue {
-                deps: vec![DepRequest::BodyBlock {
-                    statements,
-                    placement: BodyPlacement::Frame(frame),
-                }],
-                park_count: 0,
+                deps,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
             }

@@ -4,7 +4,7 @@
 //! [design/execution/scheduler.md § Dependency graph invariants](../../design/execution/scheduler.md#dependency-graph-invariants)
 //! for the Inv-A / Inv-B / Inv-C contract.
 
-use super::nodes::{work_deps, NodeWork};
+use super::nodes::NodeWork;
 use super::{NodeId, Workload};
 
 /// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
@@ -24,10 +24,10 @@ impl DepEdge {
     }
 }
 
-/// Owned-edge sidecar built from `work_deps`. Park edges are installed
+/// Owned-edge sidecar built from a node's owned deps. Park edges are installed
 /// separately via `add_park_edge`.
 pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> {
-    work_deps(work).into_iter().map(DepEdge::Owned).collect()
+    work.deps.owned().iter().copied().map(DepEdge::Owned).collect()
 }
 
 /// The three coordinated per-slot fields. Mutations go through the row, so

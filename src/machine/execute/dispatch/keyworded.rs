@@ -15,6 +15,7 @@ use super::super::ignore_results;
 use super::super::nodes::NodeWork;
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
+use crate::scheduler::{ProducerDisposition, ResolvedDeps};
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
 /// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
@@ -171,8 +172,7 @@ pub(super) fn redispatch_continue<'step>(
 ) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     let work = NodeWork::new(
-        Vec::new(),
-        0,
+        ResolvedDeps::new(),
         ignore_results(Box::new(move |ctx, idx| {
             finish(ctx, working_expr, idx, arg_carriers)
         })),
@@ -198,15 +198,20 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> Outcome<'step> {
-    let mut to_wait: Vec<NodeId> = Vec::new();
+    // Classify each candidate through the shared park ladder; a ready-errored producer short-circuits,
+    // a ready-Ok or would-cycle producer is skipped, and a still-finalizing one joins the park set
+    // (deduped by `park_on`).
+    let mut to_wait = ResolvedDeps::new();
     for p in producers {
-        if ctx.is_result_ready(p) {
-            if let Err(e) = ctx.result_error(p) {
+        match ctx.producer_disposition(p, Some(NodeId(idx))) {
+            ProducerDisposition::Errored(e) => {
                 let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
             }
-        } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
-            to_wait.push(p);
+            ProducerDisposition::Ready | ProducerDisposition::Cycle => {}
+            ProducerDisposition::Park => {
+                to_wait.park_on(p);
+            }
         }
     }
     if to_wait.is_empty() {
@@ -219,7 +224,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     // hand `expr` itself to the resume closure.
     let carrier = expr.summarize();
     park_resume(
-        to_wait,
+        to_wait.parks().to_vec(),
         Some(carrier),
         Box::new(move |ctx, idx| initial(ctx, expr, pre_subs, idx)),
     )
@@ -275,6 +280,29 @@ fn install_eager_subs_track<'step>(
     ctx.install_eager_subs(working_expr, staged_subs, None, inline_carriers)
 }
 
+/// Park the walk on `producer`, or error if the edge would close a cycle. The one place the
+/// walk's cycle-check → `SchedulerDeadlock` → dedup-push ladder lives — called from both the
+/// wrap-slot and ref-name arms of [`part_walk`].
+fn park_walk_producer(
+    ctx: &SchedulerView<'_, '_>,
+    producer: NodeId,
+    idx: usize,
+    part: &crate::machine::model::ast::ExpressionPart<'_>,
+    producers_to_wait: &mut Vec<NodeId>,
+) -> Result<(), KError> {
+    if ctx.would_create_cycle(producer, NodeId(idx)) {
+        let name = bare_name_of(part).unwrap_or_default();
+        return Err(KError::new(KErrorKind::SchedulerDeadlock {
+            pending: 1,
+            sample: format!("cycle in type alias `{name}`"),
+        }));
+    }
+    if !producers_to_wait.contains(&producer) {
+        producers_to_wait.push(producer);
+    }
+    Ok(())
+}
+
 /// Fused splice / park / eager-sub walk over `parts`. Pure: no
 /// scheduler submission, no park-edge installation — the caller
 /// decides whether to install a combined park or submit the staged
@@ -328,16 +356,7 @@ fn part_walk<'step>(
                     });
                 }
                 Some(NameOutcome::Parked(p)) => {
-                    if ctx.would_create_cycle(*p, NodeId(idx)) {
-                        let name = bare_name_of(&part.value).unwrap_or_default();
-                        return Err(KError::new(KErrorKind::SchedulerDeadlock {
-                            pending: 1,
-                            sample: format!("cycle in type alias `{name}`"),
-                        }));
-                    }
-                    if !producers_to_wait.contains(p) {
-                        producers_to_wait.push(*p);
-                    }
+                    park_walk_producer(ctx, *p, idx, &part.value, &mut producers_to_wait)?;
                     new_parts.push(Spanned {
                         value: part.value,
                         span,
@@ -369,16 +388,7 @@ fn part_walk<'step>(
             );
             if park_eligible {
                 if let Some(NameOutcome::Parked(p)) = &bare_outcomes[i] {
-                    if ctx.would_create_cycle(*p, NodeId(idx)) {
-                        let name = bare_name_of(&part.value).unwrap_or_default();
-                        return Err(KError::new(KErrorKind::SchedulerDeadlock {
-                            pending: 1,
-                            sample: format!("cycle in type alias `{name}`"),
-                        }));
-                    }
-                    if !producers_to_wait.contains(p) {
-                        producers_to_wait.push(*p);
-                    }
+                    park_walk_producer(ctx, *p, idx, &part.value, &mut producers_to_wait)?;
                 }
             }
             new_parts.push(Spanned {

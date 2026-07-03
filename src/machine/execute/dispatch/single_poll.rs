@@ -26,6 +26,7 @@ use super::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::FrameSet;
+use crate::scheduler::ProducerDisposition;
 use crate::witnessed::Witnessed;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
@@ -105,26 +106,30 @@ pub(super) fn bare_type_leaf<'step, 'b>(
                     return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(t.render()))));
                 }
             };
-            if ctx.is_result_ready(producer) {
-                if let Err(e) = ctx.result_error(producer) {
-                    return Outcome::Done(Err(e.clone_for_propagation()));
-                }
+            // A bare leaf has no consumer id in scope, so the disposition can never classify `Cycle`.
+            match ctx.producer_disposition(producer, None) {
+                ProducerDisposition::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                return bare_type_leaf(ctx, s, t);
+                ProducerDisposition::Ready => bare_type_leaf(ctx, s, t),
+                ProducerDisposition::Cycle => {
+                    unreachable!("bare_type_leaf passes consumer=None, so Cycle never classifies")
+                }
+                // The producer's terminal is not the type carrier (a finalize-combine returns its own
+                // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
+                // than lifting the producer's value. No spliced expression to render, so carrier is
+                // `None`.
+                ProducerDisposition::Park => {
+                    let leaf = t.clone();
+                    park_resume(
+                        vec![producer],
+                        None,
+                        Box::new(move |ctx, _idx| {
+                            ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
+                        }),
+                    )
+                }
             }
-            // The producer's terminal is not the type carrier (a finalize-combine returns its own
-            // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
-            // than lifting the producer's value. No spliced expression to render, so carrier is
-            // `None`.
-            let leaf = t.clone();
-            park_resume(
-                vec![producer],
-                None,
-                Box::new(move |ctx, _idx| {
-                    ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
-                }),
-            )
         }
     }
 }
@@ -220,7 +225,8 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // The dest brand is `yoke`d into the frame that owns `scope`'s region, witnessed by it —
         // co-located by construction rather than paired with an asserted singleton.
         let dest = KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b);
-        Ok(deps[0]
+        Ok(deps
+            .owned(0)
             .carrier
             .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {
                 relocate_carried(value, region)
@@ -275,15 +281,27 @@ pub(super) fn type_call<'step>(
         // above wins; reaching this arm with a terminal producer means a mid-write/errored
         // producer, so it surfaces `UnboundName` (the resume re-runs the fast lane).
         Some(NameLookup::Parked(producer)) => {
-            if !ctx.is_result_ready(producer) {
-                let carrier = expr.summarize();
-                return park_resume(
-                    vec![producer],
-                    Some(carrier),
-                    Box::new(move |ctx, _idx| type_call(ctx, expr)),
-                );
+            // No consumer id in scope, so `Cycle` never classifies. A terminal producer (Ready, Ok
+            // or errored) means a mid-write / errored binder — the fast lane never read the error, so
+            // both surface `UnboundName` (the resume re-runs the fast lane).
+            match ctx.producer_disposition(producer, None) {
+                ProducerDisposition::Errored(_) | ProducerDisposition::Ready => {
+                    return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                        head_t.render(),
+                    ))));
+                }
+                ProducerDisposition::Cycle => {
+                    unreachable!("type_call passes consumer=None, so Cycle never classifies")
+                }
+                ProducerDisposition::Park => {
+                    let carrier = expr.summarize();
+                    return park_resume(
+                        vec![producer],
+                        Some(carrier),
+                        Box::new(move |ctx, _idx| type_call(ctx, expr)),
+                    );
+                }
             }
-            return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }
         None => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));

@@ -217,12 +217,13 @@ slot's dependents), `pending` (this slot's unresolved-dep counter), and
   itself.
 
 Inv-B is what makes the eager `clear_dep_edges(idx)` in
-`Scheduler::reclaim_deps` sound at the `[park_count..]` owned-suffix reclaim: the
-suffix a node owns holds only `Owned` edges (the sub-Dispatches the slot spawned).
-`Notify` edges land only in the `[..park_count]` prefix — a dispatch decide's
+`Scheduler::reclaim_deps` sound at the owned-suffix reclaim: the owned deps a
+node holds carry only `Owned` edges (the sub-Dispatches the slot spawned).
+`Notify` edges land only on a node's park producers — a dispatch decide's
 park-on-producer and a dep-finish's `Existing` sibling parks — which `run_step`
-excludes from the reclaim by reading `deps[park_count..]` for the owned indices,
-so clearing the owned tree cannot drop a wake intent on a sibling producer.
+excludes from the reclaim by reading only the resolved dep list's owned entries
+(`deps.owned()`), so clearing the owned tree cannot drop a wake intent on a
+sibling producer.
 
 ## Bare-name forward splice
 

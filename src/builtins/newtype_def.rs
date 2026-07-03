@@ -194,7 +194,7 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match results[0] {
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| match *results.owned(0) {
         Carried::Type(kt) => {
             Action::Done(finalize_newtype(fctx.scope, name, kt.clone(), bind_index))
         }

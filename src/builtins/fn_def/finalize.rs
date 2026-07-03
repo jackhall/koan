@@ -99,9 +99,9 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
             return_type: ReturnType::Deferred(d),
         },
         (ReturnTypeState::ExprToSubDispatch(e), ParamListResult::Done(_)) => {
-            // Park empty, only the return-type sub: results[0] is its value.
+            // Only the return-type sub, no parks: it is owned index 0.
             FnPlan::Deferred(DeferredInputs {
-                capture: ReturnTypeCapture::ReturnTypeExpr { results_pos: 0 },
+                capture: ReturnTypeCapture::ReturnTypeExpr { owned_pos: 0 },
                 park_producers: Vec::new(),
                 return_type_sub: Some(e),
                 sub_dispatches: Vec::new(),
@@ -143,11 +143,10 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
                 sub_dispatches,
             },
         ) => {
-            // `[park ++ return_type_sub ++ sub_dispatches...]` puts the
-            // return-type result at `results[park_producers.len()]`.
-            let results_pos = park_producers.len();
+            // The return-type sub is scheduled ahead of the signature subs, so it is owned index 0
+            // regardless of how many producers are parked.
             FnPlan::Deferred(DeferredInputs {
-                capture: ReturnTypeCapture::ReturnTypeExpr { results_pos },
+                capture: ReturnTypeCapture::ReturnTypeExpr { owned_pos: 0 },
                 park_producers,
                 return_type_sub: Some(e),
                 sub_dispatches,
@@ -311,7 +310,9 @@ pub(crate) fn defer<'a>(
         sub_dispatches,
         prebuilt_elements,
     } = inputs;
-    let park_count = park_producers.len();
+    // `deps` is `[Existing parks..., Dispatch rt?, Dispatch subs...]`; the harness partitions it into
+    // a `Deps` builder (parks first, owned in this order), so the return-type sub is owned index 0 and
+    // the signature subs follow. `splice_layout` records each sub's owned index for the finish.
     let mut deps: Vec<DepRequest<'a>> = park_producers
         .iter()
         .copied()
@@ -331,13 +332,13 @@ pub(crate) fn defer<'a>(
             expr: sub_expr,
             placement: DepPlacement::OwnScope,
         });
-        splice_layout.push((slot_idx, park_count + owned_count));
+        splice_layout.push((slot_idx, owned_count));
         owned_count += 1;
     }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let mut spliced_parts = signature_expr.parts.clone();
-        for &(slot_idx, results_pos) in &splice_layout {
-            let carrier = results[results_pos];
+        for &(slot_idx, owned_pos) in &splice_layout {
+            let carrier = *results.owned(owned_pos);
             if !matches!(carrier, Carried::Type(_)) {
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \

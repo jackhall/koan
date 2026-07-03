@@ -19,6 +19,7 @@ use crate::machine::model::types::{
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{KType, Record};
 use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::scheduler::Deps;
 use crate::witnessed::Witnessed;
 
 use super::super::outcome::{dep_error_frame, Continuation, Outcome};
@@ -45,10 +46,10 @@ pub(crate) type FieldListFinalizeAction<'step> = Box<
         + 'step,
 >;
 
-/// The `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]` dep vector both
-/// deferral twins declare — the harness owns the `Dispatch` suffix and parks the `Existing` prefix,
-/// feeding results in that order (so the re-walk consumes `results[park_count..]` in DFS order).
-/// Built once here rather than spelled arm-for-arm in each twin.
+/// The `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]` dep vector the
+/// `Action` deferral twin declares — `run_action` parks the `Existing` prefix and owns the
+/// `Dispatch` suffix, so the re-walk consumes the owned suffix in DFS order. The scheduler twin
+/// builds its `Deps` directly.
 fn field_list_deps<'step>(
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'step>>,
@@ -82,13 +83,11 @@ pub(crate) fn defer_field_list<'step>(
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'step>,
 ) -> Outcome<'step> {
-    let park_count = park_producers.len();
     let finish: DepFinish<'step> = Box::new(move |view, results, _carriers| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // `results` = `[park results.. , owned-sub results..]`; the re-walk consumes only
-        // the owned-sub carriers, in the DFS order they were scheduled above.
-        let mut feed = ResultFeed::new(&results[park_count..]);
+        // The re-walk consumes only the owned-sub carriers, in the DFS order they were scheduled.
+        let mut feed = ResultFeed::new(results.owned_slice());
         let mut elaborator = Elaborator::new(view.current_scope())
             .with_threaded(threaded.iter().cloned())
             .with_chain(chain.clone());
@@ -116,10 +115,17 @@ pub(crate) fn defer_field_list<'step>(
             }
         }
     });
-    let deps = field_list_deps(park_producers, sub_dispatches);
+    // Parks the forward-ref producers; owns each sigil sub-Dispatch (in DFS order). The finish reads
+    // only the owned suffix through the view.
+    let mut deps = Deps::from_parks(park_producers);
+    for sub in sub_dispatches {
+        deps.own(DepRequest::Dispatch {
+            expr: sub,
+            placement: DepPlacement::OwnScope,
+        });
+    }
     Outcome::ParkThenContinue {
         deps,
-        park_count,
         continuation: Continuation::Finish(finish),
         dep_error_frame: Some(dep_error_frame()),
     }
@@ -143,14 +149,13 @@ pub(crate) fn defer_field_list_action<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{Action, AwaitContinue};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
-    // park_producers, and the scheduler feeds results as [park.. , owned..] — so the re-walk
-    // consumes `results[park_count..]`, exactly as the scheduler-side twin does.
-    let park_count = park_producers.len();
+    // park_producers; the scheduler feeds results as [park.. , owned..] — so the re-walk consumes
+    // the owned suffix, exactly as the scheduler-side twin does.
     let deps = field_list_deps(park_producers, sub_dispatches);
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        let mut feed = ResultFeed::new(&results[park_count..]);
+        let mut feed = ResultFeed::new(results.owned_slice());
         let mut elaborator = Elaborator::new(fctx.scope)
             .with_threaded(threaded.iter().cloned())
             .with_chain(chain.clone());

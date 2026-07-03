@@ -40,7 +40,7 @@ use super::{
     ContinuationFamily, DepFinish,
 };
 use crate::machine::model::values::CarriedFamily;
-use crate::scheduler::{Scheduler, Workload};
+use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
 use crate::witnessed::Witnessed;
 
 mod interpret;
@@ -276,9 +276,10 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     block_entry,
                     body_index,
                 });
+            let mut deps = Deps::new();
+            deps.own(body_block);
             Outcome::ParkThenContinue {
-                deps: vec![body_block],
-                park_count: 0,
+                deps,
                 continuation: Continuation::Finish(finish),
                 dep_error_frame: Some(dep_error_frame()),
             }
@@ -287,19 +288,20 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
         Action::AwaitDeps { deps, finish } => {
             // An `Existing` dep is a park-producer the combine reads but doesn't own; every other
             // arm is an owned sub-slot (a builtin only ever declares `Dispatch` — an `InScope` body
-            // fans out one per statement at apply time). The harness orders the realized deps
-            // `[park..., owned...]`; `park_count` is the park prefix length. The wrapped finish
-            // recurses `run_action` on the `AwaitContinue`.
-            let mut park: Vec<DepRequest<'step>> = Vec::new();
-            let mut owned: Vec<DepRequest<'step>> = Vec::new();
+            // fans out one per statement at apply time). Parks keep first-occurrence order, owned
+            // insertion order; the builder delivers results `[park..., owned...]`. The wrapped
+            // finish recurses `run_action` on the `AwaitContinue`.
+            let mut built: Deps<DepRequest<'step>> = Deps::new();
             for dep in deps {
                 match dep {
-                    DepRequest::Existing(_) => park.push(dep),
-                    _ => owned.push(dep),
+                    DepRequest::Existing(id) => {
+                        built.park_on(id);
+                    }
+                    _ => {
+                        built.own(dep);
+                    }
                 }
             }
-            let park_count = park.len();
-            park.extend(owned);
             let wrapped: DepFinish<'step> = Box::new(move |view, results, _carriers| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
@@ -307,8 +309,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 run_action(finish(&fctx, results))
             });
             Outcome::ParkThenContinue {
-                deps: park,
-                park_count,
+                deps: built,
                 continuation: Continuation::Finish(wrapped),
                 dep_error_frame: Some(dep_error_frame()),
             }
@@ -324,8 +325,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 run_action(finish(&fctx, result))
             });
             Outcome::ParkThenContinue {
-                deps: Vec::new(),
-                park_count: 0,
+                deps: Deps::new(),
                 continuation: Continuation::Catch {
                     watched,
                     finish: wrapped,
@@ -487,16 +487,18 @@ impl<'run> KoanRuntime<'run> {
             }
             Outcome::ParkThenContinue {
                 deps,
-                park_count,
                 continuation,
                 dep_error_frame,
             } => {
-                // Submit each fresh dep (an `Existing` is already in the graph). Submission order
-                // is preserved, so a finish reads `results[k]` for the k-th declared dep — except
-                // an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each
-                // fan out to one producer per statement (so those arms `extend`, the rest `push`).
-                let mut dep_ids: Vec<NodeId> = Vec::with_capacity(deps.len());
-                for dep in deps {
+                // Realize the builder's owned requests into producer ids, rebuilding a
+                // `ResolvedDeps` from the same parks. An `Existing` request realizes to itself; an
+                // `InScope`-placed `Dispatch` and a `BodyBlock` each fan out to one owned producer
+                // per statement (so those arms `own` per id, the rest own one). Parks keep their
+                // first-occurrence order, owned their realization order — the `[park..., owned...]`
+                // delivery order a finish addresses through [`DepResults`].
+                let (parks, owned_requests) = deps.into_parts();
+                let mut resolved = ResolvedDeps::from_parks(parks);
+                for dep in owned_requests {
                     match dep {
                         // An `InScope` body fans out one producer per statement (multi-statement
                         // split); `OwnScope` realizes as a single producer via the shared
@@ -506,19 +508,21 @@ impl<'run> KoanRuntime<'run> {
                             placement: DepPlacement::InScope(scope),
                         } => {
                             let statements = split_body_statements(expr);
-                            dep_ids.extend(self.enter_block(scope.id, statements, scope))
+                            for id in self.enter_block(scope.id, statements, scope) {
+                                resolved.own(id);
+                            }
                         }
                         DepRequest::Dispatch { expr, placement } => {
-                            dep_ids.push(self.realize_dispatch(expr, placement))
+                            resolved.own(self.realize_dispatch(expr, placement));
                         }
                         DepRequest::ListLit(items) => {
-                            dep_ids.push(self.schedule_list_literal(items))
+                            resolved.own(self.schedule_list_literal(items));
                         }
                         DepRequest::DictLit(pairs) => {
-                            dep_ids.push(self.schedule_dict_literal(pairs))
+                            resolved.own(self.schedule_dict_literal(pairs));
                         }
                         DepRequest::RecordLit(fields) => {
-                            dep_ids.push(self.schedule_record_literal(fields))
+                            resolved.own(self.schedule_record_literal(fields));
                         }
                         // A body block fans out one owned producer per statement: into a fresh
                         // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
@@ -527,48 +531,43 @@ impl<'run> KoanRuntime<'run> {
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Frame(frame),
-                        } => dep_ids.extend(self.dispatch_body(&frame, statements)),
+                        } => {
+                            for id in self.dispatch_body(&frame, statements) {
+                                resolved.own(id);
+                            }
+                        }
                         DepRequest::BodyBlock {
                             statements,
                             placement: BodyPlacement::Overlay(overlay),
-                        } => dep_ids.extend(self.enter_block(overlay.id, statements, overlay)),
-                        DepRequest::Existing(id) => dep_ids.push(id),
+                        } => {
+                            for id in self.enter_block(overlay.id, statements, overlay) {
+                                resolved.own(id);
+                            }
+                        }
+                        DepRequest::Existing(id) => {
+                            resolved.own(id);
+                        }
                     }
                 }
-                // Edge install: the `[..park_count]` prefix is notify-parked (sibling producers
-                // the slot waits on but doesn't own); the `[park_count..]` suffix is owned
-                // (cascade-freed on resolve). Each continuation sets `park_count` to match: a
-                // dispatch `Finish` owns all its deps (`park_count: 0`); an action `AwaitDeps` parks
-                // its `Existing` prefix and owns its `Dispatch` suffix; `Replay` parks every
-                // producer (`park_count: len`); a bare-name `Forward` parks its one producer
-                // (`park_count: 1`) while a deferred-combine `Forward` owns it (`park_count: 0`).
-                // (`Catch` declares no deps here — it realizes and owns its single watched dep in
-                // the `cont` match below.)
-                for (i, id) in dep_ids.iter().enumerate() {
-                    if i < park_count {
-                        self.sched.add_park_edge(*id, NodeId(idx));
-                    } else {
-                        self.sched.add_owned_edge(*id, NodeId(idx));
-                    }
-                }
+                // Install the resolved list's edges against this slot: each park a `Notify` edge
+                // (kept alive), each owned dep an `Owned` edge (cascade-freed on resolve). (`Catch`
+                // declares no deps here, so `resolved` is empty — it realizes and owns its single
+                // watched dep in the `cont` match below.)
+                self.sched.install_edges(&resolved, NodeId(idx));
                 let work = match continuation {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
                     // `None` frameless); an action/literal dep-finish carries the `dep_error_frame()`
                     // label. Both install the same `Wait` over the realized deps (edges already
-                    // installed by the loop above), the short-circuit baked into the continuation by
+                    // installed above), the short-circuit baked into the continuation by
                     // `short_circuit`.
-                    Continuation::Finish(finish) => NodeWork::new(
-                        dep_ids,
-                        park_count,
-                        short_circuit(dep_error_frame, finish),
-                        None,
-                    ),
+                    Continuation::Finish(finish) => {
+                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
+                    }
                     // The construction-inversion sibling: same realized deps and edges, but the
                     // continuation folds the resolved terminals (value + reach) into one witnessed
                     // carrier and seals as `Done(Ok)` (see [`short_circuit_witnessed`]).
                     Continuation::FinishWitnessed(finish) => NodeWork::new(
-                        dep_ids,
-                        park_count,
+                        resolved,
                         short_circuit_witnessed(dep_error_frame, finish),
                         None,
                     ),
@@ -578,13 +577,15 @@ impl<'run> KoanRuntime<'run> {
                     Continuation::Catch { watched, finish } => {
                         let from = self.realize_catch_dep(watched);
                         self.sched.add_owned_edge(from, NodeId(idx));
-                        NodeWork::new(vec![from], 0, catch_continuation(finish), None)
+                        let mut watched_deps = ResolvedDeps::new();
+                        watched_deps.own(from);
+                        NodeWork::new(watched_deps, catch_continuation(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
-                    // no dep values, so `ignore_results` drops the (park-only) results slice.
+                    // no dep values, so `ignore_results` drops the (park-only) results view.
                     Continuation::Resume { carrier, resume } => {
-                        NodeWork::new(dep_ids, park_count, ignore_results(resume), carrier)
+                        NodeWork::new(resolved, ignore_results(resume), carrier)
                     }
                 };
                 NodeStep::Replace {

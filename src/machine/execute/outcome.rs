@@ -22,6 +22,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
+use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
 use crate::witnessed::{Sealed, Witnessed};
 
@@ -59,15 +60,13 @@ pub(in crate::machine::execute) enum Outcome<'step> {
         block_entry: BlockEntry<'step>,
         body_index: usize,
     },
-    /// Park the slot on `deps` and run `cont` when they resolve. `deps` layout is
-    /// `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix length
-    /// (`Notify` edges, kept alive), the suffix installs as `Owned` (cascade-freed). For a
-    /// [`Continuation::Resume`] every dep parks (notify-only).
-    /// `dep_error_frame` is attached to a dep-error short-circuit (dep-finish-style) before the
-    /// finish runs.
+    /// Park the slot on `deps` and run `cont` when they resolve. `deps` is a [`Deps`] builder over
+    /// unrealized [`DepRequest`]s: its parks install `Notify` edges (kept alive), its owned entries
+    /// realize to sub-slots the harness owns (cascade-freed). For a [`Continuation::Resume`] every dep
+    /// is a park (notify-only). `dep_error_frame` is attached to a dep-error short-circuit
+    /// (dep-finish-style) before the finish runs.
     ParkThenContinue {
-        deps: Vec<DepRequest<'step>>,
-        park_count: usize,
+        deps: Deps<DepRequest<'step>>,
         continuation: Continuation<'step>,
         dep_error_frame: Option<TraceFrame>,
     },
@@ -132,19 +131,20 @@ pub(in crate::machine::execute) enum Continuation<'step> {
 }
 
 /// Host-side closure run by a dep-finish [`NodeWork`](super::nodes::NodeWork) once its deps resolve
-/// without error. Receives the dep **values** in submission order as [`Carried`] (relocated into the
-/// consumer region; an object or a type flowing in the type channel) **and**, in the same order, a
-/// borrow of each dep's own [`Sealed`] carrier (un-relocated, naming the dep's reach) — so a finish
-/// that commits a call threads each arg's carrier on to the body. Static elements are captured in the
-/// closure. A value-consuming finish calls `.object()` on each value; a type-resolving dep arrives as
-/// [`Carried::Type`]; a finish that needs no carriers ignores the slice. The finish decides against a
-/// read-only [`SchedulerView`] and returns an [`Outcome`] the harness applies — it issues no graph
-/// write of its own.
+/// without error. Receives the dep **values** as a [`DepResults`] view over the `[park..., owned...]`
+/// delivery order — each [`Carried`] relocated into the consumer region (an object or a type flowing
+/// in the type channel) — **and**, wrapped with the same park-prefix, a borrow of each dep's own
+/// [`Sealed`] carrier (un-relocated, naming the dep's reach) — so a finish that commits a call threads
+/// each arg's carrier on to the body, and value/carrier addressing can't drift apart. Static elements
+/// are captured in the closure. A value-consuming finish calls `.object()` on each value; a
+/// type-resolving dep arrives as [`Carried::Type`]; a finish that needs no carriers ignores the view.
+/// The finish decides against a read-only [`SchedulerView`] and returns an [`Outcome`] the harness
+/// applies — it issues no graph write of its own.
 pub(in crate::machine::execute) type DepFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            &[Carried<'a>],
-            &[&Sealed<CarriedFamily, FrameSet>],
+            DepResults<'_, Carried<'a>>,
+            DepResults<'_, &Sealed<CarriedFamily, FrameSet>>,
         ) -> Outcome<'a>
         + 'a,
 >;
@@ -191,7 +191,7 @@ pub(in crate::machine::execute) struct DepTerminal<'a> {
 pub(in crate::machine::execute) type NodeContinuation<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            &[Result<DepTerminal<'a>, KError>],
+            DepResults<'_, Result<DepTerminal<'a>, KError>>,
             usize,
         ) -> Outcome<'a>
         + 'a,
@@ -224,7 +224,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
     Box::new(move |view, results, _idx| {
         let mut values: Vec<Carried<'_>> = Vec::with_capacity(results.len());
         let mut carriers: Vec<&Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(results.len());
-        for r in results {
+        for r in results.all() {
             match r {
                 Ok(t) => {
                     values.push(relocate_carried(t.value, view.current_scope().brand()));
@@ -238,7 +238,9 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
                 }
             }
         }
-        finish(view, &values, &carriers)
+        // Re-wrap the relocated values and their carriers under the same park-prefix so the finish
+        // reads both through one `[park..., owned...]` view (`.park` / `.owned`).
+        finish(view, results.rewrap(&values), results.rewrap(&carriers))
     })
 }
 
@@ -250,7 +252,7 @@ pub(in crate::machine::execute) fn short_circuit<'a>(
 pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            &[&DepTerminal<'a>],
+            DepResults<'_, &DepTerminal<'a>>,
         ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
         + 'a,
 >;
@@ -266,7 +268,7 @@ pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let mut deps: Vec<&DepTerminal<'_>> = Vec::with_capacity(results.len());
-        for r in results {
+        for r in results.all() {
             match r {
                 Ok(t) => deps.push(t),
                 Err(e) => {
@@ -274,7 +276,8 @@ pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
                 }
             }
         }
-        match finish(view, &deps) {
+        // Re-wrap under the same park-prefix so the fold reads its cells through one view.
+        match finish(view, results.rewrap(&deps)) {
             Ok(carrier) => Outcome::Done(Ok(carrier)),
             Err(e) => Outcome::Done(Err(e)),
         }
@@ -287,7 +290,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
     finish: CatchFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
-        let result = match &results[0] {
+        let result = match &results.all()[0] {
             // Relocate the watched value into the consumer region (the lift delivers it un-relocated)
             // for a value-reading finish (TRY-WITH's `it` bind), and hand the producer's own carrier
             // alongside for a witnessed finish (CATCH folds it via `transfer_into`).
@@ -360,7 +363,8 @@ mod erased_continuation_tests {
             .zip(scope_carrier)
             .open(&cart, |(continuation, scope)| {
                 let view = SchedulerView::new(&sched, &ambient, scope);
-                let out = continuation(&view, &[], 0);
+                let empty: &[Result<DepTerminal, KError>] = &[];
+                let out = continuation(&view, DepResults::new(empty, 0), 0);
                 assert!(matches!(out, Outcome::Done(Err(_))));
             });
         // Mutate the region through a sibling pointer after the brand to catch a stacked-borrow regression.

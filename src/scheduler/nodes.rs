@@ -6,17 +6,17 @@
 
 use std::rc::Rc;
 
-use super::{Erased, NodeId, Reattachable, Workload};
+use super::{Erased, Reattachable, ResolvedDeps, Workload};
 
 /// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals.
-/// `deps` layout is `[park_producers..., owned_subs...]`; `park_count` is the park-producer prefix
-/// (`Notify` edges, kept alive), the suffix installs `Owned` (cascade-freed at success). `carrier`
-/// is the deadlock-report sample (a workload-supplied expression summary, else `None`). The
-/// continuation is stored opaquely (`W::Continuation`) and handed back to run once; the node itself
-/// never branches and names no workload type.
+/// `deps` is a [`ResolvedDeps`] — a `[park_producers..., owned_subs...]` layout the scheduler owns
+/// (assembled only through the [`Deps`](super::Deps) builder): parks install `Notify` edges (kept
+/// alive), owned deps install `Owned` (cascade-freed at success). `carrier` is the deadlock-report
+/// sample (a workload-supplied expression summary, else `None`). The continuation is stored opaquely
+/// (`W::Continuation`) and handed back to run once; the node itself never branches and names no
+/// workload type.
 pub(crate) struct NodeWork<W: Workload> {
-    pub(crate) deps: Vec<NodeId>,
-    pub(crate) park_count: usize,
+    pub(crate) deps: ResolvedDeps,
     /// The slot's continuation, stored erased to `'static` (`Erased<W::Continuation>`) so the node it
     /// sits on pins no borrow. Handed back to run once; never inspected — the workload re-anchors it
     /// once per step via the consuming externally-witnessed
@@ -30,17 +30,21 @@ impl<W: Workload> NodeWork<W> {
     /// scheduler owns the erase (peer of `finalize`'s value erase). The continuation is handed back
     /// re-anchored to run once; the scheduler never inspects it.
     pub(crate) fn new(
-        deps: Vec<NodeId>,
-        park_count: usize,
+        deps: ResolvedDeps,
         continuation: <W::Continuation as Reattachable>::At<'_>,
         carrier: Option<String>,
     ) -> Self {
         NodeWork {
             deps,
-            park_count,
             continuation: Erased::erase(continuation),
             carrier,
         }
+    }
+
+    /// Decompose a popped node's work by value for the run loop: the resolved dep list (read in
+    /// delivery order), the erased continuation, and the deadlock-summary carrier.
+    pub(crate) fn into_run_parts(self) -> (ResolvedDeps, Erased<W::Continuation>, Option<String>) {
+        (self.deps, self.continuation, self.carrier)
     }
 }
 
@@ -72,16 +76,4 @@ pub(crate) struct Node<W: Workload> {
     /// The slot's per-call frame state (cart + reserve + opaque contract) — never absent, see
     /// [`NodeFrame`].
     pub(crate) frame: NodeFrame<W>,
-}
-
-/// Owned `NodeId`s a node must read before running: the `deps[park_count..]` suffix. The
-/// park-producer prefix is installed separately as `Notify` edges.
-pub(in crate::scheduler) fn work_deps<W: Workload>(work: &NodeWork<W>) -> Vec<NodeId> {
-    work.deps[work.park_count..].to_vec()
-}
-
-/// Park-producer prefix (sibling slots whose values the node reads but does not own). The caller
-/// installs each as a `Notify` edge separately from the Owned path.
-pub(in crate::scheduler) fn work_park_producers<W: Workload>(work: &NodeWork<W>) -> &[NodeId] {
-    &work.deps[..work.park_count]
 }

@@ -119,7 +119,7 @@ pub fn body<'a>(
     let te_for_finish = te;
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         debug_assert_eq!(results.len(), 1, "VAL dep-finish has exactly one dep");
-        let kt = match &results[0] {
+        let kt = match results.owned(0) {
             Carried::Type(kt) => (*kt).clone(),
             // Routing bug — surface structured, don't panic.
             Carried::Object(other) => {

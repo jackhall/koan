@@ -21,7 +21,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
     let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
     let finish: DepFinish = Box::new(|_sched, results, _carriers| {
-        let a = match results[0] {
+        let a = match results.owned(0) {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -29,7 +29,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
                 )))
             }
         };
-        let b = match results[1] {
+        let b = match results.owned(1) {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -43,7 +43,10 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
             .alloc_object(KObject::KString(format!("{a}+{b}")));
         Outcome::done_resident(Carried::Object(allocated))
     });
-    let dep_finish_id = runtime.add_dep_finish(vec![dep_a, dep_b], vec![], scope, finish);
+    let mut deps = crate::scheduler::ResolvedDeps::new();
+    deps.own(dep_a);
+    deps.own(dep_b);
+    let dep_finish_id = runtime.add_dep_finish(deps, scope, finish);
     runtime.execute().unwrap();
     assert!(runtime
         .read_result_with(
@@ -90,7 +93,10 @@ fn dep_finish_short_circuits_on_dep_error() {
         invoked_clone.set(true);
         Outcome::done_resident(Carried::Object(value))
     });
-    let dep_finish_id = runtime.add_dep_finish(vec![dep_ok, dep_err], vec![], scope, finish);
+    let mut deps = crate::scheduler::ResolvedDeps::new();
+    deps.own(dep_ok);
+    deps.own(dep_err);
+    let dep_finish_id = runtime.add_dep_finish(deps, scope, finish);
     runtime.execute().unwrap();
 
     assert!(!invoked.get(), "finish must not run when a dep errored");

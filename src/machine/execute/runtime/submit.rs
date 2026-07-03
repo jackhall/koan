@@ -45,33 +45,24 @@ use super::super::outcome::dep_error_frame;
 use super::super::{short_circuit, DepFinish};
 use super::super::{short_circuit_witnessed, WitnessedDepFinish};
 use super::{KoanRuntime, KoanWorkload};
+use crate::scheduler::ResolvedDeps;
 
-/// A bare dep-finish node built for direct submission (not via `apply_outcome`): waits on `deps` (a
-/// `park_count`-long park prefix, owned suffix), short-circuits on the first errored dep under the
-/// [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`. Used only by
-/// the test fixture below; the run path's construction finishes route the witnessed
+/// A bare dep-finish node built for direct submission (not via `apply_outcome`): waits on the
+/// resolved `deps` (its park prefix and owned suffix), short-circuits on the first errored dep under
+/// the [`dep_error_frame`] label, else hands the resolved values to a value-only `finish`. Used only
+/// by the test fixture below; the run path's construction finishes route the witnessed
 /// [`awaiting_witnessed`].
 #[cfg(test)]
-fn awaiting(deps: Vec<NodeId>, park_count: usize, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
-    NodeWork::new(
-        deps,
-        park_count,
-        short_circuit(Some(dep_error_frame()), finish),
-        None,
-    )
+fn awaiting(deps: ResolvedDeps, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
+    NodeWork::new(deps, short_circuit(Some(dep_error_frame()), finish), None)
 }
 
 /// Witnessed sibling of [`awaiting`]: builds a dep-finish node whose continuation folds the resolved
 /// deps into a witnessed aggregate carrier ([`short_circuit_witnessed`]) instead of handing bare
 /// values to a value-only finish.
-fn awaiting_witnessed(
-    deps: Vec<NodeId>,
-    park_count: usize,
-    finish: WitnessedDepFinish<'_>,
-) -> NodeWork<KoanWorkload> {
+fn awaiting_witnessed(deps: ResolvedDeps, finish: WitnessedDepFinish<'_>) -> NodeWork<KoanWorkload> {
     NodeWork::new(
         deps,
-        park_count,
         short_circuit_witnessed(Some(dep_error_frame()), finish),
         None,
     )
@@ -292,19 +283,15 @@ impl<'run> KoanRuntime<'run> {
 
     /// Schedule an `AwaitDeps` against the executing slot's own scope handle whose finish folds the
     /// resolved deps into a witnessed aggregate carrier (the construction inversion), naming every
-    /// region the result reaches on its carrier. `owned_subs` are cascade-freed on success;
-    /// `park_producers` are existing siblings the combine reads but does not own. The finish sees
-    /// results as `[park_producers..., owned_subs...]`.
+    /// region the result reaches on its carrier. `deps` carries the park producers (existing siblings
+    /// the combine reads but does not own) and owned subs (cascade-freed on success); the finish
+    /// addresses them through a [`DepResults`](crate::scheduler::DepResults) view.
     pub(in crate::machine::execute) fn submit_dep_finish_witnessed_in_own_scope<'a>(
         &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
+        deps: ResolvedDeps,
         finish: WitnessedDepFinish<'a>,
     ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.submit_in_own_scope(awaiting_witnessed(deps, park_count, finish))
+        self.submit_in_own_scope(awaiting_witnessed(deps, finish))
     }
 }
 
@@ -352,19 +339,15 @@ impl<'run> KoanRuntime<'run> {
         )
     }
 
-    /// Schedule a dep-finish slot against an explicit `scope`. `owned_subs` are sub-Dispatches this
-    /// dep-finish allocated (cascade-freed on success); `park_producers` are existing sibling slots
-    /// it splices but does not own. The finish closure sees results as `[park_producers..., owned_subs...]`.
+    /// Schedule a dep-finish slot against an explicit `scope`. `deps` carries the owned sub-Dispatches
+    /// (cascade-freed on success) and any park producers (existing siblings it reads but does not own);
+    /// the finish addresses their results through a [`DepResults`](crate::scheduler::DepResults) view.
     pub(in crate::machine::execute) fn add_dep_finish(
         &mut self,
-        owned_subs: Vec<NodeId>,
-        park_producers: Vec<NodeId>,
+        deps: ResolvedDeps,
         scope: &'run Scope<'run>,
         finish: DepFinish<'run>,
     ) -> NodeId {
-        let park_count = park_producers.len();
-        let mut deps = park_producers;
-        deps.extend(owned_subs);
-        self.add(awaiting(deps, park_count, finish), scope)
+        self.add(awaiting(deps, finish), scope)
     }
 }

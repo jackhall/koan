@@ -26,6 +26,7 @@ use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
 use super::{park_on_deps_witnessed, DepRequest, Outcome};
+use crate::scheduler::DepResults;
 
 /// Fold accumulator for a record-repr newtype: the field values gathered from the value deps, each
 /// `transfer_into`-folded so the accumulator's witness names every region a field reaches. The final
@@ -202,8 +203,11 @@ pub(crate) fn build_type_operand<'step>(
 fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind<'step>,
-    terminals: &[&DepTerminal<'step>],
+    terminals: DepResults<'_, &DepTerminal<'step>>,
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    // A constructor parks on its value subs only (all owned, no park producers), so its results are
+    // exactly the owned suffix — read them as one slice.
+    let terminals = terminals.owned_slice();
     let scope = view.current_scope();
     let region = scope.brand();
     match kind {
