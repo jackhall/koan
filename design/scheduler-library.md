@@ -230,5 +230,4 @@ picture:
 
 ## Open work
 
-- [Shrink witnessed.rs's raw retype surface](../roadmap/scheduler_library/witnessed-retype-hygiene.md)
 - [A compile-enforced boundary for the substrate](../roadmap/scheduler_library/substrate-crate-boundary.md)
