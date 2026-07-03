@@ -33,6 +33,9 @@ pub use region::{Region, StorageProfile, Stored};
 mod region_set;
 pub use region_set::{PinsRegion, RegionSet};
 
+mod step_ctx;
+pub use step_ctx::StepContext;
+
 #[doc(hidden)]
 pub mod doctest_fixture;
 

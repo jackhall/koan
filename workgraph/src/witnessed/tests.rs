@@ -358,3 +358,56 @@ fn seal_option_none_opens_to_none() {
         });
     assert_eq!(got, 9);
 }
+
+/// [`StepContext::alloc`]: the built value's witness is the singleton pinning the context's own
+/// frame — reach = own region only.
+#[test]
+fn step_context_alloc_witness_is_singleton() {
+    let cart: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![1, 2, 3],
+        outer: None,
+    });
+    let ctx: StepContext<TestCart> = StepContext::new(Rc::clone(&cart));
+    let w: Witnessed<RefFamily, RegionSet<TestCart>> = ctx.alloc(|region| &region[0]);
+    assert_eq!(w.with(|r| **r), 1);
+    assert!(w
+        .witness()
+        .sole()
+        .is_some_and(|owner| Rc::ptr_eq(owner, &cart)));
+}
+
+/// [`StepContext::alloc_with`]: the witness is the union of the context's own frame and every named
+/// dep's reach, and the dep views arrive at `build` in the same order as `deps`.
+#[test]
+fn step_context_alloc_with_unions_witness_and_preserves_dep_order() {
+    let own: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![100],
+        outer: None,
+    });
+    let dep_a: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![1],
+        outer: None,
+    });
+    let dep_b: Rc<TestCart> = Rc::new(TestCart {
+        backing: vec![2],
+        outer: None,
+    });
+    let sealed_a: Sealed<RefFamily, RegionSet<TestCart>> =
+        Sealed::seal(Witnessed::yoke(Rc::clone(&dep_a), |r| &r[0]).into_set());
+    let sealed_b: Sealed<RefFamily, RegionSet<TestCart>> =
+        Sealed::seal(Witnessed::yoke(Rc::clone(&dep_b), |r| &r[0]).into_set());
+
+    let ctx: StepContext<TestCart> = StepContext::new(Rc::clone(&own));
+    let w: Witnessed<RefFamily, RegionSet<TestCart>> =
+        ctx.alloc_with(&[&sealed_a, &sealed_b], |region, views| {
+            assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
+            &region[0]
+        });
+    assert_eq!(w.with(|r| **r), 100);
+    // Three unrelated carts (own, dep_a, dep_b) — none pins another, so the union stays a
+    // three-member set rather than collapsing to a singleton.
+    assert!(
+        w.witness().sole().is_none(),
+        "unrelated carts stay distinct set members"
+    );
+}
