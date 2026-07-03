@@ -138,7 +138,7 @@ impl<W: StorageProfile> Region<W> {
     /// widen past the pin. The `&'a self` borrow is what makes it sound — the region pins the pointee
     /// for the whole of `'a`, so the re-anchored reference cannot out-claim its backing.
     ///
-    /// Reachable only through a [`RegionBrand`](crate::machine::core::RegionBrand)'s `alloc_*` wrappers
+    /// Reachable only through an embedder's brand type (Koan's `RegionBrand`)'s `alloc_*` wrappers
     /// (the co-located residents: a registered `&KType`, a child `&Scope`); the witnessed terminals go
     /// through the brand-confined [`alloc`](Self::alloc). A bare `&Region` exposes neither.
     pub fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {

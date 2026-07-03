@@ -1,6 +1,6 @@
 //! `Witnessed<T, W>` and the lifetime-erasure substrate it is built on — the single audited owner
 //! of the erase-to-`'static` / reattach-to-`'r` discipline every lifetime-free inter-node carrier
-//! shares. It sits below both [`machine`](crate::machine) and [`scheduler`](crate::scheduler) and
+//! shares. It sits below both an embedder's value layer and [`scheduler`](crate::scheduler) and
 //! names no concrete workload type, so each depends on it for the machinery, not the reverse.
 //!
 //! A node's slot stores a borrow-carrying value the borrow checker can't lifetime-track: it forgets
@@ -312,7 +312,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
 
     /// Bundle a **region-pure** value under the default (empty / pins-nothing) witness — the honest
     /// constructor for a value built inside an alloc brand that references no foreign region. `resident`
-    /// fixes the witness to `W::default()` — the empty set for a [`FrameSet`]-style set witness — so it
+    /// fixes the witness to `W::default()` — the empty set for a `FrameSet`-style set witness — so it
     /// **cannot** pair a value with a *wrong* non-empty witness; the only obligation it carries is that
     /// `value`'s foreign reach is genuinely empty. It is what lets the brand-confined region allocator
     /// return a witnessed carrier without an open-ended co-location assertion.
