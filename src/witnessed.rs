@@ -144,8 +144,9 @@ impl<T: Reattachable> Erased<T> {
 
     /// Re-anchor the carrier to a caller-chosen `'r` without a bundled witness — the raw fabrication
     /// the externally-witnessed [`SealedExtern::open`] wraps behind its rank-2 brand, supplying the pin
-    /// at the access. The bundled-witness accessors ([`Witnessed::with`] / [`Witnessed::map`]) route
-    /// the same brand-retype directly instead.
+    /// at the access. The bundled-witness accessors ([`Witnessed::map`], [`Witnessed::merge`], the
+    /// borrow-bounded [`Witnessed::read`]) route their re-anchor through here, each discharging this
+    /// contract with its held witness; [`Witnessed::with`] reads through [`with_branded_ref`] instead.
     ///
     /// # Safety
     ///
@@ -437,11 +438,11 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         f: impl for<'b> FnOnce(T::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
     ) -> Witnessed<P, W> {
         let Witnessed { value, witness } = self;
-        // SAFETY: re-anchor the erased carrier at a fresh existential brand the `for<'b>` closure
-        // cannot leak; the projected result is immediately re-erased to `'static` for storage under
-        // the same witness, which still pins the backing. Lifetime-only retype of a single-lifetime
-        // family.
-        let live: T::At<'_> = unsafe { retype::<T::At<'static>, T::At<'_>>(value.inner) };
+        // SAFETY: `reattach`'s contract — the destructured `witness` is held across `f` and pins the
+        // carrier's pointee; the re-anchor is transient (the fresh existential brand the `for<'b>`
+        // closure cannot leak), and the projection is immediately re-erased to `'static` for storage
+        // under that same witness.
+        let live: T::At<'_> = unsafe { value.reattach() };
         let projected = f(live, PhantomData);
         Witnessed {
             value: Erased::erase(projected),
@@ -522,10 +523,10 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         // SAFETY: both source witnesses are held across `f`, each pinning its own carrier's backing;
         // the two carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak,
         // and the projection is immediately re-erased to `'static` for storage. The combined `witness`
-        // (set union with subsumption) pins both regions thereafter. Lifetime-only retypes of
-        // single-lifetime families.
-        let live_left: T::At<'_> = unsafe { retype::<T::At<'static>, T::At<'_>>(left.inner) };
-        let live_right: B::At<'_> = unsafe { retype::<B::At<'static>, B::At<'_>>(right.inner) };
+        // (set union with subsumption) pins both regions thereafter — `reattach`'s contract, discharged
+        // for both carriers.
+        let live_left: T::At<'_> = unsafe { left.reattach() };
+        let live_right: B::At<'_> = unsafe { right.reattach() };
         let projected = f(live_left, live_right, PhantomData);
         // The source witnesses pinned both backings across `f`; drop them now — the combined `witness`
         // computed above carries both pins forward.
@@ -573,11 +574,11 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     where
         T::At<'static>: Copy,
     {
-        // SAFETY: the bundled `witness` pins the pointee for the whole `&self` borrow (dropping it
-        // needs `&mut self`), and the returned carrier is bounded by that borrow, so it cannot
-        // outlive the pin. Lifetime-only retype of a single-lifetime family; the `Copy` bound copies
-        // the erased carrier out of `&self` before re-anchoring.
-        unsafe { retype::<T::At<'static>, T::At<'_>>(self.value.inner) }
+        // SAFETY: `reattach`'s contract — the bundled `witness` pins the pointee for the whole
+        // `&self` borrow (dropping it needs `&mut self`), and the returned carrier is bounded by
+        // that borrow, so it cannot outlive the pin. The `Copy` bound copies the erased carrier
+        // out of `&self` before the consuming re-anchor.
+        unsafe { self.value.reattach() }
     }
 
     /// Duplicate the carrier: copy the erased value (a `Copy` carrier family — a thin/fat reference)
