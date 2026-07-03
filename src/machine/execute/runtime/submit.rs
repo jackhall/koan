@@ -42,8 +42,8 @@ use super::super::nodes::NodePayload;
 use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
 #[cfg(test)]
-use super::super::{short_circuit, DepFinish};
-use super::super::{short_circuit_witnessed, WitnessedDepFinish};
+use super::super::{relocate_values, DepFinish};
+use super::super::{seal_witnessed, short_circuit, WitnessedDepFinish};
 use super::{KoanRuntime, KoanWorkload};
 use crate::scheduler::ResolvedDeps;
 
@@ -54,19 +54,23 @@ use crate::scheduler::ResolvedDeps;
 /// [`awaiting_witnessed`].
 #[cfg(test)]
 fn awaiting(deps: ResolvedDeps, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
-    NodeWork::new(deps, short_circuit(Some(dep_error_frame()), finish), None)
+    NodeWork::new(
+        deps,
+        short_circuit(Some(dep_error_frame()), relocate_values(finish)),
+        None,
+    )
 }
 
 /// Witnessed sibling of [`awaiting`]: builds a dep-finish node whose continuation folds the resolved
-/// deps into a witnessed aggregate carrier ([`short_circuit_witnessed`]) instead of handing bare
-/// values to a value-only finish.
+/// deps into a witnessed aggregate carrier (the [`seal_witnessed`] projection over [`short_circuit`])
+/// instead of handing bare values to a value-only finish.
 fn awaiting_witnessed(
     deps: ResolvedDeps,
     finish: WitnessedDepFinish<'_>,
 ) -> NodeWork<KoanWorkload> {
     NodeWork::new(
         deps,
-        short_circuit_witnessed(Some(dep_error_frame()), finish),
+        short_circuit(Some(dep_error_frame()), seal_witnessed(finish)),
         None,
     )
 }

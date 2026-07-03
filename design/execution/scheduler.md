@@ -28,11 +28,17 @@ which combinator built the `cont` closure ([`short_circuit`](../../src/machine/e
 and names no AST.
 
 - A **dep-finish** `cont` (built by `short_circuit`) waits on a fixed set of dep
-  slots, short-circuits on the first errored dep, and otherwise runs an arbitrary
-  host closure ([`DepFinish`](../../src/machine/execute/outcome.rs)) over their
-  resolved values. List- and dict-literal planners use it; the construction logic
-  — including already-resolved literal scalars that don't need a dep slot — lives
-  in the closure's capture.
+  slots, short-circuits on the first errored dep, and otherwise hands the
+  resolved dep terminals to a single
+  [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure. The two
+  host-closure shapes callers write —
+  [`DepFinish`](../../src/machine/execute/outcome.rs) (value-copy) and
+  [`WitnessedDepFinish`](../../src/machine/execute/outcome.rs) (folds terminals
+  into one witnessed carrier) — are projected onto that one currency by
+  `relocate_values` / `seal_witnessed` before `short_circuit` ever sees them, so
+  there is exactly one delivery loop. List- and dict-literal planners use the
+  value-copy shape; the construction logic — including already-resolved literal
+  scalars that don't need a dep slot — lives in the closure's capture.
 - A **catch** `cont` (built by `catch_cont`) waits on one slot and hands its
   terminal to a [`CatchFinish`](../../src/machine/execute/outcome.rs) closure as a
   `Result<&KObject, KError>`. Unlike a dep-finish, an errored dep does not

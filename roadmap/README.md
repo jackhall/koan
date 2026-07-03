@@ -50,7 +50,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [`Action::Tail` covers every dispatch tail](scheduler_library/action-tail-single-lowering.md)
 - [The step owns region liveness](scheduler_library/step-held-region.md)
 - [A compile-enforced boundary for the substrate](scheduler_library/substrate-crate-boundary.md)
-- [One dep-finish delivery currency](scheduler_library/witnessed-only-dep-finish.md)
 - [Shrink witnessed.rs's raw retype surface](scheduler_library/witnessed-retype-hygiene.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)

@@ -231,7 +231,6 @@ picture:
 ## Open work
 
 - [`Action::Tail` covers every dispatch tail](../roadmap/scheduler_library/action-tail-single-lowering.md)
-- [One dep-finish delivery currency](../roadmap/scheduler_library/witnessed-only-dep-finish.md)
 - [Shrink witnessed.rs's raw retype surface](../roadmap/scheduler_library/witnessed-retype-hygiene.md)
 - [The step owns region liveness](../roadmap/scheduler_library/step-held-region.md)
 - [A compile-enforced boundary for the substrate](../roadmap/scheduler_library/substrate-crate-boundary.md)

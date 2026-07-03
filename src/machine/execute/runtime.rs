@@ -36,8 +36,8 @@ use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome};
 use super::run_loop::RegionRefFamily;
 use super::{
-    catch_continuation, ignore_results, short_circuit, short_circuit_witnessed, CatchFinish,
-    ContinuationFamily, DepFinish,
+    catch_continuation, ignore_results, relocate_values, seal_witnessed, short_circuit,
+    CatchFinish, ContinuationFamily, DepFinish,
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
@@ -553,16 +553,18 @@ impl<'run> KoanRuntime<'run> {
                     // `None` frameless); an action/literal dep-finish carries the `dep_error_frame()`
                     // label. Both install the same `Wait` over the realized deps (edges already
                     // installed above), the short-circuit baked into the continuation by
-                    // `short_circuit`.
-                    Continuation::Finish(finish) => {
-                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
-                    }
+                    // `short_circuit` — the one loop, `relocate_values` its value-copy projection.
+                    Continuation::Finish(finish) => NodeWork::new(
+                        resolved,
+                        short_circuit(dep_error_frame, relocate_values(finish)),
+                        None,
+                    ),
                     // The construction-inversion sibling: same realized deps and edges, but the
-                    // continuation folds the resolved terminals (value + reach) into one witnessed
-                    // carrier and seals as `Done(Ok)` (see [`short_circuit_witnessed`]).
+                    // `seal_witnessed` projection folds the resolved terminals (value + reach) into
+                    // one witnessed carrier and seals as `Done(Ok)`.
                     Continuation::FinishWitnessed(finish) => NodeWork::new(
                         resolved,
-                        short_circuit_witnessed(dep_error_frame, finish),
+                        short_circuit(dep_error_frame, seal_witnessed(finish)),
                         None,
                     ),
                     // The action-harness catch carries its single watched dep unrealized (its

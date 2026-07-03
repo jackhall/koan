@@ -19,6 +19,7 @@
 
 use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::RegionBrand;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
@@ -99,10 +100,11 @@ impl<'step> Outcome<'step> {
 ///   dep-finishes ([`run_action`](super::runtime::run_action)'s `Action::AwaitDeps`, the literal
 ///   builders — labelled [`dep_error_frame`]). Its finish consumes the dep values, runs against a
 ///   read-only [`SchedulerView`], and returns another [`Outcome`] (it may itself re-park).
-/// - `FinishWitnessed` is the construction-inversion sibling of `Finish`: it short-circuits the same
-///   way but hands the resolved dep *terminals* (value + reach) to a [`WitnessedDepFinish`] that folds
-///   them into a single witnessed carrier ([`short_circuit_witnessed`]), sealing the slot as
-///   [`Outcome::Done(Ok)`](Outcome::Done). The decide-side twin of the apply-side
+/// - `FinishWitnessed` is the construction-inversion sibling of `Finish`: it runs through the same
+///   [`short_circuit`] loop but hands the resolved dep *terminals* (value + reach) to a
+///   [`WitnessedDepFinish`] that folds them into a single witnessed carrier (the [`seal_witnessed`]
+///   projection), sealing the slot as [`Outcome::Done(Ok)`](Outcome::Done). The decide-side twin of
+///   the apply-side
 ///   `submit_dep_finish_witnessed_in_own_scope` — used by a construction decide (newtype / tagged
 ///   union) that parks on its value deps and builds the wrapped value naming every region it reaches.
 /// - `Catch` is the action-harness catch ([`run_action`](super::runtime::run_action)'s
@@ -159,11 +161,11 @@ pub(in crate::machine::execute) fn dep_error_frame() -> TraceFrame {
 
 /// The envelope builder — the sole production constructor of an [`Outcome::ParkThenContinue`]
 /// carrying a [`Continuation::Finish`] / [`Continuation::FinishWitnessed`]. Park on `deps`; when they
-/// resolve the apply side wraps the finish in the dep-error short-circuit ([`short_circuit`] /
-/// [`short_circuit_witnessed`]), so a finish body never observes an errored dep. `error_frame` labels
-/// the propagated error when a dep errors; skipping it propagates frameless (the consumer attaches its
-/// own frame). (`Resume` / `Catch` continuations are built at their own sites — they carry no
-/// dep-finish.)
+/// resolve the apply side wraps the finish in the dep-error short-circuit ([`short_circuit`], run over
+/// the [`relocate_values`] or [`seal_witnessed`] projection), so a finish body never observes an
+/// errored dep. `error_frame` labels the propagated error when a dep errors; skipping it propagates
+/// frameless (the consumer attaches its own frame). (`Resume` / `Catch` continuations are built at
+/// their own sites — they carry no dep-finish.)
 pub(in crate::machine::execute) struct Await<'step> {
     deps: Deps<DepRequest<'step>>,
     dep_error_frame: Option<TraceFrame>,
@@ -222,15 +224,24 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// by construction (the [`alloc` construction
 /// inversion](../../../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)). `value` is the same
 /// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
-/// open) for the **value-copy** finishes still on the bare channel, which [`relocate_carried`] it into
-/// the consumer region (a bare structural copy: the spine is rebuilt, a surviving closure / module
-/// borrow is preserved verbatim). Such a borrow stays alive without a per-relocate reach fold: its
+/// open) for the **value-copy** finishes still on the bare channel: the [`relocate_values`]
+/// projection [`relocate`](DepTerminal::relocate)s it into the consumer region (a bare structural
+/// copy: the spine is rebuilt, a surviving closure / module borrow is preserved verbatim). Such a borrow stays alive without a per-relocate reach fold: its
 /// reach rides the dep's own carrier, read off `carrier.witness()` and unioned into the consumer-step
 /// `pin` before the open, and folded onto the scope reach-set only when the value is *bound*
 /// (`let` / user-fn arg). The dep's reach is read off the carrier the same way for every dep.
 pub(in crate::machine::execute) struct DepTerminal<'a> {
     pub(in crate::machine::execute) value: Carried<'a>,
     pub(in crate::machine::execute) carrier: Sealed<CarriedFamily, FrameSet>,
+}
+
+impl<'a> DepTerminal<'a> {
+    /// Relocate the terminal's value into the consumer region (a bare structural copy via
+    /// [`relocate_carried`]) — the one consumption [`relocate_values`] and [`catch_continuation`]
+    /// share.
+    pub(in crate::machine::execute) fn relocate(&self, dest: RegionBrand<'a>) -> Carried<'a> {
+        relocate_carried(self.value, dest)
+    }
 }
 
 /// The one continuation every node runs when its deps resolve — the unified currency
@@ -266,8 +277,8 @@ reattachable!(ContinuationFamily => NodeContinuation<'r>);
 
 /// Walk the resolved dep results in delivery order, short-circuiting on the first errored dep (its
 /// error propagated under `dep_error_frame`). On success every terminal resolved to a value and is
-/// returned by reference in order — the one dep-error gate both [`short_circuit`] combinators run,
-/// so a finish body never observes an errored dep.
+/// returned by reference in order — the one dep-error gate [`short_circuit`] runs, so a finish body
+/// never observes an errored dep.
 fn all_or_first_error<'a, 'r>(
     results: &DepResults<'r, Result<DepTerminal<'a>, KError>>,
     dep_error_frame: &Option<TraceFrame>,
@@ -282,31 +293,35 @@ fn all_or_first_error<'a, 'r>(
     Ok(terminals)
 }
 
+/// The one delivery currency a resolved dep-finish runs against: resolved dep terminals (value +
+/// sealed carrier, un-relocated, `[park..., owned...]` order), an [`Outcome`] out. Both
+/// [`DepFinish`] and [`WitnessedDepFinish`] project onto this shape — [`relocate_values`] and
+/// [`seal_witnessed`] are the two projections — so [`short_circuit`] is the single loop that runs
+/// either.
+pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
+    dyn for<'view> FnOnce(
+            &SchedulerView<'a, 'view>,
+            DepResults<'_, &DepTerminal<'a>>,
+        ) -> Outcome<'a>
+        + 'a,
+>;
+
 /// Dep-finish continuation: short-circuit on the first errored dep (labelled with `dep_error_frame`),
-/// else relocate each resolved dep into the consumer region and hand the values to a value-only
-/// [`DepFinish`]. The short-circuit and the per-dep relocation are this combinator's job, so the node
-/// stays uniform.
+/// else hand the resolved dep terminals (un-relocated, value + reach) to a [`TerminalDepFinish`]. The
+/// one delivery loop every dep-finish runs through — [`relocate_values`] and [`seal_witnessed`]
+/// project the two legacy finish shapes onto it.
 pub(in crate::machine::execute) fn short_circuit<'a>(
     dep_error_frame: Option<TraceFrame>,
-    finish: DepFinish<'a>,
+    finish: TerminalDepFinish<'a>,
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let terminals = match all_or_first_error(&results, &dep_error_frame) {
             Ok(terminals) => terminals,
             Err(e) => return Outcome::Done(Err(e)),
         };
-        let values: Vec<Carried<'_>> = terminals
-            .iter()
-            .map(|t| relocate_carried(t.value, view.current_scope().brand()))
-            .collect();
-        // Each dep's own carrier (un-relocated, naming its reach) rides alongside the relocated value
-        // so a call-committing finish threads it to the body. Borrowed — a finish that keeps a carrier
-        // `duplicate`s it.
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
-            terminals.iter().map(|t| &t.carrier).collect();
-        // Re-wrap the relocated values and their carriers under the same park-prefix so the finish
-        // reads both through one `[park..., owned...]` view (`.park` / `.owned`).
-        finish(view, results.rewrap(&values), results.rewrap(&carriers))
+        // Re-wrap under the same park-prefix so the finish reads the terminals through one
+        // `[park..., owned...]` view (`.park` / `.owned`).
+        finish(view, results.rewrap(&terminals))
     })
 }
 
@@ -323,25 +338,38 @@ pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
         + 'a,
 >;
 
-/// Witnessed dep-finish continuation: short-circuit on the first errored dep, else hand the resolved
-/// dep terminals (un-relocated, value + reach) to a [`WitnessedDepFinish`] that folds them into a
-/// witnessed aggregate carrier. The fold relocates each dep once (`transfer_into`) and names the union
-/// of their reaches on the carrier, so no separate per-dep relocation runs on this path. A finish
-/// error becomes a bare [`Outcome::Done`] error.
-pub(in crate::machine::execute) fn short_circuit_witnessed<'a>(
-    dep_error_frame: Option<TraceFrame>,
+/// Project a [`WitnessedDepFinish`] onto the one [`TerminalDepFinish`] delivery: run the fold and seal
+/// the resulting carrier (or error) as an [`Outcome::Done`]. The fold relocates each dep once
+/// (`transfer_into`) and names the union of their reaches on the carrier, so no separate per-dep
+/// relocation runs on this path.
+pub(in crate::machine::execute) fn seal_witnessed<'a>(
     finish: WitnessedDepFinish<'a>,
-) -> NodeContinuation<'a> {
-    Box::new(move |view, results, _idx| {
-        let deps = match all_or_first_error(&results, &dep_error_frame) {
-            Ok(deps) => deps,
-            Err(e) => return Outcome::Done(Err(e)),
-        };
-        // Re-wrap under the same park-prefix so the fold reads its cells through one view.
-        match finish(view, results.rewrap(&deps)) {
-            Ok(carrier) => Outcome::Done(Ok(carrier)),
-            Err(e) => Outcome::Done(Err(e)),
-        }
+) -> TerminalDepFinish<'a> {
+    Box::new(move |view, terminals| match finish(view, terminals) {
+        Ok(carrier) => Outcome::Done(Ok(carrier)),
+        Err(e) => Outcome::Done(Err(e)),
+    })
+}
+
+/// Project a [`DepFinish`] onto the one [`TerminalDepFinish`] delivery — the sole place in the crate
+/// that derives the relocated-values + carrier-slice shape: relocate each terminal's value into the
+/// consumer region and hand it, alongside a borrow of each dep's own un-relocated carrier, to the
+/// value-only finish. Each dep's own carrier rides alongside the relocated value so a call-committing
+/// finish threads it to the body — borrowed, a finish that keeps a carrier `duplicate`s it.
+pub(in crate::machine::execute) fn relocate_values<'a>(
+    finish: DepFinish<'a>,
+) -> TerminalDepFinish<'a> {
+    Box::new(move |view, terminals| {
+        let values: Vec<Carried<'_>> = terminals
+            .all()
+            .iter()
+            .map(|t| t.relocate(view.current_scope().brand()))
+            .collect();
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            terminals.all().iter().map(|t| &t.carrier).collect();
+        // Re-wrap the relocated values and their carriers under the same park-prefix so the finish
+        // reads both through one `[park..., owned...]` view (`.park` / `.owned`).
+        finish(view, terminals.rewrap(&values), terminals.rewrap(&carriers))
     })
 }
 
@@ -356,7 +384,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
             // for a value-reading finish (TRY-WITH's `it` bind), and hand the producer's own carrier
             // alongside for a witnessed finish (CATCH folds it via `transfer_into`).
             Ok(t) => Ok(CatchOk {
-                value: relocate_carried(t.value, view.current_scope().brand()),
+                value: t.relocate(view.current_scope().brand()),
                 carrier: t.carrier.duplicate(),
             }),
             // Frameless: the recovery-site dispatch attaches its own frame.
