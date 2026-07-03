@@ -8,7 +8,7 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
 use crate::machine::BindingIndex;
-use crate::witnessed::{MergeWitness, Sealed, Witnessed};
+use crate::witnessed::{Sealed, Witnessed};
 use std::marker::PhantomData;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
@@ -40,7 +40,7 @@ fn pins_region_walks_outer_chain() {
     );
 }
 
-/// `FrameSet::merge` over related carts collapses to the descendant singleton (the ancestor's region
+/// `FrameSet::union` over related carts collapses to the descendant singleton (the ancestor's region
 /// is already pinned by the descendant's `outer` chain), regardless of operand order.
 #[test]
 fn frameset_merge_subsumes_ancestor() {
@@ -49,24 +49,22 @@ fn frameset_merge_subsumes_ancestor() {
     let descendant = FrameSet::singleton(Rc::clone(&child));
     let ancestor = FrameSet::singleton(Rc::clone(&root));
 
-    let merged =
-        FrameSet::merge(&descendant, &ancestor).expect("a set always represents the union");
+    let merged = FrameSet::union(&descendant, &ancestor);
     let sole = merged.sole().expect("ancestor subsumed by descendant");
     assert!(std::ptr::eq(sole.region(), child.region()));
 
     // Order-independent: the antichain is the same either way.
-    let merged_rev = FrameSet::merge(&ancestor, &descendant).expect("union always represents");
+    let merged_rev = FrameSet::union(&ancestor, &descendant);
     let sole_rev = merged_rev.sole().expect("ancestor subsumed by descendant");
     assert!(std::ptr::eq(sole_rev.region(), child.region()));
 }
 
-/// `FrameSet::merge` over unrelated carts keeps both — neither `outer` chain pins the other.
+/// `FrameSet::union` over unrelated carts keeps both — neither `outer` chain pins the other.
 #[test]
 fn frameset_merge_keeps_unrelated() {
     let a = FrameStorage::run_root();
     let b = FrameStorage::run_root();
-    let merged = FrameSet::merge(&FrameSet::singleton(a), &FrameSet::singleton(b))
-        .expect("a set always represents the union");
+    let merged = FrameSet::union(&FrameSet::singleton(a), &FrameSet::singleton(b));
     assert!(merged.sole().is_none(), "unrelated regions both kept");
 }
 
@@ -387,12 +385,10 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
             Carried::Object(r.alloc_object(KObject::Number(2.0)))
         });
     // Fold the foreign element in at the shared brand; re-seal under the union of both regions.
-    let merged: Witnessed<CarriedFamily, FrameSet> = here
-        .merge::<CarriedFamily, CarriedFamily>(
-            foreign,
-            |_here, foreign, _brand: PhantomData<&_>| foreign,
-        )
-        .expect("a FrameSet set witness always represents the union of unrelated regions");
+    let merged: Witnessed<CarriedFamily, FrameSet> = here.merge::<CarriedFamily, CarriedFamily>(
+        foreign,
+        |_here, foreign, _brand: PhantomData<&_>| foreign,
+    );
     drop(here_frame);
     drop(foreign_frame); // `merged` holds its own clones of both frames.
     let got = merged.with(|c| match *c {
@@ -445,24 +441,20 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
     // the union. `transfer_into` borrows the dep's seal (does not consume it — other consumers keep
     // reading the producer terminal).
-    let acc1 = dep_a
-        .transfer_into::<AggBuildFamily, AggBuildFamily>(
-            acc0,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        )
-        .expect("a FrameSet set witness always represents the union");
-    let acc2 = dep_b
-        .transfer_into::<AggBuildFamily, AggBuildFamily>(
-            acc1,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        )
-        .expect("a FrameSet set witness always represents the union");
+    let acc1 = dep_a.transfer_into::<AggBuildFamily, AggBuildFamily>(
+        acc0,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
+    let acc2 = dep_b.transfer_into::<AggBuildFamily, AggBuildFamily>(
+        acc1,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
     // regions, all three now named on this one carrier's witness.
     let list: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
@@ -684,8 +676,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
                 cells.push(Held::from_carried(dep));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let acc2 = Sealed::seal(witnessed_closure(&frame_b))
         .transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc1,
@@ -693,8 +684,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
                 cells.push(Held::from_carried(dep));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let list: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
         Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
     });
@@ -750,8 +740,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                 cells.push(Held::from_carried(dep));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let acc2 = Sealed::seal(witnessed_closure(&frame_2))
         .transfer_into::<AggBuildFamily, AggBuildFamily>(
             acc1,
@@ -759,8 +748,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                 cells.push(Held::from_carried(dep));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let inners: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
         Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
     });
@@ -782,8 +770,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                     .expect("bind the inners list into the outer closure's scope");
             }
             outer_v
-        })
-        .expect("frame_outer and the inners list share a region, so their witnesses merge");
+        });
 
     drop(frame_outer);
     drop(frame_1);
@@ -836,8 +823,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
                 cells.push(("a".to_string(), Held::from_carried(dep)));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let acc2 = Sealed::seal(witnessed_closure(&frame_b))
         .transfer_into::<RecordCellFamily, RecordCellFamily>(
             acc1,
@@ -845,8 +831,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
                 cells.push(("b".to_string(), Held::from_carried(dep)));
                 (region, cells)
             },
-        )
-        .expect("a FrameSet set witness always represents the union");
+        );
     let record: Witnessed<CarriedFamily, FrameSet> = acc2.map(|(region, cells), _brand| {
         Carried::Object(region.alloc_object(KObject::record_of_held(Record::from_pairs(cells))))
     });

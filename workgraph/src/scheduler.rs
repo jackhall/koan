@@ -36,7 +36,7 @@ mod workload;
 
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
-pub use crate::witnessed::{Erased, MergeWitness, Reattachable, Sealed, Witnessed};
+pub use crate::witnessed::{Erased, Reattachable, Sealed, UnionWitness, Witnessed};
 pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
@@ -145,10 +145,7 @@ impl<W: Workload> Scheduler<W> {
     /// own seal intact — the consumer-pull lift hands each dep this so a construction finish folds it
     /// witnessed, naming the reach on the carrier rather than reconstructing it. Follows a
     /// bare-name-forward alias to the real producer (which holds the sole copy).
-    pub fn dep_carrier(
-        &self,
-        id: NodeId,
-    ) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
+    pub fn dep_carrier(&self, id: NodeId) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
         self.store.dep_carrier(self.resolve_alias(id))
     }
 
@@ -158,7 +155,7 @@ impl<W: Workload> Scheduler<W> {
     /// retype (via [`Witnessed::merge`]). `dest` is the destination region wrapped as a witnessed
     /// carrier; `relocate` is the workload's structural copy into it (it names the value type; the
     /// scheduler does not). Follows a bare-name-forward alias to the real producer (which holds the
-    /// value). `None` only if the witness union is not representable — never for a set witness.
+    /// value).
     // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
     #[allow(clippy::type_complexity)]
     pub fn transfer_lifted<B: Reattachable>(
@@ -170,9 +167,9 @@ impl<W: Workload> Scheduler<W> {
             B::At<'b>,
             std::marker::PhantomData<&'b ()>,
         ) -> <W::Value as Reattachable>::At<'b>,
-    ) -> Result<Option<Witnessed<W::Value, W::Witness>>, &W::Error>
+    ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
     where
-        W::Witness: MergeWitness,
+        W::Witness: UnionWitness,
     {
         self.store
             .transfer_lifted(self.resolve_alias(id), dest, relocate)

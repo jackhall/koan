@@ -153,7 +153,6 @@ impl<'run> KoanRuntime<'run> {
             .transfer_lifted(producer, dest, |value, region, _brand| {
                 relocate_carried(value, region)
             })
-            .map(|opt| opt.expect("a FrameSet union always represents"))
             .map_err(|e| e.clone())
     }
 

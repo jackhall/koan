@@ -180,15 +180,13 @@ pub(crate) fn build_type_operand<'step>(
 ) -> Witnessed<RegionTypeFamily, FrameSet> {
     let dest_brand = dest_brand(dest_frame);
     let identity_carrier = scope.resident_type_carrier(identity, reach);
-    dest_brand
-        .merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
-            let kt = match carried {
-                Carried::Type(t) => t,
-                _ => unreachable!("the identity carrier is always a Type"),
-            };
-            (brand, kt)
-        })
-        .expect("a FrameSet union always represents")
+    dest_brand.merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
+        let kt = match carried {
+            Carried::Type(t) => t,
+            _ => unreachable!("the identity carrier is always a Type"),
+        };
+        (brand, kt)
+    })
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
@@ -222,8 +220,7 @@ fn finish_witnessed<'step>(
                             type_id: identity_ty,
                         }))
                     },
-                )
-                .expect("a FrameSet set witness always represents the union"))
+                ))
         }
         CtorKind::RecordNewType {
             identity,
@@ -259,21 +256,18 @@ fn finish_witnessed<'step>(
                                 fields
                             },
                         )
-                        .expect("a FrameSet set witness always represents the union")
                 });
             let home = build_type_operand(scope, view.dest_frame(), identity, reach);
-            Ok(fields
-                .merge::<RegionTypeFamily, CarriedFamily>(
-                    home,
-                    |fields, (region, identity_ty), _brand| {
-                        let record = Record::from_pairs(fields);
-                        Carried::Object(region.alloc_object(KObject::Wrapped {
-                            inner: NonWrappedRef::peel(&KObject::record(record)),
-                            type_id: identity_ty,
-                        }))
-                    },
-                )
-                .expect("a FrameSet set witness always represents the union"))
+            Ok(fields.merge::<RegionTypeFamily, CarriedFamily>(
+                home,
+                |fields, (region, identity_ty), _brand| {
+                    let record = Record::from_pairs(fields);
+                    Carried::Object(region.alloc_object(KObject::Wrapped {
+                        inner: NonWrappedRef::peel(&KObject::record(record)),
+                        type_id: identity_ty,
+                    }))
+                },
+            ))
         }
         CtorKind::Tagged {
             schema,
@@ -323,8 +317,7 @@ fn finish_witnessed<'step>(
                             type_args: Rc::new(vec![]),
                         }))
                     },
-                )
-                .expect("a FrameSet set witness always represents the union"))
+                ))
         }
     }
 }

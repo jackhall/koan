@@ -247,26 +247,20 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
     }
 }
 
-/// A [`Witness`] whose values compose to the one that pins **both** operands' regions — the seam
-/// [`Witnessed::merge`] routes to seal a combined carrier under the tightest correct witness.
-///
-/// The motivating shape is a *set* of region owners: a value can reach several regions, so its
-/// witness is the set of frame `Rc`s pinning them, and two witnesses compose by **set union** —
-/// dropping a member whose region another member's ancestor (`outer`) chain already pins
-/// (subsumption). A single-region witness is the degenerate case: the union of two *related* carts
-/// collapses to the descendant (whose `outer` chain pins the ancestor), while two *unrelated*
-/// single-region carts have no common representable pin, so [`Self::merge`] returns `None`. A set
-/// witness can always represent the union, so it never returns `None`.
+/// A [`Witness`] whose values compose **totally** to the one that pins both operands' regions —
+/// the set-union seam [`Witnessed::merge`], [`Witnessed::reseal_under`], and
+/// [`Sealed::transfer_into`] route. A set of region owners can always represent a union, so there
+/// is no failure verdict; a single-region witness joins the union world by lifting through
+/// [`Witnessed::into_set`] first.
 ///
 /// # Safety
 ///
-/// When [`Self::merge`] returns `Some(w)`, holding `w` must keep both `left`'s and `right`'s pinned
-/// regions live for as long as `w` is held. `None` asserts no value of `Self` pins both — the only
-/// safe verdict when this witness type cannot represent the combined pin.
-pub unsafe trait MergeWitness: Witness + Sized {
+/// Holding the value `union` returns must keep both `left`'s and `right`'s pinned regions live for
+/// as long as it is held.
+pub unsafe trait UnionWitness: Witness + Sized {
     /// The witness pinning both `left`'s and `right`'s regions (set union with `outer`-chain
-    /// subsumption), or `None` when this witness type cannot represent a value pinning both.
-    fn merge(left: &Self, right: &Self) -> Option<Self>;
+    /// subsumption).
+    fn union(left: &Self, right: &Self) -> Self;
 }
 
 /// A set witness a single-region [`WitnessRegion`] widens into: it holds the single witness as a
@@ -483,12 +477,9 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// pins **both** — the composition law for [`Witnessed`]. The two carriers are re-anchored at a
     /// shared `for<'b>` brand and handed to `f`, which may bind one into the other (e.g. a witnessed
     /// `KFunction` into a witnessed `Scope`); the projection is then sealed under
-    /// [`MergeWitness::merge`] of the two witnesses — the set union (with `outer`-chain subsumption)
-    /// that keeps every region the combined carrier reaches live.
-    ///
-    /// Returns `None` only when that union is **not representable** in `W` — a single-region witness
-    /// whose two operands are unrelated (see [`MergeWitness::merge`]); a set witness always succeeds.
-    /// The composability verdict is taken *before* `f` runs, so an unsound combination is never built.
+    /// [`UnionWitness::union`] of the two witnesses — the set union (with `outer`-chain subsumption)
+    /// that keeps every region the combined carrier reaches live. Total: a set witness can always
+    /// represent the union, so there is no failure verdict to compute before `f` runs.
     ///
     /// Sound for the same reason as [`Self::map`], doubled: both source witnesses are held for the
     /// whole of `f`, so re-anchoring both carriers to one brand `'b` cannot dangle; the `for<'b>`
@@ -497,27 +488,33 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     ///
     /// ```
     /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use workgraph::witnessed::Witnessed;
+    /// use workgraph::witnessed::{RegionSet, Witnessed};
     /// use std::marker::PhantomData;
+    /// use std::rc::Rc;
     ///
-    /// let a = Cart(vec![1]);
-    /// let b = Cart(vec![2]);
-    /// let wa: Witnessed<RefFamily, Cart> = Witnessed::yoke(a, |region| &region[0]);
-    /// let wb: Witnessed<RefFamily, Cart> = Witnessed::yoke(b, |region| &region[0]);
-    /// // Two unrelated single-region carts have no common pin: merge refuses before `f` runs.
+    /// let a = Rc::new(Cart(vec![1]));
+    /// let b = Rc::new(Cart(vec![2]));
+    /// let wa: Witnessed<RefFamily, RegionSet<Cart>> =
+    ///     Witnessed::yoke(a, |region| &region[0]).into_set();
+    /// let wb: Witnessed<RefFamily, RegionSet<Cart>> =
+    ///     Witnessed::yoke(b, |region| &region[0]).into_set();
+    /// // Two unrelated carts both land in the union set — no failure verdict.
     /// let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
-    /// assert!(merged.is_none());
+    /// assert_eq!(merged.with(|r| **r), 1);
     /// ```
     ///
     /// ```compile_fail
     /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use workgraph::witnessed::Witnessed;
+    /// use workgraph::witnessed::{RegionSet, Witnessed};
     /// use std::marker::PhantomData;
+    /// use std::rc::Rc;
     ///
-    /// let a = Cart(vec![1]);
-    /// let b = Cart(vec![2]);
-    /// let wa: Witnessed<RefFamily, Cart> = Witnessed::yoke(a, |region| &region[0]);
-    /// let wb: Witnessed<RefFamily, Cart> = Witnessed::yoke(b, |region| &region[0]);
+    /// let a = Rc::new(Cart(vec![1]));
+    /// let b = Rc::new(Cart(vec![2]));
+    /// let wa: Witnessed<RefFamily, RegionSet<Cart>> =
+    ///     Witnessed::yoke(a, |region| &region[0]).into_set();
+    /// let wb: Witnessed<RefFamily, RegionSet<Cart>> =
+    ///     Witnessed::yoke(b, |region| &region[0]).into_set();
     /// let mut stolen: Option<&u32> = None;
     /// // Try to capture a branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
     /// let _ = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| {
@@ -530,14 +527,11 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         self,
         other: Witnessed<B, W>,
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
-    ) -> Option<Witnessed<P, W>>
+    ) -> Witnessed<P, W>
     where
-        W: MergeWitness,
+        W: UnionWitness,
     {
-        // Composability first: the combined witness must pin both regions, or there is no sound
-        // result — so compute it before `f` builds a value that would reference a region no surviving
-        // witness keeps live. The source witnesses below stay held across `f`.
-        let witness = W::merge(&self.witness, &other.witness)?;
+        let witness = W::union(&self.witness, &other.witness);
         let Witnessed {
             value: left,
             witness: left_witness,
@@ -558,27 +552,26 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         // computed above carries both pins forward.
         drop(left_witness);
         drop(right_witness);
-        Some(Witnessed {
+        Witnessed {
             value: Erased::erase(projected),
             witness,
-        })
+        }
     }
 
     /// Fold an extra witness set into the bundled one, re-sealing the carrier under the union that
     /// pins **both** — the witness-only counterpart to [`Self::merge`] (no value transform, no second
     /// carrier). The producer-frame fold at finalize/close routes this: a foreign-reach-only carrier
     /// (born under the empty set, its producing frame deliberately excluded) has that frame folded in
-    /// here before storage, the [`MergeWitness::merge`] set union pinning the value's backing
+    /// here before storage, the [`UnionWitness::union`] set union pinning the value's backing
     /// thereafter. Idempotent when `extra` is already subsumed by the bundled witness (the folded
     /// frame is one the set's `outer` chains already pin), so re-sealing a self-witnessed carrier
     /// changes nothing.
     pub fn reseal_under(self, extra: W) -> Self
     where
-        W: MergeWitness,
+        W: UnionWitness,
     {
         let Witnessed { value, witness } = self;
-        let witness = W::merge(&witness, &extra)
-            .expect("reseal_under: a set witness always represents the union of the resealed sets");
+        let witness = W::union(&witness, &extra);
         Witnessed { value, witness }
     }
 
@@ -714,21 +707,21 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// (the `&self` seal is left intact for other consumers), re-anchored at a shared `for<'b>` brand
     /// with `dest`, and handed to `relocate` — the workload's structural copy, which allocs into
     /// `dest` at the brand **natively** (no fabricated lifetime); the projection is then re-sealed
-    /// under [`MergeWitness::merge`] of this carrier's witness and `dest`'s — the set union of every
-    /// region the relocated value reaches (its retained sources ∪ the destination).
+    /// under [`UnionWitness::union`] of this carrier's witness and `dest`'s — the set union of every
+    /// region the relocated value reaches (its retained sources ∪ the destination). Total: a set
+    /// witness always represents the union.
     ///
-    /// Returns `None` only when that union is not representable in `W` (see [`MergeWitness::merge`]);
-    /// a set witness always succeeds. Because it routes `merge`'s already-audited retype it **adds no
-    /// `unsafe`**, and because the value lands at the destination region's own lifetime there is **no
-    /// fabricated lifetime** at the call site — a soundness the type system enforces, not one a
-    /// hand-written reattach must assert in prose.
+    /// Because it routes `merge`'s already-audited retype it **adds no `unsafe`**, and because the
+    /// value lands at the destination region's own lifetime there is **no fabricated lifetime** at
+    /// the call site — a soundness the type system enforces, not one a hand-written reattach must
+    /// assert in prose.
     pub fn transfer_into<B: Reattachable, P: Reattachable>(
         &self,
         dest: Witnessed<B, W>,
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
-    ) -> Option<Witnessed<P, W>>
+    ) -> Witnessed<P, W>
     where
-        W: MergeWitness + Clone,
+        W: UnionWitness + Clone,
         T::At<'static>: Copy,
     {
         self.inner.duplicate().merge::<B, P>(dest, relocate)

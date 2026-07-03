@@ -28,8 +28,8 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    PinsRegion, Reattachable, Region, RegionOwner, RegionSet, StorageProfile, Stored, WitnessRegion,
-    Witnessed,
+    PinsRegion, Reattachable, Region, RegionOwner, RegionSet, StorageProfile, Stored,
+    WitnessRegion, Witnessed,
 };
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -328,7 +328,10 @@ pub(crate) trait KoanRegionExt {
     /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
-    fn yoke_branded<T: Reattachable, F>(owner: Rc<FrameStorage>, build: F) -> Witnessed<T, FrameSet>
+    fn yoke_branded<T: Reattachable, F>(
+        owner: Rc<FrameStorage>,
+        build: F,
+    ) -> Witnessed<T, FrameSet>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
@@ -456,7 +459,7 @@ impl FrameStorage {
 
     /// True iff holding `self`'s `Rc` keeps the region at `region_ptr` alive — `self`'s own region or
     /// any of its `outer` ancestors (each pinned by the chain). The subsumption test [`FrameSet`]'s
-    /// [`MergeWitness::merge`] uses: a member whose region another member already pins is redundant.
+    /// union uses: a member whose region another member already pins is redundant.
     pub(crate) fn pins_region(&self, region_ptr: *const KoanRegion) -> bool {
         let mut node = self;
         loop {

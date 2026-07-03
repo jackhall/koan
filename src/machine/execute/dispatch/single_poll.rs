@@ -219,8 +219,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .carrier
             .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {
                 relocate_carried(value, region)
-            })
-            .expect("a FrameSet set witness always represents the union"))
+            }))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

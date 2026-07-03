@@ -6,7 +6,7 @@
 
 use std::cell::Cell;
 
-use super::{MergeWitness, Reattachable, SealedExtern, Witness, WitnessRegion};
+use super::{PinsRegion, Reattachable, RegionOwner, SealedExtern, Witness, WitnessRegion};
 
 /// A shared-reference carrier family: `&'r u32`.
 pub struct RefFamily;
@@ -34,12 +34,19 @@ unsafe impl WitnessRegion for Cart {
         &self.0
     }
 }
-// SAFETY: `None` is the always-safe verdict — a single-region `Cart` cannot represent
-// a value pinning two unrelated regions. The merge guard only needs this impl to
-// type-check; guard code never runs.
-unsafe impl MergeWitness for Cart {
-    fn merge(_left: &Self, _right: &Self) -> Option<Self> {
-        None
+// SAFETY: `region` borrows the buffer the `Witness` impl pins; `Cart` has no ancestry, so
+// identity (pointer equality) is the whole pins relation.
+unsafe impl RegionOwner for Cart {
+    type Region = [u32];
+    fn region(&self) -> &[u32] {
+        &self.0
+    }
+}
+// SAFETY: a `Cart` has no ancestry — it pins exactly its own buffer, so identity (pointer
+// equality) is the whole pins relation.
+unsafe impl PinsRegion for Cart {
+    fn pins_region(&self, region: &[u32]) -> bool {
+        std::ptr::eq(&self.0[..], region)
     }
 }
 

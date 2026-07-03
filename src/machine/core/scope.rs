@@ -206,17 +206,17 @@ impl<'a> Scope<'a> {
         );
         let home = self.region_owner.upgrade();
         self.reach.borrow_mut().fold_omitting(witness, |region| {
-                // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
-                // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
-                // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
-                // closure's captured (ancestor) scope — a region the closure already pins, which the
-                // reach-set must not re-pin (re-pinning it, paired with a sibling bind of the call's
-                // result, closes a region cycle).
-                home.as_ref().is_some_and(|h| h.pins_region(region))
-                    || self
-                        .ancestors()
-                        .any(|scope| std::ptr::eq(scope.region(), region))
-            });
+            // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
+            // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
+            // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
+            // closure's captured (ancestor) scope — a region the closure already pins, which the
+            // reach-set must not re-pin (re-pinning it, paired with a sibling bind of the call's
+            // result, closes a region cycle).
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+                || self
+                    .ancestors()
+                    .any(|scope| std::ptr::eq(scope.region(), region))
+        });
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {

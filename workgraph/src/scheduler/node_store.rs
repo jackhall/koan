@@ -16,7 +16,7 @@ use std::ops::{Index, IndexMut};
 
 use super::nodes::{Node, NodeWork};
 use super::{Live, NodeId, Workload};
-use crate::witnessed::{MergeWitness, Reattachable, Sealed, Witnessed};
+use crate::witnessed::{Reattachable, Sealed, UnionWitness, Witnessed};
 // `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
 // pre-built `Witnessed`, so the import is test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
@@ -190,8 +190,7 @@ impl<W: Workload> NodeStore<W> {
     /// `Forward`-ready pull and the drain re-home route (the consumer-pull dep slice opens in-band at
     /// the step brand instead). `dest` is the destination region wrapped as a witnessed carrier;
     /// `relocate` is the workload's structural copy into it. The stored seal is left untouched (the
-    /// producer keeps its terminal for other consumers). `None` only if the witness union is not
-    /// representable — never for a set witness.
+    /// producer keeps its terminal for other consumers).
     // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
     #[allow(clippy::type_complexity)]
     pub(super) fn transfer_lifted<B: Reattachable>(
@@ -203,9 +202,9 @@ impl<W: Workload> NodeStore<W> {
             B::At<'b>,
             PhantomData<&'b ()>,
         ) -> <W::Value as Reattachable>::At<'b>,
-    ) -> Result<Option<Witnessed<W::Value, W::Witness>>, &W::Error>
+    ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
     where
-        W::Witness: MergeWitness,
+        W::Witness: UnionWitness,
     {
         match &self.slots[id] {
             SlotState::Done(Ok(sealed), ..) => Ok(sealed.transfer_into(dest, relocate)),

@@ -14,9 +14,7 @@ use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
-use crate::witnessed::{
-    erase_to_static, reattachable, seal_option, MergeWitness, SealedExtern, Witnessed,
-};
+use crate::witnessed::{erase_to_static, reattachable, seal_option, SealedExtern, Witnessed};
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
@@ -180,26 +178,21 @@ impl<'run> KoanRuntime<'run> {
         // reads it as a witness — every value terminal rides `DoneWitnessed` with its own carrier
         // naming exactly the regions the output reaches, and an error carries no value witness. A
         // single-dep forward re-seals off the forwarded dep's own reach, not `pin`.
-        let pin: FrameSet =
-            dep_sources
-                .iter()
-                .zip(deps.all_ids())
-                .fold(FrameSet::empty(), |acc, (src, d)| {
-                    match src {
-                        Ok(t) => FrameSet::merge(&acc, t.carrier.witness()),
-                        Err(_) => FrameSet::merge(&acc, &self.sched.dep_witness(d)),
-                    }
-                    .expect("a set witness always represents the union")
-                });
+        let pin: FrameSet = dep_sources.iter().zip(deps.all_ids()).fold(
+            FrameSet::empty(),
+            |acc, (src, d)| match src {
+                Ok(t) => FrameSet::union(&acc, t.carrier.witness()),
+                Err(_) => FrameSet::union(&acc, &self.sched.dep_witness(d)),
+            },
+        );
         // The step's open witness: the start cart (which pins the continuation, the contract, and the
         // consumer `dest` region — and, via its `outer` chain, their run / ancestor backings) unioned
         // with `pin` (which pins every dep source). Held across the whole open, so re-anchoring the
         // zipped carriers — including the dep slice — to `'b` cannot dangle.
-        let combined: FrameSet = FrameSet::merge(
+        let combined: FrameSet = FrameSet::union(
             &FrameSet::singleton(continuation_witness.storage_rc()),
             &pin,
-        )
-        .expect("a set witness always represents the union");
+        );
         // Open the step's externally-witnessed carriers — the continuation, the (frame-gated) return
         // contract, the active scope, and the dep slice — together at a single rank-2 `for<'b>` brand
         // standing in for the step lifetime `'s`, witnessed by `combined`. The brand is generative:

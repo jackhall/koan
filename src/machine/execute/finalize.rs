@@ -103,39 +103,37 @@ impl NodeFinalize for KoanRuntime<'_> {
         // merged, whose result witness is identical (`merge(carrier.witness, ∅) == carrier.witness`).
         let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::resident((home, declared));
         let mut mismatch: Option<KError> = None;
-        let checked = carrier
-            .merge::<ContractHomeFamily, CarriedFamily>(
-                home_carrier,
-                |value, (home_region, declared_type), _brand| match value {
-                    Carried::Object(_) => {
-                        let object = value.object();
-                        if !declared_type.matches_value(object) {
-                            mismatch = Some(return_type_mismatch(
-                                declared_type,
-                                per_call,
-                                &label,
-                                object.ktype().name(),
-                            ));
-                            return Carried::Object(home_region.alloc_object(object.deep_clone()));
-                        }
-                        Carried::Object(
-                            home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
-                        )
+        let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
+            home_carrier,
+            |value, (home_region, declared_type), _brand| match value {
+                Carried::Object(_) => {
+                    let object = value.object();
+                    if !declared_type.matches_value(object) {
+                        mismatch = Some(return_type_mismatch(
+                            declared_type,
+                            per_call,
+                            &label,
+                            object.ktype().name(),
+                        ));
+                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
                     }
-                    Carried::Type(t) => {
-                        if !declared_type.matches_type(t) {
-                            mismatch = Some(return_type_mismatch(
-                                declared_type,
-                                per_call,
-                                &label,
-                                t.name(),
-                            ));
-                        }
-                        value
+                    Carried::Object(
+                        home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
+                    )
+                }
+                Carried::Type(t) => {
+                    if !declared_type.matches_type(t) {
+                        mismatch = Some(return_type_mismatch(
+                            declared_type,
+                            per_call,
+                            &label,
+                            t.name(),
+                        ));
                     }
-                },
-            )
-            .expect("a FrameSet set witness always represents the union");
+                    value
+                }
+            },
+        );
         match mismatch {
             Some(error) => Err(error),
             None => Ok(checked),

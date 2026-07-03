@@ -283,10 +283,11 @@ slate — [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) 
 their tests live in that crate's lib test binary, a separate `cargo test` target from
 koan's. `CarriedFamily`'s `unsafe impl Reattachable`
 ([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)) and this
-embedder's `Witness` / `WitnessRegion` / `MergeWitness` for `FrameSet`
-([src/machine/core/arena.rs](../src/machine/core/arena.rs)) are the Koan-side instantiations
-that primitive routes for; `FrameSet::merge`'s antichain logic (union with `outer`-chain
-subsumption) is pinned by the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
+embedder's `Witness` / `WitnessRegion` / `PinsRegion` for `FrameStorage`
+([src/machine/core/arena.rs](../src/machine/core/arena.rs)), backing the library's
+`RegionSet<FrameStorage>` that `FrameSet` aliases, are the Koan-side instantiations that primitive
+routes for; `RegionSet::union`'s antichain logic (union with `outer`-chain subsumption) is pinned by
+the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
 [arena/tests.rs](../src/machine/core/arena/tests.rs), which run under plain `cargo test`.
 
 **`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))

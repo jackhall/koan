@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use super::{MergeWitness, RegionOwner, SetWitness, Witness};
+use super::{RegionOwner, SetWitness, UnionWitness, Witness};
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
 /// outer-chain subsumption hook [`RegionSet`] folds and inserts through.
@@ -132,11 +132,11 @@ unsafe impl<F: PinsRegion> SetWitness<Rc<F>> for RegionSet<F> {
     }
 }
 
-// SAFETY: `merge` returns the set union (deduplicated by region, a member dropped only when
+// SAFETY: `union` returns the set union (deduplicated by region, a member dropped only when
 // another member's owner chain already pins its region), so holding the result keeps every region
-// either input pinned alive. Always `Some` — a set can always represent the union.
-unsafe impl<F: PinsRegion> MergeWitness for RegionSet<F> {
-    fn merge(left: &Self, right: &Self) -> Option<Self> {
-        Some(Self::union(left, right))
+// either input pinned alive.
+unsafe impl<F: PinsRegion> UnionWitness for RegionSet<F> {
+    fn union(left: &Self, right: &Self) -> Self {
+        Self::union(left, right)
     }
 }

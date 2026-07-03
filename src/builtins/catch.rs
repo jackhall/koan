@@ -85,37 +85,32 @@ pub fn body<'a>(
         let witnessed = match result {
             // The watched value's carrier folds onto the result: `transfer_into` relocates it into the
             // consumer region and unions its reach onto the `Ok` carrier.
-            Ok(ok) => ok
-                .carrier
-                .transfer_into::<RegionTypeFamily, CarriedFamily>(
-                    home,
-                    |value, (region, identity), _brand| {
-                        Carried::Object(region.alloc_object(build_result(
-                            "Ok",
-                            identity,
-                            value.object().deep_clone(),
-                        )))
-                    },
-                )
-                .expect("a FrameSet set witness always represents the union"),
+            Ok(ok) => ok.carrier.transfer_into::<RegionTypeFamily, CarriedFamily>(
+                home,
+                |value, (region, identity), _brand| {
+                    Carried::Object(region.alloc_object(build_result(
+                        "Ok",
+                        identity,
+                        value.object().deep_clone(),
+                    )))
+                },
+            ),
             // The error payload is built region-pure into the scope region (it reaches no foreign
             // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
             Err(e) => {
                 let payload = KoanRegion::alloc_witnessed(frame, |region| {
                     Carried::Object(region.alloc_object(e.to_tagged(region)))
                 });
-                payload
-                    .merge::<RegionTypeFamily, CarriedFamily>(
-                        home,
-                        |payload, (region, identity), _brand| {
-                            Carried::Object(region.alloc_object(build_result(
-                                "Error",
-                                identity,
-                                payload.object().deep_clone(),
-                            )))
-                        },
-                    )
-                    .expect("a FrameSet set witness always represents the union")
+                payload.merge::<RegionTypeFamily, CarriedFamily>(
+                    home,
+                    |payload, (region, identity), _brand| {
+                        Carried::Object(region.alloc_object(build_result(
+                            "Error",
+                            identity,
+                            payload.object().deep_clone(),
+                        )))
+                    },
+                )
             }
         };
         Action::Done(Ok(witnessed))

@@ -80,7 +80,6 @@ fn fold_cells(
                 (region, cells)
             },
         )
-        .expect("a FrameSet set witness always represents the union")
     })
 }
 

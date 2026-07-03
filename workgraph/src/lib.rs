@@ -11,8 +11,10 @@
 //!   [`witnessed::SealedExtern`], and the raw-retype currency [`witnessed::Erased`].
 //! - The witness traits an embedder implements for its own region-owner type:
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
-//!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), [`witnessed::MergeWitness`],
+//!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), [`witnessed::UnionWitness`],
 //!   [`witnessed::SetWitness`].
+//! - The opaque reach-set library type [`witnessed::RegionSet`], generic over the member trait
+//!   [`witnessed::PinsRegion`] an embedder implements for its own frame-owner type.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the
 //!   [`witnessed::reattachable`] macro that discharges its `unsafe` obligation once per family.
 //! - The generic region engine: [`witnessed::Region`], [`witnessed::StorageProfile`],

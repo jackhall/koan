@@ -57,13 +57,15 @@ escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yok
 `SealedExtern::open`.
 
 An embedder's realisation of the `unsafe trait` impls this primitive routes for — Koan's
-`Witness` / `WitnessRegion` / `MergeWitness` for `FrameSet`, the unified region-owner witness in
-`machine/core/arena.rs` — is covered cross-crate: its region-plus-`outer`-ancestry shape is exactly
-what the `Rc<TestCart>` stand-in mirrors, so `yoke_sources_carrier_from_witness_region` and
+`Witness` / `WitnessRegion` / `PinsRegion` for `FrameStorage`, backing the library's `RegionSet<F>`
+(the unified region-owner witness `FrameSet` aliases, generic over the member trait in
+`workgraph::witnessed::region_set`) — is covered cross-crate: its region-plus-`outer`-ancestry shape
+is exactly what the `TestCart` stand-in mirrors, so `yoke_sources_carrier_from_witness_region` and
 `merge_binds_ancestor_ref_into_descendant_scope` pin its yoke / merge / subsumption
-(drop-an-ancestor-still-pinned-by-the-chain) UB shapes, and `merge_rejects_unrelated_carts` the
-no-common-pin verdict. Koan's `FrameSet::merge` antichain logic (union with `outer`-chain
-subsumption) is pinned separately by that embedder's own `frameset_*` /
+(drop-an-ancestor-still-pinned-by-the-chain) UB shapes, and
+`merge_keeps_unrelated_carts_as_a_two_member_set` the two-member-set case (a set witness always
+represents the union — there is no failure verdict). Koan's `RegionSet::union` antichain logic
+(union with `outer`-chain subsumption) is pinned separately by that embedder's own `frameset_*` /
 `pins_region_walks_outer_chain` unit tests, which run under plain `cargo test` (no `unsafe` of their
 own — the `unsafe` they exercise is this primitive).
 
@@ -76,7 +78,7 @@ own — the `unsafe` they exercise is this primitive).
 - `invariant_same_brand_mutation`
 - `yoke_sources_carrier_from_witness_region`
 - `merge_binds_ancestor_ref_into_descendant_scope`
-- `merge_rejects_unrelated_carts`
+- `merge_keeps_unrelated_carts_as_a_two_member_set`
 - `sealed_extern_open_externally_witnessed`
 - `sealed_extern_open_consumes_non_copy`
 - `sealed_extern_zip_opens_heterogeneous_at_one_brand`
@@ -99,11 +101,11 @@ own scheduler-driving tests exercise it end-to-end. No separate minimal test her
 
 **Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
 — the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /
-`WitnessRegion` / `MergeWitness` for `Cart` back the six `compile_fail` soundness guards and their
-compiling twins (`cargo test --doc`), so a signature change to those traits has one shared
-fixture to update instead of five pasted copies. Each impl is a marker with no runtime `unsafe`
-operation of its own, asserting the identical `&'r u32` / `Cell<&'r u32>` layout-invariance and
-owned-`Vec` fixed-address pin shapes the `retype` group's separate `Rc<TestCart>` stand-in (in
+`WitnessRegion` / `RegionOwner` / `PinsRegion` for `Cart` back the six `compile_fail` soundness
+guards and their compiling twins (`cargo test --doc`), so a signature change to those traits has one
+shared fixture to update instead of five pasted copies. Each impl is a marker with no runtime
+`unsafe` operation of its own, asserting the identical `&'r u32` / `Cell<&'r u32>` layout-invariance
+and owned-`Vec` fixed-address pin shapes the `retype` group's separate `TestCart` stand-in (in
 `witnessed/tests.rs`, excluded from the audit as test scaffolding) already Miri-verifies. Doctests run
 under `cargo test --doc`, not Miri, so there is no separate slate test here — the shape is pinned by
 the `retype` group above.
