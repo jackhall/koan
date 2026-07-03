@@ -21,12 +21,10 @@ use super::super::run_loop::RegionRefFamily;
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{
-    become_dispatch, forward_to_producer, park_on_deps_witnessed, park_resume, DepRequest, Outcome,
-};
+use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::FrameSet;
-use crate::scheduler::ProducerDisposition;
+use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Witnessed;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
@@ -233,7 +231,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             })
             .expect("a FrameSet set witness always represents the union"))
     });
-    park_on_deps_witnessed(vec![dep], None, finish)
+    Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }
 
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,

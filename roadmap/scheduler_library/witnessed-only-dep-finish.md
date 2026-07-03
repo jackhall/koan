@@ -51,8 +51,6 @@ value-copy shape has no equivalent in the target library surface.
 
 **Requires:**
 
-- [The `Await` envelope builder](await-envelope-builder.md) — the builder is
-  the sole envelope constructor; this item collapses the delivery beneath it.
 
 **Unblocks:** none tracked yet — the witnessed-hoist tranche (step
 construction context) is planned as this ships.

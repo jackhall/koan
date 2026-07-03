@@ -87,6 +87,16 @@ impl<R> Deps<R> {
         deps
     }
 
+    /// Build a dep list whose every entry is owned — the all-owned shape a dispatch decide parks on
+    /// when it has no notify-only producers to wait on.
+    pub(crate) fn from_owned(entries: impl IntoIterator<Item = R>) -> Self {
+        let mut deps = Deps::new();
+        for entry in entries {
+            deps.own(entry);
+        }
+        deps
+    }
+
     pub(crate) fn parks(&self) -> &[NodeId] {
         &self.parks
     }

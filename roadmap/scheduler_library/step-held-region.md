@@ -49,9 +49,8 @@ repeat the dest-brand construction
 
 ## Dependencies
 
-Touches the same finish bodies the
-[`Await` envelope builder](await-envelope-builder.md) reshapes — lands
-cleanest after it (soft ordering, not a prerequisite).
+Touches the same finish bodies the shipped
+[`Await` envelope](../../design/scheduler-library.md#the-consumer-api) builds.
 
 **Requires:** none — parallel migration track.
 

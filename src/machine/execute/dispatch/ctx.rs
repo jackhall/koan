@@ -27,8 +27,8 @@ use crate::witnessed::Sealed;
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::runtime::KoanWorkload;
-use super::{park_on_deps, resolve_name_part, DepRequest, Outcome, PendingSub};
-use crate::scheduler::{ProducerDisposition, Scheduler};
+use super::{resolve_name_part, Await, DepRequest, Outcome, PendingSub};
+use crate::scheduler::{Deps, ProducerDisposition, Scheduler};
 
 /// Run `f` with a raw [`NodeScope`] handle's scope opened at a `for<'b>` brand — the Koan scope
 /// interpretation the scheduler does not own, folded onto `open` like the decide channel. The driver
@@ -257,7 +257,9 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             }
             finish_eager_subs(working_expr, picked, arg_carriers)
         });
-        park_on_deps(deps, dep_error_frame, finish)
+        Await::on(Deps::from_owned(deps))
+            .error_frame(dep_error_frame)
+            .finish(finish)
     }
 }
 

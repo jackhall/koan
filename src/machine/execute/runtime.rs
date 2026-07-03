@@ -33,7 +33,7 @@ use crate::witnessed::SealedExtern;
 use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::relocate_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
-use super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::outcome::{dep_error_frame, Await, Continuation, Outcome};
 use super::run_loop::RegionRefFamily;
 use super::{
     catch_continuation, ignore_results, short_circuit, short_circuit_witnessed, CatchFinish,
@@ -276,13 +276,9 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     block_entry,
                     body_index,
                 });
-            let mut deps = Deps::new();
-            deps.own(body_block);
-            Outcome::ParkThenContinue {
-                deps,
-                continuation: Continuation::Finish(finish),
-                dep_error_frame: Some(dep_error_frame()),
-            }
+            Await::on(Deps::from_owned([body_block]))
+                .error_frame(dep_error_frame())
+                .finish(finish)
         }
 
         Action::AwaitDeps { deps, finish } => {
@@ -308,11 +304,9 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 };
                 run_action(finish(&fctx, results))
             });
-            Outcome::ParkThenContinue {
-                deps: built,
-                continuation: Continuation::Finish(wrapped),
-                dep_error_frame: Some(dep_error_frame()),
-            }
+            Await::on(built)
+                .error_frame(dep_error_frame())
+                .finish(wrapped)
         }
 
         Action::Catch { watched, finish } => {

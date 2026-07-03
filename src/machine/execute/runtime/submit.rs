@@ -60,7 +60,10 @@ fn awaiting(deps: ResolvedDeps, finish: DepFinish<'_>) -> NodeWork<KoanWorkload>
 /// Witnessed sibling of [`awaiting`]: builds a dep-finish node whose continuation folds the resolved
 /// deps into a witnessed aggregate carrier ([`short_circuit_witnessed`]) instead of handing bare
 /// values to a value-only finish.
-fn awaiting_witnessed(deps: ResolvedDeps, finish: WitnessedDepFinish<'_>) -> NodeWork<KoanWorkload> {
+fn awaiting_witnessed(
+    deps: ResolvedDeps,
+    finish: WitnessedDepFinish<'_>,
+) -> NodeWork<KoanWorkload> {
     NodeWork::new(
         deps,
         short_circuit_witnessed(Some(dep_error_frame()), finish),

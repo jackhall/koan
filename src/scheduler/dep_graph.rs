@@ -27,7 +27,12 @@ impl DepEdge {
 /// Owned-edge sidecar built from a node's owned deps. Park edges are installed
 /// separately via `add_park_edge`.
 pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> {
-    work.deps.owned().iter().copied().map(DepEdge::Owned).collect()
+    work.deps
+        .owned()
+        .iter()
+        .copied()
+        .map(DepEdge::Owned)
+        .collect()
 }
 
 /// The three coordinated per-slot fields. Mutations go through the row, so

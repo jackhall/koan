@@ -51,9 +51,6 @@ result inside the finish.
 
 **Requires:**
 
-- [The `Await` envelope builder](await-envelope-builder.md) — the single
-  lowering assembles its envelope through the builder instead of adding one
-  more hand-rolled site.
 
 **Unblocks:** none tracked yet — the later scheduler-library tranches
 (witnessed construction hoist, regions-wholesale ownership) are planned as

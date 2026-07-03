@@ -9,8 +9,7 @@
 //! one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::nodes::NodeWork;
-use super::super::outcome::{dep_error_frame, Continuation, Outcome};
-use crate::scheduler::{Deps, ResolvedDeps};
+use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::runtime::KoanWorkload;
 use super::super::{ignore_results, DepFinish};
 use super::SchedulerView;
@@ -26,6 +25,7 @@ use crate::machine::model::types::{Record, SignatureElement};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::scheduler::{Deps, ResolvedDeps};
 use crate::witnessed::Sealed;
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
@@ -195,16 +195,12 @@ pub(super) fn invoke<'step>(
                     block_entry: BlockEntry::FrameScope(block_entry),
                     body_index,
                 });
-            let mut deps = Deps::new();
-            deps.own(DepRequest::BodyBlock {
+            Await::on(Deps::from_owned([DepRequest::BodyBlock {
                 statements,
                 placement: BodyPlacement::Frame(frame),
-            });
-            Outcome::ParkThenContinue {
-                deps,
-                continuation: Continuation::Finish(finish),
-                dep_error_frame: Some(dep_error_frame()),
-            }
+            }]))
+            .error_frame(dep_error_frame())
+            .finish(finish)
         }
         ExecOutcome::DeferredExprTail {
             type_expr,
@@ -259,16 +255,12 @@ pub(super) fn invoke<'step>(
                     body_index,
                 }
             });
-            let mut deps = Deps::new();
-            deps.own(DepRequest::BodyBlock {
+            Await::on(Deps::from_owned([DepRequest::BodyBlock {
                 statements,
                 placement: BodyPlacement::Frame(frame),
-            });
-            Outcome::ParkThenContinue {
-                deps,
-                continuation: Continuation::Finish(finish),
-                dep_error_frame: Some(dep_error_frame()),
-            }
+            }]))
+            .error_frame(dep_error_frame())
+            .finish(finish)
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
     }

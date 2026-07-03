@@ -46,9 +46,9 @@ re-couple the halves the extraction needs separate.
 
 ## Dependencies
 
-Coordinate with the
-[`Await` envelope builder](await-envelope-builder.md), which adds code to the
-same scheduler tree — pure file-motion conflicts, no logical dependency.
+Shares the scheduler tree that the shipped
+[`Await` envelope](../../design/scheduler-library.md#the-consumer-api) lives in
+— pure file-motion overlap, no logical dependency.
 
 **Requires:** none — the property it enforces already holds.
 

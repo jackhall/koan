@@ -25,8 +25,8 @@ use super::super::run_loop::RegionRefFamily;
 use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
-use super::{park_on_deps_witnessed, DepRequest, Outcome};
-use crate::scheduler::DepResults;
+use super::{Await, DepRequest, Outcome};
+use crate::scheduler::{DepResults, Deps};
 
 /// Fold accumulator for a record-repr newtype: the field values gathered from the value deps, each
 /// `transfer_into`-folded so the accumulator's witness names every region a field reaches. The final
@@ -163,7 +163,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
         .collect();
     let combine_finish: WitnessedDepFinish<'step> =
         Box::new(move |view, terminals| finish_witnessed(view, &kind, terminals));
-    park_on_deps_witnessed(deps, None, combine_finish)
+    Await::on(Deps::from_owned(deps)).finish_witnessed(combine_finish)
 }
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.

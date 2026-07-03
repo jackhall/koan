@@ -31,7 +31,8 @@ use crate::source::Spanned;
 
 use super::super::DepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
-use super::{park_on_deps, DepRequest, Outcome};
+use super::{Await, DepRequest, Outcome};
+use crate::scheduler::Deps;
 
 /// `HeadDeferred` entry: head is a nested `Expression`, dispatched directly, then
 /// applied to `parts[1..]` once it resolves.
@@ -88,14 +89,11 @@ fn park_on_head<'step>(
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
     // attaches its own frame), matching the resume behaviour.
-    park_on_deps(
-        vec![DepRequest::Dispatch {
-            expr: head,
-            placement: DepPlacement::OwnScope,
-        }],
-        None,
-        finish,
-    )
+    Await::on(Deps::from_owned([DepRequest::Dispatch {
+        expr: head,
+        placement: DepPlacement::OwnScope,
+    }]))
+    .finish(finish)
 }
 
 /// Branch a resumed head value into a [`ResolvedCallable`], honoring the

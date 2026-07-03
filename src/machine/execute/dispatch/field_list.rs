@@ -16,13 +16,13 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::{KType, Record};
 use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
 use crate::witnessed::Witnessed;
 
-use super::super::outcome::{dep_error_frame, Continuation, Outcome};
+use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::DepFinish;
 use super::DepRequest;
 use super::SchedulerView;
@@ -65,6 +65,54 @@ fn field_list_deps<'step>(
     deps
 }
 
+/// The deferred re-walk both currencies run once their deps resolve: rebuild the elaborator, feed the
+/// owned sub-Dispatch carriers back through the field walker in DFS order, and produce the
+/// `(name, KType)` pairs. The re-walk consumes only the owned suffix (`park_producers` are notify-only
+/// forward-ref waits). The `Err` arm labels a shape error with `error_frame`; a still-`Pending` walk is
+/// a scheduling inconsistency (every producer waited on is terminal by the dep-finish invariant, so a
+/// second park is not a recoverable forward ref) and errors loudly.
+struct FieldListRewalk<'step> {
+    expr: KExpression<'step>,
+    context: &'static str,
+    name_kind: FieldNameKind,
+    threaded: Vec<String>,
+    chain: Option<Rc<LexicalFrame>>,
+    error_frame: Option<TraceFrame>,
+}
+
+impl<'step> FieldListRewalk<'step> {
+    fn run(
+        self,
+        scope: &Scope<'step>,
+        owned: &[Carried<'step>],
+    ) -> Result<Vec<(String, KType<'step>)>, KError> {
+        let mut feed = ResultFeed::new(owned);
+        let mut elaborator = Elaborator::new(scope)
+            .with_threaded(self.threaded.iter().cloned())
+            .with_chain(self.chain.clone());
+        match parse_typed_field_list_via_elaborator(
+            &self.expr,
+            self.context,
+            self.name_kind,
+            &mut elaborator,
+            Some(&mut feed),
+        ) {
+            FieldListOutcome::Done(fields) => Ok(fields),
+            FieldListOutcome::Err(msg) => {
+                let error = KError::new(KErrorKind::ShapeError(msg));
+                Err(match self.error_frame {
+                    Some(frame) => error.with_frame(frame),
+                    None => error,
+                })
+            }
+            FieldListOutcome::Pending { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
+                "{}: forward type reference still unresolved after dep-finish wake",
+                self.context
+            )))),
+        }
+    }
+}
+
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
 /// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
 /// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
@@ -83,36 +131,20 @@ pub(crate) fn defer_field_list<'step>(
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalize<'step>,
 ) -> Outcome<'step> {
+    let rewalk = FieldListRewalk {
+        expr,
+        context,
+        name_kind,
+        threaded,
+        chain,
+        error_frame,
+    };
     let finish: DepFinish<'step> = Box::new(move |view, results, _carriers| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // The re-walk consumes only the owned-sub carriers, in the DFS order they were scheduled.
-        let mut feed = ResultFeed::new(results.owned_slice());
-        let mut elaborator = Elaborator::new(view.current_scope())
-            .with_threaded(threaded.iter().cloned())
-            .with_chain(chain.clone());
-        match parse_typed_field_list_via_elaborator(
-            &expr,
-            context,
-            name_kind,
-            &mut elaborator,
-            Some(&mut feed),
-        ) {
-            FieldListOutcome::Done(fields) => finalize(view.current_scope(), fields),
-            FieldListOutcome::Err(msg) => {
-                let error = KError::new(KErrorKind::ShapeError(msg));
-                Outcome::Done(Err(match error_frame {
-                    Some(frame) => error.with_frame(frame),
-                    None => error,
-                }))
-            }
-            // Every producer waited on is terminal by dep-finish invariant, so a second
-            // park is a scheduling inconsistency rather than a recoverable forward ref.
-            FieldListOutcome::Pending { .. } => {
-                Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context}: forward type reference still unresolved after dep-finish wake"
-                )))))
-            }
+        match rewalk.run(view.current_scope(), results.owned_slice()) {
+            Ok(fields) => finalize(view.current_scope(), fields),
+            Err(e) => Outcome::Done(Err(e)),
         }
     });
     // Parks the forward-ref producers; owns each sigil sub-Dispatch (in DFS order). The finish reads
@@ -124,11 +156,9 @@ pub(crate) fn defer_field_list<'step>(
             placement: DepPlacement::OwnScope,
         });
     }
-    Outcome::ParkThenContinue {
-        deps,
-        continuation: Continuation::Finish(finish),
-        dep_error_frame: Some(dep_error_frame()),
-    }
+    Await::on(deps)
+        .error_frame(dep_error_frame())
+        .finish(finish)
 }
 
 /// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] vector
@@ -152,34 +182,22 @@ pub(crate) fn defer_field_list_action<'a>(
     // park_producers; the scheduler feeds results as [park.. , owned..] — so the re-walk consumes
     // the owned suffix, exactly as the scheduler-side twin does.
     let deps = field_list_deps(park_producers, sub_dispatches);
+    let rewalk = FieldListRewalk {
+        expr,
+        context,
+        name_kind,
+        threaded,
+        chain,
+        error_frame,
+    };
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        let mut feed = ResultFeed::new(results.owned_slice());
-        let mut elaborator = Elaborator::new(fctx.scope)
-            .with_threaded(threaded.iter().cloned())
-            .with_chain(chain.clone());
-        match parse_typed_field_list_via_elaborator(
-            &expr,
-            context,
-            name_kind,
-            &mut elaborator,
-            Some(&mut feed),
-        ) {
-            FieldListOutcome::Done(fields) => Action::Done(finalize(fctx.scope, fields)),
-            FieldListOutcome::Err(msg) => {
-                let error = KError::new(KErrorKind::ShapeError(msg));
-                Action::Done(Err(match error_frame {
-                    Some(frame) => error.with_frame(frame),
-                    None => error,
-                }))
-            }
-            FieldListOutcome::Pending { .. } => {
-                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{context}: forward type reference still unresolved after dep-finish wake"
-                )))))
-            }
-        }
+        Action::Done(
+            rewalk
+                .run(fctx.scope, results.owned_slice())
+                .and_then(|fields| finalize(fctx.scope, fields)),
+        )
     });
     Action::AwaitDeps { deps, finish }
 }

@@ -27,9 +27,9 @@ use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
+use super::ignore_results;
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
-use super::{ignore_results, DepFinish, WitnessedDepFinish};
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
 
@@ -57,7 +57,7 @@ mod submit;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::machine::execute) use super::outcome::{Continuation, Outcome};
+pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
 pub(crate) use constructors::build_type_operand;
 pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
@@ -231,45 +231,6 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 }
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
-
-/// Park the slot on `deps` as a [`NodeWork`](super::nodes::NodeWork) whose
-/// `finish` runs over their resolved values (the dispatch combine — short-circuits on dep error).
-/// Every dep is owned (the builder parks nothing).
-pub(in crate::machine::execute) fn park_on_deps<'step>(
-    deps: Vec<DepRequest<'step>>,
-    dep_error_frame: Option<TraceFrame>,
-    finish: DepFinish<'step>,
-) -> Outcome<'step> {
-    let mut built = Deps::new();
-    for dep in deps {
-        built.own(dep);
-    }
-    Outcome::ParkThenContinue {
-        deps: built,
-        continuation: Continuation::Finish(finish),
-        dep_error_frame,
-    }
-}
-
-/// Construction-inversion sibling of [`park_on_deps`]: park on `deps` (all owned) and, on resolve,
-/// fold their terminals (value + reach) into one witnessed carrier via the [`WitnessedDepFinish`],
-/// sealing the slot as [`Outcome::Done(Ok)`](Outcome::Done). The decide-side entry a construction decide
-/// (newtype / tagged union) uses so the built value names every region it reaches by construction.
-pub(in crate::machine::execute) fn park_on_deps_witnessed<'step>(
-    deps: Vec<DepRequest<'step>>,
-    dep_error_frame: Option<TraceFrame>,
-    finish: WitnessedDepFinish<'step>,
-) -> Outcome<'step> {
-    let mut built = Deps::new();
-    for dep in deps {
-        built.own(dep);
-    }
-    Outcome::ParkThenContinue {
-        deps: built,
-        continuation: Continuation::FinishWitnessed(finish),
-        dep_error_frame,
-    }
-}
 
 /// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
 /// closure-carrying `ParkSelf` shape every park-and-replay family uses. `carrier` is the parked

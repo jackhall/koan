@@ -104,30 +104,71 @@ fn key_from_carried(c: Carried<'_>) -> Result<KKey, String> {
     }
 }
 
+/// One layout row of an aggregate literal: the value cell, plus — for a dict — the key slot resolved
+/// to a scalar [`KKey`] at finish time (list and record rows carry no key).
+struct AggRow {
+    key: Option<Slot>,
+    value: Slot,
+}
+
+/// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
+/// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
+/// field names and each shape builds its own `KObject` at the fold brand.
+type AggAssemble = Box<dyn for<'r> FnOnce(Vec<KKey>, Vec<Held<'r>>) -> KObject<'r>>;
+
 impl<'step> KoanRuntime<'step> {
+    /// The one scheduling path behind the three aggregate literals: park a witnessed dep-finish on
+    /// `deps`; on resolve, read each row's key (a non-scalar dict key errors before the fold, under the
+    /// dict-literal frame — only a dict row carries a key slot), fold the value cells into the consumer
+    /// region, and `assemble` the aggregate inside the witness closure so it names every region it
+    /// reaches by construction.
+    fn schedule_aggregate(
+        &mut self,
+        deps: ResolvedDeps,
+        rows: Vec<AggRow>,
+        assemble: AggAssemble,
+    ) -> NodeId {
+        let finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
+            let n = rows.len();
+            // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
+            // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
+            let mut keys: Vec<KKey> = Vec::new();
+            let mut cells: Vec<Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(n);
+            for row in rows {
+                if let Some(key_slot) = row.key {
+                    let kkey = scalar_key(&key_slot, terminals).map_err(|msg| {
+                        KError::new(KErrorKind::ShapeError(msg))
+                            .with_frame(TraceFrame::bare("<dict>", "dict literal"))
+                    })?;
+                    keys.push(kkey);
+                }
+                cells.push(cell_carrier(row.value, terminals));
+            }
+            let acc = fold_cells(view, cells.into_iter(), n);
+            Ok(acc.map(move |(region, value_helds), _brand| {
+                Carried::Object(region.alloc_object(assemble(keys, value_helds)))
+            }))
+        });
+        self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
+    }
+
     /// Schedule a list-literal materialization as a witnessed dep-finish over its element producers.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
     ) -> NodeId {
-        let mut layout: Vec<Slot> = Vec::with_capacity(items.len());
         let mut deps = ResolvedDeps::new();
+        let mut rows = Vec::with_capacity(items.len());
         for part in items {
             // List elements are not name-resolved; bare identifiers stay `Static`.
-            let slot = self.classify_aggregate_part(part, &mut deps, false);
-            layout.push(slot);
+            let value = self.classify_aggregate_part(part, &mut deps, false);
+            rows.push(AggRow { key: None, value });
         }
-        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
-            let n = layout.len();
-            let cells = layout
-                .into_iter()
-                .map(|slot| cell_carrier(slot, terminals));
-            let acc = fold_cells(view, cells, n);
-            Ok(acc.map(|(region, cells), _brand| {
-                Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
-            }))
-        });
-        self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
+        self.schedule_aggregate(
+            deps,
+            rows,
+            Box::new(|_keys, cells| KObject::list_of_held(cells)),
+        )
     }
 
     /// Schedule a dict-literal materialization as a witnessed dep-finish over its key/value producers.
@@ -137,38 +178,28 @@ impl<'step> KoanRuntime<'step> {
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     ) -> NodeId {
-        let mut layout: Vec<(Slot, Slot)> = Vec::with_capacity(pairs.len());
         let mut deps = ResolvedDeps::new();
+        let mut rows = Vec::with_capacity(pairs.len());
         for (k, v) in pairs {
-            let key_slot = self.classify_aggregate_part(k, &mut deps, true);
-            let val_slot = self.classify_aggregate_part(v, &mut deps, true);
-            layout.push((key_slot, val_slot));
+            let key = self.classify_aggregate_part(k, &mut deps, true);
+            let value = self.classify_aggregate_part(v, &mut deps, true);
+            rows.push(AggRow {
+                key: Some(key),
+                value,
+            });
         }
-        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
-            let frame_label = || TraceFrame::bare("<dict>", "dict literal");
-            let n = layout.len();
-            // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
-            // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
-            let mut keys: Vec<KKey> = Vec::with_capacity(n);
-            let mut value_cells: Vec<Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(n);
-            for (k_slot, v_slot) in layout {
-                let kkey = scalar_key(&k_slot, terminals).map_err(|msg| {
-                    KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label())
-                })?;
-                keys.push(kkey);
-                value_cells.push(cell_carrier(v_slot, terminals));
-            }
-            let acc = fold_cells(view, value_cells.into_iter(), n);
-            Ok(acc.map(|(region, value_helds), _brand| {
+        self.schedule_aggregate(
+            deps,
+            rows,
+            Box::new(|keys, value_helds| {
                 let map: HashMap<Box<dyn Serializable + '_>, Held<'_>> = keys
                     .into_iter()
                     .zip(value_helds)
                     .map(|(k, v)| (Box::new(k) as Box<dyn Serializable + '_>, v))
                     .collect();
-                Carried::Object(region.alloc_object(KObject::dict_of_held(map)))
-            }))
-        });
-        self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
+                KObject::dict_of_held(map)
+            }),
+        )
     }
 
     /// Schedule a record-literal materialization (`{x = 1, y = "a"}`). Field *names* are literal
@@ -179,23 +210,21 @@ impl<'step> KoanRuntime<'step> {
         fields: Vec<(String, ExpressionPart<'a>)>,
     ) -> NodeId {
         let mut names: Vec<String> = Vec::with_capacity(fields.len());
-        let mut layout: Vec<Slot> = Vec::with_capacity(fields.len());
         let mut deps = ResolvedDeps::new();
+        let mut rows = Vec::with_capacity(fields.len());
         for (name, value) in fields {
-            let val_slot = self.classify_aggregate_part(value, &mut deps, true);
+            let value = self.classify_aggregate_part(value, &mut deps, true);
             names.push(name);
-            layout.push(val_slot);
+            rows.push(AggRow { key: None, value });
         }
-        let finish: WitnessedDepFinish<'a> = Box::new(move |view, terminals| {
-            let n = layout.len();
-            let cells = layout.into_iter().map(|slot| cell_carrier(slot, terminals));
-            let acc = fold_cells(view, cells, n);
-            Ok(acc.map(|(region, value_helds), _brand| {
+        self.schedule_aggregate(
+            deps,
+            rows,
+            Box::new(move |_keys, value_helds| {
                 let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
-                Carried::Object(region.alloc_object(KObject::record_of_held(record)))
-            }))
-        });
-        self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
+                KObject::record_of_held(record)
+            }),
+        )
     }
 
     /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is suppressed

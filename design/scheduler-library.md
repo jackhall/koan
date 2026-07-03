@@ -175,11 +175,14 @@ by arithmetic over a shared vector.
 ```rust
 Await::on(deps)
     .error_frame(frame)          // label attached if a dep errors
-    .finish(|ctx, deps| ...)     // runs only if no dep errored
+    .finish(|ctx, deps| ...)     // value-copy finish; runs only if no dep errored
+// or, for a construction that folds its deps into one witnessed carrier:
+Await::on(deps).finish_witnessed(|ctx, terminals| ...)
 ```
 
-The sole constructor of a parked continuation. Error short-circuit is
-built in: a finish never sees an errored dep.
+The sole constructor of a parked continuation, over either finish channel.
+Error short-circuit is built in through one shared walk: a finish never sees
+an errored dep.
 
 **The step construction context.** What a finish receives and the only way
 it can build a result:
@@ -227,7 +230,6 @@ picture:
 
 ## Open work
 
-- [The `Await` envelope builder](../roadmap/scheduler_library/await-envelope-builder.md)
 - [`Action::Tail` covers every dispatch tail](../roadmap/scheduler_library/action-tail-single-lowering.md)
 - [One dep-finish delivery currency](../roadmap/scheduler_library/witnessed-only-dep-finish.md)
 - [Shrink witnessed.rs's raw retype surface](../roadmap/scheduler_library/witnessed-retype-hygiene.md)

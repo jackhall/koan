@@ -685,6 +685,7 @@ digraph {
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::head_deferred" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
