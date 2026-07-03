@@ -1,31 +1,27 @@
 //! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
 //! the action harness (its bound args as a `KObject::Record` `BodyCtx`); a user-defined body runs
 //! through [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered
-//! to an [`Outcome`] the harness applies. `invoke` is a **pure decide**: it reads a `SchedulerView`
-//! and the per-call `frame` the harness already acquired (frame acquisition is the harness's write),
-//! and returns the deferred body dispatch declaratively (a `Continue` for the tail, a
-//! `ParkThenContinue` over a [`DepRequest::BodyBlock`] for a first-call deferred return). Kept out
-//! of `ctx.rs` (the dispatcher facade) so the dispatcher core stays thin; pure body semantics live
-//! one layer down in [`crate::machine::core::kfunction::exec`].
+//! to an [`Action::Tail`] the shared [`run_action`](super::super::runtime::run_action) interprets.
+//! `invoke` is a **pure decide**: it reads a `SchedulerView` and the per-call `frame` the harness
+//! already acquired (frame acquisition is the harness's write), and hands the deferred body dispatch
+//! to `run_action` declaratively. Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core
+//! stays thin; pure body semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
+use super::super::ignore_results;
 use super::super::nodes::NodeWork;
-use super::super::outcome::{dep_error_frame, Await, Outcome};
+use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
-use super::super::{ignore_results, DepFinish};
 use super::SchedulerView;
-use super::{BodyPlacement, DepRequest};
-use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
+use crate::machine::core::kfunction::action::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{
-    home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
-};
+use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Record, SignatureElement};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{FrameSet, KError, KErrorKind};
-use crate::scheduler::{Deps, ResolvedDeps};
+use crate::scheduler::ResolvedDeps;
 use crate::witnessed::Sealed;
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
@@ -161,106 +157,37 @@ pub(super) fn invoke<'step>(
                     ret: ret_ref,
                 },
             };
-            // Empty `leading` → body_index 1 (the lone statement sits above the params); otherwise
-            // the leading statements sit at indices `1..=N` and the tail replaces in at `N + 1`.
-            let body_index = leading.len() + 1;
-            // Capture the body scope id before `frame` moves; the reinstall site reads it to
-            // assemble the chain.
-            let block_entry = frame.scope_id();
-            let tail_expr = tail.clone();
-            if leading.is_empty() {
-                // No leading statements: tail-replace directly into the body terminal. The frame is
-                // already the slot's installed cart (the producer's `ReuseReserve`), so re-enter it
-                // with `Inherit` — re-installing it would clobber the ping-pong reserve.
-                return Outcome::Continue {
-                    work: super::decide(tail_expr),
-                    frame: FramePlacement::Inherit,
-                    contract: Some(contract),
-                    block_entry: BlockEntry::FrameScope(block_entry),
-                    body_index,
-                };
-            }
-            // Leading statements become owned siblings in `frame` (one `BodyBlock` dep); the slot
-            // parks on them so they cascade-free before the tail continues, restoring the frame's
-            // uniqueness so the next call's `try_reset_for_tail` reuses (TCO stays flat). The
-            // resolving finish — having waited out every leading statement — emits the tail
-            // `Continue`, re-entering the already-installed cart with `Inherit`.
-            let statements: Vec<KExpression<'step>> =
-                leading.into_iter().map(|e| (*e).clone()).collect();
-            let finish: DepFinish<'step> =
-                Box::new(move |_view, _results, _carriers| Outcome::Continue {
-                    work: super::decide(tail_expr),
-                    frame: FramePlacement::Inherit,
-                    contract: Some(contract),
-                    block_entry: BlockEntry::FrameScope(block_entry),
-                    body_index,
-                });
-            Await::on(Deps::from_owned([DepRequest::BodyBlock {
-                statements,
-                placement: BodyPlacement::Frame(frame),
-            }]))
-            .error_frame(dep_error_frame())
-            .finish(finish)
+            // The frame is already the slot's installed cart (the producer's `ReuseReserve`), so the
+            // tail re-enters it with `Inherit` — re-installing would clobber the ping-pong reserve —
+            // and the block entry carries it so the lowering fans any leading statements into it.
+            super::super::runtime::run_action(Action::Tail {
+                leading: leading.into_iter().map(|e| (*e).clone()).collect(),
+                tail: tail.clone(),
+                contract: TailContract::Eager(Some(contract)),
+                frame_placement: FramePlacement::Inherit,
+                block_entry: BlockEntry::FrameScope(frame),
+            })
         }
         ExecOutcome::DeferredExprTail {
             type_expr,
             leading,
             tail,
         } => {
-            // First-call deferred `Expression` return: the harness dispatches the leading body
-            // statements and the return-type expression as body-chain siblings in `frame` (a single
-            // `BodyBlock` dep). The combine reads the last result (the resolved type), builds the
-            // `PerCall` contract, and tail-replaces into the body terminal — a proper tail call, so
-            // the recursion (subsequent calls skip resolution) stays TCO-flat. The body terminal
-            // sits above the params, the leading siblings, and the type slot.
-            let mut body_and_type = leading;
-            body_and_type.push(type_expr);
-            let body_index = body_and_type.len() + 1;
-            let statements: Vec<KExpression<'step>> =
-                body_and_type.into_iter().map(|e| (*e).clone()).collect();
-            let tail_expr = tail.clone();
-            // Capture the body scope id before `frame` moves into the `BodyBlock` dep; the finish
-            // re-enters that already-installed cart with `Inherit`.
-            let block_entry = frame.scope_id();
-            let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
-                // The return-type expression is the last body statement (all owned), so its resolved
-                // value is the last owned result.
-                let owned = results.owned_slice();
-                let kt = match owned[owned.len() - 1] {
-                    Carried::Type(t) => t,
-                    Carried::Object(other) => {
-                        return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN deferred return-type expression produced a non-type {} value",
-                            other.ktype().name(),
-                        )))))
-                    }
-                };
-                // The per-call type rides the captured-scope (frame-outer) region, a strict ancestor
-                // the cart keeps live — same home as the `Type` form's `PerCall.ret`. A concrete
-                // module return type is rejected (see `home_return_type`); every other resolved type
-                // is owned / `Rc` data the clone re-homes past the dying frame.
-                let ret_ref = match home_return_type(kt, picked.captured_scope().brand()) {
-                    Ok(r) => r,
-                    Err(e) => return Outcome::Done(Err(e)),
-                };
-                let contract = ReturnContract::PerCall {
-                    func: picked,
-                    ret: ret_ref,
-                };
-                Outcome::Continue {
-                    work: super::decide(tail_expr),
-                    frame: FramePlacement::Inherit,
-                    contract: Some(contract),
-                    block_entry: BlockEntry::FrameScope(block_entry),
-                    body_index,
-                }
-            });
-            Await::on(Deps::from_owned([DepRequest::BodyBlock {
-                statements,
-                placement: BodyPlacement::Frame(frame),
-            }]))
-            .error_frame(dep_error_frame())
-            .finish(finish)
+            // First-call deferred `Expression` return: the leading body statements and the
+            // return-type expression run as body-chain siblings in the installed cart, and the
+            // lowering's finish reads the last result — the resolved type — into a `PerCall`
+            // contract before tail-replacing into the body terminal, a proper tail call, so the
+            // recursion (subsequent calls skip resolution) stays TCO-flat.
+            let mut statements: Vec<KExpression<'step>> =
+                leading.into_iter().map(|e| (*e).clone()).collect();
+            statements.push(type_expr.clone());
+            super::super::runtime::run_action(Action::Tail {
+                leading: statements,
+                tail: tail.clone(),
+                contract: TailContract::FromLastResult { func: picked },
+                frame_placement: FramePlacement::Inherit,
+                block_entry: BlockEntry::FrameScope(frame),
+            })
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
     }

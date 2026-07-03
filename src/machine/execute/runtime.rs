@@ -20,14 +20,16 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{
-    Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement,
+    Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
 use crate::machine::core::kfunction::body::{
-    split_body_statements, ContractFamily, ErasedContract,
+    split_body_statements, ContractFamily, ErasedContract, ReturnContract,
 };
+use crate::machine::core::kfunction::exec::home_return_type;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{CallFrame, FrameSet, KError, NodeId, Scope};
+use crate::machine::model::Carried;
+use crate::machine::{CallFrame, FrameSet, KError, KErrorKind, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest};
@@ -221,6 +223,14 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             };
             if leading.is_empty() {
                 // No leading statements: tail-replace directly into the tail body.
+                let contract = match contract {
+                    TailContract::Eager(contract) => contract,
+                    TailContract::FromLastResult { .. } => {
+                        unreachable!(
+                            "a from-last-result contract rides at least its type statement"
+                        )
+                    }
+                };
                 return Outcome::Continue {
                     work: super::dispatch::decide(tail),
                     frame: frame_placement,
@@ -230,55 +240,63 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 };
             }
             // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
-            // parks on them so they run — and cascade-free — before the tail continues, keeping the
-            // side-effect order and (for a fresh frame) the uniqueness TCO reuse needs. Two block
-            // shapes carry leading statements: a `FreshChild` frame whose own scope is the block
-            // (MATCH / TRY arms — fan out via `dispatch_body`), or an `Inherit` overlay entered
-            // without a fresh frame (USING — fan out via `enter_block`). The tail re-enters the same
-            // block: a `FreshChild` re-installs the frame, an `Inherit` keeps the call-site cart.
-            let overlay = match &block_entry {
-                BlockEntry::Overlay(scope) => Some(*scope),
-                _ => None,
+            // parks on them so they run — and cascade-free — before the tail continues. Where they
+            // bind is what `block_entry` names: the block frame's own scope (MATCH / TRY arms via a
+            // pre-built `FreshChild` cart, FN-body tails re-entering the already-installed cart with
+            // `Inherit`), or a caller-allocated overlay under the inherited call-site cart (USING).
+            let placement = match &block_entry {
+                BlockEntry::FrameScope(frame) => BodyPlacement::Frame(Rc::clone(frame)),
+                BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
+                BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
             };
-            let (body_block, continue_frame): (DepRequest<'step>, FramePlacement<'step>) =
-                match frame_placement {
-                    FramePlacement::FreshChild { frame } => {
-                        let body_frame = frame.clone();
-                        (
-                            DepRequest::BodyBlock {
-                                statements: leading,
-                                placement: BodyPlacement::Frame(frame),
-                            },
-                            FramePlacement::FreshChild { frame: body_frame },
-                        )
+            // `ReuseReserve` mints its cart only at apply time — after the leading statements would
+            // already have fanned out — so a leading-carrying tail cannot ride it.
+            debug_assert!(
+                !matches!(frame_placement, FramePlacement::ReuseReserve { .. }),
+                "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
+            );
+            let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
+                let contract = match contract {
+                    TailContract::Eager(contract) => contract,
+                    // The return-type expression is the last leading statement (all owned), so its
+                    // resolved value is the last owned result. The per-call type is re-homed into the
+                    // captured-scope region — a strict ancestor the cart keeps live — like the `Type`
+                    // form's `PerCall.ret`; a concrete module return type is rejected there (see
+                    // `home_return_type`).
+                    TailContract::FromLastResult { func } => {
+                        let owned = results.owned_slice();
+                        let kt = match owned[owned.len() - 1] {
+                            Carried::Type(t) => t,
+                            Carried::Object(other) => {
+                                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
+                                    format!(
+                                        "FN deferred return-type expression produced a non-type {} value",
+                                        other.ktype().name(),
+                                    ),
+                                ))))
+                            }
+                        };
+                        let ret = match home_return_type(kt, func.captured_scope().brand()) {
+                            Ok(ret) => ret,
+                            Err(error) => return Outcome::Done(Err(error)),
+                        };
+                        Some(ReturnContract::PerCall { func, ret })
                     }
-                    FramePlacement::Inherit => {
-                        let overlay = overlay.expect(
-                            "a leading-carrying Inherit tail carries an overlay block (USING)",
-                        );
-                        (
-                            DepRequest::BodyBlock {
-                                statements: leading,
-                                placement: BodyPlacement::Overlay(overlay),
-                            },
-                            FramePlacement::Inherit,
-                        )
-                    }
-                    FramePlacement::ReuseReserve { .. } => unreachable!(
-                        "a leading-carrying tail is a FreshChild frame or an Inherit overlay"
-                    ),
                 };
-            let finish: DepFinish<'step> =
-                Box::new(move |_view, _results, _carriers| Outcome::Continue {
+                Outcome::Continue {
                     work: super::dispatch::decide(tail),
-                    frame: continue_frame,
+                    frame: frame_placement,
                     contract,
                     block_entry,
                     body_index,
-                });
-            Await::on(Deps::from_owned([body_block]))
-                .error_frame(dep_error_frame())
-                .finish(finish)
+                }
+            });
+            Await::on(Deps::from_owned([DepRequest::BodyBlock {
+                statements: leading,
+                placement,
+            }]))
+            .error_frame(dep_error_frame())
+            .finish(finish)
         }
 
         Action::AwaitDeps { deps, finish } => {
@@ -464,7 +482,7 @@ impl<'run> KoanRuntime<'run> {
                 // re-projects from its own cart.
                 let (block_scope_id, overlay_scope) = match block_entry {
                     BlockEntry::None => (None, None),
-                    BlockEntry::FrameScope(id) => (Some(id), None),
+                    BlockEntry::FrameScope(frame) => (Some(frame.scope_id()), None),
                     BlockEntry::Overlay(overlay) => (
                         Some(overlay.id),
                         Some(SealedExtern::<ScopeRefFamily>::erase(overlay)),

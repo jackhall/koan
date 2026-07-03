@@ -5,7 +5,9 @@
 //! [`Action::Tail`](crate::machine::core::kfunction::action::Action::Tail); no builtin constructs one
 //! elsewhere, so every "block, return the tail" terminal is one structural shape.
 
-use crate::machine::core::kfunction::action::{Action, BlockEntry, FramePlacement};
+use std::rc::Rc;
+
+use crate::machine::core::kfunction::action::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
 use crate::machine::model::ast::KExpression;
 use crate::machine::Scope;
@@ -24,8 +26,8 @@ pub(crate) enum BlockBody<'a> {
 pub(crate) enum BlockScope<'a> {
     /// No lexical block push; the tail runs in the frame's own scope with the chain unchanged (EVAL).
     None,
-    /// The `FreshChild` frame's own child scope is the block (MATCH / TRY arms). Its `scope_id`
-    /// becomes `block_entry`, and a `seed` binds into it through
+    /// The `FreshChild` frame's own child scope is the block (MATCH / TRY arms). The frame itself
+    /// becomes `block_entry`, and a `seed` binds into its scope through
     /// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope).
     FrameOwn,
     /// A caller-allocated overlay scope in a cart-ancestor region (USING under `Inherit`). Its `id`
@@ -61,7 +63,7 @@ pub(crate) fn block_tail<'a>(
             if let Some(seed) = seed {
                 frame.with_scope(|child| seed(child));
             }
-            BlockEntry::FrameScope(frame.scope_id())
+            BlockEntry::FrameScope(Rc::clone(frame))
         }
         BlockScope::Overlay(overlay) => {
             if let Some(seed) = seed {
@@ -83,7 +85,7 @@ pub(crate) fn block_tail<'a>(
     Action::Tail {
         leading,
         tail,
-        contract,
+        contract: TailContract::Eager(contract),
         frame_placement,
         block_entry,
     }

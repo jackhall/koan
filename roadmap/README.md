@@ -47,7 +47,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [One chain-walk for scope name resolution](refactor/unify-scope-lookup-ladders.md)
-- [`Action::Tail` covers every dispatch tail](scheduler_library/action-tail-single-lowering.md)
 - [The step owns region liveness](scheduler_library/step-held-region.md)
 - [A compile-enforced boundary for the substrate](scheduler_library/substrate-crate-boundary.md)
 - [Shrink witnessed.rs's raw retype surface](scheduler_library/witnessed-retype-hygiene.md)

@@ -8,7 +8,8 @@
 use std::rc::Rc;
 
 use super::body::ReturnContract;
-use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, ScopeId};
+use super::KFunction;
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
@@ -226,6 +227,15 @@ pub struct CatchOk<'a> {
 pub type CatchContinue<'a> =
     Box<dyn FnOnce(&FinishCtx<'a>, Result<CatchOk<'a>, KError>) -> Action<'a> + 'a>;
 
+/// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
+/// statement's result at finish time (a deferred-`Expression` FN return: the return-type
+/// expression rides as the last leading statement, and the lowering's finish reads the resolved
+/// type and homes it as a `PerCall` contract for `func`).
+pub enum TailContract<'a> {
+    Eager(Option<ReturnContract<'a>>),
+    FromLastResult { func: &'a KFunction<'a> },
+}
+
 /// What happens next for a slot — the four shapes the builtin survey reduced everything to.
 pub enum Action<'a> {
     /// Produce this slot's terminal (after any direct scope mutation the builtin did): a witnessed
@@ -236,16 +246,16 @@ pub enum Action<'a> {
     /// finalize. The construction terminal for **both** channels: a builtin that allocates a `KObject`
     /// or a `KType` seals it here.
     Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
-    /// Tail-replace into `tail`, carrying `contract`, in a cart per `frame_placement`. When
-    /// `leading` (the body's non-tail statements) is non-empty the slot first parks on them as
-    /// owned deps and tail-replaces only once they resolve — so they run, and cascade-free, before
-    /// the tail continues. `block_entry` names the lexical block the tail enters (see
-    /// [`BlockEntry`]); the harness derives the body-statement chains and the tail's `body_index`
-    /// from it + `leading`.
+    /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
+    /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
+    /// first parks on them as owned deps and tail-replaces only once they resolve — so they run,
+    /// and cascade-free, before the tail continues. `block_entry` names the lexical block the tail
+    /// enters (see [`BlockEntry`]); the harness derives the body-statement chains and the tail's
+    /// `body_index` from it + `leading`.
     Tail {
         leading: Vec<KExpression<'a>>,
         tail: KExpression<'a>,
-        contract: Option<ReturnContract<'a>>,
+        contract: TailContract<'a>,
         frame_placement: FramePlacement<'a>,
         block_entry: BlockEntry<'a>,
     },
@@ -339,10 +349,11 @@ pub enum BlockEntry<'a> {
     /// No lexical block push; the tail continues in the slot's current block with the chain
     /// unchanged (EVAL, frameless continuations).
     None,
-    /// The installed frame's own scope is the block; the run loop projects it from the frame at the
-    /// tail-replace. Carries the scope id for the chain push / FN-body assembly (MATCH / TRY arms,
-    /// FN-body tails).
-    FrameScope(ScopeId),
+    /// The installed frame's own scope is the block; the frame carries its own scope id
+    /// (`frame.scope_id()`) for the chain push / FN-body assembly, and the lowering fans any
+    /// leading statements into the frame itself (`BodyPlacement::Frame`) — MATCH / TRY arms,
+    /// FN-body tails.
+    FrameScope(Rc<CallFrame>),
     /// A caller-allocated overlay scope in a cart-ancestor region, entered without a fresh frame —
     /// the tail runs in it under the inherited call-site cart (USING). Carries the overlay so the
     /// harness fans the leading statements into it and installs it as the tail slot's scope.
