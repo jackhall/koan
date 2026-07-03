@@ -12,12 +12,12 @@
 //! `Identifier` lhs wins `body_identifier`, a module / type-token lhs wins its `OfKind`
 //! overload, and only a bare runtime value falls through to [`body_newtype`].
 
-use crate::machine::execute::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
+use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, Scope, TypeCarrierHit};
+use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, NameLookup, Scope};
 use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
@@ -122,14 +122,14 @@ pub fn body_type_lhs<'a>(
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     match s_kt {
-        KType::Unresolved(te) => match resolve_type_leaf_carrier(ctx.scope, te, None) {
+        KType::Unresolved(te) => match ctx.scope.resolve_type_identifier(te, None) {
             // The lhs type's own reach is irrelevant here — the member's carrier is built from the
             // *member's* stored reach inside `access_type_member`.
-            TypeLeafCarrier::Resolved { kt, .. } => route(access_type_member(kt, &field_name)),
-            TypeLeafCarrier::Unbound(name) => {
+            TypeResolution::Done(resolved) => route(access_type_member(resolved.kt, &field_name)),
+            TypeResolution::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
-            TypeLeafCarrier::Park(producers) => {
+            TypeResolution::Park(producers) => {
                 Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "ATTR lhs type `{}` resolved to a still-finalizing type \
                      (parked on {} producer(s)); the type argument should already be sealed \
@@ -306,8 +306,8 @@ fn access_module_member<'a>(
         // abstract type reaching nothing foreign, so it is alloc'd fresh under the empty reach.
         return Ok(
             match module_scope.bindings().lookup_type_carrier(field, None) {
-                Some(TypeCarrierHit::Bound { kt, reach }) => {
-                    module_scope.resident_type_carrier(kt, &reach)
+                Some(NameLookup::Bound(hit)) => {
+                    module_scope.resident_type_carrier(hit.kt, &hit.reach)
                 }
                 _ => module_scope.resident_type_carrier(
                     module_scope.brand().alloc_ktype(minted),

@@ -5,7 +5,7 @@ back-edges (plus 1 model→execute).
 
 **Problem.** Those back-edges are not stray imports: they are a strongly-connected
 component split across the model/core boundary — `model::values::KObject` holds
-`KFunction`/`KFuture`/`FrameStorage` (all in `core`), while `core::scope::Scope`
+`KFunction`/`FrameStorage` (all in `core`), while `core::scope::Scope`
 imports `KObject` back from `model`. value ↔ scope ↔ closure is a cycle the module
 boundary bisects, and the scorer charges its cross-boundary edges as `α·feedback`.
 Relieving this by relocating one item or renaming one module measures *worse*
@@ -29,7 +29,7 @@ component removes it.
 **Directions.**
 
 - *Group membership — open.* Leading hypothesis: `KObject`, `KFunction`, `Scope`,
-  `ScopePtr`/`ScopeId`, `FrameStorage`, `KFuture` — the live-value-plus-environment
+  `ScopePtr`/`ScopeId`, `FrameStorage` — the live-value-plus-environment
   cluster. Recommended: confirm membership with `modgraph propose` (until it lands,
   the hypothesis is scorable today with `rewrite item --move`) before committing to
   a cut.

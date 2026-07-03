@@ -1,0 +1,233 @@
+# The scheduler library
+
+Koan's runtime substrate — the deferred-work scheduler, the region memory
+system, and the witnessed carrier machinery — is one self-contained library
+with no dependency on Koan's language semantics. Koan is its first embedder;
+the library is extractable for other projects. Its public surface is
+memory-safe **by construction**: an embedder can schedule work, allocate
+values, and pass borrow-carrying results between nodes without writing
+`unsafe` and without upholding any convention the compiler cannot check.
+Every memory-safety invariant is either enforced by a type (a brand, an
+opaque set, a sealed carrier) or discharged inside the library.
+
+This doc owns the *division of responsibility*: what is library, what is
+Koan, and the API surface between them.
+[per-node-memory.md](per-node-memory.md) owns the witnessed substrate
+mechanics; [execution/](execution/README.md) owns the pipeline;
+[memory-model.md](memory-model.md) owns Koan's value-ownership semantics;
+[per-call-region/](per-call-region/README.md) owns the `Rc<CallFrame>`
+contract. Where those docs describe machinery this doc assigns to the
+library, this doc states the target boundary and they describe the
+mechanics.
+
+## Vocabulary
+
+Terms used throughout, defined once. Type names marked *(working name)* fix
+a concept, not a final identifier.
+
+- **Region** — a bump-allocated arena owning stored values, with typed
+  sub-arenas and the Drop discipline described in
+  [per-node-memory.md](per-node-memory.md).
+- **Region owner** — the handle whose drop tears a region down. Holding it,
+  or a handle derived from it, is proof of liveness.
+- **Witness** — a value whose possession pins a region alive at a fixed
+  address. A borrow into a region is only handed out alongside a witness.
+- **Brand** — a `for<'b>` closure lifetime used as an unforgeable tag: a
+  reference issued at brand `'b` cannot escape the closure that introduced
+  `'b`. The substrate's construction surface
+  ([witnessed.rs](../src/witnessed.rs)) is built on this device.
+- **Carrier** — a stored value bundled with its witness (`Witnessed`), or
+  its storable, reopenable form (`Sealed`). A carrier is born at the
+  allocation site already naming everything that keeps it alive.
+- **Reach set** — *(working name `RegionSet`)* an **opaque library type**
+  naming the set of regions a stored value's borrows can reach. Only the
+  library mints one — from region handles and carriers — so a reach set
+  always represents the true union; no caller can assert or assemble one by
+  hand.
+- **Slot / node** — one unit of scheduled work with an identity (`NodeId`),
+  dep edges, and eventually a terminal.
+- **Dep** — a producer another slot waits on. **Park** deps are
+  notify-only (kept alive); **owned** deps are cascade-freed with their
+  consumer.
+- **Terminal** — a slot's finished result: a sealed carrier, or the
+  workload's error.
+- **Finish** — the continuation a consumer runs once its deps resolve.
+- **Workload** — the embedder-facing trait: the brand-indexed value family
+  (Koan instantiates it with `Carried`), the error type, and the opaque
+  payload/cart types the scheduler stores but never inspects.
+
+## The boundary
+
+**The library owns:**
+
+- The scheduling core: slots, dep edges, notify wakeups, work queues,
+  splicing and alias resolution ([src/scheduler/](../src/scheduler.rs)).
+- **Regions, wholesale**: arenas, region owners, liveness. The generic
+  region engine of [arena.rs](../src/machine/core/arena.rs) is library
+  code; embedders allocate only through it.
+- The witnessed substrate ([witnessed.rs](../src/witnessed.rs)): brands,
+  carriers, erase-store, reattach.
+- The reach set, as an opaque type (see Vocabulary).
+- Terminal storage and delivery: sealing results into slots, handing dep
+  terminals to finishes, and the first-errored-dep short-circuit.
+- The consumer API: `producer_disposition`, the `Deps` builder, the `Await`
+  envelope, and the step construction context (all below).
+
+**Koan keeps:**
+
+- Value shape: `KObject`, `KType`, and the `Carried` family that
+  instantiates the workload's value family.
+- The `Action` currency
+  ([action.rs](../src/machine/core/kfunction/action.rs)) and the builtin
+  protocol combinators above it.
+- `Scope` as a **naming layer**: lookup, binding, and shadowing semantics.
+  A scope's storage is allocated through library region handles; the scope
+  itself owns no arena.
+- `CallFrame`: per-call lifecycle semantics. A frame **holds library region
+  handles**, which is how Koan allocates objects, types, and scopes at
+  will, outside any scheduler step.
+- Reach **policy**: which regions a lexical chain reaches, what pins what.
+  Policy code queries the opaque reach set through library predicates; it
+  never constructs or decomposes one.
+
+## The guarantees
+
+What "safe and sound at the exported surface" means, concretely. Each
+guarantee names its enforcement, because enforcement-by-type rather than
+by-convention is the point.
+
+1. **Liveness.** A stored value is only readable while its region is
+   provably alive. *Enforced by:* every read goes through a carrier, and a
+   carrier cannot exist without its witness.
+2. **Reach totality.** A reach set always names every region the value's
+   borrows can reach. *Enforced by:* the type is opaque and mintable only
+   by the library, from the region handles and carriers involved in the
+   allocation itself.
+3. **Co-location.** A carrier is born at its allocation site, already
+   witnessed; there is no "allocate bare, wrap later" path. *Enforced by:*
+   the library's alloc combinators are the only constructors.
+4. **Step liveness.** During a step, the scheduler itself holds the
+   consumer's region owner, so the step context's region access is
+   infallible — no caller-side liveness upgrade, no failure path.
+   *Enforced by:* the step loop's ownership, not the caller.
+5. **Escape prevention.** A dep's payload is viewable only at a closure
+   brand inside the step context. Embedding it in an output value is only
+   possible through the combinator that received that dep's carrier — which
+   folds the dep's reach into the output's reach set as a side effect of
+   the call shape. Forgetting to name a reach is not expressible.
+   *Enforced by:* brands.
+
+## Two currencies, one lowering
+
+The library and the embedder each speak their own currency, and exactly one
+place translates.
+
+- **Library currency** (workload-generic): slots, `Deps`, `Await`
+  envelopes, finishes over dep terminals. Nothing in it names a Koan type.
+- **Koan currency**: [`Action`](../src/machine/core/kfunction/action.rs) —
+  `Done` / `Tail` / `AwaitDeps` / `Catch` — the scheduler-agnostic shape a
+  builtin returns, plus dispatch's `Outcome` on the execute side.
+- **The lowering**: the action harness
+  ([runtime.rs](../src/machine/execute/runtime.rs)) and the apply side are
+  the only code that translates Koan currency into library envelopes.
+
+The governance rule, stated so it can be enforced in review: **builtins
+speak `Action` and the protocol combinators; dispatch internals speak the
+library's consumer API; only the harness/apply side constructs raw
+envelopes.** The library's envelope constructors are not visible above the
+harness.
+
+This split is load-bearing for extraction: the library compiles with no
+Koan types in scope, and Koan's semantic layers never reach into scheduler
+internals.
+
+## The consumer API
+
+Working names throughout; shapes are the commitment, identifiers are not.
+
+**Disposition — one owner for "can I depend on this producer?"**
+
+```rust
+enum ProducerDisposition { Errored(E), Ready, Cycle(E), Park }
+fn producer_disposition(&self, producer: NodeId, consumer: NodeId)
+    -> ProducerDisposition
+```
+
+The single implementation of the ready / already-errored / would-cycle /
+must-park classification. Callers keep only their per-site `Ready` policy.
+
+**`Deps` — the dep-list builder.**
+
+```rust
+let mut deps = Deps::new();
+deps.park_on(producer);                    // dedup'd notify-only edge
+let arg = deps.dispatch(request);          // owned edge, returns DepIndex
+```
+
+`Deps` owns the park/owned layout internally. Finishes address results by
+`DepIndex`, never by arithmetic over a shared vector.
+
+**`Await` — the envelope builder.**
+
+```rust
+Await::on(deps)
+    .error_frame(frame)          // label attached if a dep errors
+    .finish(|ctx, deps| ...)     // runs only if no dep errored
+```
+
+The sole constructor of a parked continuation. Error short-circuit is
+built in: a finish never sees an errored dep.
+
+**The step construction context.** What a finish receives and the only way
+it can build a result:
+
+```rust
+ctx.region()                       // the consumer's live region — infallible
+                                   // (guarantee 4)
+ctx.alloc(|b| value)               // reach = own region only: purity is
+                                   // structural, not asserted
+ctx.alloc_with(&[dep_a, dep_b],    // reach = own region ∪ those deps' reaches
+    |b, views| value)              // dep payloads viewable only inside, at
+                                   // brand `b` (guarantee 5)
+dep.carrier()                      // the dep's sealed carrier, freely
+                                   // passable — for policy work
+```
+
+A finish gets **both** brand-confined payload views (for construction) and
+the deps' sealed carriers (for policy: binding results into scopes,
+threading argument carriers onward). Views cannot escape; carriers can,
+safely.
+
+**Two allocation modes, one substrate.** The step context is the
+maximally-checked path. Outside a step, an embedder allocates through held
+region handles — the `yoke` / `merge` construction surface of
+[per-node-memory.md](per-node-memory.md) — with the same carrier and
+reach-set types. In Koan: `CallFrame` holds the handles; `Scope` allocates
+through them.
+
+## Koan above the library
+
+The Koan-side layers this design assumes, so the north star reads as one
+picture:
+
+- **`Action` is complete over its lowering.** Every `Action::Tail`
+  placement/entry combination the dispatch layer needs is expressible, so
+  dispatch hands tails to the one harness lowering rather than lowering by
+  hand.
+- **Protocol combinators** own the recurring builtin shapes above
+  `Action`: resolve-a-type-or-await-its-producer (with the re-resolve-on-
+  wake step inside), and schedule-an-aggregate-literal. A builtin states
+  *which* protocol it is, not the protocol's moving parts.
+- **Scope binding folds reaches through carriers.** Binding a value into a
+  scope takes the value's carrier and unions its reach set into the
+  scope's — policy code composing library values, never inspecting them.
+
+## Open work
+
+- [One producer-disposition primitive and the `Deps` builder](../roadmap/scheduler_library/disposition-and-deps-builder.md)
+- [The `Await` envelope builder](../roadmap/scheduler_library/await-envelope-builder.md)
+- [`Action::Tail` covers every dispatch tail](../roadmap/scheduler_library/action-tail-single-lowering.md)
+- [One dep-finish delivery currency](../roadmap/scheduler_library/witnessed-only-dep-finish.md)
+- [Shrink witnessed.rs's raw retype surface](../roadmap/scheduler_library/witnessed-retype-hygiene.md)
+- [The step owns region liveness](../roadmap/scheduler_library/step-held-region.md)
+- [A compile-enforced boundary for the substrate](../roadmap/scheduler_library/substrate-crate-boundary.md)

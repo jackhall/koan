@@ -6,7 +6,10 @@ land in the right place by partition rather than by intuition.
 
 The root-level docs cover the six cross-cutting concerns of the
 runtime (execution, memory, parsing, error handling, functional
-programming, monadic effects). The [typing/](typing/README.md)
+programming, monadic effects);
+[scheduler-library.md](scheduler-library.md) states the target
+substrate architecture the execution and memory concerns converge on.
+The [typing/](typing/README.md)
 subdirectory carries the type-and-module system as one topic because
 both share the scheduler-driven elaborator and the nominal-identity
 carrier — see [typing/](typing/README.md) for its own index.
@@ -28,6 +31,13 @@ Root concerns:
   surface with its one-wrapper-per-node invariant, and the
   `seal` / `open` / `transfer_into` access surface for storing
   borrow-carrying values in scheduler nodes.
+- [scheduler-library.md](scheduler-library.md) — the north star for the
+  runtime substrate: the scheduler + region memory + witnessed machinery
+  as one extractable, Koan-agnostic library whose public surface is
+  memory-safe by construction; the library/Koan boundary, the five
+  soundness guarantees, the two-currency step contract, and the consumer
+  API (`producer_disposition`, `Deps`, `Await`, the step construction
+  context).
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame

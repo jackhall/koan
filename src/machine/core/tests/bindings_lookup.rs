@@ -6,7 +6,7 @@
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{BindingIndex, FrameStorage, Resolution, TypeResolution};
+use crate::machine::core::{BindingIndex, FrameStorage, NameLookup};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -28,7 +28,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
         )
         .unwrap();
     match scope.bindings().lookup_value("late", None) {
-        Some(Resolution::Value(KObject::Number(n))) => assert_eq!(*n, 7.0),
+        Some(NameLookup::Bound(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected Value(Number(7.0))"),
     }
 }
@@ -63,7 +63,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
         )
         .unwrap();
     match scope.bindings().lookup_value("earlier", Some(5)) {
-        Some(Resolution::Value(KObject::Number(n))) => assert_eq!(*n, 7.0),
+        Some(NameLookup::Bound(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected Value(Number(7.0))"),
     }
 }
@@ -85,7 +85,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
         .lookup_value("placeholder", Some(3))
         .is_none());
     match scope.bindings().lookup_value("placeholder", Some(9)) {
-        Some(Resolution::Placeholder(id)) => assert_eq!(id, NodeId(2)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(2)),
         _ => panic!("placeholder must be visible past its install index"),
     }
 }
@@ -102,7 +102,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
     );
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
-        Some(TypeResolution::Type(KType::Number)),
+        Some(NameLookup::Bound(KType::Number)),
     ));
 }
 
@@ -128,6 +128,9 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -168,14 +171,22 @@ fn lookup_function_filters_per_overload_visibility() {
     };
     let key = sig_num.untyped_key();
     debug_assert_eq!(key, sig_str.untyped_key(), "untyped keys must collide");
-    let f_early =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f_late =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f_early = region.brand().alloc_function(KFunction::new(
+        sig_num,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let f_late = region.brand().alloc_function(KFunction::new(
+        sig_str,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
     let obj_early = region.brand().alloc_object(KObject::KFunction(f_early));
     let obj_late = region.brand().alloc_object(KObject::KFunction(f_late));
     scope
@@ -228,6 +239,9 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -252,6 +266,9 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope

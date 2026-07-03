@@ -1,6 +1,6 @@
 //! Tests for [`relocate_carried`] — the value-relocation hook. It structurally copies a
 //! [`Carried`] into a destination region: the top node is re-allocated there, while the composite
-//! spine shares its `Rc` payloads and a `KFunction` / `KFuture` / first-class `Module` rides a bare
+//! spine shares its `Rc` payloads and a `KFunction` / first-class `Module` rides a bare
 //! borrow preserved verbatim. No region anchor is embedded in the value — the regions a relocated
 //! value reaches are pinned by the carrier's witness set at the `transfer_into` layer, not here.
 
@@ -34,6 +34,9 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 ))
             }),
             child,
+            None,
+            None,
+            false,
         );
         home.brand().alloc_function(kf)
     })
@@ -220,43 +223,6 @@ fn kfunction_borrow_preserved_verbatim() {
             );
         }
         Carried::Object(other) => panic!("expected a KFunction, got {:?}", other.ktype()),
-        Carried::Type(_) => panic!("expected an Object carrier"),
-    }
-}
-
-/// A `KFuture` preserves its `function` borrow through relocation (the future deep-clones its
-/// `parsed`/`args` but shares the immutable region-allocated function).
-#[test]
-fn kfuture_relocation_preserves_function_borrow() {
-    use crate::machine::model::ast::KExpression;
-    use crate::machine::model::types::Record;
-    use crate::machine::KFuture;
-    let root = FrameStorage::run_root();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
-
-    let kf_ref = alloc_local_kf(&source);
-    let future = KFuture {
-        parsed: KExpression::new(vec![]),
-        function: kf_ref,
-        args: Record::new(),
-    };
-    let obj: &KObject = source.brand().alloc_object(KObject::KFuture(future));
-
-    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
-    match relocated {
-        Carried::Object(r @ KObject::KFuture(fut)) => {
-            assert!(
-                dest.region().owns_object(r),
-                "the KFuture node relocated into dest"
-            );
-            assert!(
-                std::ptr::eq(fut.function, kf_ref),
-                "the function borrow is preserved"
-            );
-        }
-        Carried::Object(other) => panic!("expected a KFuture, got {:?}", other.ktype()),
         Carried::Type(_) => panic!("expected an Object carrier"),
     }
 }

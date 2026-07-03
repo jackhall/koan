@@ -8,12 +8,12 @@ fn resolve_type_expr_builtin_leaf_caches() {
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done { kt, .. } => kt,
+        TypeResolution::Done(resolved) => resolved.kt,
         _ => panic!("expected Done"),
     };
     assert_eq!(*first, KType::Number);
     let second = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done { kt, .. } => kt,
+        TypeResolution::Done(resolved) => resolved.kt,
         _ => panic!("expected Done on second call"),
     };
     assert!(
@@ -28,7 +28,7 @@ fn resolve_type_expr_unbound_returns_unbound() {
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("NotABuiltin".into());
     match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Unbound(_) => {}
+        TypeResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
     }
 }
@@ -43,7 +43,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let te = TypeIdentifier::leaf("Point".into());
     let kt = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done { kt, .. } => kt,
+        TypeResolution::Done(resolved) => resolved.kt,
         _ => panic!("expected Done after STRUCT declaration"),
     };
     match kt {
@@ -51,7 +51,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         _ => panic!("expected SetRef for Point"),
     }
     let kt2 = match scope.resolve_type_identifier(&te, None) {
-        TypeIdentifierResolution::Done { kt, .. } => kt,
+        TypeResolution::Done(resolved) => resolved.kt,
         _ => panic!("expected Done on memo hit"),
     };
     assert!(std::ptr::eq(kt, kt2));
@@ -113,14 +113,15 @@ fn ktype_user_refs_yields_nothing_for_leaf() {
     assert!(iter.next().is_none());
 }
 
-mod resolve_type_leaf_carrier {
-    use super::super::{resolve_type_leaf_carrier, TypeLeafCarrier};
+mod bare_leaf_resolution {
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::BindingIndex;
     use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
     use crate::machine::model::ast::TypeIdentifier;
+    use crate::machine::model::types::TypeResolution;
     use crate::machine::model::KType;
+    use crate::machine::TypeHit;
 
     #[test]
     fn builtin_synthesizes_type_carrier() {
@@ -133,11 +134,9 @@ mod resolve_type_leaf_carrier {
             FrameSet::empty(),
         );
         let leaf = TypeIdentifier::leaf("Number".to_string());
-        match resolve_type_leaf_carrier(scope, &leaf, None) {
-            TypeLeafCarrier::Resolved {
-                kt: KType::Number, ..
-            } => {}
-            other => panic!("expected Resolved(Number), got {:?}", carrier_tag(&other)),
+        match scope.resolve_type_identifier(&leaf, None) {
+            TypeResolution::Done(resolved) if *resolved.kt == KType::Number => {}
+            other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
     }
 
@@ -146,14 +145,14 @@ mod resolve_type_leaf_carrier {
         let region = FrameStorage::run_root();
         let scope = run_root_bare(&region);
         let leaf = TypeIdentifier::leaf("Missing".to_string());
-        match resolve_type_leaf_carrier(scope, &leaf, None) {
+        match scope.resolve_type_identifier(&leaf, None) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
-            TypeLeafCarrier::Unbound(message) => assert!(
+            TypeResolution::Unbound(message) => assert!(
                 message.contains("Missing"),
                 "expected an unbound message naming `Missing`, got: {message}",
             ),
-            other => panic!("expected Unbound, got {:?}", carrier_tag(&other)),
+            other => panic!("expected Unbound, got {:?}", outcome_tag(&other)),
         }
     }
 
@@ -208,11 +207,11 @@ mod resolve_type_leaf_carrier {
             .expect("placeholder install");
 
         let leaf = TypeIdentifier::leaf("Node".to_string());
-        match resolve_type_leaf_carrier(scope, &leaf, None) {
-            TypeLeafCarrier::Park(producers) => {
+        match scope.resolve_type_identifier(&leaf, None) {
+            TypeResolution::Park(producers) => {
                 assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
             }
-            other => panic!("expected Park mid-seal, got {:?}", carrier_tag(&other)),
+            other => panic!("expected Park mid-seal, got {:?}", outcome_tag(&other)),
         }
 
         // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
@@ -223,27 +222,27 @@ mod resolve_type_leaf_carrier {
             )))));
         drop(pending_guard);
 
-        match resolve_type_leaf_carrier(scope, &leaf, None) {
-            TypeLeafCarrier::Resolved {
-                kt: KType::SetRef { set: s, index },
-                ..
-            } => {
-                assert_eq!(s.member(*index).name, "Node");
-            }
+        match scope.resolve_type_identifier(&leaf, None) {
+            TypeResolution::Done(resolved) => match resolved.kt {
+                KType::SetRef { set: s, index } => {
+                    assert_eq!(s.member(*index).name, "Node");
+                }
+                other => panic!("expected SetRef after seal, got {other:?}"),
+            },
             other => {
                 panic!(
-                    "expected Resolved(SetRef) after seal, got {:?}",
-                    carrier_tag(&other)
+                    "expected Done(SetRef) after seal, got {:?}",
+                    outcome_tag(&other)
                 )
             }
         }
     }
 
-    fn carrier_tag(c: &TypeLeafCarrier<'_>) -> &'static str {
+    fn outcome_tag(c: &TypeResolution<TypeHit<'_>>) -> &'static str {
         match c {
-            TypeLeafCarrier::Resolved { .. } => "Resolved",
-            TypeLeafCarrier::Park(_) => "Park",
-            TypeLeafCarrier::Unbound(_) => "Unbound",
+            TypeResolution::Done(_) => "Done",
+            TypeResolution::Park(_) => "Park",
+            TypeResolution::Unbound(_) => "Unbound",
         }
     }
 }

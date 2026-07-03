@@ -15,7 +15,6 @@ use super::super::{ignore_results, DepFinish};
 use super::SchedulerView;
 use super::{BodyPlacement, DepRequest};
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
-use crate::machine::core::kfunction::bind_by_name::CallArgs;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::kfunction::exec::{
     home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
@@ -89,10 +88,10 @@ pub(super) fn invoke<'step>(
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
         // Re-key the slot-indexed arg carriers onto their parameter names (the body reads them by
-        // name) before `bind` consumes the working expression.
+        // name).
         let arg_carriers = map_arg_carriers(picked, arg_carriers);
-        let args = match picked.bind(working_expr) {
-            Ok(future) => future.args,
+        let args = match picked.bind_args(&working_expr) {
+            Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };
         return run_action_builtin(view, f, args, arg_carriers);
@@ -116,7 +115,7 @@ pub(super) fn invoke<'step>(
         }
     };
 
-    let bound = match picked.bind_by_name(CallArgs::Positional(args)) {
+    let bound = match picked.bind_by_name(args) {
         Ok(record) => record,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -290,28 +289,25 @@ fn map_arg_carriers<'step>(
     record
 }
 
-/// Lower an action-harness builtin: convert its resolved `args` record into the `KObject::Record`
-/// the `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
+/// Lower an action-harness builtin: wrap its owned `args` record as the `KObject::Record` the
+/// `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
 /// returned `Action` through the shared `run_action`. `arg_carriers` are the per-parameter reach
 /// carriers (a value-embedding body folds / merges the one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
-    args: Record<crate::machine::model::values::ArgValue<'step>>,
+    args: Record<crate::machine::model::values::Held<'step>>,
     arg_carriers: Record<Sealed<CarriedFamily, FrameSet>>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
-    use crate::machine::model::values::{ArgValue, Held};
     use crate::machine::model::KObject;
 
-    let cells = args.map(|av| match av {
-        ArgValue::Object(rc) => Held::Object(rc.deep_clone()),
-        ArgValue::Type(t) => Held::Type(t.clone()),
-    });
+    // `bind_args` already produced a fresh, owned `Held` record — move it straight into the
+    // region-allocated `KObject::Record` the read-only `BodyCtx` exposes.
     let args_obj: &'step KObject<'step> = view
         .current_scope()
         .brand()
-        .alloc_object(KObject::record_of_held(cells));
+        .alloc_object(KObject::record_of_held(args));
     let frame = view.current_frame();
     let chain = view.current_lexical_chain();
     let action = {
@@ -328,9 +324,11 @@ fn run_action_builtin<'step>(
     super::super::runtime::run_action(action)
 }
 
-/// Extract the call's resolved value arguments from `working_expr`'s parts, in order. Returns
-/// `None` if any value part isn't a resolved `Carried` (a `Spliced`-splice or a literal) — the
-/// signal to fall through to the legacy binder. Keyword parts are the signature's own literals.
+/// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`
+/// part contributes its carried value, a literal is resolved into the run region, and keyword parts
+/// (the signature's own literals) contribute nothing. Returns `None` if a value part is neither
+/// spliced nor a literal — unreachable by construction (the bind sites resolve value parts first),
+/// which the caller surfaces as a diagnostic.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
     working_expr: &KExpression<'step>,

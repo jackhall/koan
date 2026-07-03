@@ -31,10 +31,13 @@ impl<'a> KType<'a> {
     }
 
     /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
-    /// scope-aware resolver. The leaf name goes through [`KType::from_name`]; unknown
-    /// names surface as `Err(_)`, and the caller either falls back to a `KType::Unresolved`
-    /// carrier or routes through the scheduler-aware
-    /// [`crate::machine::model::types::elaborate_type_identifier`].
+    /// scope-aware resolver. The single owner of the [`KType::from_name`] builtin-table
+    /// fallback on the resolution path: the bind-time scopeless caller
+    /// ([`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for),
+    /// which falls back to a `KType::Unresolved` carrier on the `Err`) and the scope-aware
+    /// [`elaborate_type_identifier`](crate::machine::model::types::elaborate_type_identifier)
+    /// (which routes its builtin fallback here) both reach `from_name` through this one entry.
+    /// Unknown names surface as `Err(_)`.
     pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType<'a>, String> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }

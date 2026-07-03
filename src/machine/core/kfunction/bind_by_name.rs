@@ -1,60 +1,39 @@
-//! Bind a user-defined call's already-resolved arguments to a function's parameters *by name* — the
-//! binder the `exec` body executor uses, subsuming both call forms (named `f {x = a}` and positional
-//! `f a b`). (Builtins bind via [`KFunction::bind`], which produces a `Record<ArgValue>`.) The
-//! arguments arrive as [`Carried`] values (resolved into the region by dispatch), so binding is a
-//! pure rename map into a `Record<Carried>`: no `ArgValue` wrapping and no per-argument type-check —
-//! that is the picker's job, and the carried type is trusted here.
+//! Bind a user-defined call's already-resolved positional arguments to a function's parameters — the
+//! binder the `exec` body executor uses. A named call (`f {x = a}`) is reordered into positional order
+//! by [`KFunction::reconstruct_positional`] before dispatch, so every call reaches this binder as
+//! positional values in parameter order. (Builtins bind via [`KFunction::bind_args`], which produces
+//! an owned `Record<Held>`.) The arguments arrive as [`Carried`] values (resolved into the region by
+//! dispatch), so binding is a pure rename map into a `Record<Carried>`: no owned-value wrapping and no
+//! per-argument type-check — that is the picker's job, and the carried type is trusted here.
 
 use super::KFunction;
 use crate::machine::model::types::{Argument, ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::Carried;
 use crate::machine::{KError, KErrorKind};
 
-/// A call's resolved arguments, before binding — the single input to [`KFunction::bind_by_name`].
-/// The two forms differ only in how each parameter's value is *located*; binding is identical.
-pub enum CallArgs<'a> {
-    /// `f a b` — positional values in parameter order. Keywords are the signature's own literals
-    /// (matched when the overload was picked), so only the value cells appear here.
-    Positional(Vec<Carried<'a>>),
-    /// `f {x = a, y = b}` — the named-argument record itself; each parameter is taken by its name.
-    /// Leftover names with no matching parameter are dropped (call-by-name width drop, as in
-    /// `reconstruct_positional`).
-    Named(Record<Carried<'a>>),
-}
-
 impl<'a> KFunction<'a> {
-    /// Bind `args` to this function's parameters by name, producing the argument record directly.
-    pub fn bind_by_name(&'a self, args: CallArgs<'a>) -> Result<Record<Carried<'a>>, KError> {
-        bind_args_by_name(&self.signature, args)
+    /// Bind `values` to this function's parameters in signature order, producing the argument record
+    /// directly. Keywords are the signature's own literals (matched when the overload was picked), so
+    /// `values` holds only the value cells.
+    pub fn bind_by_name(&'a self, values: Vec<Carried<'a>>) -> Result<Record<Carried<'a>>, KError> {
+        bind_args_by_name(&self.signature, values)
     }
 }
 
 /// Signature-only core of [`KFunction::bind_by_name`] — needs no body or captured scope, so it is
-/// directly testable. Walks the signature's parameters in order; for each, takes its supplied value
-/// (by name for [`CallArgs::Named`], by position for [`CallArgs::Positional`]) into the record.
+/// directly testable. Walks the signature's parameters in order, taking each parameter's supplied
+/// value by position into the record; too few values is a `MissingArg`.
 pub fn bind_args_by_name<'a>(
     signature: &ExpressionSignature<'a>,
-    args: CallArgs<'a>,
+    values: Vec<Carried<'a>>,
 ) -> Result<Record<Carried<'a>>, KError> {
     let mut bound: Record<Carried<'a>> = Record::new();
-    match args {
-        CallArgs::Named(record) => {
-            for arg in arguments(signature) {
-                let value = *record
-                    .get(&arg.name)
-                    .ok_or_else(|| KError::new(KErrorKind::MissingArg(arg.name.clone())))?;
-                bound.insert(arg.name.clone(), value);
-            }
-        }
-        CallArgs::Positional(values) => {
-            let mut values = values.into_iter();
-            for arg in arguments(signature) {
-                let value = values
-                    .next()
-                    .ok_or_else(|| KError::new(KErrorKind::MissingArg(arg.name.clone())))?;
-                bound.insert(arg.name.clone(), value);
-            }
-        }
+    let mut values = values.into_iter();
+    for arg in arguments(signature) {
+        let value = values
+            .next()
+            .ok_or_else(|| KError::new(KErrorKind::MissingArg(arg.name.clone())))?;
+        bound.insert(arg.name.clone(), value);
     }
     Ok(bound)
 }
@@ -101,25 +80,18 @@ mod tests {
     }
 
     #[test]
-    fn named_and_positional_bind_identically() {
+    fn positional_binds() {
         let storage = FrameStorage::run_root();
         let region = storage.brand();
         let seven = Carried::Object(region.alloc_object(KObject::Number(7.0)));
 
-        let mut named_args = Record::new();
-        named_args.insert("x".to_string(), seven);
-        let named = bind_args_by_name(&double_signature(), CallArgs::Named(named_args))
-            .expect("named binds");
-        assert_eq!(bound_x(&named), 7.0);
-
-        let positional = bind_args_by_name(&double_signature(), CallArgs::Positional(vec![seven]))
-            .expect("positional binds");
-        assert_eq!(bound_x(&positional), 7.0);
+        let bound = bind_args_by_name(&double_signature(), vec![seven]).expect("positional binds");
+        assert_eq!(bound_x(&bound), 7.0);
     }
 
     #[test]
-    fn named_missing_parameter_errors() {
-        let result = bind_args_by_name(&double_signature(), CallArgs::Named(Record::new()));
+    fn missing_parameter_errors() {
+        let result = bind_args_by_name(&double_signature(), Vec::new());
         assert!(matches!(
             result,
             Err(e) if matches!(e.kind, KErrorKind::MissingArg(ref n) if n == "x")

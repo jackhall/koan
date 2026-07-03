@@ -88,9 +88,6 @@ mechanics:
 
 ## Verification
 
-- `unanchored_kfuture_no_arena_borrow_does_not_anchor` and
-  `unanchored_kfuture_with_arena_borrow_does_anchor` cover both sides
-  of the targeted KFuture anchor.
 - `fast_lane_closure_escapes_outer_call_and_remains_invocable` and
   `fast_lane_escaped_closure_with_param_returns_body_value` confirm a
   closure returned from its defining frame remains invocable.

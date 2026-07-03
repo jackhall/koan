@@ -21,19 +21,23 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
-use std::rc::Rc;
-
-use crate::machine::core::CallFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope, TraceFrame};
+use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 use super::{ignore_results, DepFinish, WitnessedDepFinish};
-use crate::machine::core::kfunction::action::{BlockEntry, DepPlacement, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::scheduler::Scheduler;
+
+// The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
+// dispatch-side view `Outcome` consumers reach through `super::dispatch`.
+pub(in crate::machine::execute) use crate::machine::core::kfunction::action::{
+    BodyPlacement, DepRequest,
+};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -59,9 +63,7 @@ pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
-pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
-pub use resolve_type_identifier::TypeIdentifierResolution;
-pub(crate) use resolve_type_identifier::{resolve_type_leaf_carrier, TypeLeafCarrier};
+pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 
 /// The shape classification and classifier live in
 /// [`crate::machine::model::ast`] (pure-structural, cached on the node at parse
@@ -87,25 +89,25 @@ pub(super) fn resolve_name_part<'step>(
     };
     let chain = active_chain.map(|c| &**c);
     match scope.resolve_with_chain(name, chain) {
-        Resolution::Placeholder(producer) => {
+        Some(NameLookup::Parked(producer)) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
         }
-        Resolution::Value(obj) if is_type.is_none() => {
+        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
             return NameOutcome::Resolved(Carried::Object(obj));
         }
-        Resolution::Value(_) | Resolution::UnboundName => {}
+        Some(NameLookup::Bound(_)) | None => {}
     }
     match is_type {
         // The bare-leaf type token routes through the memoized, park-capable bridge. A
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match resolve_type_leaf_carrier(scope, t, active_chain.cloned()) {
+        Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
             // The `&KType` rides the type channel; its reach is recomputed at the read site
             // (`literal.rs`) via `resolve_type_reach`, since `NameOutcome` carries only the value.
-            TypeLeafCarrier::Resolved { kt, .. } => NameOutcome::Resolved(Carried::Type(kt)),
-            TypeLeafCarrier::Unbound(n) => NameOutcome::Unbound(n),
-            TypeLeafCarrier::Park(producers) => match producers.first() {
+            TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
+            TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
+            TypeResolution::Park(producers) => match producers.first() {
                 Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),
                 None => NameOutcome::Unbound(name.to_string()),
             },
@@ -153,51 +155,6 @@ pub(in crate::machine::execute) enum PendingSub<'step> {
     ListLit(Vec<ExpressionPart<'step>>),
     DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
     RecordLit(Vec<(String, ExpressionPart<'step>)>),
-}
-
-/// A dependency a [`Outcome::ParkThenContinue`] declares — the data the read-only decide phase hands
-/// the harness (`KoanRuntime::apply_outcome`; the harness is the sole `&mut Scheduler` holder),
-/// which runs the matching write. The
-/// decide phase issues no graph write itself. `Dispatch` / `*Lit` / `BodyBlock` are fresh producers the harness submits
-/// (and owns); `Existing` is a pre-existing producer the decide phase found that the slot merely
-/// parks on. Deps resolve in declaration order, so a finish reads `results[k]` for the k-th dep —
-/// except an `InScope`-placed `Dispatch` and a `BodyBlock`, whose multi-statement body each fan out
-/// to one resolved producer per statement (the harness `extend`s them in order).
-///
-/// This enum names AST (`KExpression` / `ExpressionPart`) and so lives on the dispatch side, beside
-/// [`PendingSub`]; [`Outcome`] carries it as an opaque type, keeping `outcome.rs` AST-free.
-pub(in crate::machine::execute) enum DepRequest<'step> {
-    Dispatch {
-        expr: KExpression<'step>,
-        placement: DepPlacement<'step>,
-    },
-    ListLit(Vec<ExpressionPart<'step>>),
-    DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
-    RecordLit(Vec<(String, ExpressionPart<'step>)>),
-    /// A body's non-tail statements dispatched as a block, fanning out to one owned producer per
-    /// statement (the harness `extend`s them in declaration order). `placement` picks where they
-    /// bind (see [`BodyPlacement`]): a deferred-return FN's first-call body and a leading-carrying
-    /// arm bind into a fresh per-call frame's own scope; a leading-carrying USING binds into an
-    /// inherited-cart overlay.
-    BodyBlock {
-        statements: Vec<KExpression<'step>>,
-        placement: BodyPlacement<'step>,
-    },
-    Existing(NodeId),
-}
-
-/// Where a [`DepRequest::BodyBlock`]'s statements bind — the two block fan-outs a leading-carrying
-/// tail chooses between.
-pub(in crate::machine::execute) enum BodyPlacement<'step> {
-    /// Dispatch as body-chain siblings in `frame`'s own scope
-    /// ([`dispatch_body`](super::runtime::KoanRuntime::dispatch_body)) — a deferred-return FN's
-    /// first-call body (its non-tail body + the return-type expression) and MATCH / TRY arm leading
-    /// statements. The only dep that carries its own frame.
-    Frame(Rc<CallFrame>),
-    /// Enter `overlay` as a fresh lexical block without a per-call frame
-    /// ([`enter_block`](super::runtime::KoanRuntime::enter_block)) — USING's leading statements,
-    /// which bind into the transparent overlay inside the inherited call-site cart.
-    Overlay(&'step Scope<'step>),
 }
 
 /// Result of a successful keyworded part walk.

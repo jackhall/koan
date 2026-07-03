@@ -27,9 +27,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{
-    BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame, TypeResolution,
-};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NameLookup, Scope, TraceFrame};
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -118,13 +116,13 @@ fn finalize_record_newtype<'a>(
 }
 
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
-/// parks on an in-flight producer (a `Dep::Existing` dep-finish), or errors; a raw sigil repr
+/// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, Dep,
+        arg_object, arg_type, require_bare_type_name, Action, AwaitContinue, DepRequest,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
@@ -138,18 +136,18 @@ pub fn body<'a>(
                     .scope
                     .resolve_type_with_chain(te.as_str(), chain.as_deref())
                 {
-                    Some(TypeResolution::Type(kt)) => {
+                    Some(NameLookup::Bound(kt)) => {
                         Action::Done(finalize_newtype(ctx.scope, name, kt.clone(), bind_index))
                     }
                     // The repr names a type still finalizing in this scheduler: park on its
                     // producer and re-resolve at dep-finish.
-                    Some(TypeResolution::Placeholder(producer)) => {
+                    Some(NameLookup::Parked(producer)) => {
                         let chain_for_finish = chain.clone();
                         let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| match fctx
                             .scope
                             .resolve_type_with_chain(te.as_str(), chain_for_finish.as_deref())
                         {
-                            Some(TypeResolution::Type(kt)) => Action::Done(finalize_newtype(
+                            Some(NameLookup::Bound(kt)) => Action::Done(finalize_newtype(
                                 fctx.scope,
                                 name,
                                 kt.clone(),
@@ -161,7 +159,7 @@ pub fn body<'a>(
                             ))))),
                         });
                         Action::AwaitDeps {
-                            deps: vec![Dep::Existing(producer)],
+                            deps: vec![DepRequest::Existing(producer)],
                             finish,
                         }
                     }
@@ -190,7 +188,9 @@ fn defer_resolved_sigil<'a>(
     inner: KExpression<'a>,
     bind_index: BindingIndex,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue, Dep, DepPlacement};
+    use crate::machine::core::kfunction::action::{
+        Action, AwaitContinue, DepPlacement, DepRequest,
+    };
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
@@ -204,7 +204,7 @@ fn defer_resolved_sigil<'a>(
         ))))),
     });
     Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
+        deps: vec![DepRequest::Dispatch {
             expr: wrapped,
             placement: DepPlacement::OwnScope,
         }],

@@ -4,7 +4,7 @@ use crate::machine::model::Carried;
 /// The workload's value-relocation hook: structurally copy a [`Carried`] into `dest`'s region so the
 /// copy outlives the producer's dying frame. Only the top-level node is re-allocated into `dest`; the
 /// composite spine shares its `Rc` payloads ([`KObject::deep_clone`](crate::machine::model::KObject::deep_clone)),
-/// and a `KFunction` / `KFuture` / first-class `Module` rides a *bare* borrow into its defining region —
+/// and a `KFunction` / first-class `Module` rides a *bare* borrow into its defining region —
 /// preserved verbatim, never deep-copied (a closure may reference anything reachable from its captured
 /// scope). Those surviving borrows are kept alive by the carrier's witness set
 /// ([`FrameSet`](crate::machine::FrameSet)), which [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into)

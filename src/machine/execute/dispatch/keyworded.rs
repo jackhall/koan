@@ -6,8 +6,8 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
-    BindingIndex, FrameSet, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, TraceFrame,
-    ValueCarrierResolution,
+    BindingIndex, DispatchOutcome, FrameSet, KError, KErrorKind, NameLookup, NameOutcome, NodeId,
+    TraceFrame,
 };
 use crate::witnessed::Sealed;
 
@@ -39,26 +39,26 @@ pub(super) fn initial<'step>(
     let scope = ctx.current_scope();
     let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes);
     let resolved = match outcome {
-        ResolveOutcome::Resolved(r) => r,
+        DispatchOutcome::Resolved(r) => r,
         // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
         // bare-identifier and head-deferred lanes — not a fatal `?` abort. `interpret`
         // reads each top-level slot result and re-raises, so the CLI surfacing is unchanged.
-        ResolveOutcome::Ambiguous(n) => {
+        DispatchOutcome::Ambiguous(n) => {
             return Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: expr.summarize(),
                 candidates: n,
             })));
         }
-        ResolveOutcome::Unmatched => {
+        DispatchOutcome::Unmatched => {
             return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "no matching function".to_string(),
             })));
         }
-        ResolveOutcome::UnboundName(name) => {
+        DispatchOutcome::UnboundName(name) => {
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))));
         }
-        ResolveOutcome::Deferred => {
+        DispatchOutcome::Deferred => {
             debug_assert!(
                 pre_subs.is_empty(),
                 "Deferred resolve_dispatch implies no binder pick at submit time; \
@@ -66,7 +66,7 @@ pub(super) fn initial<'step>(
             );
             return install_eager_only(ctx, expr);
         }
-        ResolveOutcome::ParkOnProducers(producers) => {
+        DispatchOutcome::ParkOnProducers(producers) => {
             return install_overload_park(ctx, producers, expr, pre_subs, idx);
         }
     };
@@ -136,27 +136,27 @@ pub(super) fn finish<'step>(
         // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
         // the `Continue` that installs its frame and runs `invoke`, threading the arg carriers
         // (inline-resolved plus eager-sub) collected before the re-resolve.
-        ResolveOutcome::Resolved(r) => {
+        DispatchOutcome::Resolved(r) => {
             super::exec::invoke_continue(r.function, working_expr, arg_carriers)
         }
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
-        ResolveOutcome::Ambiguous(n) => {
+        DispatchOutcome::Ambiguous(n) => {
             Outcome::Done(Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
                 candidates: n,
             })))
         }
-        ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+        DispatchOutcome::Deferred | DispatchOutcome::Unmatched => {
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: working_expr.summarize(),
                 reason: "no matching function".to_string(),
             })))
         }
-        ResolveOutcome::ParkOnProducers(producers) => {
+        DispatchOutcome::ParkOnProducers(producers) => {
             install_overload_park(ctx, producers, working_expr, Vec::new(), idx)
         }
-        ResolveOutcome::UnboundName(name) => {
+        DispatchOutcome::UnboundName(name) => {
             Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
         }
     }
@@ -225,7 +225,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     )
 }
 
-/// `ResolveOutcome::Deferred` arm: stage every eager part and park
+/// `DispatchOutcome::Deferred` arm: stage every eager part and park
 /// on them, with no speculative function pick captured.
 fn install_eager_only<'step>(
     ctx: &SchedulerView<'step, '_>,
@@ -314,7 +314,7 @@ fn part_walk<'step>(
                     // (the type family inverts under `alloc_ktype`).
                     if matches!(c, Carried::Object(_)) {
                         if let Some(name) = bare_name_of(&part.value) {
-                            if let ValueCarrierResolution::Value(carrier) = ctx
+                            if let Some(NameLookup::Bound(carrier)) = ctx
                                 .current_scope()
                                 .resolve_value_carrier(&name, ctx.chain_deref())
                             {

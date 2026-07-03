@@ -14,8 +14,8 @@ runtime value type — the `Object` arm of the scheduler's value currency
 (`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`, `Tagged`,
 `Record`, `Null`) carry no references into
 [`machine::core`](../../src/machine/core.rs). The runtime-reference
-variants do — `KFunction`, `KFuture`, and `Wrapped`
-embed `&'a KFunction<'a>`, `KFuture<'a>`, `&'a KType`, and an
+variants do — `KFunction` and `Wrapped`
+embed `&'a KFunction<'a>`, `&'a KType`, and an
 `Option<Rc<FrameStorage>>` lifecycle anchor. (A module / signature value
 travels the `Type` arm as `KType::Module { &Module, .. }` /
 `KType::Signature { &Signature, .. }`, so those references live on `KType`,
@@ -115,7 +115,7 @@ loops. What it can't do cheaply:
   rewrites a slot in place. A tree-walker needs explicit trampolining
   with a worklist (which is roughly the slot table reinvented).
 - **Forward references.** `LET y = (x); LET x = …` parks `y`'s
-  sub-Dispatch on `x`'s producer via `Resolution::Placeholder` and
+  sub-Dispatch on `x`'s producer via `NameLookup::Parked` and
   wakes when `x` finalizes. A tree-walker would need a pre-pass to
   resolve names or fail on out-of-order definitions.
 - **Replay-park on pending types.** Type-elaboration can suspend on a

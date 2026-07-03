@@ -4,15 +4,16 @@ Koan's runtime is a three-stage pipeline. Each top-level expression flows throug
 
 ```
 source ──▶ parse ──▶ dispatch ──▶ execute
-        KExpression   KFuture      KObject
+        KExpression  ResolveOutcome  KObject
 ```
 
 Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
-returns a [`KFuture`](../../src/machine/core/scope.rs) — the resolved `&KFunction` plus
-its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
+returns a [`ResolveOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) — on a
+unique match, the resolved `&KFunction` with its bound arguments, ready to run but not yet
+executed. **Execution** is what
 the [`Scheduler`](../../src/machine/execute/run_loop.rs) does: it owns a DAG of deferred
-work, decides when each `KFuture` runs, and hands its body the live scope.
+work, decides when each resolved call runs, and hands its body the live scope.
 
 
 ## The model, in three parts

@@ -31,7 +31,8 @@ use crate::machine::core::arena::FrameSet;
 use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    elaborate_type_identifier, DeferredReturn, ElabResult, Elaborator, KType, Record, ReturnType,
+    elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
+    TypeResolution,
 };
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::witnessed::Sealed;
@@ -243,10 +244,10 @@ where
                     let homed = ctx.region.with_scope(|child| {
                         let mut elaborator = Elaborator::new(child);
                         let kt = match elaborate_type_identifier(&mut elaborator, type_expr) {
-                            ElabResult::Done(kt) => kt,
+                            TypeResolution::Done(kt) => kt,
                             // The param install + fn_def carrier scan jointly guarantee resolution;
                             // fall back to Any so the body's own dispatch surfaces any real error.
-                            ElabResult::Park(_) | ElabResult::Unbound(_) => KType::Any,
+                            TypeResolution::Park(_) | TypeResolution::Unbound(_) => KType::Any,
                         };
                         home_return_type(&kt, captured_region)
                     });

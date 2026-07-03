@@ -174,9 +174,7 @@ impl<'a> KType<'a> {
         *self == *carried || carried.is_more_specific_than(self)
     }
 
-    /// True iff a runtime `KObject` value satisfies this declared type. A `KFuture`
-    /// thunk is accepted because its result isn't known yet — the full check defers to
-    /// runtime.
+    /// True iff a runtime `KObject` value satisfies this declared type.
     /// Aggregate-cell satisfaction: an `Object` cell defers to [`matches_value`]; a `Type`
     /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
     /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
@@ -225,7 +223,6 @@ impl<'a> KType<'a> {
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                KObject::KFuture(_) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match obj {
@@ -235,7 +232,6 @@ impl<'a> KType<'a> {
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                KObject::KFuture(_) => true,
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a *module*, which
@@ -415,7 +411,6 @@ impl<'a> KType<'a> {
                     }
                     function_compat(&f.signature, params, ret, false)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match part {
@@ -425,7 +420,6 @@ impl<'a> KType<'a> {
                     }
                     function_compat(&f.signature, params, ret, true)
                 }
-                ExpressionPart::Spliced(Carried::Object(KObject::KFuture(_))) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),

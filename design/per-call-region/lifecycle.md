@@ -13,7 +13,7 @@ lexical-ancestor frames' storage alive. An escaping value pins the
 (see [§ TCO frame reuse](frames.md#tco-frame-reuse)).
 
 A value-side reference into a per-call region is a *bare borrow*: a `KObject::KFunction(&'a
-KFunction<'a>)` or `KObject::KFuture(KFuture<'a>)` reaches the per-call region that owns its captured
+KFunction<'a>)` reaches the per-call region that owns its captured
 scope only through that reference, and a `KType::Module { module }` reaches its child scope's region
 the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
 reaches is kept alive by the value's *carrier* — a producer slot's `FrameSet` witness while the value

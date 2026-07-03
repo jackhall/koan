@@ -122,7 +122,7 @@ The rails the dispatch driver feeds:
     `UnboundName` falls through to the keyworded path so `value_lookup`'s body
     produces the structured error.
   - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
-    routes through `resolve_type_leaf_carrier` over the memoized,
+    routes through the memoized,
     park-capable `Scope::resolve_type_identifier` bridge: a leaf naming an
     earlier still-finalizing binder parks on its producer and re-resolves
     on wake, like every compound type form, and other failures surface
@@ -363,7 +363,7 @@ definitions don't deadlock on their own placeholder. FN-signature
 elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) hits a
 bare type-name leaf whose binder is in `Scope::placeholders` but not yet
-finalized, it returns `ElabResult::Park(producers)` and FN-def's body
+finalized, it returns `TypeResolution::Park(producers)` and FN-def's body
 schedules a dep-finish over those producers that re-runs the signature
 elaboration against the now-final scope at finish time. (See
 [typing/elaboration.md § Layers](../typing/elaboration.md#layers) § Layer 3
@@ -445,7 +445,7 @@ against the now-populated scope:
   `TypeMismatch`.
 - A **`FunctionValueCall`** head-placeholder park (`fn_value::install_head_park`)
   carries the original call expression and re-runs the fast lane once
-  `scope.resolve_with_chain` lands in the `Resolution::Value` arm. Its eager
+  `scope.resolve_with_chain` lands in the `NameLookup::Bound` arm. Its eager
   subs route through `apply_callable::install_eager_subs_track`, which returns
   a `Continuation::Finish` carrying the picked `KFunction` from the head directly;
   `FunctionValueCall` is non-overload-set, so a typed `Future(_)` an eager sub

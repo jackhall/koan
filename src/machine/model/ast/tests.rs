@@ -3,7 +3,7 @@ use crate::machine::model::ast::{
 };
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
-use crate::machine::model::values::ArgValue;
+use crate::machine::model::values::Held;
 use crate::machine::model::Parseable;
 use crate::source::Spanned;
 
@@ -28,7 +28,7 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
     let slot = KType::OfKind(KKind::ProperType);
     match part.resolve_for(&slot) {
-        ArgValue::Type(kt) => assert_eq!(kt, KType::Number),
+        Held::Type(kt) => assert_eq!(kt, KType::Number),
         _ => panic!("expected a Type-arm carrier"),
     }
 }
@@ -38,7 +38,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::ProperType);
     let r = part.resolve_for(&slot);
-    assert!(matches!(r, ArgValue::Type(KType::Unresolved(_))));
+    assert!(matches!(r, Held::Type(KType::Unresolved(_))));
 }
 
 #[test]

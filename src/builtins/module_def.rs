@@ -11,7 +11,7 @@
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{Scope, TraceFrame, TypeCarrierHit};
+use crate::machine::{NameLookup, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
@@ -22,7 +22,8 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, AwaitContinue, Dep, DepPlacement,
+        require_bare_type_name, require_kexpression, Action, AwaitContinue, DepPlacement,
+        DepRequest,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
@@ -41,12 +42,12 @@ pub fn body<'a>(
         child_scope.close();
         // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
         // `&KType` in place from its **stored** reach.
-        if let Some(TypeCarrierHit::Bound { kt, reach }) = fctx
+        if let Some(NameLookup::Bound(hit)) = fctx
             .scope
             .bindings()
             .lookup_type_carrier(&name_for_finish, None)
         {
-            return Action::Done(Ok(fctx.scope.resident_type_carrier(kt, &reach)));
+            return Action::Done(Ok(fctx.scope.resident_type_carrier(hit.kt, &hit.reach)));
         }
         // The module's home-omitted foreign reach, folded from the child scope held **directly** here
         // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
@@ -84,7 +85,7 @@ pub fn body<'a>(
         }
     });
     Action::AwaitDeps {
-        deps: vec![Dep::Dispatch {
+        deps: vec![DepRequest::Dispatch {
             expr: body_expr,
             placement: DepPlacement::InScope(child_scope),
         }],

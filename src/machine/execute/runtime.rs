@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{
-    Action, BlockEntry, Dep, DepPlacement, FinishCtx, FramePlacement,
+    Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement,
 };
 use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ErasedContract,
@@ -285,18 +285,17 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
         }
 
         Action::AwaitDeps { deps, finish } => {
-            // `Existing` deps are park-producers the combine reads but doesn't own; `Dispatch`
-            // deps are owned sub-slots (an `InScope` body fans out one per statement at apply
-            // time). The harness orders the realized deps `[park..., owned...]`; `park_count` is
-            // the park prefix length. The wrapped finish recurses `run_action` on the `AwaitContinue`.
+            // An `Existing` dep is a park-producer the combine reads but doesn't own; every other
+            // arm is an owned sub-slot (a builtin only ever declares `Dispatch` — an `InScope` body
+            // fans out one per statement at apply time). The harness orders the realized deps
+            // `[park..., owned...]`; `park_count` is the park prefix length. The wrapped finish
+            // recurses `run_action` on the `AwaitContinue`.
             let mut park: Vec<DepRequest<'step>> = Vec::new();
             let mut owned: Vec<DepRequest<'step>> = Vec::new();
             for dep in deps {
                 match dep {
-                    Dep::Existing(id) => park.push(DepRequest::Existing(id)),
-                    Dep::Dispatch { expr, placement } => {
-                        owned.push(DepRequest::Dispatch { expr, placement })
-                    }
+                    DepRequest::Existing(_) => park.push(dep),
+                    _ => owned.push(dep),
                 }
             }
             let park_count = park.len();
@@ -362,14 +361,20 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Realize a [`Catch`](Continuation::Catch)'s single watched [`Dep`] to a producer `NodeId`.
-    /// `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as a
-    /// single statement (an `InScope` watched expr enters a fresh single-statement block — see
-    /// [`Self::realize_dispatch`]).
-    fn realize_catch_dep<'a>(&mut self, dep: Dep<'a>) -> NodeId {
+    /// Realize a [`Catch`](Continuation::Catch)'s single watched [`DepRequest`] to a producer
+    /// `NodeId`. `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as
+    /// a single statement (an `InScope` watched expr enters a fresh single-statement block — see
+    /// [`Self::realize_dispatch`]). A `Catch` never watches a dispatcher-only lowering.
+    fn realize_catch_dep<'a>(&mut self, dep: DepRequest<'a>) -> NodeId {
         match dep {
-            Dep::Existing(id) => id,
-            Dep::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
+            DepRequest::Existing(id) => id,
+            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
+            DepRequest::ListLit(_)
+            | DepRequest::DictLit(_)
+            | DepRequest::RecordLit(_)
+            | DepRequest::BodyBlock { .. } => {
+                unreachable!("a Catch watches only a simple Dispatch/Existing dep")
+            }
         }
     }
 

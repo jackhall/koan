@@ -17,13 +17,12 @@ mod tests;
 
 pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily};
 pub use bindings::{
-    ApplyOutcome, BindKind, BindingIndex, Bindings, CarrierHit, FunctionLookup, MemberResolution,
-    PendingBinderGuard, PendingTypeEntry, Resolution, TypeCarrierHit, TypeResolution,
+    ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
+    PendingBinderGuard, PendingTypeEntry, TypeHit, ValueHit,
 };
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
-pub(crate) use scope::ValueCarrierResolution;
-pub use scope::{KFuture, Scope, ScopeKind};
+pub use scope::{Scope, ScopeKind};
 pub use scope_id::ScopeId;
 pub use scope_ptr::ScopeRefFamily;

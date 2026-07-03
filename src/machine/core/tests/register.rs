@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, Resolution};
+use super::super::{BindingIndex, NameLookup};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
@@ -121,6 +121,9 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
@@ -130,6 +133,9 @@ fn register_function_dedupes_exact_signature() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
@@ -152,6 +158,9 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     scope
@@ -161,6 +170,9 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     let err = scope
@@ -188,6 +200,9 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f));
@@ -233,14 +248,22 @@ fn register_function_allows_overload_with_different_arg_types() {
             }),
         ],
     };
-    let f1 =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_num, Body::Builtin(body_no_op), scope));
-    let f2 =
-        region
-            .brand()
-            .alloc_function(KFunction::new(sig_str, Body::Builtin(body_no_op), scope));
+    let f1 = region.brand().alloc_function(KFunction::new(
+        sig_num,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
+    let f2 = region.brand().alloc_function(KFunction::new(
+        sig_str,
+        Body::Builtin(body_no_op),
+        scope,
+        None,
+        None,
+        false,
+    ));
     let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
     let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
     scope
@@ -270,6 +293,9 @@ fn register_function_coexists_with_same_name_value() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -304,6 +330,9 @@ fn register_function_coexists_with_same_name_type() {
         unit_signature(),
         Body::Builtin(body_no_op),
         scope,
+        None,
+        None,
+        false,
     ));
     let obj = region.brand().alloc_object(KObject::KFunction(f));
     scope
@@ -370,7 +399,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
         )
         .unwrap();
     match scope.resolve("x") {
-        Resolution::Placeholder(id) => assert_eq!(id, NodeId(7)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(7)),
         _ => panic!("expected Placeholder"),
     }
 }
@@ -393,13 +422,13 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
         )
         .unwrap();
     match inner.resolve("x") {
-        Resolution::Placeholder(id) => assert_eq!(id, NodeId(3)),
+        Some(NameLookup::Parked(id)) => assert_eq!(id, NodeId(3)),
         other => panic!(
             "expected Placeholder from inner — outer's Value should not shadow it. Got {}",
             match other {
-                Resolution::Value(_) => "Value",
-                Resolution::Placeholder(_) => "Placeholder",
-                Resolution::UnboundName => "Unbound",
+                Some(NameLookup::Bound(_)) => "Bound",
+                Some(NameLookup::Parked(_)) => "Parked",
+                None => "Unbound",
             }
         ),
     }
@@ -422,7 +451,9 @@ fn bind_value_clears_own_placeholder() {
         .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
-    assert!(matches!(scope.resolve("x"), Resolution::Value(KObject::Number(n)) if *n == 42.0));
+    assert!(
+        matches!(scope.resolve("x"), Some(NameLookup::Bound(KObject::Number(n))) if *n == 42.0)
+    );
 }
 
 // Visibility-gate unit tests: exercise `Scope::resolve_with_chain` /
@@ -450,7 +481,7 @@ fn visibility_chain_none_sees_every_entry() {
     let unrelated: Rc<LexicalFrame> = LexicalFrame::root(other_scope_id, 1);
     assert!(matches!(
         scope.resolve_with_chain("late", Some(&unrelated)),
-        Resolution::Value(KObject::Number(n)) if *n == 7.0,
+        Some(NameLookup::Bound(KObject::Number(n))) if *n == 7.0,
     ));
 }
 
@@ -471,10 +502,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
-    assert!(matches!(
-        scope.resolve_with_chain("later", Some(&consumer)),
-        Resolution::UnboundName,
-    ));
+    assert!(scope.resolve_with_chain("later", Some(&consumer)).is_none());
 }
 
 #[test]
@@ -495,7 +523,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
     assert!(matches!(
         scope.resolve_with_chain("earlier", Some(&consumer)),
-        Resolution::Value(KObject::Number(n)) if *n == 7.0,
+        Some(NameLookup::Bound(KObject::Number(n))) if *n == 7.0,
     ));
 }
 
@@ -516,10 +544,9 @@ fn visibility_self_index_hidden_under_strict_less_than() {
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
-    assert!(matches!(
-        scope.resolve_with_chain("self_idx", Some(&consumer)),
-        Resolution::UnboundName,
-    ));
+    assert!(scope
+        .resolve_with_chain("self_idx", Some(&consumer))
+        .is_none());
 }
 
 #[test]
@@ -537,14 +564,11 @@ fn visibility_placeholder_filtered_same_as_value() {
         )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
-    assert!(matches!(
-        scope.resolve_with_chain("ph", Some(&consumer)),
-        Resolution::UnboundName,
-    ));
+    assert!(scope.resolve_with_chain("ph", Some(&consumer)).is_none());
     let consumer_after: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 9);
     assert!(matches!(
         scope.resolve_with_chain("ph", Some(&consumer_after)),
-        Resolution::Placeholder(_),
+        Some(NameLookup::Parked(_)),
     ));
 }
 

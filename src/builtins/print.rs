@@ -9,8 +9,8 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, Action};
-    // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) —
-    // `Held::summarize` is the twin of `ArgValue::summarize`.
+    // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
+    // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
         Some(value) => value.summarize(),
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),

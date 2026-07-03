@@ -9,4 +9,4 @@ pub use types::{
     KType, NominalMember, NominalSchema, Parseable, ProjectedSchema, Record, RecursiveSet,
     ReturnType, Serializable, SignatureElement, UntypedElement, UntypedKey,
 };
-pub use values::{ArgValue, Carried, Held, KKey, KObject};
+pub use values::{Carried, Held, KKey, KObject};

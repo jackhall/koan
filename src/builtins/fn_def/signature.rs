@@ -1,7 +1,7 @@
 //! Signature parsing for the `FN` builtin.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
+use crate::machine::model::types::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::Carried;
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::NodeId;
@@ -56,7 +56,7 @@ pub(crate) enum ParamListOutcome<'a> {
 }
 
 /// Type-name resolution rides on [`elaborate_type_identifier`], which returns
-/// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
+/// `TypeResolution::Park(producers)` for type-binding names that have dispatched but not
 /// finalized. Parking producers and sub-Dispatches accumulate across the whole signature
 /// walk so the caller can register every blocker in one dep-finish.
 pub(crate) fn parse_fn_param_list<'a>(
@@ -87,20 +87,20 @@ pub(crate) fn parse_fn_param_list<'a>(
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
                         match elaborate_type_identifier(elaborator, t) {
-                            ElabResult::Done(kt) => {
+                            TypeResolution::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: name.clone(),
                                     ktype: kt,
                                 }));
                             }
-                            ElabResult::Park(producers) => {
+                            TypeResolution::Park(producers) => {
                                 parks.extend(producers);
                             }
-                            ElabResult::Unbound(msg) if first_err.is_none() => {
+                            TypeResolution::Unbound(msg) if first_err.is_none() => {
                                 first_err =
                                     Some(format!("{msg} in FN signature for parameter `{name}`"));
                             }
-                            ElabResult::Unbound(_) => {}
+                            TypeResolution::Unbound(_) => {}
                         }
                         i += 2;
                     }

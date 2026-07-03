@@ -23,14 +23,14 @@ fn list_of_let_binding_is_ktype_value() {
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeIdentifier;
-    use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
+    use crate::machine::model::types::{elaborate_type_identifier, Elaborator, TypeResolution};
     use crate::machine::model::KType;
     let region = FrameStorage::run_root();
     let scope = run_root_silent(&region);
     run(scope, "LET MyList = :(LIST OF Number)");
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into())) {
-        ElabResult::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
+        TypeResolution::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
 }

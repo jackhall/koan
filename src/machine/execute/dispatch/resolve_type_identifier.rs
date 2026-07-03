@@ -12,25 +12,10 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
-use std::rc::Rc;
-
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::{FrameSet, LexicalFrame, Scope, ScopeId};
+use crate::machine::core::{LexicalFrame, Scope, ScopeId, TypeHit};
 use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::types::KType;
-
-/// Outcome of [`Scope::resolve_type_identifier`]. Mirrors
-/// [`crate::machine::model::types::ElabResult`] but `Done` carries an
-/// region-allocated cache reference plus the resolved binding's home-omitted foreign reach (so a
-/// read witnesses the `&KType` in place from it), and `Park` carries scheduler `NodeId`s.
-pub enum TypeIdentifierResolution<'step> {
-    Done {
-        kt: &'step KType<'step>,
-        reach: FrameSet,
-    },
-    Park(Vec<NodeId>),
-    Unbound(String),
-}
+use crate::machine::model::types::{KType, TypeResolution};
 
 impl<'step> Scope<'step> {
     /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, runs
@@ -42,73 +27,33 @@ impl<'step> Scope<'step> {
         &self,
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
-    ) -> TypeIdentifierResolution<'step> {
-        use crate::machine::model::types::{elaborate_type_identifier, ElabResult, Elaborator};
+    ) -> TypeResolution<TypeHit<'step>> {
+        use crate::machine::model::types::{elaborate_type_identifier, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
         if let Some((kt, reach)) = self.type_identifier_memo_get(te, cutoff) {
-            return TypeIdentifierResolution::Done { kt, reach };
+            return TypeResolution::Done(TypeHit { kt, reach });
         }
         let chain_for_reach = chain.clone();
         let mut elaborator = Elaborator::new(self).with_chain(chain);
-        match elaborate_type_identifier(&mut elaborator, te) {
-            ElabResult::Done(kt) => {
-                let pending = FinalizeGate { scope: self }.pending_producers(&kt);
-                if pending.is_empty() {
-                    let kt_ref: &'step KType<'step> = self.brand().alloc_ktype(kt);
-                    // A bare `TypeIdentifier` resolves to at most one `types` binding, so its reach is
-                    // that binding's stored reach (empty for a builtin / owned type; the child-scope
-                    // reach for a module). Cached alongside `kt` so a hit rebuilds the read carrier.
-                    let reach = self.resolve_type_reach(te.as_str(), chain_for_reach.as_deref());
-                    self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, reach.clone());
-                    TypeIdentifierResolution::Done { kt: kt_ref, reach }
-                } else {
-                    TypeIdentifierResolution::Park(pending)
-                }
+        // Lift the elaborator's owned `Done(KType)` to a memoized region `Done(TypeHit)`,
+        // gating on finalize: a referenced type still in flight turns the `Done` into a `Park`,
+        // while `Park` / `Unbound` forward unchanged.
+        elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
+            let pending = FinalizeGate { scope: self }.pending_producers(&kt);
+            if pending.is_empty() {
+                let kt_ref: &'step KType<'step> = self.brand().alloc_ktype(kt);
+                // A bare `TypeIdentifier` resolves to at most one `types` binding, so its reach is
+                // that binding's stored reach (empty for a builtin / owned type; the child-scope
+                // reach for a module). Cached alongside `kt` so a hit rebuilds the read carrier.
+                let reach = self.resolve_type_reach(te.as_str(), chain_for_reach.as_deref());
+                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, reach.clone());
+                TypeResolution::Done(TypeHit { kt: kt_ref, reach })
+            } else {
+                TypeResolution::Park(pending)
             }
-            ElabResult::Park(producers) => TypeIdentifierResolution::Park(producers),
-            ElabResult::Unbound(msg) => TypeIdentifierResolution::Unbound(msg),
-        }
-    }
-}
-
-/// Outcome of [`resolve_type_leaf_carrier`] — the type-channel adaptation of
-/// [`TypeIdentifierResolution`] for the three bare-leaf token call sites.
-pub(crate) enum TypeLeafCarrier<'step> {
-    /// The memoized `&KType` witnessed in place, ready to ride the type channel (`Carried::Type`) the
-    /// same dispatch transport every other body consumes. `reach` is the resolved binding's
-    /// home-omitted foreign reach, so the read site builds a self-contained carrier from it.
-    Resolved {
-        kt: &'step KType<'step>,
-        reach: FrameSet,
-    },
-    /// The bare leaf names a still-finalizing type; the producer `NodeId`s the caller
-    /// parks on (single-producer in practice, see the module-level invariant).
-    Park(Vec<NodeId>),
-    /// No binding for the leaf name.
-    Unbound(String),
-}
-
-/// Resolve a bare leaf [`TypeIdentifier`] through the memoized, park-capable
-/// [`Scope::resolve_type_identifier`] bridge and adapt the result into a type-channel carrier.
-///
-/// A resolved leaf yields the memoized `&KType` so a struct / union / module / Result /
-/// signature type token reaches a constructor or ATTR call site through the same transport
-/// every other body consumes. A leaf naming a not-yet-sealed type parks on the producers
-/// the bridge surfaces, so a bare leaf never observes a half-sealed identity. A miss
-/// surfaces `Unbound(name)`.
-pub(crate) fn resolve_type_leaf_carrier<'step>(
-    scope: &Scope<'step>,
-    t: &TypeIdentifier,
-    chain: Option<Rc<LexicalFrame>>,
-) -> TypeLeafCarrier<'step> {
-    match scope.resolve_type_identifier(t, chain) {
-        // Witness the resolved `&KType` in place — no `alloc_ktype` re-home — carrying its stored
-        // reach forward for the read site to seal from.
-        TypeIdentifierResolution::Done { kt, reach } => TypeLeafCarrier::Resolved { kt, reach },
-        TypeIdentifierResolution::Park(producers) => TypeLeafCarrier::Park(producers),
-        TypeIdentifierResolution::Unbound(message) => TypeLeafCarrier::Unbound(message),
+        })
     }
 }
 

@@ -4,7 +4,7 @@ A type's constructor is reachable as a `KObject::KFunction`, so it binds whereve
 function value does.
 
 **Problem.** A bare type name in a value position resolves to a `KObject::KTypeValue` (a Type
-value) via [`resolve_type_leaf_carrier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs),
+value) via [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs),
 never a callable function value. Construction only works as a verb-led call expression routed
 through the [`type_call`](../../src/machine/execute/dispatch/single_poll.rs) fast lane into
 [`newtype_construct`](../../src/builtins/newtype_def.rs) — the constructor itself can't be

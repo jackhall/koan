@@ -17,7 +17,7 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, Dep, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
@@ -122,7 +122,7 @@ pub(in crate::machine::execute) enum Continuation<'step> {
     Finish(DepFinish<'step>),
     FinishWitnessed(WitnessedDepFinish<'step>),
     Catch {
-        watched: Dep<'step>,
+        watched: DepRequest<'step>,
         finish: CatchFinish<'step>,
     },
     Resume {

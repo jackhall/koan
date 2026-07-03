@@ -9,11 +9,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::{resolve_type_leaf_carrier, TypeLeafCarrier};
 use crate::machine::core::{KoanRegion, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
-use crate::machine::{KError, KErrorKind, TypeResolution, ValueCarrierResolution};
+use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
 use super::super::lift::relocate_carried;
@@ -75,11 +75,9 @@ pub(super) fn bare_identifier<'step, 'b>(
         // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
         // transitively pins that scope's reach-set — so the read names the value's reach by
         // construction rather than reconstructing it from the value.
-        ValueCarrierResolution::Value(carrier) => Outcome::Done(Ok(carrier)),
-        ValueCarrierResolution::Placeholder(producer) => forward_to_producer(producer),
-        ValueCarrierResolution::UnboundName => {
-            Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name))))
-        }
+        Some(NameLookup::Bound(carrier)) => Outcome::Done(Ok(carrier)),
+        Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
+        None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
 }
 
@@ -88,19 +86,19 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     s: &'b Scope<'b>,
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
-    match resolve_type_leaf_carrier(s, t, ctx.active_chain()) {
+    match s.resolve_type_identifier(t, ctx.active_chain()) {
         // A resolved type leaf is witnessed in place under `s` (the scope it was resolved against) from
         // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
-        TypeLeafCarrier::Resolved { kt, reach } => {
-            Outcome::Done(Ok(s.resident_type_carrier(kt, &reach)))
+        TypeResolution::Done(resolved) => {
+            Outcome::Done(Ok(s.resident_type_carrier(resolved.kt, &resolved.reach)))
         }
-        TypeLeafCarrier::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
+        TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
         // re-resolve once it seals. A producer already terminal-with-error short-circuits.
-        TypeLeafCarrier::Park(producers) => {
+        TypeResolution::Park(producers) => {
             let producer = match producers.first() {
                 Some(p) => *p,
                 None => {
@@ -235,7 +233,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 /// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
 /// branched outcomes routed through the shared apply-a-callable tail:
 ///
-/// 1. `resolve_with_chain` first, only to park: a `Placeholder` (a still-finalizing
+/// 1. `resolve_with_chain` first, only to park: a `Parked` producer (a still-finalizing
 ///    binding, including a recursive/forward functor) parks the whole dispatch via
 ///    `install_overload_park` until the producer finalizes. Bound *values* are not
 ///    branched here — every Type-class carrier (a type alias or a bound functor)
@@ -270,13 +268,13 @@ pub(super) fn type_call<'step>(
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         // `kt` resolves at the cart `'step` directly — it feeds `apply_callable`'s outcome with no
         // re-anchor.
-        Some(TypeResolution::Type(kt)) => kt,
+        Some(NameLookup::Bound(kt)) => kt,
         // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a forward
         // functor) whose producer is not yet terminal: park on the producer and re-run `type_call`
-        // on resume. A terminal producer has already installed `types[name]`, so the `Type` arm
+        // on resume. A terminal producer has already installed `types[name]`, so the `Bound` arm
         // above wins; reaching this arm with a terminal producer means a mid-write/errored
         // producer, so it surfaces `UnboundName` (the resume re-runs the fast lane).
-        Some(TypeResolution::Placeholder(producer)) => {
+        Some(NameLookup::Parked(producer)) => {
             if !ctx.is_result_ready(producer) {
                 let carrier = expr.summarize();
                 return park_resume(

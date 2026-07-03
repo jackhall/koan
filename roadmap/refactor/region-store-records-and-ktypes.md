@@ -45,19 +45,19 @@ each `.ktype()` / lift, where a region reference would be a cheap copy.
   intern field-type records. Recommended: region reference, consistent with how
   resolved leaf types already live in the region.
 - *De-dup the `alloc_ktype(kt.clone())` sites — decided.* Where the source `&KType` is
-  already region-allocated, thread the reference instead of cloning. This overlaps the
-  resolver-leaf redundant-allocation criterion owned by
-  [Unify the type-name resolution path](unify-resolution-outcome.md); coordinate so the
-  leaf is fixed once.
+  already region-allocated, thread the reference instead of cloning. The resolver-leaf
+  redundant allocation is already fixed on the type-name resolution path (see
+  [design/typing/elaboration.md](../../design/typing/elaboration.md)); the sites this item
+  still owns are the record-memo and lift-path clones.
 - *Lift-path clones — open.* The lift path clones element/key/value types even when the
   items are unchanged; decide whether region-stored memos let lift copy a reference.
 
 ## Dependencies
 
-An engine-internal memory/hot-path item that overlaps
-[Unify the type-name resolution path](unify-resolution-outcome.md) (shares the
-`resolve_type_identifier` redundant-allocation target) and sits near
-[Content-addressed type identity](type-identity-registry.md). Update
+An engine-internal memory/hot-path item near
+[Content-addressed type identity](type-identity-registry.md). The
+`resolve_type_identifier` resolver-leaf redundant allocation it once shared is already
+fixed (see [design/typing/elaboration.md](../../design/typing/elaboration.md)). Update
 [design/memory-model.md](../../design/memory-model.md) if the region-storage families it
 names change.
 
