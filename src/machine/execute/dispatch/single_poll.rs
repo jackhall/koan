@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{KoanRegion, Scope};
+use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};

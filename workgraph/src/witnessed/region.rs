@@ -80,18 +80,18 @@ impl<W: StorageProfile> Region<W> {
 
     /// Number of values stored in family `K`'s sub-arena. Read-only; exposes no `&Arena`, so it
     /// cannot be used to bypass the gate.
-    pub(crate) fn family_len<K: Stored<W>>(&self) -> usize {
+    pub fn family_len<K: Stored<W>>(&self) -> usize {
         K::sub_arena(&self.storage).len()
     }
 
     /// Whether `addr` was recorded by a prior [`Stored::record_local`] on this frame.
-    pub(crate) fn owns_addr(&self, addr: usize) -> bool {
+    pub fn owns_addr(&self, addr: usize) -> bool {
         self.membership.borrow().contains(&addr)
     }
 
     /// Record `addr` into the membership side-table. Called by a family's
     /// [`Stored::record_local`]; the only writer.
-    pub(crate) fn record_addr(&self, addr: usize) {
+    pub fn record_addr(&self, addr: usize) {
         self.membership.borrow_mut().push(addr);
     }
 
@@ -122,7 +122,7 @@ impl<W: StorageProfile> Region<W> {
     /// region pins the pointee for the whole synchronous `project` call and the brand keeps the view
     /// from outliving it, so this surface carries **no `unsafe`** of its own beyond the substrate's
     /// single audited retype.
-    pub(crate) fn alloc<K: Stored<W>, R>(
+    pub fn alloc<K: Stored<W>, R>(
         &self,
         value: K::At<'_>,
         project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
@@ -141,7 +141,7 @@ impl<W: StorageProfile> Region<W> {
     /// Reachable only through a [`RegionBrand`](crate::machine::core::RegionBrand)'s `alloc_*` wrappers
     /// (the co-located residents: a registered `&KType`, a child `&Scope`); the witnessed terminals go
     /// through the brand-confined [`alloc`](Self::alloc). A bare `&Region` exposes neither.
-    pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
+    pub fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
         let stored: &'a K::At<'static> = self.store::<K>(value);
         // SAFETY: lifetime-only retype of a single-lifetime family (the `Reattachable` contract); a
         // reference is a thin/fat pointer whose layout is identical across the content lifetime. The
@@ -157,3 +157,9 @@ impl<W: StorageProfile> Default for Region<W> {
         Self::new()
     }
 }
+
+// SAFETY: a `Region`'s values live in a `typed_arena`, whose backing pages never move while the
+// region is borrowed, so a held `&Region` keeps any pointee alloc'd in it (or a strict ancestor it
+// roots) at a fixed address — the bound the consumer-pull lift's frameless re-anchor relies on to
+// witness the destination lifetime.
+unsafe impl<W: StorageProfile> super::Witness for Region<W> {}

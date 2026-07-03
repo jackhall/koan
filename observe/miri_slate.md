@@ -1,11 +1,8 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 5
+src/machine/core/arena.rs: 4
 src/machine/model/types/ktype_predicates.rs: 1
-src/witnessed.rs: 20
-src/witnessed/doctest_fixture.rs: 5
-src/witnessed/region.rs: 1
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -83,8 +80,10 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-44 tests, grouped by the unsafe site each pins down. Names below are the exact
-test identifiers; pass them after `--` in the Miri command.
+30 tests, grouped by the unsafe site each pins down. Names below are the exact
+test identifiers; pass them after `--` in the Miri command. A further 14 tests
+covering the witnessed substrate live in the `workgraph` crate's own slate
+([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
 
 **`CallFrame` lifetime erasure** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the
 child-scope `Option<SealedExtern<ScopeRefFamily>>` opened at a `for<'b>` brand via `CallFrame::with_scope`
@@ -103,7 +102,7 @@ end-to-end — the run scope outlives the frame, so no separate minimal test.
 - `call_frame_chained_outer_frame_walkable`
 - `with_scope_relocates_seed_value_into_brand`
 
-**`Region` alloc engine under live borrows** ([src/witnessed/region.rs](../src/witnessed/region.rs)) — the
+**`Region` alloc engine under live borrows** ([workgraph/src/witnessed/region.rs](../workgraph/src/witnessed/region.rs)) — the
 single `store` path erases the value to `'static` (the move-through-union `erase_store`), writes it to
 the sub-arena, and records its address into the `membership` `RefCell` via `borrow_mut`; two surfaces
 re-anchor it, both pinned here while a prior `&` from the same region is shared-borrowed. The bare-`&'a`
@@ -278,74 +277,17 @@ cart `Rc` locally and routes this helper) all funnel through it — none carries
 It runs the transmute defined in the group above, so `node_scope_yoked_child_erase_open_roundtrip`
 — and end-to-end every scheduler-driving slate test — pins it. No separate minimal test.
 
-**`retype` primitive — `Erased<T>` / `Witnessed<T, W>`** ([src/witnessed.rs](../src/witnessed.rs))
-— the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
-`transmute_copy` behind a `ManuallyDrop`, the one site `transmute`'s GAT size-proof can't cover),
-reached through `Erased<T>::erase` / `reattach`, the
-consuming externally-witnessed `SealedExtern::open` (which reattaches a witness-less carrier — or a
-`zip`-combined product / `seal_option` optional of carriers — at a generative `for<'b>` brand the
-supplied witness pins), and through the `Witnessed` accessors: the rank-2 branded `with`
-(borrow + read) and `map` (consume + transform), the borrow-bounded `read` that hands the carrier
-*out* at the `&self` borrow — sound because its content lifetime is the borrow itself (not a free
-`'b`), so the bundled `Witness` pins it for exactly that long — and the rank-2 branded `merge`, which
-re-anchors *two* carriers under one `'b`, runs a binding projection, and re-seals under the
-descendant witness (the one whose ancestor-chain pin keeps both regions live), rejecting unrelated
-carts. The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
-through a `for<'b>` closure (no `unsafe` of its own — it routes the safe `erase`), so it is exercised
-for the brand discipline, not a retype. The `unsafe impl Reattachable` families declare
-layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
-primitive: `CarriedFamily`
-([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)), `ContractFamily`,
-`ContFamily`, `ScopeFamily`, the `BoxFamily` non-`Copy` stand-in, and the generic `And` product /
-`OptionOf` optional families the `zip` / `seal_option` combinators seal. The tests erase a
-borrow-carrying family to the `'static` store and
-re-anchor it through every entry point — the witness-less helpers, the borrow-bounded `read` (read
-after the original binding drops), and the `Witnessed` accessors that drop the *original* binding and
-read back only through the bundled witness (the load-bearing case for the invariant `Cell<&'r u32>`
-carrier) — plus `map`'s branded projection (binding a cart-coherent `&'b` value into the invariant
-scope slot, the write `with` rejects). `yoke` sources a carrier from a stand-in cart's region, and
-`merge` binds an ancestor-cart ref into a descendant-cart scope at the shared brand and re-seals under
-the descendant (read back after both call handles drop), plus a `None`-on-unrelated-carts check.
-`SealedExtern::open` is exercised distinctly from the bundled `with` / `read`: a witness-less carrier
-opened against a *separately-held* `Rc` witness (invariant `Cell<&'r u32>` read back after the
-original drops), a **non-`Copy`** `Box<&'r u32>` consumed by the open (the boxed-continuation shape
-`Copy`-bounded `Sealed::open` excludes), and a heterogeneous `zip` of a boxed carrier + a present
-`seal_option` optional + a reference opened together at one brand (plus the `None`-optional arm). The
-escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` / `merge` /
-`SealedExtern::open`.
-
-The **production** realisation of these `unsafe trait` impls — `Witness` / `WitnessRegion` /
-`MergeWitness` for `FrameSet`, the unified region-owner witness in
-[src/machine/core/arena.rs](../src/machine/core/arena.rs) — is covered here cross-file: its
-region-plus-`outer`-ancestry shape is exactly what the `Rc<TestCart>` stand-in mirrors, so
-`yoke_sources_carrier_from_witness_region` and `merge_binds_ancestor_ref_into_descendant_scope`
-pin its yoke / merge / subsumption (drop-an-ancestor-still-pinned-by-the-chain) UB shapes, and
-`merge_rejects_unrelated_carts` the no-common-pin verdict. `FrameSet::merge`'s antichain logic
-(union with `outer`-chain subsumption) is pinned by the `frameset_*` / `pins_region_walks_outer_chain`
-unit tests in [arena/tests.rs](../src/machine/core/arena/tests.rs).
-
-- `erased_roundtrip`
-- `read_borrow_bounded_witness_only`
-- `branded_ref_reads_erased_store`
-- `covariant_roundtrip_witness_only`
-- `invariant_roundtrip_witness_only`
-- `continuation_binds_cart_coherent_value_via_map`
-- `invariant_same_brand_mutation`
-- `yoke_sources_carrier_from_witness_region`
-- `merge_binds_ancestor_ref_into_descendant_scope`
-- `merge_rejects_unrelated_carts`
-- `sealed_extern_open_externally_witnessed`
-- `sealed_extern_open_consumes_non_copy`
-- `sealed_extern_zip_opens_heterogeneous_at_one_brand`
-- `seal_option_none_opens_to_none`
-
-**`ReturnContract` re-attach — Done-boundary open** ([src/witnessed.rs](../src/witnessed.rs))
-— the contract opens at the run-loop step brand alongside the continuation (a `seal_option` optional
-operand of the step's `SealedExtern::open`), so it is a live `ReturnContract<'b>` at the Done arm with
-no reattach in `finalize.rs`; the `unsafe` lives in `SealedExtern::open` (`Erased::reattach`). The
-start cart pins the contract's home region (a strict ancestor of the producer frame).
-`erased_roundtrip` / `sealed_extern_zip_opens_heterogeneous_at_one_brand` (and end-to-end
-`recursive_tagged_match_no_uaf`) pin it. No separate minimal test.
+The `retype` primitive (`Erased<T>` / `Witnessed<T, W>`) and the `ReturnContract`
+re-attach it backs at the Done boundary are audited in the `workgraph` crate's own
+slate — [workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) — since
+their tests live in that crate's lib test binary, a separate `cargo test` target from
+koan's. `CarriedFamily`'s `unsafe impl Reattachable`
+([src/machine/model/values/carried.rs](../src/machine/model/values/carried.rs)) and this
+embedder's `Witness` / `WitnessRegion` / `MergeWitness` for `FrameSet`
+([src/machine/core/arena.rs](../src/machine/core/arena.rs)) are the Koan-side instantiations
+that primitive routes for; `FrameSet::merge`'s antichain logic (union with `outer`-chain
+subsumption) is pinned by the `frameset_*` / `pins_region_walks_outer_chain` unit tests in
+[arena/tests.rs](../src/machine/core/arena/tests.rs), which run under plain `cargo test`.
 
 **`ContinuationFamily` continuation erasure** ([src/machine/execute/outcome.rs](../src/machine/execute/outcome.rs))
 — the continuation generalizes the contract discipline from a `ReturnContract` enum to the whole
@@ -362,25 +304,12 @@ read.
 
 - `erased_continuation_open_roundtrip`
 
-**`SealedExtern::open` — run-loop step-tail open** ([src/witnessed.rs](../src/witnessed.rs))
-— the `unsafe { self.value.reattach() }` inside `SealedExtern::open` runs the transmute defined in the
-`retype` group above with none of its own, opening the run-loop step's continuation, contract, and
-consumer `dest` region together at one generative `for<'b>` brand the start cart pins (`run_step`); the
-dep slice and an `Outcome::Forward` pull are then born at `'b` from the opened region. The
-`sealed_extern_*` minimal tests above and end-to-end every scheduler-driving slate test pin it. The
-`run_loop.rs` / `finalize.rs` call sites carry no `unsafe` of their own (the `open` brand confines the
-reattach). No separate minimal test beyond the `retype` group's.
-
-**Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
-— the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /
-`WitnessRegion` / `MergeWitness` for `Cart` back the six `compile_fail` soundness guards and their
-compiling twins (`cargo test --doc witnessed`), so a signature change to those traits has one shared
-fixture to update instead of five pasted copies. Each impl is a marker with no runtime `unsafe`
-operation of its own, asserting the identical `&'r u32` / `Cell<&'r u32>` layout-invariance and
-owned-`Vec` fixed-address pin shapes the `retype` group's separate `Rc<TestCart>` stand-in (in
-`witnessed/tests.rs`, excluded from the audit as test scaffolding) already Miri-verifies. Doctests run
-under `cargo test --doc`, not Miri, so there is no separate slate test here — the shape is pinned by
-the `retype` group above.
+The run-loop step-tail `SealedExtern::open` (`run_step`, opening the continuation, contract, and
+consumer `dest` region together at one generative brand) and the doctest fixture markers backing the
+`compile_fail` soundness guards are audited in
+[workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md) alongside the `retype` group they
+route through — [src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs)'s and
+`finalize.rs`'s call sites carry no `unsafe` of their own.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is

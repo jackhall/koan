@@ -19,7 +19,7 @@ values (the constructor path in
 [`KObject`](../../src/machine/model/values/kobject.rs) only once its parts are done), so
 a field cannot point back at a value that does not yet exist. And the region cycle gate
 ([`obj_anchors_to`](../../src/machine/core/arena.rs), consulted by
-[`Region::alloc`](../../src/witnessed/region.rs)) actively redirects any allocation
+[`Region::alloc`](../../workgraph/src/witnessed/region.rs)) actively redirects any allocation
 whose value would hold an `Rc` back into its own frame to the escape frame —
 specifically to prevent a refcount cycle, which would leak under the refcount-based
 reclamation the memory model assumes. So `NEWTYPE Node = :{next :Node}` types fine, yet

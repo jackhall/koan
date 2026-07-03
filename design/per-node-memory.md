@@ -85,7 +85,7 @@ embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness 
 
 The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
 region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
-widens into the region *set* the aggregate accumulates in through a distinct [`into_set`](../src/witnessed.rs)
+widens into the region *set* the aggregate accumulates in through a distinct [`into_set`](../workgraph/src/witnessed.rs)
 lift, kept separate from `yoke` so minting stays a one-region act and combining regions stays `merge`'s
 job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
@@ -111,10 +111,10 @@ through [`Scope::seal_value`](../src/machine/core/scope.rs), a region-referencin
 construction ([`Scope::reach_of_child`](../src/machine/core/scope.rs), from the child scope the birth
 site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
 `yoke` brand. The region-pure
-carrier is built by the purpose-built [`Witnessed::resident`](../src/witnessed.rs), which fixes the
+carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/witnessed.rs), which fixes the
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
-within-step transient, the producing frame folded in at close ([`reseal_under`](../src/witnessed.rs))
+within-step transient, the producing frame folded in at close ([`reseal_under`](../workgraph/src/witnessed.rs))
 before the carrier is stored. A node's own value terminal is witnessed the same way — a region-pure
 result (a spliced value, a builtin's synchronous result) through `resident`, a dep-reaching result by
 folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
@@ -359,7 +359,7 @@ the carrier a node holds, not an arena the node owns.
 
 The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
 reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
-beside its carrier in the `witnessed` module and the opaque [`Sealed`](../src/witnessed.rs)
+beside its carrier in the `witnessed` module and the opaque [`Sealed`](../workgraph/src/witnessed.rs)
 storage form (`seal` / `open`), with the node result slot rerouted onto it. Its **value reads** now
 nest under the rank-2 `open`: two driver accessors copy out inside the brand — a value read
 ([`read_result_with`](../src/scheduler.rs)) and a borrow-free error probe (`result_error`) — and the
@@ -367,7 +367,7 @@ three ride-up-stack dispatch sites resolve at the cart `'step` directly, so the 
 self-witnessed `Sealed::read` is gone, and the scope channel — the frame-side reads and the seed-side
 binds alike — fold onto `open` too, and the borrow-bounded `attach` is deleted. The witnessed
 alloc surface has landed — region allocation hands back a foreign-reach-only
-[`Witnessed`](../src/witnessed.rs) with the active frame folded in at close, and the frame builder's
+[`Witnessed`](../workgraph/src/witnessed.rs) with the active frame folded in at close, and the frame builder's
 child scope is born externally-witnessed — and every object- and type-channel construction *terminal*
 builds through it, a seal folding the already-witnessed carrier's reach rather than re-anchoring a
 separately-built value. Allocation is reachable only through the branded

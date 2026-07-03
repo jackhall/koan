@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::machine::core::KoanRegionExt;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};

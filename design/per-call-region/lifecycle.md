@@ -110,7 +110,7 @@ The allocation engine therefore needs **no cycle gate**. A stored value holds no
 a region, so storing a composite that carries an escaping closure into any region — including the one
 the closure's scope lives in — can never close a region↔value back-edge. The named safe wrappers
 (`alloc_object`, `alloc_ktype`, `alloc_function`, `alloc_scope`, `alloc_module`, `alloc_signature`,
-`alloc_operator_group`) each route the single [`alloc`](../../src/witnessed/region.rs) engine, which
+`alloc_operator_group`) each route the single [`alloc`](../../workgraph/src/witnessed/region.rs) engine, which
 erases the value to `'static`, stores it, and re-anchors the store to `'a` with no redirect step. The
 engine lives generically in the `Region<W>` substrate (`src/witnessed/region.rs`), names no Koan type,
 and carries **no `unsafe`** of its own: its erase-store routes the scheduler's audited

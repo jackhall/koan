@@ -35,7 +35,7 @@ a concept, not a final identifier.
 - **Brand** — a `for<'b>` closure lifetime used as an unforgeable tag: a
   reference issued at brand `'b` cannot escape the closure that introduced
   `'b`. The substrate's construction surface
-  ([witnessed.rs](../src/witnessed.rs)) is built on this device.
+  ([witnessed.rs](../workgraph/src/witnessed.rs)) is built on this device.
 - **Carrier** — a stored value bundled with its witness (`Witnessed`), or
   its storable, reopenable form (`Sealed`). A carrier is born at the
   allocation site already naming everything that keeps it alive.
@@ -65,7 +65,7 @@ a concept, not a final identifier.
 - **Regions, wholesale**: arenas, region owners, liveness. The generic
   region engine of [arena.rs](../src/machine/core/arena.rs) is library
   code; embedders allocate only through it.
-- The witnessed substrate ([witnessed.rs](../src/witnessed.rs)): brands,
+- The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
 - The reach set, as an opaque type (see Vocabulary).
 - Terminal storage and delivery: sealing results into slots, handing dep

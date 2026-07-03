@@ -59,6 +59,7 @@ pub unsafe trait Reattachable {
 /// size, alignment, and validity for every `'r`, per [`Reattachable`]'s contract) — is discharged
 /// **once** here, so the carrier sites carry no open-coded `unsafe impl`. The macro cannot *check*
 /// layout-invariance, so only invoke it with families that genuinely satisfy the contract.
+#[macro_export]
 macro_rules! reattachable {
     ($($family:ty => $at:ty),+ $(,)?) => {$(
         // SAFETY: see the macro docs — `$family`'s `At<'r>` is layout-invariant in `'r`.
@@ -67,7 +68,7 @@ macro_rules! reattachable {
         }
     )+};
 }
-pub(crate) use reattachable;
+pub use reattachable;
 
 /// The single lifetime-retype primitive: move an `A` out as a `B`, where the caller guarantees `A`
 /// and `B` are one type up to a lifetime. Private to this module and reached only through the
@@ -97,7 +98,7 @@ unsafe fn retype<A, B>(value: A) -> B {
 /// `'static`, until a witnessed re-anchor), so this is sound to call without `unsafe`. The
 /// run-lifetime storage substrate routes its region writes through here instead of carrying its own
 /// transmute, so [`retype`] is the single audited home for value lifetime-erasure.
-pub(crate) fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
+pub fn erase_to_static<T: Reattachable>(value: T::At<'_>) -> T::At<'static> {
     // SAFETY: lifetime-only retype for storage of a single-lifetime family (the `Reattachable`
     // layout-invariance contract); the erased value is stored, not used, until a re-anchor.
     unsafe { retype::<T::At<'_>, T::At<'static>>(value) }
@@ -131,7 +132,7 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
 /// re-anchored either through a [`Witnessed`] that bundles its witness, or transiently through the
 /// externally-witnessed [`SealedExtern::open`] (routing [`Self::reattach`]) against a borrowed witness.
 /// The single audited home for the carrier families; see the module docs.
-pub(crate) struct Erased<T: Reattachable> {
+pub struct Erased<T: Reattachable> {
     inner: T::At<'static>,
 }
 
@@ -139,7 +140,7 @@ impl<T: Reattachable> Erased<T> {
     /// Erase a live carrier to its storable `'static` form. Safe: forgetting a lifetime for
     /// storage cannot fabricate one — the value is stored, never used at `'static`, until a
     /// witnessed re-anchor.
-    pub(crate) fn erase(live: T::At<'_>) -> Self {
+    pub fn erase(live: T::At<'_>) -> Self {
         Erased {
             inner: erase_to_static::<T>(live),
         }
@@ -156,7 +157,7 @@ impl<T: Reattachable> Erased<T> {
     /// The caller holds a liveness witness — the carrier's frame `Rc`, or the run region — that pins
     /// the pointee for all of `'r`, and re-anchors only transiently while that witness is held, so
     /// the fabricated `'r` cannot outlive the pointee. `'r` is driven by the return-type annotation.
-    pub(crate) unsafe fn reattach<'r>(self) -> T::At<'r> {
+    pub unsafe fn reattach<'r>(self) -> T::At<'r> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
         unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
     }
@@ -214,6 +215,33 @@ pub unsafe trait WitnessRegion: Witness {
     type Region: ?Sized;
     /// Borrow the pinned region.
     fn region(&self) -> &Self::Region;
+}
+
+/// What an embedder's frame-owner type (held behind an `Rc`) implements to pick up
+/// [`WitnessRegion`] via the blanket impl below — the embedder's frame-owner type is foreign to
+/// this crate, so it cannot itself be the target of a direct `WitnessRegion for Rc<F>` impl; this
+/// trait lets the embedder supply the `region()` projection while the blanket impl carries the
+/// orphan-rule-legal `Rc` wrapping.
+///
+/// # Safety
+///
+/// Same obligation as [`WitnessRegion::region`]: the returned reference must stay live and at a
+/// fixed address for as long as `Self` is held.
+pub unsafe trait RegionOwner {
+    /// The region whose contents `Self` pins.
+    type Region: ?Sized;
+    /// Borrow the pinned region.
+    fn region(&self) -> &Self::Region;
+}
+
+// SAFETY: `Rc<F>` is `StableDeref` (asserted for `Witness` above), so `F::region` — a reference
+// into `F` — stays live and at a fixed address for as long as the `Rc` is held, satisfying
+// `WitnessRegion`'s obligation given `F`'s own `RegionOwner` obligation holds.
+unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
+    type Region = F::Region;
+    fn region(&self) -> &Self::Region {
+        RegionOwner::region(&**self)
+    }
 }
 
 /// A [`Witness`] whose values compose to the one that pins **both** operands' regions — the seam
@@ -278,7 +306,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
     /// region-pure value under the empty witness), or [`merge`](Self::merge) (folding two co-located
     /// carriers) — so no site pairs an arbitrary value with an arbitrary witness.
-    pub(crate) fn from_erased(value: Erased<T>, witness: W) -> Self {
+    pub fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
 
@@ -297,7 +325,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     ///
     /// Safe because the erase cannot fabricate a lifetime, and `W::default()` is the pins-nothing
     /// element of the witness type (the empty set).
-    pub(crate) fn resident(value: T::At<'_>) -> Self
+    pub fn resident(value: T::At<'_>) -> Self
     where
         W: Default,
     {
@@ -321,8 +349,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// region stays live and fixed-address under the held witness — so the later re-anchor cannot dangle.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     ///
     /// let cart = Cart(vec![1, 2, 3]);
     /// // A region-derived borrow satisfies the `for<'b>` brand — the compiling twin of the guard below.
@@ -331,8 +359,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     ///
     /// let outside: u32 = 7;
     /// let cart = Cart(vec![1, 2, 3]);
@@ -362,8 +390,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// because `R` cannot mention the universally-quantified `'b`.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{Cart, InvFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, InvFamily};
+    /// use workgraph::witnessed::Witnessed;
     /// use std::cell::Cell;
     ///
     /// let cart = Cart(vec![42]);
@@ -374,8 +402,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{Cart, InvFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, InvFamily};
+    /// use workgraph::witnessed::Witnessed;
     /// use std::cell::Cell;
     ///
     /// let cart = Cart(vec![42]);
@@ -407,8 +435,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// to be read after the witness drops — the `for<'b>` quantifier rejects it at compile time.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     ///
     /// let cart = Cart(vec![5]);
     /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
@@ -418,8 +446,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     ///
     /// let cart = Cart(vec![5]);
     /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
@@ -465,8 +493,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// witness pins the sealed carrier's backing thereafter.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     /// use std::marker::PhantomData;
     ///
     /// let a = Cart(vec![1]);
@@ -479,8 +507,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::Witnessed;
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::Witnessed;
     /// use std::marker::PhantomData;
     ///
     /// let a = Cart(vec![1]);
@@ -643,8 +671,8 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// [`Witnessed::map`] guards.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::{Sealed, Witnessed};
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::{Sealed, Witnessed};
     ///
     /// let cart = Cart(vec![42]);
     /// let sealed: Sealed<RefFamily, Cart> =
@@ -655,8 +683,8 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
-    /// use koan::witnessed::{Sealed, Witnessed};
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::{Sealed, Witnessed};
     ///
     /// let cart = Cart(vec![42]);
     /// let sealed: Sealed<RefFamily, Cart> =
@@ -708,7 +736,7 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// duplicate of the producer slot's own carrier (so the dep arrives **witnessed**, its reach named,
     /// rather than re-wrapped by pairing the value with a separately-asserted witness); the producer keeps its terminal for
     /// other consumers. Routes [`Witnessed::duplicate`], so it adds no `unsafe`.
-    pub(crate) fn duplicate(&self) -> Self
+    pub fn duplicate(&self) -> Self
     where
         Erased<T>: Copy,
         W: Clone,
@@ -745,14 +773,14 @@ pub struct SealedExtern<T: Reattachable> {
 impl<T: Reattachable> SealedExtern<T> {
     /// Seal an **already-erased** carrier into its externally-witnessed dormant form — the entry for a
     /// carrier the node already stores erased (the continuation / contract). No witness is bundled.
-    pub(crate) fn seal(value: Erased<T>) -> Self {
+    pub fn seal(value: Erased<T>) -> Self {
         SealedExtern { value }
     }
 
     /// Erase a **live** carrier directly into the dormant form — the entry for a value re-anchored at
     /// the access rather than recovered from node storage (the run-loop `dest` region). Safe for the
     /// same reason as [`Erased::erase`]: forgetting a lifetime for storage cannot fabricate one.
-    pub(crate) fn erase(live: T::At<'_>) -> Self {
+    pub fn erase(live: T::At<'_>) -> Self {
         SealedExtern {
             value: Erased::erase(live),
         }
@@ -778,8 +806,8 @@ impl<T: Reattachable> SealedExtern<T> {
     /// but over a **consumed**, externally-witnessed carrier.
     ///
     /// ```
-    /// use koan::witnessed::doctest_fixture::{seal_extern, RefFamily};
-    /// use koan::witnessed::SealedExtern;
+    /// use workgraph::witnessed::doctest_fixture::{seal_extern, RefFamily};
+    /// use workgraph::witnessed::SealedExtern;
     /// use std::rc::Rc;
     ///
     /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
@@ -790,8 +818,8 @@ impl<T: Reattachable> SealedExtern<T> {
     /// ```
     ///
     /// ```compile_fail
-    /// use koan::witnessed::doctest_fixture::{seal_extern, RefFamily};
-    /// use koan::witnessed::SealedExtern;
+    /// use workgraph::witnessed::doctest_fixture::{seal_extern, RefFamily};
+    /// use workgraph::witnessed::SealedExtern;
     /// use std::rc::Rc;
     ///
     /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
@@ -816,7 +844,7 @@ impl<T: Reattachable> SealedExtern<T> {
     /// step lifetime. The combined carrier is an [`And`] product of the two families; opening it hands
     /// the closure a `(T::At<'b>, U::At<'b>)` pair at one `'b`. A pure-data combine of two already-erased
     /// carriers, so it adds no `unsafe`: both halves are re-anchored together by the eventual `open`.
-    pub(crate) fn zip<U: Reattachable>(self, other: SealedExtern<U>) -> SealedExtern<And<T, U>> {
+    pub fn zip<U: Reattachable>(self, other: SealedExtern<U>) -> SealedExtern<And<T, U>> {
         SealedExtern {
             value: Erased {
                 inner: (self.value.inner, other.value.inner),
@@ -846,7 +874,7 @@ impl<T: Reattachable> Copy for SealedExtern<T> where T::At<'static>: Copy {}
 /// frame-gated return contract) can [`zip`](SealedExtern::zip) into a combined open and arrive as
 /// `Option<T::At<'b>>` at the brand. A pure-data rewrap of `Option<Erased<T>>` into
 /// `Erased<OptionOf<T>>` (both are `'static`-erased), so it carries no `unsafe`.
-pub(crate) fn seal_option<T: Reattachable>(value: Option<Erased<T>>) -> SealedExtern<OptionOf<T>> {
+pub fn seal_option<T: Reattachable>(value: Option<Erased<T>>) -> SealedExtern<OptionOf<T>> {
     SealedExtern {
         value: Erased {
             inner: value.map(|erased| erased.inner),

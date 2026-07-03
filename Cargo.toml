@@ -1,3 +1,8 @@
+[workspace]
+members = ["workgraph"]
+default-members = [".", "workgraph"]
+resolver = "2"
+
 [package]
 name = "koan"
 version = "0.1.0"
@@ -17,3 +22,7 @@ typed-arena = "2"
 indexmap = "2"
 mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
+workgraph = { path = "workgraph" }
+
+[dev-dependencies]
+workgraph = { path = "workgraph", features = ["test-hooks"] }

@@ -28,8 +28,8 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    MergeWitness, Reattachable, Region, SetWitness, StorageProfile, Stored, Witness, WitnessRegion,
-    Witnessed,
+    MergeWitness, Reattachable, Region, RegionOwner, SetWitness, StorageProfile, Stored, Witness,
+    WitnessRegion, Witnessed,
 };
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -59,16 +59,10 @@ impl StorageProfile for KoanStorageProfile {
 /// alias unchanged.
 pub type KoanRegion = Region<KoanStorageProfile>;
 
-// SAFETY: a `Region`'s values live in a `typed_arena`, whose backing pages never move while the
-// region is borrowed, so a held `&Region` keeps any pointee alloc'd in it (or a strict ancestor it
-// roots) at a fixed address — the bound the consumer-pull lift's frameless re-anchor relies on to
-// witness the destination lifetime.
-unsafe impl<W: crate::witnessed::StorageProfile> crate::witnessed::Witness for Region<W> {}
-
 /// The frame-lifetime **allocation capability** for a [`KoanRegion`] — a `Copy` newtype over a
 /// `&'a KoanRegion` that carries every `alloc_*` method. It is the *only* way to allocate into a
 /// region: a bare `&KoanRegion` (the references that "scope around" — `scope.region()`,
-/// `frame.region()`) exposes identity queries (`owns_object`, `functions_is_empty`) but **no**
+/// `frame.region()`) exposes identity queries (`owns_object`) but **no**
 /// `alloc_*`, so nothing can mint a region resident from an ambient region reference and "an
 /// allocated value is always born inside the Witnessed/Sealed abstraction" is a type rule, not an
 /// audited convention.
@@ -117,11 +111,10 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
-    /// captured scope. The `functions_is_empty` fast path relies on this — without the
-    /// invariant, "no KFunction allocated here" no longer implies "no KFunction has
-    /// `captured_scope` in this region," and the path silently drops regions out from under
-    /// live `&KFunction` references. The `debug_assert!` catches violations at the
-    /// allocation site rather than later as use-after-free.
+    /// captured scope — otherwise a `KFunction` could reference a region other than the one
+    /// that allocated it, undermining region-based reasoning about `&KFunction` liveness. The
+    /// `debug_assert!` catches violations at the allocation site rather than later as
+    /// use-after-free.
     pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
         debug_assert!(
             std::ptr::eq(
@@ -300,12 +293,11 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     }
 }
 
-/// The Koan witnessed-allocation entry that takes an **owner** frame `Rc` rather than a region — it
-/// `yoke`s into the owner's own region under the single-owner [`WitnessRegion`] witness, then lifts to
-/// the [`FrameSet`] the aggregate world accumulates in — plus the region identity/read queries. Every
-/// co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
+/// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
+/// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
+/// Every co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
 /// `&KoanRegion` keeps only the identity surface here.
-impl Region<KoanStorageProfile> {
+pub(crate) trait KoanRegionExt {
     /// The alloc-witnessed construction inversion's region-pure primitive: build a value into
     /// `owner`'s region *inside* the `yoke` closure, returning it bundled with the [`FrameSet`]
     /// singleton pinning `owner` so it is co-located by construction rather than paired with an
@@ -324,12 +316,10 @@ impl Region<KoanStorageProfile> {
     /// identical. An inline closure returning a `Carried` still unifies fine at the call site.
     // Drives the object-family construction inversion
     // (design/per-node-memory.md): a region-pure leaf builds its `KObject` inside this closure.
-    pub(crate) fn alloc_witnessed(
+    fn alloc_witnessed(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        Self::yoke_branded::<CarriedFamily, _>(owner, build)
-    }
+    ) -> Witnessed<CarriedFamily, FrameSet>;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
@@ -338,10 +328,27 @@ impl Region<KoanStorageProfile> {
     /// region. The yoke hands a `&'b KoanRegion`; wrapping it as the brand is sound for the same reason
     /// the yoke is — the `for<'b>` quantifier admits only region-derived/owned references, so
     /// co-location holds by construction and nothing branded escapes the closure.
-    pub(crate) fn yoke_branded<T: Reattachable, F>(
+    fn yoke_branded<T: Reattachable, F>(owner: Rc<FrameStorage>, build: F) -> Witnessed<T, FrameSet>
+    where
+        F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
+
+    /// Whether `ptr` was returned by a prior `alloc_object` on this region. Currently only called
+    /// from test code (verifying the relocate-into-`dest` invariant); `#[allow(dead_code)]` because
+    /// trait methods, unlike inherent ones, are checked per compilation target, and the plain `--lib`
+    /// build (no `cfg(test)`) can't see that caller.
+    #[allow(dead_code)]
+    fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
+}
+
+impl KoanRegionExt for KoanRegion {
+    fn alloc_witnessed(
         owner: Rc<FrameStorage>,
-        build: F,
-    ) -> Witnessed<T, FrameSet>
+        build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        Self::yoke_branded::<CarriedFamily, _>(owner, build)
+    }
+
+    fn yoke_branded<T: Reattachable, F>(owner: Rc<FrameStorage>, build: F) -> Witnessed<T, FrameSet>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
@@ -355,28 +362,27 @@ impl Region<KoanStorageProfile> {
             .into_set::<FrameSet>()
     }
 
-    /// Whether `ptr` was returned by a prior `alloc_object` on this region.
-    pub fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
+    fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
         // `KObject` is invariant in `'a`, so the through-`'static` cast is required despite
         // clippy's complaint.
         #[allow(clippy::unnecessary_cast)]
         let target = ptr as *const KObject<'static> as usize;
         self.owns_addr(target)
     }
+}
 
-    /// When true, no value can hold a `&KFunction` pointing into this region — see the
-    /// `alloc_function` invariant.
-    pub fn functions_is_empty(&self) -> bool {
-        self.family_len::<KFunction<'static>>() == 0
-    }
+/// Test-only allocation counting over the generic [`Region`] — an extension trait for the same
+/// reason as [`KoanRegionExt`].
+#[cfg(test)]
+pub(crate) trait KoanRegionTestExt {
+    /// Total number of values stored across all seven sub-arenas. Each `alloc_*` writes to
+    /// exactly one sub-arena, so this is the precise allocation count without double-counting.
+    fn alloc_count(&self) -> usize;
 }
 
 #[cfg(test)]
-impl Region<KoanStorageProfile> {
-    /// Total number of values stored across all seven sub-arenas (test-only). Each `alloc_*`
-    /// writes to exactly one sub-arena, so this is the precise allocation count without
-    /// double-counting.
-    pub fn alloc_count(&self) -> usize {
+impl KoanRegionTestExt for KoanRegion {
+    fn alloc_count(&self) -> usize {
         self.family_len::<KObject<'static>>()
             + self.family_len::<KFunction<'static>>()
             + self.family_len::<Scope<'static>>()
@@ -572,12 +578,12 @@ unsafe impl Witness for FrameSet {}
 
 // SAFETY: a held `Rc<FrameStorage>` keeps its owned `FrameStorage` — and the `KoanRegion` field within
 // it, along with the arena pages a value lives in — at a fixed heap address for the whole life of the
-// `Rc` (`Rc` is `StableDeref`), so `region()` returns a reference into storage this `Rc`'s `Witness`
-// impl pins: a value built solely from that region is pinned by holding the `Rc`. A single held
-// `Rc<FrameStorage>` pins exactly one region — its own — which *is* the single-region `yoke`
-// precondition, now a type rather than a runtime narrowing of a set that could be empty or multi.
-// `region()` deref-coerces `&Rc<FrameStorage>` → `&FrameStorage`.
-unsafe impl WitnessRegion for Rc<FrameStorage> {
+// `Rc` (`Rc` is `StableDeref`), so `region()` returns a reference into storage the `RegionOwner` blanket
+// impl's `Rc<F>: WitnessRegion` pins: a value built solely from that region is pinned by holding the
+// `Rc`. A single held `Rc<FrameStorage>` pins exactly one region — its own — which *is* the
+// single-region `yoke` precondition, now a type rather than a runtime narrowing of a set that could be
+// empty or multi.
+unsafe impl RegionOwner for FrameStorage {
     type Region = KoanRegion;
     fn region(&self) -> &KoanRegion {
         FrameStorage::region(self)

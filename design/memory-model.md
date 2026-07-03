@@ -90,7 +90,7 @@ protocol sits on top of.
 Every sub-arena inside [`KoanRegion`](../src/machine/core/arena.rs) stores
 `T<'static>` rather than `T<'a>` — the `'static` is phantom so `KoanRegion`
 itself carries no lifetime parameter. The erase-store engine lives generically in
-the [`Region<W>`](../src/witnessed/region.rs) substrate (`KoanRegion`
+the [`Region<W>`](../workgraph/src/witnessed/region.rs) substrate (`KoanRegion`
 is the Koan instantiation `Region<KoanStorageProfile>`). Each named `alloc*` wrapper
 takes input at the caller's `'a` and routes one `alloc<K: Stored>` engine: the engine
 erases the value into its `'static` lifetime family (`At<'static>`) for storage and
@@ -122,7 +122,7 @@ is read out of its region, the embedded `&Scope` rides along in that single `Rea
 the whole value. So `KFunction::captured_scope`, `Module::child_scope`, `Signature::decl_scope`, and a
 `Scope`'s `outer` / `root` are **bare field reads** of an already-`'a` reference, not scope-specialized
 re-hands. The scope / module / function path carries **no `unsafe`** of its own — the only retype it
-routes is the substrate's single [`retype`](../src/witnessed.rs), shared with every other carrier;
+routes is the substrate's single [`retype`](../workgraph/src/witnessed.rs), shared with every other carrier;
 there is no per-handle `NonNull` deref.
 
 At construction the scope reference is coupled at its target lifetime with no scope-specialized
@@ -130,7 +130,7 @@ re-anchor verb. A same-region child stores its already-`'a` parent by plain coer
 constructors take `&'a Scope<'a>`. A per-call child, whose lexical parent / root is longer-lived,
 builds through the externally-witnessed construction door
 [`build_frame_child_witnessed`](../src/machine/core/arena.rs): it brands the fresh region and the
-foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../src/witnessed.rs) the
+foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../workgraph/src/witnessed.rs) the
 run-loop step also rests on), builds the real invariant `Scope<'b>` coupling them through
 [`Scope::child_for_frame_witnessed`](../src/machine/core/scope.rs), and erases it witness-less — so
 `CallFrame::new` / `try_reset_for_tail` build the per-call child at real (non-`'static`) lifetimes with
@@ -138,13 +138,13 @@ no construction-time fabrication and no re-anchor outside the witnessed substrat
 
 `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a scheduler slot's
 `NodeScope::YokedChild` (a cart-ancestor block scope evicted off the lifetime-free node) additionally
-ride the substrate's externally-witnessed [`SealedExtern<ScopeRefFamily>`](../src/witnessed.rs)
+ride the substrate's externally-witnessed [`SealedExtern<ScopeRefFamily>`](../workgraph/src/witnessed.rs)
 carrier — a `&'static Scope` erased once on the store side through the safe
 `erase_to_static::<ScopeRefFamily>` (forgetting a reference's lifetime for storage cannot fabricate
-one). Both are read through the carrier's **rank-2** [`SealedExtern::open`](../src/witnessed.rs) (the
+one). Both are read through the carrier's **rank-2** [`SealedExtern::open`](../workgraph/src/witnessed.rs) (the
 frame's `with_scope`): the scope opens at a `for<'b>` brand against the frame / cart `Rc`, so the
 fabricated lifetime cannot escape the window and no scope borrow rides up a `&mut self` path.
-[`SealedExtern::open`](../src/witnessed.rs) (plus its consuming externally-witnessed twin) is the
+[`SealedExtern::open`](../workgraph/src/witnessed.rs) (plus its consuming externally-witnessed twin) is the
 **single access verb**: every frame-side and seed-side read folds onto it, and the borrow-bounded
 `attach` re-anchor — a `<'w, 'b: 'w, W: Witness>(&'w self, &'w W) -> &'w Scope<'b>` that handed back a
 free content `'b` the brand cannot — is deleted.
@@ -153,11 +153,11 @@ Beyond the store-side erasure and the branded scope pointers, a handful of carri
 borrow-carrying *value* on a structure the borrow checker cannot lifetime-track — a scheduler
 node's slot, a per-call `TraceFrame` — and re-anchor it at a caller-chosen lifetime on read,
 witnessed by a held `Rc`. The erase/reattach discipline that makes the move safe lives in the
-top-level [`witnessed`](../src/witnessed.rs) module, a sibling of `machine` and `scheduler` that
+top-level [`witnessed`](../workgraph/src/witnessed.rs) module, a sibling of `machine` and `scheduler` that
 names no concrete workload type: both depend on it for the machinery, not the reverse.
-[`witnessed.rs`](../src/witnessed.rs) declares `unsafe trait Reattachable { type At<'r>; }` —
+[`witnessed.rs`](../workgraph/src/witnessed.rs) declares `unsafe trait Reattachable { type At<'r>; }` —
 a family whose representation is identical across every choice of its single lifetime — and
-[`Erased<T>`](../src/witnessed.rs) stores that family's `At<'static>` form. A single
+[`Erased<T>`](../workgraph/src/witnessed.rs) stores that family's `At<'static>` form. A single
 private `retype<A, B>` — a `transmute_copy` through a `ManuallyDrop` (plain `transmute` cannot prove
 two opaque GAT projections share a size), guarded by a `const` size assert that restores the check
 `transmute` would emit — is the only place a
@@ -173,9 +173,9 @@ region's `&Scope → &Scope<'static>` storage erasures route the same primitive 
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on
 the substrate for the machinery, not the reverse).
 
-[`Witnessed<T, W>`](../src/witnessed.rs) bundles an erased carrier `Erased<T>` with the liveness
+[`Witnessed<T, W>`](../workgraph/src/witnessed.rs) bundles an erased carrier `Erased<T>` with the liveness
 witness `W` that pins its pointee in one value, so "the witness keeps the value alive" is a type
-invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`Witness`](../src/witnessed.rs)
+invariant rather than a co-stored field pair plus a SAFETY comment. `W` is a [`Witness`](../workgraph/src/witnessed.rs)
 — an `unsafe` marker asserting its pointee stays at a fixed address while held; `Rc<F>` qualifies
 (a static `StableDeref` assert records the obligation), and a *set* of them — the Koan result-slot
 and lift witness [`FrameSet`](../src/machine/core/arena.rs) — pins every region a value reaches at
@@ -257,7 +257,7 @@ The allocation engine needs **no cycle gate**: a stored value holds no owning `R
 a closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
 witness set rather than an embedded anchor — so storing it where requested can never close an
 allocation back-edge. Every family implements the `Stored` trait and routes the one
-[`alloc`](../src/witnessed/region.rs) engine, which erases the value to `'static`, stores it in the
+[`alloc`](../workgraph/src/witnessed/region.rs) engine, which erases the value to `'static`, stores it in the
 family's sub-arena, and re-anchors the store to `'a`; the engine carries no redirect logic. It stays
 unbypassable by construction: the substrate's `storage` bundle is private and `alloc` is the only path
 to it, so no `Stored` impl can route around the engine.
@@ -288,7 +288,7 @@ A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` 
 A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
 `Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
-as `NodeScope::YokedChild`, a [`SealedExtern<ScopeRefFamily>`](../src/witnessed.rs) carrier (a
+as `NodeScope::YokedChild`, a [`SealedExtern<ScopeRefFamily>`](../workgraph/src/witnessed.rs) carrier (a
 `&'static Scope`) opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand,
 witnessed by the slot's cart `Rc`.
 Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The

@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::ErasedContract;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
 use crate::witnessed::{

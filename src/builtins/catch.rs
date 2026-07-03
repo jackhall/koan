@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kerror_ktype;
+use crate::machine::core::{kerror_ktype, KoanRegionExt};
 use crate::machine::model::{KObject, KType};
 use crate::machine::Scope;
 

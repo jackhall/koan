@@ -1,7 +1,7 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, KoanRegionTestExt};
 use crate::machine::execute::KoanRuntime;
 
 #[test]

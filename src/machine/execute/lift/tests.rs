@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
