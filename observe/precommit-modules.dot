@@ -119,6 +119,7 @@ digraph {
     "koan::scheduler::workload" [label="koan::scheduler::workload"];
     "koan::source" [label="koan::source"];
     "koan::witnessed" [label="koan::witnessed"];
+    "koan::witnessed::doctest_fixture" [label="koan::witnessed::doctest_fixture"];
     "koan::witnessed::region" [label="koan::witnessed::region"];
     "koan" -> "koan::builtins" [label="owns", style="solid"];
     "koan" -> "koan::machine" [label="owns", style="solid"];
@@ -239,6 +240,7 @@ digraph {
     "koan::scheduler" -> "koan::scheduler::splice" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::work_queues" [label="owns", style="solid"];
     "koan::scheduler" -> "koan::scheduler::workload" [label="owns", style="solid"];
+    "koan::witnessed" -> "koan::witnessed::doctest_fixture" [label="owns", style="solid"];
     "koan::witnessed" -> "koan::witnessed::region" [label="owns", style="solid"];
     "koan::builtins" -> "koan" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine" [label="uses", style="dashed"];
@@ -980,5 +982,6 @@ digraph {
     "koan::scheduler::workload" -> "koan::scheduler" [label="uses", style="dashed"];
     "koan::source" -> "koan" [label="uses", style="dashed"];
     "koan::witnessed" -> "koan" [label="uses", style="dashed"];
+    "koan::witnessed::doctest_fixture" -> "koan::witnessed" [label="uses", style="dashed"];
     "koan::witnessed::region" -> "koan::witnessed" [label="uses", style="dashed"];
 }

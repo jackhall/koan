@@ -4,6 +4,7 @@
 src/machine/core/arena.rs: 5
 src/machine/model/types/ktype_predicates.rs: 1
 src/witnessed.rs: 20
+src/witnessed/doctest_fixture.rs: 5
 src/witnessed/region.rs: 1
 -->
 
@@ -369,6 +370,17 @@ dep slice and an `Outcome::Forward` pull are then born at `'b` from the opened r
 `sealed_extern_*` minimal tests above and end-to-end every scheduler-driving slate test pin it. The
 `run_loop.rs` / `finalize.rs` call sites carry no `unsafe` of their own (the `open` brand confines the
 reattach). No separate minimal test beyond the `retype` group's.
+
+**Doctest fixture markers** ([src/witnessed/doctest_fixture.rs](../src/witnessed/doctest_fixture.rs))
+— the `unsafe impl Reattachable` for `RefFamily` / `InvFamily` and `unsafe impl Witness` /
+`WitnessRegion` / `MergeWitness` for `Cart` back the six `compile_fail` soundness guards and their
+compiling twins (`cargo test --doc witnessed`), so a signature change to those traits has one shared
+fixture to update instead of five pasted copies. Each impl is a marker with no runtime `unsafe`
+operation of its own, asserting the identical `&'r u32` / `Cell<&'r u32>` layout-invariance and
+owned-`Vec` fixed-address pin shapes the `retype` group's separate `Rc<TestCart>` stand-in (in
+`witnessed/tests.rs`, excluded from the audit as test scaffolding) already Miri-verifies. Doctests run
+under `cargo test --doc`, not Miri, so there is no separate slate test here — the shape is pinned by
+the `retype` group above.
 
 **`Module` interior mutation under a live `&'a Module`** ([src/machine/model/values/module.rs](../src/machine/model/values/module.rs)) — `Module`
 mutates a `RefCell<HashMap>` (`type_members` / `slot_type_tags`) while a `&'a Module<'a>` is

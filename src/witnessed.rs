@@ -30,6 +30,9 @@ use stable_deref_trait::StableDeref;
 mod region;
 pub use region::{Region, StorageProfile, Stored};
 
+#[doc(hidden)]
+pub mod doctest_fixture;
+
 #[cfg(test)]
 mod tests;
 
@@ -317,23 +320,19 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// `witness` moves into the bundle, and the [`WitnessRegion`] / [`Witness`] contracts guarantee the
     /// region stays live and fixed-address under the held witness — so the later re-anchor cannot dangle.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
     ///
-    /// struct RefFamily;
-    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for RefFamily {
-    ///     type At<'r> = &'r u32;
-    /// }
-    /// // A local witness owning its region — the `Vec`'s heap buffer stays at a fixed address
-    /// // across the witness's move, so a value built from `region()` stays pinned.
-    /// struct Cart(Vec<u32>);
-    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
-    /// unsafe impl Witness for Cart {}
-    /// unsafe impl WitnessRegion for Cart {
-    ///     type Region = [u32];
-    ///     fn region(&self) -> &[u32] { &self.0 }
-    /// }
+    /// let cart = Cart(vec![1, 2, 3]);
+    /// // A region-derived borrow satisfies the `for<'b>` brand — the compiling twin of the guard below.
+    /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
+    /// assert_eq!(w.with(|r| **r), 1);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
     ///
     /// let outside: u32 = 7;
     /// let cart = Cart(vec![1, 2, 3]);
@@ -362,22 +361,22 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// `Cell::get`, whose `&u32` would otherwise escape past the witness drop) fails to compile,
     /// because `R` cannot mention the universally-quantified `'b`.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{Cart, InvFamily};
+    /// use koan::witnessed::Witnessed;
     /// use std::cell::Cell;
     ///
-    /// struct InvFamily;
-    /// // SAFETY: `Cell<&'r u32>` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for InvFamily {
-    ///     type At<'r> = Cell<&'r u32>;
-    /// }
-    /// struct Cart(Vec<u32>);
-    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
-    /// unsafe impl Witness for Cart {}
-    /// unsafe impl WitnessRegion for Cart {
-    ///     type Region = [u32];
-    ///     fn region(&self) -> &[u32] { &self.0 }
-    /// }
+    /// let cart = Cart(vec![42]);
+    /// let w: Witnessed<InvFamily, Cart> = Witnessed::yoke(cart, |region| Cell::new(&region[0]));
+    /// // Copy a brand-free scalar out — the compiling twin of the guard below.
+    /// let value: u32 = w.with(|c| *c.get());
+    /// assert_eq!(value, 42);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{Cart, InvFamily};
+    /// use koan::witnessed::Witnessed;
+    /// use std::cell::Cell;
     ///
     /// let cart = Cart(vec![42]);
     /// let w: Witnessed<InvFamily, Cart> = Witnessed::yoke(cart, |region| Cell::new(&region[0]));
@@ -407,21 +406,20 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// The brand also seals `map`: a projection cannot stash a branded reference into an outer slot
     /// to be read after the witness drops — the `for<'b>` quantifier rejects it at compile time.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Witness, WitnessRegion, Witnessed};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
     ///
-    /// struct RefFamily;
-    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for RefFamily {
-    ///     type At<'r> = &'r u32;
-    /// }
-    /// struct Cart(Vec<u32>);
-    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
-    /// unsafe impl Witness for Cart {}
-    /// unsafe impl WitnessRegion for Cart {
-    ///     type Region = [u32];
-    ///     fn region(&self) -> &[u32] { &self.0 }
-    /// }
+    /// let cart = Cart(vec![5]);
+    /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
+    /// // Project within the brand and re-seal — the compiling twin of the guard below.
+    /// let mapped = w.map::<RefFamily>(|r, _brand| r);
+    /// assert_eq!(mapped.with(|r| **r), 5);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
     ///
     /// let cart = Cart(vec![5]);
     /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
@@ -466,27 +464,24 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// quantifier keeps either branded carrier from escaping into the result type, and the combined
     /// witness pins the sealed carrier's backing thereafter.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{MergeWitness, Reattachable, Witness, WitnessRegion, Witnessed};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
     /// use std::marker::PhantomData;
     ///
-    /// struct RefFamily;
-    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for RefFamily {
-    ///     type At<'r> = &'r u32;
-    /// }
-    /// struct Cart(Vec<u32>);
-    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
-    /// unsafe impl Witness for Cart {}
-    /// unsafe impl WitnessRegion for Cart {
-    ///     type Region = [u32];
-    ///     fn region(&self) -> &[u32] { &self.0 }
-    /// }
-    /// // SAFETY: ancestry is trivial (every cart pins itself), so the combined witness is just a
-    /// // clone of the left operand's region.
-    /// unsafe impl MergeWitness for Cart {
-    ///     fn merge(left: &Self, _right: &Self) -> Option<Self> { Some(Cart(left.0.clone())) }
-    /// }
+    /// let a = Cart(vec![1]);
+    /// let b = Cart(vec![2]);
+    /// let wa: Witnessed<RefFamily, Cart> = Witnessed::yoke(a, |region| &region[0]);
+    /// let wb: Witnessed<RefFamily, Cart> = Witnessed::yoke(b, |region| &region[0]);
+    /// // Two unrelated single-region carts have no common pin: merge refuses before `f` runs.
+    /// let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
+    /// assert!(merged.is_none());
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::Witnessed;
+    /// use std::marker::PhantomData;
     ///
     /// let a = Cart(vec![1]);
     /// let b = Cart(vec![2]);
@@ -647,21 +642,21 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     /// fails to compile, because `R` would have to name `'b`. This mirrors the [`Witnessed::with`] /
     /// [`Witnessed::map`] guards.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, Sealed, Witness, WitnessRegion, Witnessed};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::{Sealed, Witnessed};
     ///
-    /// struct RefFamily;
-    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for RefFamily {
-    ///     type At<'r> = &'r u32;
-    /// }
-    /// struct Cart(Vec<u32>);
-    /// // SAFETY: the owned `Vec`'s buffer is fixed-address for the `Cart`'s whole life.
-    /// unsafe impl Witness for Cart {}
-    /// unsafe impl WitnessRegion for Cart {
-    ///     type Region = [u32];
-    ///     fn region(&self) -> &[u32] { &self.0 }
-    /// }
+    /// let cart = Cart(vec![42]);
+    /// let sealed: Sealed<RefFamily, Cart> =
+    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
+    /// // Copy a brand-free scalar out — the compiling twin of the guard below.
+    /// let value: u32 = sealed.open(|live| *live);
+    /// assert_eq!(value, 42);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use koan::witnessed::{Sealed, Witnessed};
     ///
     /// let cart = Cart(vec![42]);
     /// let sealed: Sealed<RefFamily, Cart> =
@@ -782,18 +777,25 @@ impl<T: Reattachable> SealedExtern<T> {
     /// fails to compile, because `R` would have to name `'b`. This mirrors the [`Sealed::open`] guard
     /// but over a **consumed**, externally-witnessed carrier.
     ///
-    /// ```compile_fail
-    /// use koan::witnessed::{Reattachable, SealedExtern};
+    /// ```
+    /// use koan::witnessed::doctest_fixture::{seal_extern, RefFamily};
+    /// use koan::witnessed::SealedExtern;
     /// use std::rc::Rc;
     ///
-    /// struct RefFamily;
-    /// // SAFETY: `&'r u32` is one type generic only in `'r`.
-    /// unsafe impl Reattachable for RefFamily {
-    ///     type At<'r> = &'r u32;
-    /// }
+    /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
+    /// let sealed: SealedExtern<RefFamily> = seal_extern(&backing[0]);
+    /// // Copy a brand-free scalar out — the compiling twin of the guard below.
+    /// let value: u32 = sealed.open(&backing, |live| *live);
+    /// assert_eq!(value, 42);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use koan::witnessed::doctest_fixture::{seal_extern, RefFamily};
+    /// use koan::witnessed::SealedExtern;
+    /// use std::rc::Rc;
     ///
     /// let backing: Rc<Vec<u32>> = Rc::new(vec![42]);
-    /// let sealed: SealedExtern<RefFamily> = SealedExtern::erase(&backing[0]);
+    /// let sealed: SealedExtern<RefFamily> = seal_extern(&backing[0]);
     /// // Try to smuggle the branded value OUT of `open` — rejected by the `for<'b>` brand.
     /// let escaped: &u32 = sealed.open(&backing, |live| live);
     /// drop(sealed);
