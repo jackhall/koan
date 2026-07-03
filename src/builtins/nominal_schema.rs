@@ -7,7 +7,7 @@
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
-use crate::machine::core::kfunction::action::{Action, BodyCtx};
+use crate::machine::core::kfunction::action::{Action, BodyCtx, FinishCtx};
 use crate::machine::core::PendingTypeEntry;
 use crate::machine::execute::defer_field_list_action;
 use crate::machine::model::types::{
@@ -15,14 +15,14 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, TraceFrame};
 use crate::witnessed::Witnessed;
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> = fn(
-    &Scope<'a>,
+    &FinishCtx<'a>,
     String,
     Vec<(String, KType<'a>)>,
     BindingIndex,
@@ -68,7 +68,7 @@ pub(crate) fn nominal_schema_action<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            Action::Done(finalize(ctx.scope, name, fields, bind_index))
+            Action::Done(finalize(&ctx.finish_ctx(), name, fields, bind_index))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -86,7 +86,7 @@ pub(crate) fn nominal_schema_action<'a>(
                 chain,
                 Some(pending_guard),
                 Some(error_frame),
-                Box::new(move |scope, fields| finalize(scope, finish_name, fields, bind_index)),
+                Box::new(move |fctx, fields| finalize(fctx, finish_name, fields, bind_index)),
             )
         }
     }

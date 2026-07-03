@@ -21,8 +21,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
+use crate::machine::model::Carried;
 use crate::machine::{FrameSet, KError, KErrorKind};
 use crate::source::Spanned;
 
@@ -131,11 +133,11 @@ fn apply_constructor<'step>(
                     index: *index,
                     tag,
                 };
-                let scope = ctx.current_scope();
                 // A freshly-built union `Variant` — owned data (a `SetRef` via `Rc`) reaching no
-                // foreign region — sealed under the home frame alone.
-                let carrier = scope.brand().alloc_ktype_witnessed(variant);
-                return Outcome::Done(Ok(scope.seal_value(carrier, None)));
+                // foreign region — sealed under the home frame alone, structural via the brand.
+                return Outcome::Done(Ok(ctx
+                    .step_ctx()
+                    .alloc_carried(|b| Carried::Type(b.alloc_ktype(variant)))));
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
             // unions and higher-kinded `TypeConstructor`s both construct positionally.

@@ -19,13 +19,14 @@ use crate::machine::model::types::KKind;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::machine::core::ApplyOutcome;
+use crate::machine::core::kfunction::action::FinishCtx;
+use crate::machine::core::{ApplyOutcome, KoanStepContextExt};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{CarriedFamily, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
@@ -38,11 +39,12 @@ use super::{arg, kw, sig};
 /// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 fn finalize_newtype<'a>(
-    scope: &Scope<'a>,
+    fctx: &FinishCtx<'a>,
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    let scope = fctx.scope;
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
     member.fill(NominalSchema::NewType(Box::new(repr)));
@@ -53,9 +55,9 @@ fn finalize_newtype<'a>(
         .bindings()
         .try_register_type(&name, kt_ref, bind_index, FrameSet::empty())
     {
-        Ok(ApplyOutcome::Applied) => {
-            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
-        }
+        Ok(ApplyOutcome::Applied) => Ok(fctx
+            .ctx
+            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -72,7 +74,7 @@ fn finalize_newtype<'a>(
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and dep-finish paths.
 fn finalize_record_newtype<'a>(
-    scope: &Scope<'a>,
+    fctx: &FinishCtx<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
@@ -82,6 +84,7 @@ fn finalize_record_newtype<'a>(
             "NEWTYPE record repr must have at least one field".to_string(),
         )));
     }
+    let scope = fctx.scope;
     let scope_id = scope.id;
     let outcome = finalize_nominal_member(
         scope,
@@ -105,9 +108,9 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => {
-            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
-        }
+        SealOutcome::Sealed(kt_ref) => Ok(fctx
+            .ctx
+            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -142,10 +145,15 @@ pub fn body<'a>(
                             te.as_str(),
                         )
                     },
-                    move |scope, kt| Action::Done(finalize_newtype(scope, name, kt, bind_index)),
+                    move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
                 )
             }
-            other => Action::Done(finalize_newtype(ctx.scope, name, other.clone(), bind_index)),
+            other => Action::Done(finalize_newtype(
+                &ctx.finish_ctx(),
+                name,
+                other.clone(),
+                bind_index,
+            )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
@@ -168,8 +176,8 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |scope, kt| {
-        Action::Done(finalize_newtype(scope, name, kt, bind_index))
+    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
+        Action::Done(finalize_newtype(fctx, name, kt, bind_index))
     })
 }
 

@@ -10,8 +10,8 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{LexicalFrame, PendingBinderGuard};
+use crate::machine::core::kfunction::action::{DepPlacement, FinishCtx};
+use crate::machine::core::{KoanStepContextExt, LexicalFrame, PendingBinderGuard};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
@@ -29,21 +29,26 @@ use super::SchedulerView;
 
 /// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the dep-finish's
 /// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
-/// [`defer_field_list`].
+/// [`defer_field_list`]. Takes the [`SchedulerView`] (not a bare `Scope`) so a `finalize` that
+/// builds a born-pure carrier can construct it through `view.step_ctx().alloc_carried(…)`.
 pub(crate) type FieldListFinalize<'step> = Box<
-    dyn for<'view> FnOnce(&'view Scope<'step>, Vec<(String, KType<'step>)>) -> Outcome<'step>
+    dyn for<'view> FnOnce(
+            &SchedulerView<'step, 'view>,
+            Vec<(String, KType<'step>)>,
+        ) -> Outcome<'step>
         + 'step,
 >;
 
 /// `Action`-path twin of [`FieldListFinalize`], returning a witnessed carrier — used by
 /// [`defer_field_list_action`], whose finish lifts the result straight into
-/// [`Action::Done(Ok)`](crate::machine::core::kfunction::action::Action::Done).
-pub(crate) type FieldListFinalizeAction<'step> = Box<
-    dyn for<'view> FnOnce(
-            &'view Scope<'step>,
-            Vec<(String, KType<'step>)>,
+/// [`Action::Done(Ok)`](crate::machine::core::kfunction::action::Action::Done). Takes the
+/// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
+pub(crate) type FieldListFinalizeAction<'a> = Box<
+    dyn FnOnce(
+            &FinishCtx<'a>,
+            Vec<(String, KType<'a>)>,
         ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
-        + 'step,
+        + 'a,
 >;
 
 /// The `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]` dep vector the
@@ -143,7 +148,7 @@ pub(crate) fn defer_field_list<'step>(
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
         match rewalk.run(view.current_scope(), results.owned_slice()) {
-            Ok(fields) => finalize(view.current_scope(), fields),
+            Ok(fields) => finalize(view, fields),
             Err(e) => Outcome::Done(Err(e)),
         }
     });
@@ -196,7 +201,7 @@ pub(crate) fn defer_field_list_action<'a>(
         Action::Done(
             rewalk
                 .run(fctx.scope, results.owned_slice())
-                .and_then(|fields| finalize(fctx.scope, fields)),
+                .and_then(|fields| finalize(fctx, fields)),
         )
     });
     Action::AwaitDeps { deps, finish }
@@ -212,12 +217,14 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     fields: KExpression<'step>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {
-    fn fold<'step>(scope: &Scope<'step>, pairs: Vec<(String, KType<'step>)>) -> Outcome<'step> {
+    fn fold<'step>(
+        view: &SchedulerView<'step, '_>,
+        pairs: Vec<(String, KType<'step>)>,
+    ) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        let carrier = scope
-            .brand()
-            .alloc_ktype_witnessed(KType::Record(Box::new(record)));
-        Outcome::Done(Ok(scope.seal_value(carrier, None)))
+        Outcome::Done(Ok(view.step_ctx().alloc_carried(|b| {
+            Carried::Type(b.alloc_ktype(KType::Record(Box::new(record))))
+        })))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
@@ -227,7 +234,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(pairs) => fold(view.current_scope(), pairs),
+        FieldListOutcome::Done(pairs) => fold(view, pairs),
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,

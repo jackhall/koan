@@ -9,7 +9,8 @@
 
 use std::collections::HashSet;
 
-use crate::machine::model::{Held, KObject, KType};
+use crate::machine::core::KoanStepContextExt;
+use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
 use crate::builtins::ascribe::abstract_type_names_of;
@@ -70,11 +71,12 @@ pub fn body<'a>(
             }
         }
     }
-    let carrier = ctx.scope.brand().alloc_ktype_witnessed(KType::Signature {
-        sig: s,
-        pinned_slots: pinned,
-    });
-    Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
+    Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
+        Carried::Type(b.alloc_ktype(KType::Signature {
+            sig: s,
+            pinned_slots: pinned,
+        }))
+    })))
 }
 
 #[cfg(test)]

@@ -78,28 +78,25 @@ fn finalize_carrier<'a>(
 mod action_bodies {
     use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
+    use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 
-    use crate::machine::model::KType;
+    use crate::machine::model::{Carried, KType};
     use crate::machine::{KError, KErrorKind};
 
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let carrier = ctx
-            .scope
-            .brand()
-            .alloc_ktype_witnessed(KType::List(Box::new(elem)));
-        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
+        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
+            Carried::Type(b.alloc_ktype(KType::List(Box::new(elem))))
+        })))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let carrier = ctx
-            .scope
-            .brand()
-            .alloc_ktype_witnessed(KType::Dict(Box::new(k), Box::new(v)));
-        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
+        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
+            Carried::Type(b.alloc_ktype(KType::Dict(Box::new(k), Box::new(v))))
+        })))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -128,14 +125,12 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        let carrier = ctx
-            .scope
-            .brand()
-            .alloc_ktype_witnessed(KType::ConstructorApply {
+        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
+            Carried::Type(b.alloc_ktype(KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
-            });
-        Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
+            }))
+        })))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -158,6 +153,8 @@ fn build_carrier<'a>(
     kind: CarrierKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
+    use crate::machine::core::KoanStepContextExt;
+    use crate::machine::model::Carried;
 
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
@@ -172,8 +169,8 @@ fn build_carrier<'a>(
         FieldListOutcome::Done(fields) => {
             let kt = finalize_carrier(fields, ret, kind);
             Action::Done(Ok(ctx
-                .scope
-                .seal_value(ctx.scope.brand().alloc_ktype_witnessed(kt), None)))
+                .ctx
+                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -189,9 +186,9 @@ fn build_carrier<'a>(
             None,
             None,
             None,
-            Box::new(move |scope, fields| {
+            Box::new(move |fctx, fields| {
                 let kt = finalize_carrier(fields, ret, kind);
-                Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt), None))
+                Ok(fctx.ctx.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt))))
             }),
         ),
     }

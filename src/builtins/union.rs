@@ -1,11 +1,13 @@
 use crate::machine::model::types::KKind;
 use std::collections::HashMap;
 
+use crate::machine::core::kfunction::action::FinishCtx;
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
 use crate::witnessed::Witnessed;
@@ -17,7 +19,7 @@ use super::{arg, kw, sig};
 /// Transient `RecursiveRef(name)` variant leaves seal to `SetLocal(index)`. Mirror of
 /// [`super::newtype_def::finalize_record_newtype`].
 fn finalize_union<'a>(
-    scope: &Scope<'a>,
+    fctx: &FinishCtx<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
@@ -27,6 +29,7 @@ fn finalize_union<'a>(
             "UNION schema must have at least one tag".to_string(),
         )));
     }
+    let scope = fctx.scope;
     let scope_id = scope.id;
     let outcome = finalize_nominal_member(
         scope,
@@ -49,9 +52,9 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => {
-            Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt_ref.clone()), None))
-        }
+        SealOutcome::Sealed(kt_ref) => Ok(fctx
+            .ctx
+            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -245,8 +248,14 @@ mod tests {
             index: 0,
         };
         scope.preinstall_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
-        let first = super::finalize_union(
+        let fctx = crate::machine::core::kfunction::action::FinishCtx {
             scope,
+            ctx: crate::witnessed::StepContext::new(
+                crate::machine::core::kfunction::action::scope_frame(scope),
+            ),
+        };
+        let first = super::finalize_union(
+            &fctx,
             "Maybe".into(),
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
@@ -257,7 +266,7 @@ mod tests {
         let schema = tagged_schema(scope, "Maybe");
         assert_eq!(schema.get("Some"), Some(&KType::Number));
         let second = super::finalize_union(
-            scope,
+            &fctx,
             "Maybe".into(),
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),

@@ -3,13 +3,16 @@
 //! Park-on-producer, re-resolve-on-wake, and the second-park protocol error live here, so every
 //! routing site states its own carrier shape and slot name and nothing else.
 
-use crate::machine::core::kfunction::action::{Action, AwaitContinue, DepPlacement, DepRequest};
+use crate::machine::core::kfunction::action::{
+    scope_frame, Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx,
+};
 use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
+use crate::witnessed::StepContext;
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -71,14 +74,22 @@ pub(crate) fn resolve_or_await<'a>(
     scope: &'a Scope<'a>,
     slot: &'static str,
     resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType<'a>> + 'a,
-    on_resolved: impl FnOnce(&'a Scope<'a>, KType<'a>) -> Action<'a> + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>) -> Action<'a> + 'a,
 ) -> Action<'a> {
     match resolve(scope) {
-        TypeResolution::Done(kt) => on_resolved(scope, kt),
+        // The synchronous arm hands the continuation the same `FinishCtx` shape a wake-time finish
+        // receives, built over the caller's own scope and its frame's step context.
+        TypeResolution::Done(kt) => {
+            let fctx = FinishCtx {
+                scope,
+                ctx: StepContext::new(scope_frame(scope)),
+            };
+            on_resolved(&fctx, kt)
+        }
         TypeResolution::Park(producers) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
-                on_resolved(fctx.scope, kt)
+                on_resolved(fctx, kt)
             });
             Action::AwaitDeps {
                 deps: producers.into_iter().map(DepRequest::Existing).collect(),
@@ -107,11 +118,11 @@ pub(crate) fn expect_type_result<'a>(
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&'a Scope<'a>, KType<'a>) -> Action<'a> + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let kt = crate::try_action!(expect_type_result(&results, 0, slot));
-        on_resolved(fctx.scope, kt)
+        on_resolved(fctx, kt)
     });
     Action::AwaitDeps {
         deps: vec![DepRequest::Dispatch {

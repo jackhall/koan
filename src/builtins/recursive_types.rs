@@ -16,13 +16,14 @@
 //! the sealed members into the enclosing scope and binds the group handle: exiting the block
 //! guarantees every forward reference resolved.
 
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::KKind;
 use crate::machine::FrameSet;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::model::types::{NominalMember, RecursiveSet};
-use crate::machine::model::KType;
+use crate::machine::model::{Carried, KType};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -164,10 +165,9 @@ pub fn body<'a>(
             bind_index,
             FrameSet::empty(),
         ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx.scope.seal_value(
-                fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
-                None,
-            ))),
+            Ok(kt_ref) => Action::Done(Ok(fctx
+                .ctx
+                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone()))))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });

@@ -11,9 +11,11 @@
 //! builtin leaf re-dispatch against decl_scope so a SIG-local `LET <name> = ...` shadow wins
 //! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
+use crate::machine::core::kfunction::action::FinishCtx;
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -104,7 +106,7 @@ pub fn body<'a>(
 
     let te = match carrier {
         CarrierForm::Direct(kt) => {
-            return finalize_val(ctx.scope, name, kt, bind_index);
+            return finalize_val(&ctx.finish_ctx(), name, kt, bind_index);
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
@@ -114,8 +116,8 @@ pub fn body<'a>(
     };
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
-    dispatch_type_then(expr, "VAL type slot", move |scope, kt| {
-        finalize_val(scope, name, kt, bind_index)
+    dispatch_type_then(expr, "VAL type slot", move |fctx, kt| {
+        finalize_val(fctx, name, kt, bind_index)
     })
 }
 
@@ -125,7 +127,7 @@ pub fn body<'a>(
 /// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeIdentifier> = …`
 /// abstract member.
 fn finalize_val<'a>(
-    scope: &Scope<'a>,
+    fctx: &FinishCtx<'a>,
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
@@ -134,13 +136,14 @@ fn finalize_val<'a>(
     // A VAL declares an abstract / declared slot type — owned data reaching no foreign region, so its
     // stored reach is empty.
     if let Err(e) =
-        scope.register_user_type(name, declared_kt.clone(), bind_index, FrameSet::empty())
+        fctx.scope
+            .register_user_type(name, declared_kt.clone(), bind_index, FrameSet::empty())
     {
         return Action::Done(Err(e));
     }
-    Action::Done(Ok(
-        scope.seal_value(scope.brand().alloc_ktype_witnessed(declared_kt), None)
-    ))
+    Action::Done(Ok(fctx
+        .ctx
+        .alloc_carried(|b| Carried::Type(b.alloc_ktype(declared_kt)))))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

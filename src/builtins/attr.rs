@@ -12,10 +12,12 @@
 //! `Identifier` lhs wins `body_identifier`, a module / type-token lhs wins its `OfKind`
 //! overload, and only a bare runtime value falls through to [`body_newtype`].
 
+use crate::machine::core::kfunction::action::scope_frame;
+use crate::machine::core::{KoanRegion, KoanRegionExt, RegionTypeFamily};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::values::{CarriedFamily, Module, NonWrappedRef};
+use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, NameLookup, Scope};
 use crate::witnessed::{Sealed, Witnessed};
@@ -327,15 +329,31 @@ fn access_module_member<'a>(
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // A re-tag is a *fresh* `Wrapped` construction, born region-pure and sealed under
                 // the module scope's home frame — not a read of the pre-existing member — so the
-                // stored `reach` does not apply here.
-                let type_id = module_scope.brand().alloc_ktype(tag);
-                let carrier = module_scope
-                    .brand()
-                    .alloc_object_witnessed(KObject::Wrapped {
-                        inner: NonWrappedRef::peel(obj),
-                        type_id,
-                    });
-                return Ok(module_scope.seal_value(carrier, None));
+                // stored `reach` does not apply here. Built in the *module* scope's own region (not
+                // the step region a `StepContext` would wrap): `obj` is a pre-existing reference into
+                // that region, not one the brand can derive fresh, so it crosses the build brand as a
+                // witnessed [`CarriedFamily`] operand — `merge`d with the freshly allocated
+                // `RegionTypeFamily` tag operand — rather than being allocated inside the closure
+                // directly (the [`RegionTypeFamily`] pattern `build_type_operand` / CATCH's `Result`
+                // build share).
+                let tag_slot: Witnessed<RegionTypeFamily, FrameSet> =
+                    KoanRegion::yoke_branded::<RegionTypeFamily, _>(
+                        scope_frame(module_scope),
+                        |b| (b, b.alloc_ktype(tag)),
+                    );
+                let obj_carrier = module_scope.resident_value_carrier(obj, &FrameSet::empty());
+                return Ok(obj_carrier.merge::<RegionTypeFamily, CarriedFamily>(
+                    tag_slot,
+                    |carried, (region, type_id), _brand| match carried {
+                        Carried::Object(o) => {
+                            Carried::Object(region.alloc_object(KObject::Wrapped {
+                                inner: NonWrappedRef::peel(o),
+                                type_id,
+                            }))
+                        }
+                        Carried::Type(_) => unreachable!("a module value member is always Object"),
+                    },
+                ));
             }
             Ok(module_scope.resident_value_carrier(obj, &reach))
         }

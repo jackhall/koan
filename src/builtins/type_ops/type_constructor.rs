@@ -15,7 +15,8 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
-    use crate::machine::model::values::Held;
+    use crate::machine::core::KoanStepContextExt;
+    use crate::machine::model::values::{Carried, Held};
 
     use crate::machine::{KError, KErrorKind};
 
@@ -46,11 +47,9 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    let carrier = ctx
-        .scope
-        .brand()
-        .alloc_ktype_witnessed(KType::SetRef { set, index: 0 });
-    Action::Done(Ok(ctx.scope.seal_value(carrier, None)))
+    Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
+        Carried::Type(b.alloc_ktype(KType::SetRef { set, index: 0 }))
+    })))
 }
 
 #[cfg(test)]

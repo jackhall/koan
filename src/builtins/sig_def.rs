@@ -10,8 +10,9 @@
 //! `LET Carrier = TypeIdentifier` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::KKind;
-use crate::machine::model::values::ModuleSignature;
+use crate::machine::model::values::{Carried, ModuleSignature};
 use crate::machine::model::KType;
 use crate::machine::FrameSet;
 use crate::machine::{Scope, TraceFrame};
@@ -57,10 +58,9 @@ pub fn body<'a>(
             bind_index,
             FrameSet::empty(),
         ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx.scope.seal_value(
-                fctx.scope.brand().alloc_ktype_witnessed(kt_ref.clone()),
-                None,
-            ))),
+            Ok(kt_ref) => Action::Done(Ok(fctx
+                .ctx
+                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone()))))),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),

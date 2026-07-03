@@ -380,10 +380,6 @@ impl KoanRegionExt for KoanRegion {
 /// every other site uses. Named with full words (`alloc_carried`, not `alloc`) to avoid colliding with
 /// the generic verb it wraps. Lives here — not on `StepContext` itself — because `RegionBrand`'s
 /// constructor is private to this module (see [`FrameStorage::brand`]).
-///
-/// `#[allow(dead_code)]`: unused until the born-pure `seal_value(…, None)` terminal sites migrate
-/// onto it.
-#[allow(dead_code)]
 pub(crate) trait KoanStepContextExt {
     /// [`StepContext::alloc`] with the closure receiving a [`RegionBrand`]: reach = own region only.
     fn alloc_carried(
@@ -393,6 +389,11 @@ pub(crate) trait KoanStepContextExt {
 
     /// [`StepContext::alloc_with`] with the closure receiving a [`RegionBrand`]: reach = own region ∪
     /// every named dep's reach.
+    ///
+    /// `#[allow(dead_code)]`: the born-pure terminal sites all construct without deps
+    /// ([`Self::alloc_carried`]); the dep-folding twin is consumed when the value-copy finishes
+    /// migrate off `relocate_values`.
+    #[allow(dead_code)]
     fn alloc_carried_with(
         &self,
         deps: &[&Sealed<CarriedFamily, FrameSet>],
