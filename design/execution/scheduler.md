@@ -32,9 +32,10 @@ and names no AST.
   resolved dep terminals (un-relocated: each terminal's step-brand value plus its
   own reach carrier) to a single
   [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure — the one
-  delivery currency. A value-reading finish writes that shape directly, copying a
-  value it must outlive the resolving step site-explicitly via
-  `DepTerminal::relocate`; a
+  delivery currency. A value-reading finish writes that shape directly; a value
+  that must outlive the resolving step travels as its sealed carrier, adopted at
+  the consumer's own step brand, and the sole site-explicit value copy that
+  remains is the catch channel (`DepTerminal::relocate`). A
   [`WitnessedDepFinish`](../../src/machine/execute/outcome.rs) (folds terminals
   into one witnessed carrier) projects onto the same currency through
   `seal_witnessed` before `short_circuit` ever sees it, so there is exactly one

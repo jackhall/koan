@@ -72,11 +72,13 @@ construction runs *inside* the closure — a region-pure leaf
 closure is the single allocation. A value embedding an AST — a quoted expression, an FN body — also
 `yoke`s, because the embedded AST is *owned data*, not a borrow. An FN body and a quoted expression are owned
 [`KExpression`](../src/machine/model/ast.rs) clones (the `KObject::KExpression` and
-`Body::UserDefined` payloads), and a `KExpression`'s lifetime parameter is borne by exactly one
-variant — `ExpressionPart::Spliced(Carried)`, the per-call resolved sub-result the scheduler folds
-into a parent's parts. Raw, unevaluated AST is *splice-free*: it holds no `Spliced` part, so it binds
-no live borrow and its `'a` is a phantom. `KExpression` is therefore a [layout-invariant carrier
-family](#the-core-erase-store-witness-reattach) (the splice rides the layout-invariant `Carried`), so
+`Body::UserDefined` payloads). A `KExpression`'s lifetime parameter names no live borrow: its one
+non-owned variant — `ExpressionPart::Spliced`, the per-call resolved sub-result the scheduler folds
+into a parent's parts — holds a lifetime-free `Sealed` carrier cell, so `'a` is a phantom across
+every `KExpression`, re-anchored invariantly by a zero-size `PhantomData` marker. Raw, unevaluated
+AST is additionally *splice-free*: it holds no `Spliced` cell at all. `KExpression` is therefore a
+[layout-invariant carrier family](#the-core-erase-store-witness-reattach) — the splice cell is
+lifetime-free and the marker zero-size, so the layout is identical across `'a` — and
 a splice-free embed contributes no foreign region: the AST-embedding object is **region-pure** and
 allocs through the witnessed object surface (`alloc_object_witnessed`), born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. Co-location is enforced by the `for<'b>`

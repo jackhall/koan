@@ -72,10 +72,8 @@ fn park_on_head<'step>(
         // The head sub is the sole owned dep. Its reach — the regions its computed identity/callable
         // points into — is named on its delivered carrier's witness. A `SetRef` constructor identity
         // threads it to the construction finish (the operand names the identity's own region); a
-        // callable ignores it and rides the bind fold below instead.
+        // callable ignores it and rides the `adopt_sealed` below instead.
         let head_terminal = terminals.owned(0);
-        // A `SetRef` constructor identity threads the head's reach to the construction finish (the
-        // operand names the identity's own region); a callable ignores it and rides the adopt below.
         let reach = head_terminal.carrier.witness().clone();
         // The resolved callable survives across steps (the apply tail may itself re-park), and owned
         // deps cascade-free on resolve. Adopt the head's carrier into the consumer scope: fold its

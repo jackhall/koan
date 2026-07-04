@@ -195,8 +195,11 @@ The sole constructor of a parked continuation, over either finish channel.
 Error short-circuit is built in through one shared walk: a finish never sees
 an errored dep. Dep delivery is the terminal channel only — no bare
 pre-relocated value handoff: a finish reads each dep's step-brand value and
-reach carrier un-relocated, and a value it must outlive the resolving step it
-copies site-explicitly (`DepTerminal::relocate`).
+reach carrier un-relocated. A dep whose value must outlive the resolving step
+travels as its sealed carrier — the value stays in its producer's region and
+the consumer adopts the carrier at its own step brand, folding the reach that
+pins it — never as a relocated copy. The one site-explicit value copy that
+remains is the catch channel (`DepTerminal::relocate`).
 
 **The step construction context** ([`StepContext`](../workgraph/src/witnessed/step_ctx.rs)).
 What a finish receives and the only way it can build a result:
