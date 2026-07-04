@@ -86,7 +86,7 @@ pub(super) fn invoke<'step>(
         // Re-key the slot-indexed arg carriers onto their parameter names (the body reads them by
         // name).
         let arg_carriers = map_arg_carriers(picked, arg_carriers);
-        let args = match picked.bind_args(&working_expr) {
+        let args = match picked.bind_args(&working_expr, view.current_scope()) {
             Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };

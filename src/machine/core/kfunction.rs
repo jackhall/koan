@@ -151,15 +151,21 @@ impl<'a> KFunction<'a> {
     /// This is the builtin counterpart to [`Self::bind_by_name`] (the user-defined-call binder).
     /// The two hold *different currencies for a reason*: this binder produces owned `Held` cells
     /// because a builtin receives raw un-`Spliced` argument parts that `resolve_for` resolves into
-    /// fresh values with no region to borrow from; `bind_by_name` produces borrowed `Record<Carried>`
-    /// because a user-defined call arrives with its value parts already resolved into `Carried` by
-    /// dispatch, so it is a trusted rename of existing region values.
-    pub fn bind_args(&'a self, expr: &KExpression<'a>) -> Result<Record<Held<'a>>, KError> {
+    /// fresh values; `bind_by_name` produces borrowed `Record<Carried>` because a user-defined call
+    /// arrives with its value parts already resolved into `Carried` by dispatch, so it is a trusted
+    /// rename of existing region values. `scope` is the call scope: `resolve_for` adopts a spliced
+    /// **cell** into it before owning the value, so an owned type that still borrows the producer
+    /// region stays pinned.
+    pub fn bind_args(
+        &'a self,
+        expr: &KExpression<'a>,
+        scope: &'a Scope<'a>,
+    ) -> Result<Record<Held<'a>>, KError> {
         self.validate_call_args(expr)?;
         let mut args: Record<Held<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
-                args.insert(arg.name.clone(), part.value.resolve_for(&arg.ktype));
+                args.insert(arg.name.clone(), part.value.resolve_for(&arg.ktype, scope));
             }
         }
         Ok(args)

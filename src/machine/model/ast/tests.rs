@@ -25,20 +25,24 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
+    let storage = crate::machine::core::FrameStorage::run_root();
+    let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
     let slot = KType::OfKind(KKind::ProperType);
-    match part.resolve_for(&slot) {
-        Held::Type(kt) => assert_eq!(kt, KType::Number),
-        _ => panic!("expected a Type-arm carrier"),
-    }
+    // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
+    assert!(matches!(part.resolve_for(&slot, scope), Held::Type(KType::Number)));
 }
 
 #[test]
 fn resolve_for_defers_user_bound_leaf_to_unresolved() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
+    let storage = crate::machine::core::FrameStorage::run_root();
+    let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::ProperType);
-    let r = part.resolve_for(&slot);
-    assert!(matches!(r, Held::Type(KType::Unresolved(_))));
+    assert!(matches!(
+        part.resolve_for(&slot, scope),
+        Held::Type(KType::Unresolved(_))
+    ));
 }
 
 #[test]

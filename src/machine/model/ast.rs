@@ -209,10 +209,14 @@ impl<'a> ExpressionPart<'a> {
 
     /// Slot-aware resolve producing an owned [`Held`] cell. A type rides the `Type` arm raw; a
     /// runtime value rides the `Object` arm. Runs at [`KFunction::bind_args`] time (an already-picked
-    /// builtin call), which has no `Scope` in hand and no region to borrow from — so each cell is
-    /// owned by value.
+    /// builtin call). `scope` is the call scope: a spliced **cell** is adopted into it (its reach
+    /// folded, its value re-anchored at the scope brand) before the cell is owned-ified, so a cloned
+    /// type that still borrows the producer region stays pinned; every other arm owns its value by
+    /// value with no region to borrow from.
     ///
-    /// - A `Spliced(Carried::Type(_))` sub-result threads its type straight into the `Type` arm.
+    /// - A `Spliced(Carried::Type(_))` sub-result threads its type straight into the `Type` arm; a
+    ///   `SplicedSealed` cell adopts through `scope`, then routes the adopted value through the same
+    ///   type/object owning.
     /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
     ///   [`KType::from_type_identifier`], or to the [`KType::Unresolved`] transient for a bare user
     ///   name (a name not in the builtin table) — scope-aware elaboration defers to
@@ -220,10 +224,23 @@ impl<'a> ExpressionPart<'a> {
     /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
-    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> Held<'a> {
+    pub fn resolve_for(
+        &self,
+        slot: &crate::machine::model::KType<'a>,
+        scope: &'a crate::machine::core::Scope<'a>,
+    ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced(Carried::Type(kt)) = self {
             return Held::Type((*kt).clone());
+        }
+        // A spliced cell is adopted into the call scope, then owned-ified through the same
+        // type/object handling as a bare splice — a cloned type keeps its region borrows pinned by
+        // the scope's now-folded reach.
+        if let ExpressionPart::SplicedSealed(cell) = self {
+            return match scope.adopt_sealed(cell) {
+                Carried::Type(kt) => Held::Type(kt.clone()),
+                Carried::Object(obj) => Held::Object(obj.deep_clone()),
+            };
         }
         if let (ExpressionPart::Type(t), KType::OfKind(KKind::ProperType)) = (self, slot) {
             let kt = KType::<'a>::from_type_identifier(t)
