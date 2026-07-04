@@ -29,16 +29,18 @@ and names no AST.
 
 - A **dep-finish** `cont` (built by `short_circuit`) waits on a fixed set of dep
   slots, short-circuits on the first errored dep, and otherwise hands the
-  resolved dep terminals to a single
-  [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure. The two
-  host-closure shapes callers write —
-  [`DepFinish`](../../src/machine/execute/outcome.rs) (value-copy) and
+  resolved dep terminals (un-relocated: each terminal's step-brand value plus its
+  own reach carrier) to a single
+  [`TerminalDepFinish`](../../src/machine/execute/outcome.rs) closure — the one
+  delivery currency. A value-reading finish writes that shape directly, copying a
+  value it must outlive the resolving step site-explicitly via
+  `DepTerminal::relocate`; a
   [`WitnessedDepFinish`](../../src/machine/execute/outcome.rs) (folds terminals
-  into one witnessed carrier) — are projected onto that one currency by
-  `relocate_values` / `seal_witnessed` before `short_circuit` ever sees them, so
-  there is exactly one delivery loop. List- and dict-literal planners use the
-  value-copy shape; the construction logic — including already-resolved literal
-  scalars that don't need a dep slot — lives in the closure's capture.
+  into one witnessed carrier) projects onto the same currency through
+  `seal_witnessed` before `short_circuit` ever sees it, so there is exactly one
+  delivery loop. List- and dict-literal planners use the witnessed shape; the
+  construction logic — including already-resolved literal scalars that don't need
+  a dep slot — lives in the closure's capture.
 - A **catch** `cont` (built by `catch_cont`) waits on one slot and hands its
   terminal to a [`CatchFinish`](../../src/machine/execute/outcome.rs) closure as a
   `Result<&KObject, KError>`. Unlike a dep-finish, an errored dep does not
@@ -270,10 +272,10 @@ copy** of it. The keyworded dispatcher extracts every nested sub-expression out 
 the parent's `parts` (replacing each with a placeholder `Identifier`) and
 declares them as the deps of a
 [`ParkThenContinue`](#the-dispatcher--scheduler-boundary) whose continuation
-is a `Continuation::Finish` — the dispatch flavor of a dep-finish. The harness
-submits each dep as a sub-Dispatch and parks the parent on a
+is a `Continuation::FinishTerminal` — the dispatch flavor of a dep-finish. The
+harness submits each dep as a sub-Dispatch and parks the parent on a
 [`NodeWork`](../../src/machine/execute/nodes.rs) whose `cont` is a dep-finish wrapping
-that *splice finish* (a [`DepFinish`](../../src/machine/execute/outcome.rs)
+that *splice finish* (a [`TerminalDepFinish`](../../src/machine/execute/outcome.rs)
 closure). When the deps terminalize, that finish runs and writes each
 resolved value back into the working copy:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The splice

@@ -256,7 +256,7 @@ directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recove
 `KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
-[`relocate_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
+[`relocate_carried`](../src/machine/core/arena.rs) structural copy, transient reach rides each dep's
 carrier, and only a *bound* value deposits onto the scope reach-set (below).
 
 A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the

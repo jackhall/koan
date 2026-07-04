@@ -266,10 +266,10 @@ fn all_or_first_error<'a, 'r>(
 }
 
 /// The one delivery currency a resolved dep-finish runs against: resolved dep terminals (value +
-/// sealed carrier, un-relocated, `[park..., owned...]` order), an [`Outcome`] out. Both
-/// [`DepFinish`] and [`WitnessedDepFinish`] project onto this shape — [`relocate_values`] and
-/// [`seal_witnessed`] are the two projections — so [`short_circuit`] is the single loop that runs
-/// either.
+/// sealed carrier, un-relocated, `[park..., owned...]` order), an [`Outcome`] out. A value-reading
+/// finish writes this shape directly — copying a value it must outlive the resolving step
+/// site-explicitly via [`DepTerminal::relocate`]; a [`WitnessedDepFinish`] projects onto it through
+/// [`seal_witnessed`] — so [`short_circuit`] is the single loop that runs either.
 pub(in crate::machine::execute) type TerminalDepFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,

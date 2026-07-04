@@ -185,18 +185,21 @@ by arithmetic over a shared vector.
 
 ```rust
 Await::on(deps)
-    .error_frame(frame)          // label attached if a dep errors
-    .finish(|ctx, deps| ...)     // value-copy finish; runs only if no dep errored
+    .error_frame(frame)              // label attached if a dep errors
+    .finish_terminal(|ctx, terminals| ...)  // reads un-relocated dep terminals
 // or, for a construction that folds its deps into one witnessed carrier:
 Await::on(deps).finish_witnessed(|ctx, terminals| ...)
 ```
 
 The sole constructor of a parked continuation, over either finish channel.
 Error short-circuit is built in through one shared walk: a finish never sees
-an errored dep.
+an errored dep. Dep delivery is the terminal channel only — no bare
+pre-relocated value handoff: a finish reads each dep's step-brand value and
+reach carrier un-relocated, and a value it must outlive the resolving step it
+copies site-explicitly (`DepTerminal::relocate`).
 
-**The step construction context.** What a finish receives and the only way
-it can build a result:
+**The step construction context** ([`StepContext`](../workgraph/src/witnessed/step_ctx.rs)).
+What a finish receives and the only way it can build a result:
 
 ```rust
 ctx.region()                       // the consumer's live region — infallible
