@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::model::types::{NominalMember, RecursiveSet};
-use crate::machine::model::{Carried, KType};
+use crate::machine::model::KType;
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -165,9 +165,7 @@ pub fn body<'a>(
             bind_index,
             FrameSet::empty(),
         ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx
-                .ctx
-                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone()))))),
+            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     });

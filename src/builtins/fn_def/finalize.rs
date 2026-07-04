@@ -350,8 +350,7 @@ pub(crate) fn defer<'a>(
             // as one unit — opened where the signature is assembled (`parse_fn_param_list` adopts it
             // through the elaborator's scope). The early-error check above reads `terminal.value`,
             // still delivered at the step brand; the carrier is the survival, not a relocated copy.
-            spliced_parts[slot_idx].value =
-                ExpressionPart::Spliced(terminal.carrier.duplicate());
+            spliced_parts[slot_idx].value = ExpressionPart::Spliced(terminal.carrier.duplicate());
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

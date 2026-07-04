@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use crate::machine::core::KoanStepContextExt;
-use crate::machine::model::{Carried, Held, KObject, KType};
+use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
 use crate::builtins::ascribe::abstract_type_names_of;
@@ -71,11 +71,9 @@ pub fn body<'a>(
             }
         }
     }
-    Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
-        Carried::Type(b.alloc_ktype(KType::Signature {
-            sig: s,
-            pinned_slots: pinned,
-        }))
+    Action::Done(Ok(ctx.ctx.alloc_type(KType::Signature {
+        sig: s,
+        pinned_slots: pinned,
     })))
 }
 

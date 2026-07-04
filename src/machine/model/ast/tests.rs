@@ -30,7 +30,10 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
     let slot = KType::OfKind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
-    assert!(matches!(part.resolve_for(&slot, scope), Held::Type(KType::Number)));
+    assert!(matches!(
+        part.resolve_for(&slot, scope),
+        Held::Type(KType::Number)
+    ));
 }
 
 #[test]

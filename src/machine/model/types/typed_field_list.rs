@@ -6,14 +6,14 @@ use super::ktype::KType;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
-use crate::machine::FrameSet;
-use crate::witnessed::Sealed;
 use crate::machine::model::Parseable;
 use crate::machine::model::Record;
+use crate::machine::FrameSet;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
+use crate::witnessed::Sealed;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {

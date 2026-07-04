@@ -13,14 +13,14 @@
 //! overload, and only a bare runtime value falls through to [`body_newtype`].
 
 use crate::machine::core::kfunction::action::scope_frame;
-use crate::machine::core::{KoanRegion, KoanRegionExt, RegionTypeFamily};
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, NameLookup, Scope};
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Sealed, StepContext, Witnessed};
 
 use super::{arg, kw, sig};
 
@@ -327,33 +327,21 @@ fn access_module_member<'a>(
     match module_scope.bindings().lookup_member(field, None) {
         Some(MemberResolution::Value { obj, reach }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
-                // A re-tag is a *fresh* `Wrapped` construction, born region-pure and sealed under
-                // the module scope's home frame — not a read of the pre-existing member — so the
-                // stored `reach` does not apply here. Built in the *module* scope's own region (not
-                // the step region a `StepContext` would wrap): `obj` is a pre-existing reference into
-                // that region, not one the brand can derive fresh, so it crosses the build brand as a
-                // witnessed [`CarriedFamily`] operand — `merge`d with the freshly allocated
-                // `RegionTypeFamily` tag operand — rather than being allocated inside the closure
-                // directly (the [`RegionTypeFamily`] pattern `build_type_operand` / CATCH's `Result`
-                // build share).
-                let tag_slot: Witnessed<RegionTypeFamily, FrameSet> =
-                    KoanRegion::yoke_branded::<RegionTypeFamily, _>(
-                        scope_frame(module_scope),
-                        |b| (b, b.alloc_ktype(tag)),
-                    );
-                let obj_carrier = module_scope.resident_value_carrier(obj, &FrameSet::empty());
-                return Ok(obj_carrier.merge::<RegionTypeFamily, CarriedFamily>(
-                    tag_slot,
-                    |carried, (region, type_id), _brand| match carried {
-                        Carried::Object(o) => {
-                            Carried::Object(region.alloc_object(KObject::Wrapped {
-                                inner: NonWrappedRef::peel(o),
-                                type_id,
-                            }))
-                        }
+                // The re-tag allocates in the module region (not the read site's): `obj` is a
+                // pre-existing reference into that region, so it crosses as a fold operand — its
+                // carrier (named by the member's own `reach`) unions into the wrapped result's
+                // witness via `alloc_carried_with`.
+                let obj_carrier = Sealed::seal(module_scope.resident_value_carrier(obj, &reach));
+                let ctx = StepContext::new(scope_frame(module_scope));
+                return Ok(
+                    ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {
+                        Carried::Object(o) => Carried::Object(b.alloc_object(KObject::Wrapped {
+                            inner: NonWrappedRef::peel(o),
+                            type_id: b.alloc_ktype(tag),
+                        })),
                         Carried::Type(_) => unreachable!("a module value member is always Object"),
-                    },
-                ));
+                    }),
+                );
             }
             Ok(module_scope.resident_value_carrier(obj, &reach))
         }

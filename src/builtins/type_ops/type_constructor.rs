@@ -16,7 +16,7 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
     use crate::machine::core::KoanStepContextExt;
-    use crate::machine::model::values::{Carried, Held};
+    use crate::machine::model::values::Held;
 
     use crate::machine::{KError, KErrorKind};
 
@@ -47,9 +47,7 @@ pub fn body<'a>(
         param_names: vec![param],
     });
     let set = Rc::new(RecursiveSet::new(vec![member]));
-    Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
-        Carried::Type(b.alloc_ktype(KType::SetRef { set, index: 0 }))
-    })))
+    Action::Done(Ok(ctx.ctx.alloc_type(KType::SetRef { set, index: 0 })))
 }
 
 #[cfg(test)]

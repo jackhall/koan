@@ -15,9 +15,11 @@ use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::{KObject, KType};
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
 use crate::source::Spanned;
+use crate::witnessed::Sealed;
 
 use super::{arg, kw, sig};
 
@@ -106,7 +108,16 @@ pub fn body<'a>(
 
     let te = match carrier {
         CarrierForm::Direct(kt) => {
-            return finalize_val(&ctx.finish_ctx(), name, kt, bind_index);
+            // A bind-time `ty` argument: any caller-supplied carrier (a `:(...)` sub-dispatch
+            // spliced in before this call), so `arg_carrier` names its own foreign reach if it
+            // has one — `None` only for a scalar-literal (already-region-pure) argument.
+            return finalize_val(
+                &ctx.finish_ctx(),
+                name,
+                kt,
+                bind_index,
+                ctx.arg_carrier("ty"),
+            );
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
@@ -116,8 +127,8 @@ pub fn body<'a>(
     };
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
-    dispatch_type_then(expr, "VAL type slot", move |fctx, kt| {
-        finalize_val(fctx, name, kt, bind_index)
+    dispatch_type_then(expr, "VAL type slot", move |fctx, kt, carrier| {
+        finalize_val(fctx, name, kt, bind_index, Some(carrier))
     })
 }
 
@@ -126,24 +137,34 @@ pub fn body<'a>(
 /// directly (not a boxed carrier) keeps the type table the single home for everything ascription
 /// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeIdentifier> = …`
 /// abstract member.
+///
+/// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a
+/// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
+/// dep terminal; `carrier` is `None` only for an already-region-pure scalar leaf. Both the stored
+/// binding's reach and the sealed result's witness fold it in, so neither under-witnesses the
+/// declared type's actual reach.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
+    carrier: Option<&Sealed<CarriedFamily, FrameSet>>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    // A VAL declares an abstract / declared slot type — owned data reaching no foreign region, so its
-    // stored reach is empty.
-    if let Err(e) =
-        fctx.scope
-            .register_user_type(name, declared_kt.clone(), bind_index, FrameSet::empty())
+    let reach = carrier
+        .map(|c| fctx.scope.foreign_reach_of(c.witness()))
+        .unwrap_or_default();
+    if let Err(e) = fctx
+        .scope
+        .register_user_type(name, declared_kt.clone(), bind_index, reach)
     {
         return Action::Done(Err(e));
     }
-    Action::Done(Ok(fctx
-        .ctx
-        .alloc_carried(|b| Carried::Type(b.alloc_ktype(declared_kt)))))
+    let sealed = match carrier {
+        Some(c) => fctx.ctx.alloc_type_with(&[c], declared_kt),
+        None => fctx.ctx.alloc_type(declared_kt),
+    };
+    Action::Done(Ok(sealed))
 }
 
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {

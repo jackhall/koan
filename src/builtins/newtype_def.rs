@@ -26,11 +26,11 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+use crate::machine::model::values::{CarriedFamily, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
 
@@ -38,11 +38,18 @@ use super::{arg, kw, sig};
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
 /// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
+///
+/// `repr` embeds `carrier`'s reach when `carrier` is `Some` — a bind-time `repr` argument (a
+/// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
+/// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...);
+/// `None` is a bare-leaf name resolved against scope bindings, out of this fold's reach (that
+/// channel's own audit belongs to the total-carrier-resolution item).
 fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
+    carrier: Option<&Sealed<CarriedFamily, FrameSet>>,
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
@@ -51,13 +58,20 @@ fn finalize_newtype<'a>(
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
     let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
+    let reach = carrier
+        .map(|c| scope.foreign_reach_of(c.witness()))
+        .unwrap_or_default();
     match scope
         .bindings()
-        .try_register_type(&name, kt_ref, bind_index, FrameSet::empty())
+        .try_register_type(&name, kt_ref, bind_index, reach)
     {
-        Ok(ApplyOutcome::Applied) => Ok(fctx
-            .ctx
-            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
+        Ok(ApplyOutcome::Applied) => {
+            let sealed = match carrier {
+                Some(c) => fctx.ctx.alloc_type_with(&[c], kt_ref.clone()),
+                None => fctx.ctx.alloc_type(kt_ref.clone()),
+            };
+            Ok(sealed)
+        }
         // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
         // contention here is a programming error. Surface as a structured error rather
         // than panicking — a future re-entrant caller still gets a recoverable diag.
@@ -78,6 +92,7 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
+    carriers: &[&Sealed<CarriedFamily, FrameSet>],
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -108,9 +123,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(fctx
-            .ctx
-            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
+        SealOutcome::Sealed(kt_ref) => Ok(fctx.ctx.alloc_type_with(carriers, kt_ref.clone())),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -145,14 +158,21 @@ pub fn body<'a>(
                             te.as_str(),
                         )
                     },
-                    move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
+                    // A bare-leaf name resolved against scope bindings, not a dep terminal — that
+                    // channel's own carrier audit belongs to the total-carrier-resolution item.
+                    move |fctx, kt| {
+                        Action::Done(finalize_newtype(fctx, name, kt, bind_index, None))
+                    },
                 )
             }
+            // A bind-time `repr` argument: any caller-supplied structural carrier, so
+            // `arg_carrier` names its own foreign reach if it has one.
             other => Action::Done(finalize_newtype(
                 &ctx.finish_ctx(),
                 name,
                 other.clone(),
                 bind_index,
+                ctx.arg_carrier("repr"),
             )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
@@ -176,8 +196,8 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
-        Action::Done(finalize_newtype(fctx, name, kt, bind_index))
+    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt, carrier| {
+        Action::Done(finalize_newtype(fctx, name, kt, bind_index, Some(carrier)))
     })
 }
 

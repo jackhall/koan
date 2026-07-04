@@ -170,7 +170,10 @@ fn accepts_carried_matches_spliced_delegation() {
         (KType::Any, Carried::Object(n)),
     ] {
         // The delegation equivalence: classifying the spliced cell and opening the value directly agree.
-        assert_eq!(ty.accepts_carried(carried), ty.accepts_part(&spliced(carried)));
+        assert_eq!(
+            ty.accepts_carried(carried),
+            ty.accepts_part(&spliced(carried))
+        );
     }
     // A numeric value is admitted by `:Number` / `:Any`, refused by `:Str`.
     assert!(KType::Number.accepts_carried(Carried::Object(n)));
@@ -214,7 +217,10 @@ fn spliced_cell_classifies_by_opening() {
             "cell classification for {ty:?}",
         );
         // Agrees with opening the value directly.
-        assert_eq!(ty.accepts_part(&cell_part), ty.accepts_carried(Carried::Object(obj)));
+        assert_eq!(
+            ty.accepts_part(&cell_part),
+            ty.accepts_carried(Carried::Object(obj))
+        );
     }
 
     // A cell is a resolved value, not raw AST — QUOTE's splice-free guard rejects it.
@@ -328,8 +334,7 @@ fn of_kind_nominal_is_type_channel_only() {
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(newtype_ty.accepts_part(&spliced(Carried::Type(&newtype_tv))));
-    assert!(KType::OfKind(KKind::ProperType)
-        .accepts_part(&spliced(Carried::Type(&newtype_tv))));
+    assert!(KType::OfKind(KKind::ProperType).accepts_part(&spliced(Carried::Type(&newtype_tv))));
 
     // A Tagged type value is the wrong family — declined.
     let tagged_tv = KType::SetRef {

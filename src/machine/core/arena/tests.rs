@@ -858,3 +858,98 @@ fn multi_region_record_of_closures_survives_frame_free() {
         "both record fields read back after their frames freed"
     );
 }
+
+/// A `KFunction` plus a `KType::KFunctor { body: Some(&f), .. }` wrapping it, both resident in
+/// `home`'s own region — the stand-in for a dep terminal's `t.value`/`t.carrier` pair (a bound
+/// functor whose `body` names the callable). Mirrors [`alloc_home_closure`]'s construction, but
+/// returns the *type*, since it is the functor type's `body` borrow the fold closes a hole around.
+fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
+    use crate::machine::{Body, KFunction};
+    home.with_scope(|child| {
+        let kf = KFunction::new(
+            ExpressionSignature {
+                return_type: ReturnType::Resolved(KType::Null),
+                elements: vec![SignatureElement::Keyword("__INNER__".into())],
+            },
+            Body::Builtin(|ctx| {
+                Action::done_resident(Carried::Object(
+                    ctx.scope.brand().alloc_object(KObject::Null),
+                ))
+            }),
+            child,
+            None,
+            None,
+            true,
+        );
+        let kf_ref: &KFunction = home.brand().alloc_function(kf);
+        let kt = KType::KFunctor {
+            params: Record::new(),
+            ret: Box::new(KType::Null),
+            body: Some(kf_ref),
+        };
+        home.brand().alloc_ktype(kt)
+    })
+}
+
+/// **`alloc_type_with`'s reach fold, exercised through the actual finish-surface helper.** Mirrors
+/// what a field-list finish now does: a dep terminal's `KType::KFunctor { body: Some(&f) }` — the
+/// stand-in for `t.value`/`t.carrier` — is cloned into a fresh `Record` type built in a *different*
+/// frame's region via `alloc_type_with`, the same clone-embedding shape `field_list.rs`'s re-walk
+/// performs. The fold unions the producer's reach into the result's witness; every producer-frame
+/// handle then drops, and reading the record's embedded functor body must not dangle. Fails on UB,
+/// not values — the closing case for the reach hole `alloc_type` (no fold) leaves open.
+#[test]
+fn functor_field_reach_fold_survives_producer_frame_free() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+
+    // Producer: a KFunctor type (wrapping a KFunction) resident in its own frame's region — the
+    // stand-in for a dep terminal delivered to the finish.
+    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let kt: &KType = alloc_home_functor_type(&producer_frame);
+    let expected_id = match kt {
+        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
+        other => panic!("expected a KFunctor with a body, got {}", other.name()),
+    };
+    let dep: Sealed<CarriedFamily, FrameSet> = Sealed::seal(
+        Witnessed::<CarriedFamily, FrameSet>::resident(Carried::Type(kt))
+            .reseal_under(FrameSet::singleton(producer_frame.storage_rc())),
+    );
+
+    // Consumer: a StepContext over a *different* frame — the finish surface's own region. The fold
+    // clones `kt` in exactly as the field-list re-walk clones a sub-dispatch terminal's `t.value`.
+    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let record: Witnessed<CarriedFamily, FrameSet> = ctx.alloc_type_with(
+        &[&dep],
+        KType::Record(Box::new(Record::from_pairs(vec![(
+            "f".to_string(),
+            kt.clone(),
+        )]))),
+    );
+
+    // Drop the dep seal and every producer-frame handle: only the fold (if it happened) keeps the
+    // producer's region alive through the record's own witness.
+    drop(dep);
+    drop(producer_frame);
+    drop(consumer_frame);
+
+    // Read back through the record carrier into the embedded functor's captured scope.
+    let read_id = record.with(|c| match c {
+        Carried::Type(KType::Record(fields)) => match fields.get("f") {
+            Some(KType::KFunctor { body: Some(f), .. }) => f.captured_scope().id,
+            Some(other) => panic!(
+                "expected a KFunctor field with a body, got {}",
+                other.name()
+            ),
+            None => panic!("expected field \"f\" in the record"),
+        },
+        other => panic!("expected a Record type, got {}", other.summarize()),
+    });
+    assert_eq!(
+        read_id, expected_id,
+        "functor field's captured scope read back after producer frame freed"
+    );
+}

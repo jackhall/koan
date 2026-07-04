@@ -354,6 +354,7 @@ digraph {
     "koan::builtins::nominal_schema" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -361,6 +362,7 @@ digraph {
     "koan::builtins::parameterized_types" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::parameterized_types" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
@@ -392,6 +394,7 @@ digraph {
     "koan::builtins::resolve_or_await" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::resolve_or_await" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::resolve_or_await" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::result" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -451,6 +454,7 @@ digraph {
     "koan::builtins::using_scope" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::val_decl" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine" [label="uses", style="dashed"];
@@ -459,6 +463,7 @@ digraph {
     "koan::builtins::val_decl" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::val_decl" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins" [label="uses", style="dashed"];
@@ -588,7 +593,6 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::constructors" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];

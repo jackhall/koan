@@ -81,22 +81,36 @@ mod action_bodies {
     use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 
-    use crate::machine::model::{Carried, KType};
-    use crate::machine::{KError, KErrorKind};
+    use crate::machine::model::values::CarriedFamily;
+    use crate::machine::model::KType;
+    use crate::machine::{FrameSet, KError, KErrorKind};
+    use crate::witnessed::Sealed;
 
+    /// LIST / MAP / AS fold the carrier(s) of the arg(s) their result `KType` embeds by clone:
+    /// `elem` / `k` / `v` / `applied` / `ctor` can be any caller-supplied type (a bound `KFunctor`,
+    /// a `SetRef` into a nominal set, ...), so the clone can carry a borrow into the argument's own
+    /// producer region — [`BodyCtx::arg_carrier`] names that reach, folded in via `alloc_type_with`
+    /// (`None` — a scalar-literal argument — folds nothing, matching `alloc_type`).
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
-            Carried::Type(b.alloc_ktype(KType::List(Box::new(elem))))
-        })))
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            ctx.arg_carrier("elem").into_iter().collect();
+        Action::Done(Ok(ctx
+            .ctx
+            .alloc_type_with(&carriers, KType::List(Box::new(elem)))))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
-            Carried::Type(b.alloc_ktype(KType::Dict(Box::new(k), Box::new(v))))
-        })))
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            [ctx.arg_carrier("k"), ctx.arg_carrier("v")]
+                .into_iter()
+                .flatten()
+                .collect();
+        Action::Done(Ok(ctx
+            .ctx
+            .alloc_type_with(&carriers, KType::Dict(Box::new(k), Box::new(v)))))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -125,12 +139,18 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        Action::Done(Ok(ctx.ctx.alloc_carried(|b| {
-            Carried::Type(b.alloc_ktype(KType::ConstructorApply {
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            [ctx.arg_carrier("applied"), ctx.arg_carrier("ctor")]
+                .into_iter()
+                .flatten()
+                .collect();
+        Action::Done(Ok(ctx.ctx.alloc_type_with(
+            &carriers,
+            KType::ConstructorApply {
                 ctor: Box::new(ctor),
                 args: vec![applied],
-            }))
-        })))
+            },
+        )))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -154,8 +174,6 @@ fn build_carrier<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
     use crate::machine::core::KoanStepContextExt;
-    use crate::machine::model::Carried;
-
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);
@@ -168,9 +186,7 @@ fn build_carrier<'a>(
     ) {
         FieldListOutcome::Done(fields) => {
             let kt = finalize_carrier(fields, ret, kind);
-            Action::Done(Ok(ctx
-                .ctx
-                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))))
+            Action::Done(Ok(ctx.ctx.alloc_type(kt)))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -186,9 +202,9 @@ fn build_carrier<'a>(
             None,
             None,
             None,
-            Box::new(move |fctx, fields| {
+            Box::new(move |fctx, fields, carriers| {
                 let kt = finalize_carrier(fields, ret, kind);
-                Ok(fctx.ctx.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt))))
+                Ok(fctx.ctx.alloc_type_with(carriers, kt))
             }),
         ),
     }

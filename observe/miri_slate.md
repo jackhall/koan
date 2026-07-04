@@ -81,7 +81,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-32 tests, grouped by the unsafe site each pins down. Names below are the exact
+33 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -150,6 +150,19 @@ assert only their region-pin contracts.
 - `multi_region_list_of_closures_survives_frame_free`
 - `multi_region_closure_capturing_closures_survives_frame_free`
 - `multi_region_record_of_closures_survives_frame_free`
+
+**`alloc_type_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— `KoanStepContextExt::alloc_carried_with`/`alloc_type_with` route a finish's result through the
+library combinator `StepContext::alloc_with`, folding each listed dep's sealed reach into the
+result's witness by construction before the caller's `build` closure ever clones a dep-derived
+value in. This test builds a `KType::KFunctor { body: Some(&f), .. }` resident in a producer
+frame's region (the stand-in for a dep terminal's `t.value`/`t.carrier`), clones it into a fresh
+`Record` type via `alloc_type_with` at a *different* consumer frame, drops every producer-frame
+handle, then reads the record's embedded functor body back — a use-after-free under tree borrows
+if the fold is skipped (as `alloc_type`, its unfolded sibling, would leave it). The only `unsafe`
+routed is the shared `retype` in `witnessed.rs` (through `alloc_with`'s `yoke`/`merge`).
+
+- `functor_field_reach_fold_survives_producer_frame_free`
 
 **`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
 frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
@@ -402,9 +415,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-04: 145s — 33 tests, 0 leaks, 0 UB
+- 2026-07-04: 153s — 33 tests, 0 leaks, 0 UB
 - 2026-07-03: 142s — 30 tests, 0 leaks, 0 UB
 - 2026-07-03: 143s — 30 tests, 0 leaks, 0 UB
 - 2026-07-03: 141s — 30 tests, 0 leaks, 0 UB
-- 2026-07-03: 146s — 44 tests, 0 leaks, 0 UB
-- 2026-07-02: 157s — 44 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

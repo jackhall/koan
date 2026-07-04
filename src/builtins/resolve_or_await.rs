@@ -9,10 +9,11 @@ use crate::machine::core::kfunction::action::{
 use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::TypeResolution;
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{KError, KErrorKind, NameLookup, Scope};
+use crate::machine::{FrameSet, KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
-use crate::witnessed::StepContext;
+use crate::witnessed::{Sealed, StepContext};
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -102,31 +103,38 @@ pub(crate) fn resolve_or_await<'a>(
     }
 }
 
-/// Read the type a sub-dispatch resolved to out of a dep-finish's owned results; a non-type
-/// result is the slot's canonical shape error.
-pub(crate) fn expect_type_result<'a>(
-    results: &DepResults<'_, &DepTerminal<'a>>,
+/// Read the type a sub-dispatch resolved to out of a dep-finish's owned results, paired with the
+/// terminal's own dep carrier — a non-type result is the slot's canonical shape error. The
+/// resolved `KType` can embed a borrow into the terminal's producer region (a bound `KFunctor`,
+/// a nominal `SetRef`, ...), so a caller that seals the type into a result must fold the carrier
+/// in (`StepContext::alloc_type_with`) or fold it into a scope's reach-set (`Scope::fold_reach`)
+/// before the type crosses into stored state.
+pub(crate) fn expect_type_terminal<'a, 'd>(
+    results: &DepResults<'_, &'d DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
-) -> Result<KType<'a>, KError> {
-    // The sub-dispatch's resolved type read live at the step brand (un-relocated); `on_resolved`
-    // re-allocates it into the destination region when it constructs.
-    match results.owned(owned_pos).value {
-        Carried::Type(kt) => Ok(kt.clone()),
+) -> Result<(KType<'a>, &'d Sealed<CarriedFamily, FrameSet>), KError> {
+    // The sub-dispatch's resolved type read live at the step brand (un-relocated); the caller
+    // re-allocates it into the destination region when it constructs, folding `carrier` in.
+    let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
+    match terminal.value {
+        Carried::Type(kt) => Ok((kt.clone(), &terminal.carrier)),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
     }
 }
 
-/// Sub-dispatch `expr` in the slot's own scope and hand the resolved type to `on_resolved` at
-/// dep-finish.
+/// Sub-dispatch `expr` in the slot's own scope and hand the resolved type, plus its dep carrier,
+/// to `on_resolved` at dep-finish — `on_resolved` folds the carrier into whatever it seals so the
+/// type's own reach travels with it.
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>) -> Action<'a> + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &Sealed<CarriedFamily, FrameSet>) -> Action<'a>
+        + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let kt = crate::try_action!(expect_type_result(&results, 0, slot));
-        on_resolved(fctx, kt)
+        let (kt, carrier) = crate::try_action!(expect_type_terminal(&results, 0, slot));
+        on_resolved(fctx, kt, carrier)
     });
     Action::AwaitDeps {
         deps: vec![DepRequest::Dispatch {

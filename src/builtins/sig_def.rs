@@ -12,7 +12,7 @@
 
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::KKind;
-use crate::machine::model::values::{Carried, ModuleSignature};
+use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
 use crate::machine::FrameSet;
 use crate::machine::{Scope, TraceFrame};
@@ -58,9 +58,7 @@ pub fn body<'a>(
             bind_index,
             FrameSet::empty(),
         ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx
-                .ctx
-                .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone()))))),
+            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
             Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                 "<signature>",
                 format!("SIG {} body", name_for_finish),

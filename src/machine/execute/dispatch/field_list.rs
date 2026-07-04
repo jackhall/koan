@@ -20,7 +20,7 @@ use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::{KType, Record};
 use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::TerminalDepFinish;
@@ -35,6 +35,7 @@ pub(crate) type FieldListFinalize<'step> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'step, 'view>,
             Vec<(String, KType<'step>)>,
+            &[&Sealed<CarriedFamily, FrameSet>],
         ) -> Outcome<'step>
         + 'step,
 >;
@@ -47,6 +48,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn FnOnce(
             &FinishCtx<'a>,
             Vec<(String, KType<'a>)>,
+            &[&Sealed<CarriedFamily, FrameSet>],
         ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
         + 'a,
 >;
@@ -147,11 +149,15 @@ pub(crate) fn defer_field_list<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // The owned sub-Dispatch carriers, read live at the step brand (un-relocated); the re-walk
-        // clones each type into the region as it folds the field list.
+        // Every terminal's carrier — parks then owned — folds into the result so a field type
+        // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
+        // that producer's reach forward; the owned values, read live at the step brand
+        // (un-relocated), feed the re-walk, which clones each type into the folded field list.
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            terminals.all().iter().map(|t| &t.carrier).collect();
         let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
         match rewalk.run(view.current_scope(), &owned) {
-            Ok(fields) => finalize(view, fields),
+            Ok(fields) => finalize(view, fields, &carriers),
             Err(e) => Outcome::Done(Err(e)),
         }
     });
@@ -201,13 +207,17 @@ pub(crate) fn defer_field_list_action<'a>(
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // The owned sub-Dispatch carriers, read live at the step brand (un-relocated); the re-walk
-        // clones each type into the region as it folds the field list.
+        // Every terminal's carrier — parks then owned — folds into the result so a field type
+        // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
+        // that producer's reach forward; the owned values, read live at the step brand
+        // (un-relocated), feed the re-walk, which clones each type into the folded field list.
+        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+            results.all().iter().map(|t| &t.carrier).collect();
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
             rewalk
                 .run(fctx.scope, &owned)
-                .and_then(|fields| finalize(fctx, fields)),
+                .and_then(|fields| finalize(fctx, fields, &carriers)),
         )
     });
     Action::AwaitDeps { deps, finish }
@@ -226,11 +236,12 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     fn fold<'step>(
         view: &SchedulerView<'step, '_>,
         pairs: Vec<(String, KType<'step>)>,
+        carriers: &[&Sealed<CarriedFamily, FrameSet>],
     ) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
-        Outcome::Done(Ok(view.step_ctx().alloc_carried(|b| {
-            Carried::Type(b.alloc_ktype(KType::Record(Box::new(record))))
-        })))
+        Outcome::Done(Ok(view
+            .step_ctx()
+            .alloc_type_with(carriers, KType::Record(Box::new(record)))))
     }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
@@ -240,7 +251,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(pairs) => fold(view, pairs),
+        FieldListOutcome::Done(pairs) => fold(view, pairs, &[]),
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,

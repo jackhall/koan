@@ -16,16 +16,18 @@ use crate::machine::model::types::{
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, TraceFrame};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
-/// and the deferred finish without `Clone`.
+/// and the deferred finish without `Clone`. The trailing slice is the dep carriers (parks then
+/// owned) the field-list walk resolved — `&[]` on the synchronous arm, which has none.
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a>,
     String,
     Vec<(String, KType<'a>)>,
     BindingIndex,
+    &[&Sealed<CarriedFamily, FrameSet>],
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it. `kind` /
@@ -68,7 +70,7 @@ pub(crate) fn nominal_schema_action<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            Action::Done(finalize(&ctx.finish_ctx(), name, fields, bind_index))
+            Action::Done(finalize(&ctx.finish_ctx(), name, fields, bind_index, &[]))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -86,7 +88,9 @@ pub(crate) fn nominal_schema_action<'a>(
                 chain,
                 Some(pending_guard),
                 Some(error_frame),
-                Box::new(move |fctx, fields| finalize(fctx, finish_name, fields, bind_index)),
+                Box::new(move |fctx, fields, carriers| {
+                    finalize(fctx, finish_name, fields, bind_index, carriers)
+                }),
             )
         }
     }

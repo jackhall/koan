@@ -37,8 +37,6 @@ still crosses as a pinless copy, and the relocation hook
 
 ## Dependencies
 
-**Requires:**
-- [Fold embedded dep reach at the finish surface](fold-embedded-dep-reach.md)
-  — establishes the fold discipline and helpers this finish adopts.
+**Requires:** none — the fold discipline this finish adopts has shipped.
 
 **Unblocks:** none — the last delivery-channel conversion.

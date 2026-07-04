@@ -7,10 +7,10 @@ use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, SchemaSealResult,
     SealOutcome,
 };
-use crate::machine::model::values::{Carried, CarriedFamily};
+use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::{arg, kw, sig};
 
@@ -23,6 +23,7 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
+    carriers: &[&Sealed<CarriedFamily, FrameSet>],
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -52,9 +53,7 @@ fn finalize_union<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(fctx
-            .ctx
-            .alloc_carried(|b| Carried::Type(b.alloc_ktype(kt_ref.clone())))),
+        SealOutcome::Sealed(kt_ref) => Ok(fctx.ctx.alloc_type_with(carriers, kt_ref.clone())),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "UNION `{name}` schema references unsealed type `{missing}`",
         )))),
@@ -259,6 +258,7 @@ mod tests {
             "Maybe".into(),
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
+            &[],
         );
         assert!(first.is_ok());
         // The member of the *pre-installed* set is now filled in place.
@@ -270,6 +270,7 @@ mod tests {
             "Maybe".into(),
             vec![("Some".into(), KType::Number)],
             BindingIndex::value(0),
+            &[],
         );
         let member_name = second.as_ref().map(|carrier| {
             carrier.with(|c| match c {

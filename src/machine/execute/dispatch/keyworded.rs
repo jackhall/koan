@@ -159,9 +159,7 @@ pub(super) fn finish<'step>(
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
 /// pick. `Inherit` — a re-resolve runs in the slot's current frame.
-pub(super) fn redispatch_continue<'step>(
-    working_expr: KExpression<'step>,
-) -> Outcome<'step> {
+pub(super) fn redispatch_continue<'step>(working_expr: KExpression<'step>) -> Outcome<'step> {
     let carrier = working_expr.summarize();
     let work = NodeWork::new(
         ResolvedDeps::new(),
