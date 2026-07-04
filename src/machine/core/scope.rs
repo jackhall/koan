@@ -813,9 +813,6 @@ impl<'a> Scope<'a> {
     /// into the scope's reach-set, which the scope holds until it drops, so the returned `Carried<'a>`
     /// cannot outlive its backing — `'a` is bounded by the scope, and the scope keeps its reach-set
     /// (and thus every folded region) live for all of `'a`.
-    // Exercised by the scope-reach tests; the production consumers (head-deferred finish, FN
-    // signature slots, spliced arguments) route it as each producer site delivers carriers.
-    #[allow(dead_code)]
     pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> Carried<'a> {
         // Fold FIRST: pin every region the value reaches into this scope's reach-set before any
         // borrow of the value is fabricated (see the SAFETY note below).

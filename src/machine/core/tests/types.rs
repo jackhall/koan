@@ -87,3 +87,39 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     // Copy-free: the adopted borrow points at the very same object, not a relocated clone.
     assert!(std::ptr::eq(adopted.object(), obj));
 }
+
+/// Miri pin shape for `adopt_sealed`'s reattach: a value produced in a **foreign** frame's region,
+/// sealed as its carrier, is adopted into a consumer scope in a different frame. After every direct
+/// producer handle is dropped, the consumer scope's reach-set (folded by `adopt_sealed`) is the sole
+/// pin on the producer region the re-anchored borrow reads — so reading it must not dangle.
+#[test]
+fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
+    use crate::machine::core::KoanRegion;
+    use crate::machine::core::arena::KoanRegionExt;
+    use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+    use crate::witnessed::Sealed;
+    use std::rc::Rc;
+
+    // A value in the producer frame's own region, sealed witnessed by that frame.
+    let producer_frame = FrameStorage::run_root();
+    let cell: Sealed<CarriedFamily, FrameSet> =
+        Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&producer_frame), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(9.0)))
+        }));
+
+    // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
+    let consumer_frame = FrameStorage::run_root();
+    let consumer = run_root_bare(&consumer_frame);
+    let adopted: Carried = consumer.adopt_sealed(&cell);
+
+    // Drop every direct producer handle: the consumer scope's reach-set now solely pins the region
+    // the adopted borrow reads into.
+    drop(cell);
+    drop(producer_frame);
+
+    // Read the adopted value after the producer handles are gone — Miri confirms no use-after-free.
+    match adopted {
+        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 9.0),
+        _ => panic!("expected the adopted Number value"),
+    }
+}

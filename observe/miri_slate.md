@@ -2,7 +2,8 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 2
-src/machine/model/types/ktype_predicates.rs: 1
+src/machine/core/scope.rs: 1
+src/machine/model/types/ktype_predicates.rs: 2
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -80,7 +81,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-30 tests, grouped by the unsafe site each pins down. Names below are the exact
+32 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -194,6 +195,16 @@ violation if the queue/drain discipline regresses.)
 
 - `add_during_active_data_borrow_queues_and_drains`
 
+**`Scope::adopt_sealed` reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+— the consumption verb re-anchors a foreign producer's sealed carrier at the consumer scope's own
+lifetime (`Erased::reattach` to `'a`), copy-free, pinned by the reach-set `fold_reach` deposits
+**before** the reattach. This test seals a value witnessed by a producer frame, adopts it into a
+consumer scope in a *different* frame, drops every direct producer handle, then reads the adopted
+value — so the folded reach-set is the sole pin on the region the re-anchored borrow reads, and tree
+borrows catches a use-after-free if the fold-then-reanchor order or the pin regresses.
+
+- `adopt_sealed_reach_fold_pins_the_producer_region_after_drop`
+
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
 borrowed reference, and the block (run in a transparent scope allocated in the
@@ -244,14 +255,16 @@ the field end-to-end.
 
 - `module_child_scope_transmute_does_not_dangle`
 
-**`KType::accepts_part` lifetime coercion** ([src/machine/model/types/ktype_predicates.rs](../src/machine/model/types/ktype_predicates.rs))
-— the read-only `transmute::<&ExpressionPart<'e>, &ExpressionPart<'a>>` at `accepts_part`'s entry,
-coercing a `'b`-branded part to the type's lifetime so the dispatch-resolution decouple (threading a
-scope at an independent `'b`) can structurally admit it. Sound because the predicate only *reads* the
-part — no mutation, no borrow escapes — and the part outlives the call. Interim until a
-lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap item).
+**`KType::accepts_part` / `accepts_cell` lifetime coercion** ([src/machine/model/types/ktype_predicates.rs](../src/machine/model/types/ktype_predicates.rs))
+— two read-only lifetime coercions for the same structural-admission purpose. `accepts_part`'s entry
+`transmute::<&ExpressionPart<'e>, &ExpressionPart<'a>>` coerces a `'b`-branded part to the type's
+lifetime; `accepts_cell` opens a spliced cell and `transmute::<Carried<'b>, Carried<'a>>`s the value
+to the slot's lifetime for the same-lifetime `accepts_carried`. Both are sound because the predicate
+only *reads* — no mutation, no borrow escapes (only a `bool`) — and the value outlives the call.
+Interim until a lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap item).
 
 - `accepts_part_lifetime_coercion_reads_soundly`
+- `spliced_cell_classifies_like_bare_splice`
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is

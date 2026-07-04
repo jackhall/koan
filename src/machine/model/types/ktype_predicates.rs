@@ -8,8 +8,10 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
+use crate::machine::core::FrameSet;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
+use crate::witnessed::Sealed;
 
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
@@ -457,11 +459,31 @@ impl<'a> KType<'a> {
         }
     }
 
+    /// Classify a spliced **cell** against this slot without adopting it — the pure probe path an
+    /// overload picker takes (it may reject the candidate, so pinning the cell's regions into the
+    /// scope would be wrong). The cell opens at a fresh brand and the opened value is re-anchored to
+    /// `self`'s `'a` for the same-lifetime [`accepts_carried`](Self::accepts_carried). Re-anchoring
+    /// is the one cross-lifetime step `KType` invariance forces — the same lifetime-only cast
+    /// [`accepts_part`](Self::accepts_part) already carries for a resolved value; removal tracked by
+    /// the structural-value-equality roadmap item.
+    pub(crate) fn accepts_cell(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> bool {
+        cell.open(|c| {
+            // SAFETY: `Carried<'b>` and `Carried<'a>` share layout (the value channel is
+            // layout-invariant in its lifetime). The value is pinned by `cell.witness()` for the
+            // whole of this synchronous read, and `self`'s contents outlive the call, so the
+            // re-anchored borrow cannot dangle; only the `bool` verdict escapes the open — nothing
+            // content-branded. This is a *probe*, so it deliberately does not adopt (no reach fold).
+            let c: Carried<'a> = unsafe { std::mem::transmute::<Carried<'_>, Carried<'a>>(c) };
+            self.accepts_carried(c)
+        })
+    }
+
     /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
     /// literals admit shape-only (element types unknown until evaluation); a resolved
     /// value part ([`ExpressionPart::Spliced`]) classifies through the same-lifetime
-    /// [`accepts_carried`](Self::accepts_carried). Non-satisfying containers
-    /// fall through the scope walk rather than failing the bind.
+    /// [`accepts_carried`](Self::accepts_carried), a spliced cell
+    /// ([`ExpressionPart::SplicedSealed`]) through [`accepts_cell`](Self::accepts_cell). Non-satisfying
+    /// containers fall through the scope walk rather than failing the bind.
     pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
         // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
         // layout (the lifetime is phantom for a structural match); `part` is only read to compare
@@ -471,9 +493,13 @@ impl<'a> KType<'a> {
         // `KType` / part comparison).
         let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
         // A resolved sub-result classifies through the same-lifetime `accepts_carried`, so the
-        // value-shaped admission logic lives in the one predicate the cell-open path also routes.
+        // value-shaped admission logic lives in the one predicate the cell-open path also routes; a
+        // spliced cell opens at its own brand through `accepts_cell` first.
         if let ExpressionPart::Spliced(c) = part {
             return self.accepts_carried(*c);
+        }
+        if let ExpressionPart::SplicedSealed(cell) = part {
+            return self.accepts_cell(cell);
         }
         match self {
             KType::Any => true,

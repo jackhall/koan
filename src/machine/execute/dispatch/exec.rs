@@ -261,6 +261,11 @@ fn extract_carried_args<'step>(
         match &part.value {
             ExpressionPart::Keyword(_) => {}
             ExpressionPart::Spliced(carried) => args.push(*carried),
+            // A spliced cell is adopted into the call scope: its reach folds into the scope and its
+            // value re-anchors at `'step`, copy-free, so the argument survives the call as its carrier.
+            ExpressionPart::SplicedSealed(cell) => {
+                args.push(view.current_scope().adopt_sealed(cell))
+            }
             // A literal value part isn't `Spliced`-spliced; resolve it into the run region now
             // (mirrors `literal_pass_through`) so it joins the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {

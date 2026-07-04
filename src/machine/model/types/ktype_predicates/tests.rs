@@ -191,6 +191,37 @@ fn accepts_carried_matches_spliced_delegation() {
     assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n)));
 }
 
+/// A spliced **cell** (`SplicedSealed`) classifies through `accepts_part` identically to the same
+/// value as a bare `Spliced` part / direct `accepts_carried` — the cell opens at its own brand and
+/// re-anchors for the same-lifetime predicate. Also pins the cell's `summarize` / `is_splice_free`.
+#[test]
+fn spliced_cell_classifies_like_bare_splice() {
+    use crate::builtins::test_support::run_root_bare;
+    use crate::machine::core::{FrameSet, FrameStorage};
+    use crate::machine::model::values::KObject;
+    use crate::machine::model::ast::KExpression;
+    use crate::witnessed::Sealed;
+
+    let storage = FrameStorage::run_root();
+    let scope = run_root_bare(&storage);
+    let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
+    let carrier = scope.resident_value_carrier(obj, &FrameSet::empty());
+    let cell_part = ExpressionPart::SplicedSealed(Sealed::seal(carrier));
+    let bare_part = ExpressionPart::Spliced(Carried::Object(obj));
+
+    for ty in [KType::Number, KType::Any, KType::Str] {
+        assert_eq!(
+            ty.accepts_part(&cell_part),
+            ty.accepts_part(&bare_part),
+            "cell and bare splice must classify identically for {ty:?}",
+        );
+    }
+
+    // A cell is a resolved value, not raw AST — QUOTE's splice-free guard rejects it.
+    let expr = KExpression::new(vec![crate::source::Spanned::bare(cell_part)]);
+    assert!(!expr.is_splice_free());
+}
+
 /// A `{x = 1, y = "a"}` value (carried type `:{x :Number, y :Str}`) admits and matches a
 /// narrower `:{x :Number}` slot (width drop); rejects a field-type mismatch (`:{x :Str}`)
 /// and a slot demanding a field the value lacks (`:{x :Number, q :Bool}`). A bare record

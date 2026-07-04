@@ -28,6 +28,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                     | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::RecordType(_))
                     | Some(ExpressionPart::Spliced(_))
+                    | Some(ExpressionPart::SplicedSealed(_))
             );
             if next_is_type_slot {
                 names.push(name);
@@ -206,6 +207,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
                             | ExpressionPart::Spliced(_)
+                            | ExpressionPart::SplicedSealed(_)
                     )
                 });
                 if next_is_type_slot {
@@ -224,6 +226,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
                             | ExpressionPart::Spliced(_)
+                            | ExpressionPart::SplicedSealed(_)
                     )
                 });
                 if next_is_type_slot {

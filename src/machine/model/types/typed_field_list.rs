@@ -150,6 +150,16 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                 name,
                 other.summarize(),
             )),
+            // A spliced cell is adopted into the elaborating scope (folding its reach) and its value
+            // read at that brand, then routed through the same type/non-type handling as a bare splice.
+            ExpressionPart::SplicedSealed(cell) => match elaborator.scope.adopt_sealed(cell) {
+                Carried::Type(kt) => Ok(kt.clone()),
+                Carried::Object(other) => Err(format!(
+                    "{context} type for `{}` resolved to non-type value `{}`",
+                    name,
+                    other.summarize(),
+                )),
+            },
             other => Err(format!(
                 "{context} type for `{}` must be a type name token, got {}",
                 name,
