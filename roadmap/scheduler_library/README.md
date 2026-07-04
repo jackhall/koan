@@ -25,6 +25,13 @@ visible; each becomes one or more items when its prerequisites are close.
 - **Ambient bracket hygiene.** Closure-scoped or Drop-backed brackets for
   the per-step ambient state (`SlotStepGuard`, `swap_active_frame`,
   `active_in_contract_chain`) — no Drop backing, raw field writes.
+- **Structural `Scope::seal_value` embed.** `Scope::seal_value`'s `embedded:
+  Option<&Sealed<…>>` operand is still optional — its value-copy callers
+  (`attr.rs` field reads, `record_projection.rs`) pass `None` for a region-pure
+  source. Making a projected value's embedded reach structural — named by
+  construction like the born-pure sites the step construction context landed,
+  rather than by an asserted-or-absent operand — retires the `Option` on the
+  last seal surface that still carries it.
 - **The catch channel's watched-value delivery.** `CatchOk.value` /
   `catch_continuation` hand the watched value to a `Catch` finish as a bare
   relocated copy; carrier-only delivery for the catch channel follows the
