@@ -74,22 +74,19 @@ fn park_on_head<'step>(
         // threads it to the construction finish (the operand names the identity's own region); a
         // callable ignores it and rides the bind fold below instead.
         let head_terminal = terminals.owned(0);
+        // A `SetRef` constructor identity threads the head's reach to the construction finish (the
+        // operand names the identity's own region); a callable ignores it and rides the adopt below.
         let reach = head_terminal.carrier.witness().clone();
         // The resolved callable survives across steps (the apply tail may itself re-park), and owned
-        // deps cascade-free on resolve, so relocate the head value into the consumer region. The
-        // copy-free carrier-carrying form is the `carrier-carrying-spliced-parts` roadmap item.
-        let head = head_terminal.relocate(ctx.current_scope().brand());
+        // deps cascade-free on resolve. Adopt the head's carrier into the consumer scope: fold its
+        // reach so the callable's captured (foreign) environment outlives the application, and
+        // re-anchor the value at the scope brand — copy-free, the callable's survival is the carrier
+        // (its witness the pin), not a relocated copy in the consumer region.
+        let head = ctx.current_scope().adopt_sealed(&head_terminal.carrier);
         let callable = match classify_head(head, type_only, reach) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
-        // The head resolved to a computed callable (a functor / closure) whose captured region is
-        // foreign to this scope and held only on the producer's now-resolving node. Fold its carrier
-        // reach into the consumer scope so the captured environment outlives the application: the head
-        // value is applied (not embedded in a witnessed result), so its reach rides the bind fold here,
-        // read straight off the delivered carrier.
-        ctx.current_scope()
-            .fold_reach(head_terminal.carrier.witness());
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
