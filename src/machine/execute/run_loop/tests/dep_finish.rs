@@ -14,14 +14,14 @@ use super::let_expr;
 fn dep_finish_waits_on_deps_then_runs_finish() {
     // Pins that dep-finish waits on every dep before invoking finish and that
     // finish-returned Outcome::Done(Value) lands in the slot's result.
-    use crate::machine::execute::DepFinish;
+    use crate::machine::execute::TerminalDepFinish;
     let region = FrameStorage::run_root();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
     let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
-    let finish: DepFinish = Box::new(|_sched, results, _carriers| {
-        let a = match results.owned(0) {
+    let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
+        let a = match terminals.owned(0).value {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -29,7 +29,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
                 )))
             }
         };
-        let b = match results.owned(1) {
+        let b = match terminals.owned(1).value {
             Carried::Object(KObject::Number(n)) => *n,
             _ => {
                 return Outcome::Done(Err(crate::machine::KError::new(
@@ -60,7 +60,7 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
 fn dep_finish_short_circuits_on_dep_error() {
     // Pins that finish does not run when any dep errored, and that the
     // propagated error carries a "<deps>" frame.
-    use crate::machine::execute::DepFinish;
+    use crate::machine::execute::TerminalDepFinish;
     use crate::machine::{KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -89,7 +89,7 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let invoked_clone = Rc::clone(&invoked);
-    let finish: DepFinish = Box::new(move |_sched, _results, _carriers| {
+    let finish: TerminalDepFinish = Box::new(move |_sched, _terminals| {
         invoked_clone.set(true);
         Outcome::done_resident(Carried::Object(value))
     });

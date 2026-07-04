@@ -18,8 +18,8 @@ mod run_loop;
 mod runtime;
 
 pub(in crate::machine::execute) use outcome::{
-    catch_continuation, ignore_results, relocate_values, seal_witnessed, short_circuit,
-    CatchFinish, ContinuationFamily, DepFinish, WitnessedDepFinish,
+    catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
+    ContinuationFamily, TerminalDepFinish, WitnessedDepFinish,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 

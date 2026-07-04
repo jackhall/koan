@@ -148,10 +148,10 @@ impl<'run> KoanRuntime<'run> {
         // and is forwarded as-is. The consumer `dest` region is the *scope's* region, derived inside
         // the step `open` from the opened scope (`scope.region`) — the right region even for a
         // transparent USING window, whose scope region differs from the active frame's. The relocation
-        // that copies each dep into `dest` runs inside the consuming continuation (the
-        // `relocate_values` projection `short_circuit` runs, or `catch`), not here: the lift delivers
-        // deps un-relocated, so a construction finish folds their carriers and a value-copy finish
-        // copies the spine.
+        // that copies a dep into `dest` runs inside the consuming continuation (a value-copy finish's
+        // site-explicit `DepTerminal::relocate`, or `catch`), not here: the lift delivers deps
+        // un-relocated, so a construction finish folds their carriers and a value-copy finish copies
+        // the spine.
         let owned_indices: Vec<usize> = deps.owned().iter().map(|d| d.index()).collect();
         // Read each producer terminal out (borrow-bounded) into the dep slice — the resolved value
         // plus its `reach` set (its slot witness). The slice erases into one carrier that opens
@@ -223,10 +223,10 @@ impl<'run> KoanRuntime<'run> {
                     // The active `scope` is now live at the brand `'b`, and the consumer `dest` region
                     // is its own region. Deps arrive un-relocated at `'b` from the opened carrier (read
                     // out of their producer slots, which `combined` pins across the open). The consuming
-                    // continuation relocates each into `dest` — the `relocate_values` projection (or
-                    // `catch`) for a value-copy finish, the construction inversion's `transfer_into`
-                    // fold for an aggregate (which relocates once and names every reached region on
-                    // the carrier).
+                    // continuation relocates a dep into `dest` site-explicitly (`DepTerminal::relocate`,
+                    // or `catch`) for a value-copy finish, or via the construction inversion's
+                    // `transfer_into` fold for an aggregate (which relocates once and names every
+                    // reached region on the carrier).
                     // The lift itself no longer pre-relocates. A `ForwardReady` relocation below builds
                     // its own witnessed destination carrier from this same scope's brand.
                     let outcome = continuation(

@@ -28,8 +28,8 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    PinsRegion, Reattachable, Region, RegionOwner, RegionSet, Sealed, StepContext, StorageProfile,
-    Stored, WitnessRegion, Witnessed,
+    PinsRegion, Reattachable, Region, RegionOwner, RegionSet, StepContext, StorageProfile, Stored,
+    WitnessRegion, Witnessed,
 };
 
 /// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
@@ -394,33 +394,19 @@ impl KoanRegionExt for KoanRegion {
     }
 }
 
-/// Koan-branded wrappers over [`StepContext::alloc`] / [`StepContext::alloc_with`] — the closure
-/// receives a [`RegionBrand`] (the koan allocation capability) rather than the bare `&KoanRegion` the
-/// library-level context hands out, so a step construction site allocates through the one capability
-/// every other site uses. Named with full words (`alloc_carried`, not `alloc`) to avoid colliding with
-/// the generic verb it wraps. Lives here — not on `StepContext` itself — because `RegionBrand`'s
-/// constructor is private to this module (see [`FrameStorage::brand`]).
+/// Koan-branded wrapper over [`StepContext::alloc`] — the closure receives a [`RegionBrand`] (the koan
+/// allocation capability) rather than the bare `&KoanRegion` the library-level context hands out, so a
+/// step construction site allocates through the one capability every other site uses. Named with full
+/// words (`alloc_carried`, not `alloc`) to avoid colliding with the generic verb it wraps. Lives here —
+/// not on `StepContext` itself — because `RegionBrand`'s constructor is private to this module (see
+/// [`FrameStorage::brand`]). The dep-folding [`StepContext::alloc_with`] has no koan consumer yet — the
+/// value-copy finishes relocate their surviving deps rather than witness-construct from them — so it is
+/// reached through the library method directly when a caller needs it.
 pub(crate) trait KoanStepContextExt {
     /// [`StepContext::alloc`] with the closure receiving a [`RegionBrand`]: reach = own region only.
     fn alloc_carried(
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
-
-    /// [`StepContext::alloc_with`] with the closure receiving a [`RegionBrand`]: reach = own region ∪
-    /// every named dep's reach.
-    ///
-    /// `#[allow(dead_code)]`: the born-pure terminal sites all construct without deps
-    /// ([`Self::alloc_carried`]); the dep-folding twin is consumed when the value-copy finishes
-    /// migrate off `relocate_values`.
-    #[allow(dead_code)]
-    fn alloc_carried_with(
-        &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
-        build: impl for<'b> FnOnce(
-            RegionBrand<'b>,
-            Vec<Carried<'b>>,
-        ) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet>;
 }
 
@@ -430,19 +416,6 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
         self.alloc::<CarriedFamily, FrameSet>(|region| build(RegionBrand(region)))
-    }
-
-    fn alloc_carried_with(
-        &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
-        build: impl for<'b> FnOnce(
-            RegionBrand<'b>,
-            Vec<Carried<'b>>,
-        ) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc_with::<CarriedFamily, CarriedFamily, FrameSet>(deps, |region, views| {
-            build(RegionBrand(region), views)
-        })
     }
 }
 

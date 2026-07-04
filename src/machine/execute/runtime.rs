@@ -38,8 +38,8 @@ use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
 use super::run_loop::RegionRefFamily;
 use super::{
-    catch_continuation, ignore_results, relocate_values, seal_witnessed, short_circuit,
-    CatchFinish, ContinuationFamily, DepFinish,
+    catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
+    ContinuationFamily,
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
@@ -254,17 +254,17 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 !matches!(frame_placement, FramePlacement::ReuseReserve { .. }),
                 "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
             );
-            let finish: DepFinish<'step> = Box::new(move |_view, results, _carriers| {
+            let finish: TerminalDepFinish<'step> = Box::new(move |_view, terminals| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement (all owned), so its
-                    // resolved value is the last owned result. The per-call type is re-homed into the
-                    // captured-scope region — a strict ancestor the cart keeps live — like the `Type`
-                    // form's `PerCall.ret`; a concrete module return type is rejected there (see
-                    // `home_return_type`).
+                    // resolved value is the last owned terminal, read live at the step brand. The
+                    // per-call type is re-homed into the captured-scope region — a strict ancestor the
+                    // cart keeps live — like the `Type` form's `PerCall.ret`; a concrete module return
+                    // type is rejected there (see `home_return_type`).
                     TailContract::FromLastResult { func } => {
-                        let owned = results.owned_slice();
-                        let kt = match owned[owned.len() - 1] {
+                        let owned = terminals.owned_slice();
+                        let kt = match owned[owned.len() - 1].value {
                             Carried::Type(t) => t,
                             Carried::Object(other) => {
                                 return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
@@ -295,7 +295,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 placement,
             }]))
             .error_frame(dep_error_frame())
-            .finish(finish)
+            .finish_terminal(finish)
         }
 
         Action::AwaitDeps { deps, finish } => {
@@ -572,12 +572,11 @@ impl<'run> KoanRuntime<'run> {
                     // `None` frameless); an action/literal dep-finish carries the `dep_error_frame()`
                     // label. Both install the same `Wait` over the realized deps (edges already
                     // installed above), the short-circuit baked into the continuation by
-                    // `short_circuit` — the one loop, `relocate_values` its value-copy projection.
-                    Continuation::Finish(finish) => NodeWork::new(
-                        resolved,
-                        short_circuit(dep_error_frame, relocate_values(finish)),
-                        None,
-                    ),
+                    // `short_circuit` — the one loop the terminal delivery runs through. A finish whose
+                    // value must outlive the resolving step copies it via `DepTerminal::relocate`.
+                    Continuation::FinishTerminal(finish) => {
+                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
+                    }
                     // The construction-inversion sibling: same realized deps and edges, but the
                     // `seal_witnessed` projection folds the resolved terminals (value + reach) into
                     // one witnessed carrier and seals as `Done(Ok)`.
@@ -586,12 +585,6 @@ impl<'run> KoanRuntime<'run> {
                         short_circuit(dep_error_frame, seal_witnessed(finish)),
                         None,
                     ),
-                    // The action-harness `AwaitDeps` delivery: the finish already reads the resolved
-                    // terminals directly, so it runs through the same `short_circuit` loop with no
-                    // value-copy projection.
-                    Continuation::FinishTerminal(finish) => {
-                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
-                    }
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a dep-finish body's fan-out); realize and own it here.
                     // `catch_continuation` runs the finish without short-circuiting on a dep error.

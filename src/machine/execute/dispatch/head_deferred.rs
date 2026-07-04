@@ -29,7 +29,7 @@ use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{FrameSet, KError, KErrorKind};
 use crate::source::Spanned;
 
-use super::super::DepFinish;
+use super::super::TerminalDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::{Await, DepRequest, Outcome};
 use crate::scheduler::Deps;
@@ -68,14 +68,18 @@ fn park_on_head<'step>(
     head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
-    let finish: DepFinish<'step> = Box::new(move |ctx, results, carriers| {
+    let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         // The head sub is the sole owned dep. Its reach — the regions its computed identity/callable
         // points into — is named on its delivered carrier's witness. A `SetRef` constructor identity
         // threads it to the construction finish (the operand names the identity's own region); a
         // callable ignores it and rides the bind fold below instead.
-        let head_carrier = carriers.owned(0);
-        let reach = head_carrier.witness().clone();
-        let callable = match classify_head(*results.owned(0), type_only, reach) {
+        let head_terminal = terminals.owned(0);
+        let reach = head_terminal.carrier.witness().clone();
+        // The resolved callable survives across steps (the apply tail may itself re-park), and owned
+        // deps cascade-free on resolve, so relocate the head value into the consumer region. The
+        // copy-free carrier-carrying form is the `carrier-carrying-spliced-parts` roadmap item.
+        let head = head_terminal.relocate(ctx.current_scope().brand());
+        let callable = match classify_head(head, type_only, reach) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -84,7 +88,8 @@ fn park_on_head<'step>(
         // reach into the consumer scope so the captured environment outlives the application: the head
         // value is applied (not embedded in a witnessed result), so its reach rides the bind fold here,
         // read straight off the delivered carrier.
-        ctx.current_scope().fold_reach(head_carrier.witness());
+        ctx.current_scope()
+            .fold_reach(head_terminal.carrier.witness());
         apply_callable(ctx, callable, &expr)
     });
     // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
@@ -93,7 +98,7 @@ fn park_on_head<'step>(
         expr: head,
         placement: DepPlacement::OwnScope,
     }]))
-    .finish(finish)
+    .finish_terminal(finish)
 }
 
 /// Branch a resumed head value into a [`ResolvedCallable`], honoring the

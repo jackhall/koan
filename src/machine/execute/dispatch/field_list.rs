@@ -23,7 +23,7 @@ use crate::scheduler::Deps;
 use crate::witnessed::Witnessed;
 
 use super::super::outcome::{dep_error_frame, Await, Outcome};
-use super::super::DepFinish;
+use super::super::TerminalDepFinish;
 use super::DepRequest;
 use super::SchedulerView;
 
@@ -144,10 +144,13 @@ pub(crate) fn defer_field_list<'step>(
         chain,
         error_frame,
     };
-    let finish: DepFinish<'step> = Box::new(move |view, results, _carriers| {
+    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        match rewalk.run(view.current_scope(), results.owned_slice()) {
+        // The owned sub-Dispatch carriers, read live at the step brand (un-relocated); the re-walk
+        // clones each type into the region as it folds the field list.
+        let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
+        match rewalk.run(view.current_scope(), &owned) {
             Ok(fields) => finalize(view, fields),
             Err(e) => Outcome::Done(Err(e)),
         }
@@ -163,7 +166,7 @@ pub(crate) fn defer_field_list<'step>(
     }
     Await::on(deps)
         .error_frame(dep_error_frame())
-        .finish(finish)
+        .finish_terminal(finish)
 }
 
 /// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] vector

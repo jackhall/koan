@@ -232,7 +232,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         picked: Option<&'step KFunction<'step>>,
         inline_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
     ) -> Outcome<'step> {
-        use super::super::DepFinish;
+        use super::super::TerminalDepFinish;
         let mut deps: Vec<DepRequest<'step>> = Vec::with_capacity(staged_subs.len());
         let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
@@ -265,32 +265,30 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             "<bind>",
             &working_expr,
         ));
-        let finish: DepFinish<'step> = Box::new(move |_ctx, values, carriers| {
+        let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
             // The short-circuit already guaranteed every dep resolved; splice each value into the slot
             // it was staged from, and collect each dep's carrier (keyed by that slot) to deliver to the
-            // body. `values` are pull-lifted into this node's frame and re-exposed at `'step`, so they
-            // splice straight into the `'step` working expression that re-dispatches here; `carriers`
-            // name each arg's reach and ride on (a `duplicate` per arg — the producer keeps its seal)
-            // to `run_action_builtin` / the user-fn arg fold.
+            // body. Each staged sub is a surviving copy — the spliced value re-dispatches through the
+            // `'step` working expression and owned deps cascade-free on resolve, so relocate it into the
+            // consumer region; the dep's own carrier rides on (a `duplicate` per arg — the producer
+            // keeps its seal) to `run_action_builtin` / the user-fn arg fold, naming each arg's reach.
+            // The copy-free carrier-carrying form is the `carrier-carrying-spliced-parts` roadmap item.
             // Start from the inline-resolved wrap slots' carriers and add each staged sub's carrier,
             // so the body receives every value arg's reach (inline plus eager-sub).
             let mut arg_carriers = inline_carriers;
             arg_carriers.reserve(part_indices.len());
             // Every eager sub is an owned dep, so its result lands in the owned suffix in staging
             // order — 1:1 with `part_indices`.
-            for ((slot, value), carrier) in part_indices
-                .iter()
-                .zip(values.owned_slice())
-                .zip(carriers.owned_slice())
-            {
-                working_expr.parts[*slot].value = ExpressionPart::Spliced(*value);
-                arg_carriers.push((*slot, carrier.duplicate()));
+            for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
+                working_expr.parts[*slot].value =
+                    ExpressionPart::Spliced(terminal.relocate(ctx.current_scope().brand()));
+                arg_carriers.push((*slot, terminal.carrier.duplicate()));
             }
             finish_eager_subs(working_expr, picked, arg_carriers)
         });
         Await::on(Deps::from_owned(deps))
             .error_frame(dep_error_frame)
-            .finish(finish)
+            .finish_terminal(finish)
     }
 }
 

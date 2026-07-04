@@ -43,7 +43,7 @@ use super::super::nodes::NodePayload;
 use super::super::nodes::{NodeScope, NodeWork};
 use super::super::outcome::dep_error_frame;
 #[cfg(test)]
-use super::super::{relocate_values, DepFinish};
+use super::super::TerminalDepFinish;
 use super::super::{seal_witnessed, short_circuit, WitnessedDepFinish};
 use super::{KoanRuntime, KoanWorkload};
 use crate::scheduler::ResolvedDeps;
@@ -54,12 +54,8 @@ use crate::scheduler::ResolvedDeps;
 /// by the test fixture below; the run path's construction finishes route the witnessed
 /// [`awaiting_witnessed`].
 #[cfg(test)]
-fn awaiting(deps: ResolvedDeps, finish: DepFinish<'_>) -> NodeWork<KoanWorkload> {
-    NodeWork::new(
-        deps,
-        short_circuit(Some(dep_error_frame()), relocate_values(finish)),
-        None,
-    )
+fn awaiting(deps: ResolvedDeps, finish: TerminalDepFinish<'_>) -> NodeWork<KoanWorkload> {
+    NodeWork::new(deps, short_circuit(Some(dep_error_frame()), finish), None)
 }
 
 /// Witnessed sibling of [`awaiting`]: builds a dep-finish node whose continuation folds the resolved
@@ -351,7 +347,7 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         deps: ResolvedDeps,
         scope: &'run Scope<'run>,
-        finish: DepFinish<'run>,
+        finish: TerminalDepFinish<'run>,
     ) -> NodeId {
         self.add(awaiting(deps, finish), scope)
     }
