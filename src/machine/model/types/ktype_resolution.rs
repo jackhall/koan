@@ -8,7 +8,7 @@ use crate::machine::model::ast::TypeIdentifier;
 
 impl<'a> KType<'a> {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
-    /// `List`). Returns `None` for unknown names.
+    /// `List`).
     ///
     /// Built at the caller's `'a` directly because `KType<'a>` is invariant in `'a`
     /// (the `Module.type_members: RefCell<HashMap<_, KType<'a>>>` field puts `'a` in
@@ -31,13 +31,10 @@ impl<'a> KType<'a> {
     }
 
     /// Lower a parser `TypeIdentifier` into a `KType` against the builtin table only — no
-    /// scope-aware resolver. The single owner of the [`KType::from_name`] builtin-table
-    /// fallback on the resolution path: the bind-time scopeless caller
-    /// ([`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for),
-    /// which falls back to a `KType::Unresolved` carrier on the `Err`) and the scope-aware
+    /// scope-aware resolver. The single entry point onto the [`KType::from_name`]
+    /// builtin-table fallback: both the bind-time scopeless caller and the scope-aware
     /// [`elaborate_type_identifier`](crate::machine::model::types::elaborate_type_identifier)
-    /// (which routes its builtin fallback here) both reach `from_name` through this one entry.
-    /// Unknown names surface as `Err(_)`.
+    /// route their builtin fallback through here. Unknown names surface as `Err(_)`.
     pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType<'a>, String> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
@@ -53,10 +50,7 @@ impl<'a> KType<'a> {
             (KType::Dict(xk, xv), KType::Dict(yk, yv)) => {
                 KType::Dict(Box::new(KType::join(xk, yk)), Box::new(KType::join(xv, yv)))
             }
-            // Name-keyed join: equal length and the same key set, then join per name and
-            // on the return type. Mismatched key sets fall through to `Any` (the `_` arm).
-            // `KFunction` and `KFunctor` share the join shape (`join_param_record`) but
-            // stay tag-matched — a function and a functor never join to either family.
+            // `KFunction` and `KFunctor` stay tag-matched: one never joins to the other family.
             (
                 KType::KFunction {
                     params: xa,
@@ -85,7 +79,7 @@ impl<'a> KType<'a> {
                     ..
                 },
             ) => match join_param_record(xa, ya) {
-                // A join is an anonymous type result with no callable body.
+                // Anonymous result: no callable body survives a join.
                 Some(params) => KType::KFunctor {
                     params,
                     ret: Box::new(KType::join(xr, yr)),
@@ -105,9 +99,8 @@ impl<'a> KType<'a> {
     }
 }
 
-/// Name-keyed join of two parameter records, shared by the `KFunction` / `KFunctor`
-/// join arms. Returns `Some(joined)` when the records have equal length and the same key
-/// set (joining per name); `None` when the key sets differ, which the callers coarsen to
+/// Name-keyed join of two parameter records. `Some(joined)` when the records have equal
+/// length and the same key set; `None` on differing key sets, which callers coarsen to
 /// `KType::Any`.
 fn join_param_record<'a>(
     xa: &Record<KType<'a>>,

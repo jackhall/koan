@@ -19,9 +19,7 @@ use std::rc::Rc;
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 
 /// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
-/// `:(…)` / dotted return's inner expression may reference a parameter unbound there. It
-/// arrives via the `:SigiledTypeExpr` return overload, whose `resolve_for` unwraps the
-/// sigil to its inner `KObject::KExpression`.
+/// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
     TypeExprCarrier(TypeIdentifier),
@@ -56,9 +54,7 @@ pub(crate) enum ReturnTypeCapture<'a> {
     },
 }
 
-/// Read the `return_type` slot from a `BodyCtx::args` record. A `Type`-arm `KType` (bare-leaf
-/// `Unresolved` → `TypeExprCarrier`, else `Resolved`), or an `Object`-arm `KObject::KExpression`
-/// (`:(…)` / dotted return → `ExprCarrier`).
+/// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
 pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTypeRaw<'a>, KError> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type};
     if let Some(kt) = arg_type(args, "return_type") {
@@ -92,10 +88,6 @@ pub(crate) enum AdmissibleVerdict {
 /// Fused walk: classify the carrier and emit the FUNCTOR-return admissibility verdict
 /// in one pass. The parameter-name scan runs first so a match short-circuits eager
 /// elaboration and the carrier survives verbatim to the dispatch boundary.
-///
-/// `functor_param_types`: `None` for FN (verdict skipped, `Admissible` returned as a
-/// no-op); `Some(&map)` for FUNCTOR (drives the deferred-arm bare-leaf type-denoting
-/// check).
 pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
@@ -155,7 +147,6 @@ pub(crate) fn classify_return_type<'a>(
     }
 }
 
-/// FN callers pass `is_functor=false` and get `Admissible` back unconditionally.
 fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdict {
     if !is_functor || kt.is_admissible_functor_return() {
         AdmissibleVerdict::Admissible
@@ -193,10 +184,9 @@ fn verdict_for_deferred_type_expr<'a>(
     }
 }
 
-/// Head-keyword classification for deferred return-type carriers: `WITH` (a `sig WITH
-/// {…}` specialization) admits (yields `Signature { .. }`); a dotted `ATTR` head
-/// (`Er.Type`, a module type-member access) rejects (yields `AbstractType`); other heads
-/// fall through to a generic rejection.
+/// FUNCTOR-return admissibility verdict for a deferred return-type carrier, keyed on the
+/// expression's head keyword: `WITH` (signature specialization) admits; a dotted `ATTR`
+/// head produces an abstract type and rejects; other heads reject generically.
 fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     let head_keyword = e.parts.iter().find_map(|p| match &p.value {
         ExpressionPart::Keyword(s) => Some(s.as_str()),

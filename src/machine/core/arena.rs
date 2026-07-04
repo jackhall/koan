@@ -10,7 +10,7 @@
 //!
 //! See [per-call-region/README.md](../../../design/per-call-region/README.md) for the carrier
 //! set, escaping-value retention, ancestor chain, and TCO frame reuse;
-//! [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+//! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
 use std::cell::Cell;
@@ -355,10 +355,9 @@ pub(crate) trait KoanRegionExt {
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
-    /// Whether `ptr` was returned by a prior `alloc_object` on this region. Currently only called
-    /// from test code (verifying the relocate-into-`dest` invariant); `#[allow(dead_code)]` because
-    /// trait methods, unlike inherent ones, are checked per compilation target, and the plain `--lib`
-    /// build (no `cfg(test)`) can't see that caller.
+    /// Whether `ptr` was returned by a prior `alloc_object` on this region. `#[allow(dead_code)]`
+    /// because trait methods, unlike inherent ones, are checked per compilation target, and the
+    /// plain `--lib` build (no `cfg(test)`) can't see its only caller.
     #[allow(dead_code)]
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
 }
@@ -576,8 +575,7 @@ pub type FrameSet = RegionSet<FrameStorage>;
 // `Rc` (`Rc` is `StableDeref`), so `region()` returns a reference into storage the `RegionOwner` blanket
 // impl's `Rc<F>: WitnessRegion` pins: a value built solely from that region is pinned by holding the
 // `Rc`. A single held `Rc<FrameStorage>` pins exactly one region — its own — which *is* the
-// single-region `yoke` precondition, now a type rather than a runtime narrowing of a set that could be
-// empty or multi.
+// single-region `yoke` precondition.
 unsafe impl RegionOwner for FrameStorage {
     type Region = KoanRegion;
     fn region(&self) -> &KoanRegion {
@@ -605,9 +603,8 @@ unsafe impl PinsRegion for FrameStorage {
 /// falling out as `outer.root`), allocated through the brand's [`RegionBrand`], and erased witness-less.
 /// `Scope`'s invariance is honoured by construction — the only retypes are the substrate's audited brand
 /// ([`SealedExtern::open`]) and store ([`Region::alloc`]) — so the per-call child stops being a re-anchor
-/// audited outside Witnessed/Sealed. The earlier single-`with_branded_ref`-per-ref attempt branded the
-/// two at *independent* `'b`s, which invariance rejects; one [`zip`](SealedExtern::zip)ped `open`
-/// unifies them.
+/// audited outside Witnessed/Sealed. Branding the two refs at *independent* `'b`s is what invariance
+/// rejects; one [`zip`](SealedExtern::zip)ped `open` unifies them at a single `'b`.
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
@@ -632,7 +629,7 @@ pub(crate) fn build_frame_child_witnessed<'p>(
 ///
 /// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
 /// carrier set, escaping-value retention, ancestor chain, and TCO
-/// frame reuse; [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
+/// frame reuse; [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
     storage: Rc<FrameStorage>,

@@ -49,15 +49,13 @@ pub enum KType<'a> {
     List(Box<KType<'a>>),
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
-    /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
-    /// schema with width/depth subtyping. Anonymous: a record-repr `NewType` `SetRef`
-    /// (an ex-struct) wraps this with a nominal identity, but the bare record type is
-    /// structural and order-blind.
-    /// The inner `Record<KType>` is declaration-ordered for
-    /// rendering and order-blind by `(name, type)` for identity. A record *value*
-    /// (`KObject::Record`) memoizes this as its carried type. Subtyping is the dual of
-    /// the function-parameter relation — width-*superset* is more specific, covariant
-    /// depth — see `record_value_more_specific`.
+    /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field schema
+    /// with width/depth subtyping, order-blind by `(name, type)` for identity and
+    /// declaration-ordered for rendering. A record-repr `NewType` `SetRef` wraps this with a
+    /// nominal identity; the bare record type stays structural. A record *value*
+    /// (`KObject::Record`) memoizes it as its carried type. Subtyping is the dual of the
+    /// function-parameter relation — width-*superset* is more specific, covariant depth —
+    /// see `record_value_more_specific`.
     Record(Box<Record<KType<'a>>>),
     /// `params` is the parameter record `(name → type)` — order preserved for rendering,
     /// equality order-blind by `(name, type)`. koan has no positional call syntax, so a
@@ -299,10 +297,9 @@ impl<'a> KType<'a> {
     }
 }
 
-/// Render an FN/FUNCTOR parameter record as the comma-free `name <:type>` group the
-/// `:(FN (...) -> _)` surface re-parses. Each field is `name` then the type surface:
-/// `kt.name()` prefixed with `:` for a leaf (`:Number`), left as-is when it already opens
-/// a sigil (`:(LIST OF Number)` — no `::`). Declaration order is preserved.
+/// Render an FN/FUNCTOR parameter record as the comma-free `name :type` group the
+/// `:(FN (...) -> _)` surface re-parses. A leaf type surface gets a `:` prefix; one that
+/// already opens a sigil (`:(LIST OF Number)`) is left as-is (no `::`).
 fn render_param_record(params: &Record<KType<'_>>) -> String {
     params
         .iter()
@@ -395,7 +392,6 @@ impl<'a> PartialEq for KType<'a> {
                     pinned_slots: p2,
                 },
             ) => s1.sig_id() == s2.sig_id() && p1 == p2,
-            // `frame` is a lifecycle anchor, not part of identity.
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
                 m1.scope_id() == m2.scope_id()
             }
@@ -423,17 +419,11 @@ impl<'a> PartialEq for KType<'a> {
 }
 impl<'a> Eq for KType<'a> {}
 
-/// Manual `Hash`, kept consistent with the hand-written `PartialEq` above:
-/// `a == b` ⟹ `hash(a) == hash(b)`. The discriminant goes in first so distinct
-/// variants never alias and the unit variants need no further mixing; each
-/// compound arm then hashes exactly the fields its `PartialEq` arm compares.
-///
-/// The region-pointer variants hash their stable identity key — `Module` hashes
-/// `scope_id()`, `AbstractType` hashes its `source.scope_id()`, `Signature` hashes
-/// `sig_id()` — never the raw pointer, matching how `PartialEq` resolves them. `Module`'s
-/// `frame` lifecycle anchor stays excluded. A `SetRef` hashes `(Rc::as_ptr(set), index)`
-/// ONLY — never the schema, which is cyclic. Recursion bottoms out at the leaf
-/// `RecursiveRef` / `SetLocal`, so `ConstructorApply` hashing is bounded.
+/// Manual `Hash`, kept consistent with the hand-written `PartialEq` above
+/// (`a == b` ⟹ `hash(a) == hash(b)`): each arm hashes exactly the fields its `PartialEq`
+/// arm compares. The region-pointer variants hash their stable identity key
+/// (`scope_id()` / `source.scope_id()` / `sig_id()`), never the raw pointer; the set
+/// variants hash `Rc::as_ptr` + index, never the cyclic schema.
 impl<'a> std::hash::Hash for KType<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use KType::*;

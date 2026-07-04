@@ -41,8 +41,8 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
         reach: FrameSet,
     },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
-    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind,
-    /// matching the retired struct path) instead of deferring the whole record literal; the
+    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
+    /// instead of deferring the whole record literal; the
     /// finish builds the `KObject::Record` and wraps it with `identity`. `reach` carries the
     /// identity's stored per-binding type reach for the construction operand's witness.
     RecordNewType {
@@ -176,11 +176,9 @@ pub(super) fn literal_pass_through<'step>(
         .next()
         .expect("LiteralPassThrough shape implies one part");
     match only.value {
-        // A literal is region-pure owned data, so the `KObject` is built **inside** the witness
-        // closure — `yoke`d into this scope's frame, born co-located with that frame as its sole reach
-        // rather than resolved at the ambient lifetime and bundled under an asserted witness. (The literal
-        // is scope-independent — it comes from `expr`, not a scope resolve — so it stays on the cart
-        // region.)
+        // A literal is region-pure owned data, so the `KObject` is built inside the witness closure
+        // — `yoke`d into this scope's frame, born co-located with it as its sole reach. It comes from
+        // `expr`, not a scope resolve, so it stays on the cart region.
         ExpressionPart::Literal(lit) => {
             let frame = ctx.dest_frame();
             let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
@@ -220,25 +218,18 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }
 
-/// Synchronous resolve-then-branch for a bare-`Type`-head call. One resolution,
-/// branched outcomes routed through the shared apply-a-callable tail:
+/// Bare-`Type`-head call. A single `resolve_type_with_chain` (a `types[name]` read)
+/// classifies the identity, and the branched outcomes route through the shared
+/// apply-a-callable tail:
+/// - a constructible `SetRef` identity (a sealed nominal type) → the `Constructor` arm;
+/// - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function` arm — its
+///   result is a module;
+/// - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not invocable
+///   → `TypeMismatch`.
 ///
-/// 1. `resolve_with_chain` first, only to park: a `Parked` producer (a still-finalizing
-///    binding, including a recursive/forward functor) parks the whole dispatch via
-///    `install_overload_park` until the producer finalizes. Bound *values* are not
-///    branched here — every Type-class carrier (a type alias or a bound functor)
-///    lives in the type table, read in step 2.
-/// 2. `resolve_type_with_chain` (a pure `types[name]` read, no park) classifies the
-///    identity:
-///    - a constructible `SetRef` identity (a sealed nominal type) → the `Constructor` arm;
-///    - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function`
-///      arm — its result is a module;
-///    - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not
-///      invocable → `TypeMismatch`;
-///    - any other identity → `TypeMismatch`.
-///
-/// A name with no producer and no binding is `UnboundName` (genuine absence only —
-/// pending names are already parked in step 1).
+/// A `Parked` head (a still-finalizing `LET <Type-class> = …` binding, including a
+/// recursive/forward functor) parks on its producer and re-runs `type_call` on wake. A name
+/// with no producer and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
@@ -251,23 +242,13 @@ pub(super) fn type_call<'step>(
     // Resolve against the cart scope at `'step`, so the resolved identity rides into the outcome
     // with no re-anchor.
     let scope = ctx.current_scope();
-    // One type-side resolution at construction time. A sealed nominal type's identity is a
-    // `SetRef` whose member carries the schema (filled at the member's finalize) — no
-    // value-side carrier involved. A bound functor lives here too, carrying its callable body
-    // on `KType::KFunctor { body: Some(f) }`.
     let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
-        // `kt` resolves at the cart `'step` directly — it feeds `apply_callable`'s outcome with no
-        // re-anchor.
         Some(NameLookup::Bound(kt)) => kt,
-        // A still-finalizing head binding (a `LET <Type-class> = …` placeholder — e.g. a forward
-        // functor) whose producer is not yet terminal: park on the producer and re-run `type_call`
-        // on resume. A terminal producer has already installed `types[name]`, so the `Bound` arm
-        // above wins; reaching this arm with a terminal producer means a mid-write/errored
-        // producer, so it surfaces `UnboundName` (the resume re-runs the fast lane).
         Some(NameLookup::Parked(producer)) => {
-            // No consumer id in scope, so `Cycle` never classifies. A terminal producer (Ready, Ok
-            // or errored) means a mid-write / errored binder — the fast lane never read the error, so
-            // both surface `UnboundName` (the resume re-runs the fast lane).
+            // A terminal producer has already installed `types[name]`, so the `Bound` arm would win;
+            // reaching here with one (Ready or errored) means a mid-write/errored binder, surfaced as
+            // `UnboundName` since the resume re-runs the fast lane. No consumer id in scope, so `Cycle`
+            // never classifies.
             match ctx.producer_disposition(producer, None) {
                 ProducerDisposition::Errored(_) | ProducerDisposition::Ready => {
                     return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(

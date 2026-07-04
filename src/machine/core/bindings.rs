@@ -57,10 +57,7 @@ pub enum BindKind {
 /// enclosing `Option`'s `None` — the caller keeps walking ancestors — so "unbound" is not a
 /// variant here; the terminal unbound disposition (with its diagnostic) is materialized one level
 /// up on the resolution path ([`crate::machine::model::types::TypeResolution`] /
-/// [`crate::machine::NameOutcome`]). Every single-scope lookup instantiates this one shape: a bare
-/// value lookup is `NameLookup<&KObject>`, a bare type lookup `NameLookup<&KType>`, and the
-/// reach-carrying reads are `NameLookup<ValueHit>` / `NameLookup<TypeHit>` (value / type) or
-/// `NameLookup<Witnessed<…>>` (the witnessed value carrier the read site seals from).
+/// [`crate::machine::NameOutcome`]).
 ///
 /// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry never both
 /// hold the same name — every successful value write path clears its matching value placeholder.
@@ -83,9 +80,8 @@ impl<T> NameLookup<T> {
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
-/// module-own value side then the type side in one call, so a call site no longer probes the
-/// value map then the type map by hand. The `data`/`types` cross-kind exclusion keeps the two
-/// arms from ever both matching within a scope.
+/// module-own value side then the type side in one call. The `data`/`types` cross-kind exclusion
+/// keeps the two arms from ever both matching within a scope.
 pub enum MemberResolution<'a> {
     Value {
         obj: &'a KObject<'a>,
@@ -412,9 +408,7 @@ impl<'a> Bindings<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        // Earliest-index visible producer: most likely to finalize first; on
-        // wake the consumer re-dispatches and picks the live bucket or re-parks
-        // on the next-earliest sibling.
+        // Earliest-index visible producer: most likely to finalize first.
         let pending = self
             .pending_overloads
             .borrow()
@@ -769,7 +763,7 @@ impl<'a> Bindings<'a> {
     ///
     /// Recorded even when the bucket is already live in `functions`: a pending
     /// sibling sits *alongside* a finalized overload so the scope walk can park
-    /// the bucket until the sibling finalizes (Decision 5).
+    /// the bucket until the sibling finalizes.
     pub fn try_install_pending_overload(
         &self,
         bucket: UntypedKey,

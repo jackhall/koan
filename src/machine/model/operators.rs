@@ -47,7 +47,6 @@ impl OperatorGroup {
         OperatorGroup { members }
     }
 
-    /// Fold metadata for one operator keyword, or `None` if it is not a member.
     pub fn entry(&self, operator: &str) -> Option<&OperatorEntry> {
         self.members.get(operator)
     }

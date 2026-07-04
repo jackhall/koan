@@ -19,27 +19,23 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 /// frame and scope. `contract`, when set, is the erased return contract the replacement is
 /// entering — kept-first against the slot's prior contract by the reinstall site; any error
 /// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
-/// (see [`ChainOp`]), already lowered from the contract variant so this whole variant is
-/// lifetime-free. Every `NodeStep` arm is now lifetime-free — a value terminal is a
-/// [`Witnessed`](crate::witnessed::Witnessed) carrier (already `'step`-erased) and an error carries
-/// no value — so the enum itself needs no `'step`.
-// `Replace` is intrinsically the large variant (it carries `NodeWork` plus the
-// frame/contract/chain tail-call payload). Boxing the hot tail-call path to balance the
-// variants is the wrong trade — the imbalance is inherent.
+/// (see [`ChainOp`]).
+///
+/// Every arm is lifetime-free — a value terminal is a
+/// [`Witnessed`](crate::witnessed::Witnessed) carrier (already `'step`-erased) and an error
+/// carries no value — so the enum needs no `'step`.
+// `Replace` is intrinsically the large variant (`NodeWork` plus the frame/contract/chain
+// tail-call payload); boxing the hot tail-call path to balance the variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep {
     /// The finalized value terminal — a [`Witnessed`](crate::witnessed::Witnessed) carrier naming
-    /// every region it reaches, built inside its witness closure (a construction inversion, a
-    /// `seal_value` / `resident_type_carrier`, or a region-pure [`resident`](crate::witnessed::Witnessed::resident)
-    /// seal of a bare terminal). `run_step` seals it through
-    /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal): fold the producing
-    /// frame into the witness (the scope-reach seal at close), a declared-return re-stamp aside. The
-    /// **sole** value terminal — object and type both — so no terminal recomputes a witness beside its
-    /// value. The carrier is lifetime-free, so this arm carries no `'step`.
+    /// every region it reaches, sealed through
+    /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal), which folds the
+    /// producing frame into the witness at close. The **sole** value terminal — object and type
+    /// both — so no terminal recomputes a witness beside its value. Lifetime-free.
     DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
-    /// The finalized **error** terminal. An error carries no value, so it needs no witness — it
-    /// finalizes bare. `run_step` labels it with the frame-gated contract's trace frame (a callee's
-    /// declared-return frame) and stores it as the slot's `Err`.
+    /// The finalized **error** terminal. An error carries no value, so it needs no witness and
+    /// finalizes bare, labelled with the frame-gated contract's trace frame.
     Error(KError),
     /// A ready bare-name forward: this slot's terminal *is* `producer`'s. `run_step` relocates
     /// `producer`'s terminal into this slot's region (carrying its own witness) and finalizes — no
@@ -59,7 +55,8 @@ pub(super) enum NodeStep {
     },
     /// The slot is spliced out as an alias of `producer` (a bare-name forward whose producer was not
     /// yet ready). The slot's consumers have already been moved onto `producer`'s notify list; this
-    /// just marks the slot so `read_result` follows through to `producer`. See [`Outcome::Forward`].
+    /// just marks the slot so `read_result_with` follows through to `producer`. See
+    /// [`Outcome::Forward`](super::outcome::Outcome::Forward).
     Alias(NodeId),
 }
 
@@ -158,12 +155,10 @@ pub(super) enum NodeScope {
 }
 
 /// The opaque per-node workload payload: the Koan name-resolution state the scheduler stores on a
-/// slot, threads through a step, and hands back, but does not own as scheduler machinery — the
-/// slot's [`NodeScope`] handle and its lexical [`chain`](Self::chain). Lifetime-free (the scope is
-/// an erased `NodeScope`, the chain an `Rc`), so the node it sits on pins no `'run` through it. This
-/// is the concrete Koan stand-in for the generic workload payload the scheduler is parametric
-/// over (`KoanWorkload::Payload`). Cheap-`Clone`: `NodeScope` is `Copy`, the chain
-/// is an `Rc`.
+/// slot and threads through a step without owning — the slot's [`NodeScope`] handle and its
+/// lexical [`chain`](Self::chain). The concrete Koan stand-in for the scheduler's generic
+/// `KoanWorkload::Payload`. Lifetime-free (erased `NodeScope`, `Rc` chain), so the node it sits
+/// on pins no `'run` through it.
 #[derive(Clone)]
 pub(super) struct NodePayload {
     pub(super) scope: NodeScope,

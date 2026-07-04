@@ -22,16 +22,11 @@ use crate::machine::core::{Scope, ScopeId};
 use super::super::types::KType;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
-/// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
-/// they currently expose. Opaque-ascription members mint `KType::AbstractType { source:
-/// Module(self), name }`; the module value itself rides `KType::Module { module, frame }`
-/// in the surrounding `Carried::Type` (the two are distinguished by `KType` variant —
-/// `AbstractType` vs `Module`).
+/// `"Outer.Inner"`). Opaque-ascription members mint `KType::AbstractType { source:
+/// Module(self), name }`; the module value itself rides `KType::Module { module }` — the two
+/// are distinguished by `KType` variant.
 pub struct Module<'a> {
     pub path: String,
-    /// The captured child scope, held as a plain `&'a Scope<'a>` — re-anchored to `'a` with the rest
-    /// of the `Module` when the holder is read out of its region, so [`Self::child_scope`] is a bare
-    /// field read.
     child_scope_ref: &'a Scope<'a>,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is region-pinned and never moved, so a `&'a Module<'a>` borrow
@@ -40,8 +35,8 @@ pub struct Module<'a> {
     /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the
     /// slot's SIG-declared type. ATTR re-tags a value-side slot read with this identity so
     /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value.
-    /// Empty for unascribed and transparently-ascribed (`:!`) modules. Same `RefCell`
-    /// rationale as `type_members` — populated after the surrounding `KObject` is alloc'd.
+    /// Empty for unascribed and transparently-ascribed (`:!`) modules. `RefCell` for the same
+    /// reason as `type_members`.
     pub slot_type_tags: RefCell<HashMap<String, KType<'a>>>,
     /// Sigs this module shape-checks against. `accepts_part` for a
     /// `KType::Signature { sig, .. }` slot is an O(1) `sig.sig_id()` membership check
@@ -70,8 +65,6 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// The captured child scope. A bare field read: the `Module` was re-anchored to `'a` as a whole
-    /// when it was read out of its region, so the stored `&'a Scope<'a>` is already at `'a`.
     pub fn child_scope(&self) -> &'a Scope<'a> {
         self.child_scope_ref
     }
@@ -90,10 +83,8 @@ impl<'a> Module<'a> {
 /// ascription time.
 pub struct ModuleSignature<'a> {
     pub path: String,
-    /// The raw declaration scope, held as a plain `&'a Scope<'a>`. `Scope<'a>` is invariant in `'a`,
-    /// so this reference is what pins `ModuleSignature<'a>` invariant in `'a` — no separate marker
-    /// field is needed. Re-anchored to `'a` with the rest of the value when the holder is read out of
-    /// its region, so [`Self::decl_scope`] is a bare field read.
+    /// `Scope<'a>` is invariant in `'a`, so this reference is what pins `ModuleSignature<'a>`
+    /// invariant in `'a` — no separate marker field is needed.
     decl_scope_ref: &'a Scope<'a>,
 }
 
@@ -105,8 +96,6 @@ impl<'a> ModuleSignature<'a> {
         }
     }
 
-    /// The raw declaration scope. A bare field read: the `ModuleSignature` was re-anchored to `'a` as
-    /// a whole when it was read out of its region, so the stored `&'a Scope<'a>` is already at `'a`.
     pub fn decl_scope(&self) -> &'a Scope<'a> {
         self.decl_scope_ref
     }

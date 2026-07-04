@@ -75,13 +75,11 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
     }
 }
 
-/// Construct from a `KType::SetRef` member identity. A newtype (record-repr or scalar) takes
-/// the trailing parts as its value expression — `(Point {x = 1, y = 2})` builds a record,
-/// `(Point r)` / `(Distance 3.0)` wrap a value — so it bypasses the `{name = value}` /
-/// `(value)` body split entirely. Tagged / `TypeConstructor` take a positional `(value)` body;
-/// a named body is a loud `DispatchFailed`. A non-constructible identity is a `TypeMismatch`.
-/// The schema is projected off the member (sibling `SetLocal`s resolved to external
-/// `SetRef`s); `(set, index)` is stamped onto a tagged value.
+/// Construct from a `KType::SetRef` member identity. A newtype bypasses the
+/// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
+/// value expression, so `(Point {x = 1, y = 2})` builds a record and `(Point r)` /
+/// `(Distance 3.0)` wrap a value. Tagged / `TypeConstructor` take a positional `(value)` body
+/// (named is a loud `DispatchFailed`); a non-constructible identity is a `TypeMismatch`.
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: &'step KType<'step>,
@@ -96,9 +94,8 @@ fn apply_constructor<'step>(
         })));
     };
     match RecursiveSet::projected_schema(set, *index) {
-        // NewType construction. A named record-literal body (`Point {x = 1, y = 2}`) builds a
-        // record per-field (so literal fields bind synchronously); any other trailing
-        // expression (`(Point r)`, `(Distance 3.0)`) is wrapped as a single positional value.
+        // A record-literal body builds per-field (literal fields bind synchronously); any
+        // other trailing expression is wrapped as a single positional value.
         ProjectedSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [Spanned {
@@ -136,8 +133,7 @@ fn apply_constructor<'step>(
                 // foreign region — sealed under the home frame alone, structural via the brand.
                 return Outcome::Done(Ok(ctx.step_ctx().alloc_type(variant)));
             }
-            // Positional construction: `Outcome (Error "x")` (paren-group body). Tagged
-            // unions and higher-kinded `TypeConstructor`s both construct positionally.
+            // Positional construction: `Outcome (Error "x")` (paren-group body).
             match extract_call_body(expr) {
                 Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                     Rc::clone(set),
@@ -172,9 +168,9 @@ fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -
     names.join(", ")
 }
 
-/// Call a `KFunction` by name. Named args reconstruct the exact-arity positional
-/// expression and eager-resolve the value slots before binding; a positional body
-/// is a loud `DispatchFailed` (functions and functors take `{name = value}` only).
+/// Call a `KFunction` by name. Functions and functors take `{name = value}` only; a
+/// positional body is a loud `DispatchFailed`. Named args reconstruct the exact-arity
+/// positional expression, then eager-resolve the value slots before binding.
 fn apply_function<'step>(
     ctx: &SchedulerView<'step, '_>,
     f: &'step KFunction<'step>,
@@ -190,22 +186,20 @@ fn apply_function<'step>(
     }
 }
 
-/// Stage every eager part of the reconstructed call as a sub-Dispatch, splice already-terminal
-/// subs inline, and park the slot on the in-flight ones as a `AwaitDeps` whose finish binds
-/// `picked`. Shared by the `FunctionValueCall` lane and every head-deferred / type-call function
-/// arm.
+/// Stage every eager part of the reconstructed call as a sub-Dispatch and park the slot on the
+/// in-flight ones as an `AwaitDeps` whose finish binds `picked`. Shared by the
+/// `FunctionValueCall` lane and every head-deferred / type-call function arm.
 pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: KExpression<'step>,
     picked: &'step KFunction<'step>,
 ) -> Outcome<'step> {
-    // `picked` is already committed (the head uniquely resolved to it), so bare-name
-    // value slots resolve by sub-Dispatch rather than the keyword path's pre-pick
-    // `bare_outcomes` lookup — their resolved carrier then reaches `accepts_part` at bind.
+    // `picked` is already committed (the head uniquely resolved to it), so bare-name value slots
+    // resolve by sub-Dispatch rather than the keyword path's pre-pick `bare_outcomes` lookup —
+    // each rides `bare_identifier`'s reach carrier through the eager-subs finish and reaches
+    // `accepts_part` at bind. No slot resolves inline here.
     let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
-    // The FunctionValueCall path stages every bare-name value slot as a sub-dispatch (so each rides
-    // `bare_identifier`'s reach carrier through the eager-subs finish) — no slots resolve inline here.
     ctx.install_eager_subs(working_expr, staged_subs, Some(picked))
 }

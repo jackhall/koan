@@ -22,20 +22,17 @@ use crate::witnessed::{Erased, Sealed, Witnessed};
 /// nodes. Writes that hit a borrow conflict route through [`PendingQueue`];
 /// `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
-    /// Lexical parent, held as a plain `&'a Scope<'a>` and read through the [`Scope::outer`]
-    /// accessor (a bare field read). The reference re-anchors to `'a` together with the rest of the
-    /// `Scope` when the holder is read out of its region; a per-call child whose parent is
-    /// longer-lived couples it at the construction door's generative brand
-    /// ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)), so the child needs no common
-    /// lifetime with its parent. `Scope` is invariant in `'a`, so the stored reference keeps
-    /// `Scope<'a>` invariant in `'a`.
+    /// Lexical parent, read through [`Scope::outer`]. Held as `&'a Scope<'a>` (not a shorter borrow)
+    /// so `Scope<'a>` stays invariant in `'a`; a per-call child couples to a longer-lived parent at
+    /// the construction door's generative brand
+    /// ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)), so it needs no common
+    /// lifetime with its parent.
     outer: Option<&'a Scope<'a>>,
     /// Direct reference to the run-global [`ScopeKind::Root`] (builtins only, immutable), read
     /// through [`Scope::root_scope`]. `None` iff `self` is the root. Every other scope points
     /// straight at it, so a builtin lookup or the no-shadow consult reaches the root in one hop
-    /// instead of walking `outer` — the root holds the builtins and never changes for a run. Held as
-    /// a plain `&'a Scope<'a>`; a per-call child's root falls out of its branded parent at the same
-    /// construction-door brand ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)).
+    /// instead of walking `outer`. A per-call child's root falls out of its branded parent at the
+    /// construction door ([`child_for_frame_witnessed`](Self::child_for_frame_witnessed)).
     root: Option<&'a Scope<'a>>,
     bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
@@ -45,14 +42,13 @@ pub struct Scope<'a> {
     /// brand (not a bare `&KoanRegion`) is what lets a scope hand out the alloc capability without a
     /// forgeable constructor: nothing can turn the bare `region()` back into a brand.
     brand: RegionBrand<'a>,
-    /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in — the
-    /// "scope bundled with its storage." Read via [`Self::region_owner`] to recover a captured
-    /// function's / module's region owner (the frame a consumer retains so an escaping value
-    /// outlives its producer), without walking any frame chain. A [`Weak`] (the storage owns the
-    /// region owns this scope — an `Rc` back-edge would leak); upgrades whenever the region is live.
-    /// Set at construction: a region-boundary scope ([`Self::run_root`], [`Self::child_for_frame_witnessed`])
-    /// takes its frame's storage; a same-region child inherits its parent's. Empty (`Weak::new()`)
-    /// for a test scope built outside any `FrameStorage` — such scopes own no escapable region.
+    /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in. Read via
+    /// [`Self::region_owner`] to recover a captured function's / module's region owner without
+    /// walking any frame chain. A [`Weak`] because the storage owns the region owns this scope — an
+    /// `Rc` back-edge would leak; upgrades whenever the region is live. Set at construction: a
+    /// region-boundary scope ([`Self::run_root`], [`Self::child_for_frame_witnessed`]) takes its
+    /// frame's storage, a same-region child inherits its parent's; empty (`Weak::new()`) for a test
+    /// scope built outside any `FrameStorage`.
     region_owner: Weak<FrameStorage>,
     /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
     /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
@@ -71,14 +67,12 @@ pub struct Scope<'a> {
     /// because it flips once, late, outside the bind hot path.
     closed: Cell<bool>,
     /// The scope's **reach-set**: the foreign per-call regions its bound values still borrow into,
-    /// folded as each bind lands ([`Self::fold_reach`]). Each bound value's full carrier [`FrameSet`]
-    /// folds in via [`Self::fold_reach`], which omits the scope's own home frame so a resident
-    /// value never witnesses the frame it lives in (the `region → scope → set → frame` cycle). The
-    /// set is a mutable builder while the scope is open and frozen once [`closed`](Self::closed) flips
-    /// — `close` is the seal point (folds past it are rejected like binds are). Held inside the
-    /// region-resident `Scope`, so a closure capturing the scope keeps every foreign region the scope's
-    /// bindings reach alive for its life. `RefCell` because folds accrue between scheduler steps; a
-    /// read (once frozen) never overlaps a fold. Empty until a region-referencing value is bound.
+    /// folded as each bind lands ([`Self::fold_reach`], which omits the scope's own home frame so a
+    /// resident value never witnesses the frame it lives in — the `region → scope → set → frame`
+    /// cycle). Frozen once [`closed`](Self::closed) flips — `close` is the seal point (folds past it
+    /// are rejected like binds). Held inside the region-resident `Scope`, so a closure capturing the
+    /// scope keeps every foreign region its bindings reach alive for its life. `RefCell` because
+    /// folds accrue between scheduler steps.
     reach: RefCell<FrameSet>,
 }
 
@@ -191,13 +185,11 @@ impl<'a> Scope<'a> {
         );
     }
 
-    /// Fold a value's reach (a [`FrameSet`]) into this scope's reach-set, omitting any frame the home
-    /// frame already pins (its own region or an ancestor). Called as a
-    /// value is bound under the scope (a `let` / user-fn arg / applied-here closure) and at the
-    /// run-root drain, so the foreign regions it borrows into stay alive for the scope's life. A bind
-    /// folds the value's full carried union, so a multi-region value contributes *every* region it
-    /// reaches. A fold past the seal ([`Self::close`]) is the same invariant violation as a bind past
-    /// close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
+    /// Fold a value's reach into this scope's reach-set, omitting any region the home frame already
+    /// pins (its own or an ancestor). Called as a value is bound under the scope (a `let` / user-fn
+    /// arg / applied-here closure) and at the run-root drain, so the foreign regions it borrows into
+    /// stay alive for the scope's life. A fold past the seal ([`Self::close`]) is the same invariant
+    /// violation as a bind past close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
     pub(crate) fn fold_reach(&self, witness: &FrameSet) {
         debug_assert!(
             !self.closed.get(),
@@ -207,11 +199,10 @@ impl<'a> Scope<'a> {
         let home = self.region_owner.upgrade();
         self.reach.borrow_mut().fold_omitting(witness, |region| {
             // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
-            // ([`FrameStorage::pins_region`]), or a **lexical** `outer`-chain ancestor. A per-call
-            // frame's storage `outer` is None under TCO, so the lexical walk is what catches the
-            // closure's captured (ancestor) scope — a region the closure already pins, which the
-            // reach-set must not re-pin (re-pinning it, paired with a sibling bind of the call's
-            // result, closes a region cycle).
+            // (`FrameStorage::pins_region`), or a lexical `outer`-chain ancestor. A per-call frame's
+            // storage `outer` is None under TCO, so the lexical walk is what catches the closure's
+            // captured (ancestor) scope — re-pinning it, paired with a sibling bind of the call's
+            // result, would close a region cycle.
             home.as_ref().is_some_and(|h| h.pins_region(region))
                 || self
                     .ancestors()
@@ -274,15 +265,11 @@ impl<'a> Scope<'a> {
     }
 
     /// Per-call frame child built **witnessed**, at the construction-door brand `'a`. The lexical
-    /// parent and the fresh region arrive *already coupled at one generative `'a`* — the door
-    /// ([`build_frame_child_witnessed`](super::arena::build_frame_child_witnessed)) brands them together
-    /// — so this constructor stores every field by **plain coercion**: `outer` is the branded parent,
-    /// `root` falls out as `outer.root`, `brand` is the branded fresh region, `region_owner` the fresh
-    /// frame's `Weak`. The longer-lived parent is content-shortened into the child's region *by the
-    /// brand*, honouring `Scope`'s invariance with **no retype** of its own — the per-call child's
-    /// construction carries no re-anchor audited outside the witnessed substrate. The door is the only
-    /// caller; the brand `'a` is un-nameable and the result erases
-    /// witness-less, so nothing at the brand escapes. The frame `Rc` pins the real parent (via
+    /// parent and the fresh region arrive already coupled at one generative `'a` — the door
+    /// ([`build_frame_child_witnessed`](super::arena::build_frame_child_witnessed)) brands them
+    /// together — so every field stores by plain coercion, honouring `Scope`'s invariance with no
+    /// retype of its own. The door is the only caller; the brand `'a` is un-nameable and the result
+    /// erases witness-less, so nothing at the brand escapes. The frame `Rc` pins the real parent (via
     /// `FrameStorage.outer`) and the run-global root, so the coupled references never out-claim a live
     /// pointee.
     pub(crate) fn child_for_frame_witnessed(
@@ -723,10 +710,6 @@ impl<'a> Scope<'a> {
         self.resolve_with_chain(name, None)
     }
 
-    /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through
-    /// [`visible`] before being returned; hidden entries (later siblings, or
-    /// value-style binders before their lexical position) are skipped and the walk
-    /// continues outward.
     /// The chain-derived visibility cutoff for a per-scope `bindings` lookup, or `None` when this
     /// scope's bindings are all unconditionally visible. A transparent `USING` window
     /// ([`Self::child_transparent`]) surfaces a finalized module's members as imports available
@@ -742,6 +725,9 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through the
+    /// [`binding_cutoff`](Self::binding_cutoff), so hidden entries (later siblings, or value-style
+    /// binders before their lexical position) are skipped and the walk continues outward.
     pub fn resolve_with_chain(
         &self,
         name: &str,
@@ -757,7 +743,7 @@ impl<'a> Scope<'a> {
     /// Carrier-returning twin of [`Self::resolve_with_chain`]: resolve `name` to the bound value
     /// wrapped in a [`Witnessed`] carrier naming its reach, so an object-value read embeds a carrier
     /// by construction instead of reconstructing the reach from the value. Walks the same `outer`
-    /// chain, but at the **binding** scope wraps the value via [`Self::bound_value_carrier`] — the
+    /// chain, but at the **binding** scope wraps the value via [`Self::resident_value_carrier`] — the
     /// witness is that scope's home frame, not the reading scope's. The non-`Bound` dispositions mirror
     /// [`Self::resolve_with_chain`].
     pub(crate) fn resolve_value_carrier(
@@ -807,10 +793,8 @@ impl<'a> Scope<'a> {
     /// reach, captured at bind time). The home frame is fetched **fresh** here (never stored — that
     /// would close the `frame → region → scope → bindings → frame` cycle) and pins this scope's own
     /// region; `foreign` names every other region the value reaches, so the carrier is self-contained.
-    /// Both a name / ATTR read and the FN-def / LET define sites route this, so a read never
-    /// reconstructs the reach by walking the value. The bundle itself runs on the confined arena
-    /// surface ([`RegionBrand::seal_resident`]), so `Witnessed::resident` is never reached from a
-    /// builtin.
+    /// The bundle runs on the confined arena surface ([`RegionBrand::seal_resident`]), so
+    /// `Witnessed::resident` is never reached from a builtin.
     pub(crate) fn resident_value_carrier(
         &self,
         obj: &'a KObject<'a>,

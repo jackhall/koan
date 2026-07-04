@@ -27,14 +27,9 @@ pub(super) fn initial<'step>(
         // `obj` resolves against the cart scope at `'step` directly — the cart pins its storage for
         // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
         Some(NameLookup::Bound(obj)) => dispatch_callable_value(ctx, expr, obj),
-        // A still-finalizing head placeholder parks and re-runs on resume. A placeholder whose
-        // producer has *already* finalized splits two ways:
-        // - `Err`: the binder errored before binding the head, so the name never became a value —
-        //   propagate the producer's error.
-        // - `Ok`: unreachable. A binder's successful finalize always registers its name (the
-        //   `Bound` then shadows the placeholder), so a ready-Ok producer resolves to `Bound`,
-        //   never `Parked`. Reaching here means that invariant broke.
-        // No consumer id in scope, so `Cycle` never classifies.
+        // Head placeholder. `Errored` means the binder failed before binding the head, so the name
+        // never became a value — propagate. `Park` re-runs the fast lane on resume. The `Ready` and
+        // `Cycle` arms are unreachable; their messages carry the reasoning.
         Some(NameLookup::Parked(producer)) => match ctx.producer_disposition(producer, None) {
             ProducerDisposition::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
             ProducerDisposition::Ready => unreachable!(

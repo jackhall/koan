@@ -1,10 +1,10 @@
 //! `FROM` — caller-side record projection. `(x y) FROM r` re-types the record
 //! value `r` to carry only fields `x` and `y`, narrowing the carried per-field
 //! type record while `Rc`-sharing the backing value record whole. The dropped
-//! fields stay physically present but become invisible through the narrowed
-//! type — the same re-tag a typed `LET narrowed :{x,y} = r` ascription performs,
-//! except FROM reads the kept fields' types off the record's own carrier, so the
-//! caller writes field *names*, not field *types*, inline.
+//! fields stay physically present but invisible through the narrowed type — the
+//! same re-tag a typed `LET narrowed :{x,y} = r` ascription performs, except FROM
+//! reads the kept fields' types off the record's own carrier, so the caller writes
+//! field *names*, not field *types*.
 //!
 //! This closes record subtyping's projection direction: it can break an
 //! `AmbiguousDispatch` tie between two width-incomparable record arms by
@@ -25,8 +25,7 @@ use super::{arg, kw, sig};
 /// The `fields` operand arrives unevaluated through a `KExpression` slot: each part
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
-/// reads a guaranteed `KObject::Record` carrier. Reads its args from `BodyCtx::args` and
-/// returns the re-typed record as `Action::Done`.
+/// reads a guaranteed `KObject::Record` carrier.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -34,8 +33,7 @@ pub fn body<'a>(
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
-    // Extract field names from the captured expression. Each part must be a bare
-    // identifier; a computed field list is out of scope by design.
+    // A computed field list is out of scope: each part must be a bare identifier.
     let mut names: Vec<String> = Vec::with_capacity(fields_expr.parts.len());
     for part in &fields_expr.parts {
         match &part.value {
@@ -73,8 +71,6 @@ pub fn body<'a>(
         }
     };
 
-    // Each named field must exist in the record; narrow the carried type to exactly
-    // the named fields, reading each kept field's type off the record's own carrier.
     let mut narrowed_pairs: Vec<(String, KType<'a>)> = Vec::with_capacity(names.len());
     for name in &names {
         match types.get(name) {
@@ -93,7 +89,7 @@ pub fn body<'a>(
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
     // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
     // foreign reach folded in, so every region the shared backing borrows into outlives the
-    // projection — the object-family terminal replacing the relocate-seam reconstruction.
+    // projection.
     Action::Done(Ok(ctx.scope.seal_value(carrier, ctx.arg_carrier("record"))))
 }
 
@@ -120,8 +116,6 @@ mod tests {
     use crate::machine::core::FrameStorage;
     use crate::machine::model::{KObject, KType};
 
-    /// `(x y) FROM r` re-tags the carried type to `{x, y}` while every field of `r`
-    /// stays physically present on the `Rc`-shared backing record.
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
         let region = FrameStorage::run_root();
@@ -129,10 +123,8 @@ mod tests {
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(fields, types) => {
-                // All three fields stay physically present on the shared value record.
                 assert_eq!(fields.len(), 3);
                 assert!(fields.get("z").is_some());
-                // The carried type is narrowed to exactly x, y.
                 assert_eq!(types.len(), 2);
                 assert_eq!(types.get("x"), Some(&KType::Number));
                 assert_eq!(types.get("y"), Some(&KType::Number));
@@ -161,7 +153,6 @@ mod tests {
         }
     }
 
-    /// `() FROM r` projects to zero fields → the empty record `:{}`, not an error.
     #[test]
     fn from_empty_field_list_yields_empty_record() {
         let region = FrameStorage::run_root();
@@ -169,7 +160,6 @@ mod tests {
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(fields, types) => {
-                // The backing value record is shared whole; only the type narrows.
                 assert_eq!(fields.len(), 1);
                 assert_eq!(types.len(), 0);
             }
@@ -177,7 +167,6 @@ mod tests {
         }
     }
 
-    /// Naming a field absent from the record is a `ShapeError`.
     #[test]
     fn from_unknown_field_errors() {
         let region = FrameStorage::run_root();
@@ -190,7 +179,6 @@ mod tests {
         );
     }
 
-    /// A duplicate name in the field list is a `ShapeError`.
     #[test]
     fn from_duplicate_field_errors() {
         let region = FrameStorage::run_root();
@@ -204,13 +192,10 @@ mod tests {
     }
 
     /// A non-record operand matches no FROM overload — the `:{}` `record` slot rejects
-    /// `5`, and no evaluation of the `(x y)` operand can change that, so dispatch fails
-    /// cleanly with `DispatchFailed` ("no matching function") at the call rather than
-    /// eagerly evaluating `(x y)` and leaking its `unbound name 'x'` — the relaxed
-    /// admission pass keeps it a clean miss (see
+    /// `5`, so dispatch fails cleanly with `DispatchFailed` rather than eagerly evaluating
+    /// `(x y)` and leaking its `unbound name 'x'`: the relaxed admission pass keeps it a
+    /// clean miss (see
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
-    /// The root miss is a slot-terminal `DispatchFailed`, read from the slot like an
-    /// `AmbiguousDispatch`.
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
         use crate::machine::core::KErrorKind;

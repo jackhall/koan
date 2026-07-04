@@ -18,11 +18,10 @@ use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{KType, TypeResolution};
 
 impl<'step> Scope<'step> {
-    /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, runs
-    /// [`crate::machine::model::types::elaborate_type_identifier`] against `self`, asks a
-    /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
-    /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
-    /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
+    /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, elaborates against
+    /// `self` and writes the cache only when a [`FinalizeGate`] admits the result. The
+    /// Park arm — elaborator-parked or gate-rejected — never writes the cache: caching
+    /// mid-SCC would observe pre-close opaque identity.
     pub fn resolve_type_identifier(
         &self,
         te: &TypeIdentifier,
@@ -37,9 +36,8 @@ impl<'step> Scope<'step> {
         }
         let chain_for_reach = chain.clone();
         let mut elaborator = Elaborator::new(self).with_chain(chain);
-        // Lift the elaborator's owned `Done(KType)` to a memoized region `Done(TypeHit)`,
-        // gating on finalize: a referenced type still in flight turns the `Done` into a `Park`,
-        // while `Park` / `Unbound` forward unchanged.
+        // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
+        // `Unbound` forward unchanged.
         elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self }.pending_producers(&kt);
             if pending.is_empty() {
@@ -135,14 +133,11 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     self.stack.push(v);
                     self.stack.push(k);
                 }
-                // Walk each field's type; `Record::values()` order is immaterial here.
                 KType::Record(fields) => {
                     for t in fields.values() {
                         self.stack.push(t);
                     }
                 }
-                // Order is immaterial (the walker only collects the set of nested
-                // user-type refs), and `Record::values()` is not double-ended, so no `.rev()`.
                 KType::KFunction { params, ret } => {
                     self.stack.push(ret);
                     for a in params.values() {
@@ -161,9 +156,8 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     }
                     self.stack.push(ctor);
                 }
-                // Leaves / wildcards: no nested user‑type references at this level.
-                // `DeferredReturn` carries only a hashable surface shadow (no nested
-                // `KType`), so it bottoms out here.
+                // Leaves: no nested `KType`. `DeferredReturn` carries only a hashable
+                // surface shadow, so it bottoms out here too.
                 KType::Number
                 | KType::Str
                 | KType::Bool

@@ -1,39 +1,32 @@
-//! `Record<V>` — an ordered identifier-keyed map: the single shape behind a struct
-//! schema's `(name, type)` fields, and (later) the FN/FUNCTOR parameter list and the
-//! runtime binding carriers. Generic over the value so the type level stores
-//! `Record<KType>` and the value level can store `Record<KObject>`.
+//! `Record<V>` — an ordered identifier-keyed map: the shape behind a struct schema's
+//! `(name, type)` fields, the FN/FUNCTOR parameter list, and the runtime binding
+//! carriers. Generic over the value, so the type level stores `Record<KType>` and the
+//! value level stores `Record<KObject>`.
 //!
-//! Two properties define it (see the [record-substrate] roadmap item):
+//! Two invariants define it:
 //!
-//! - **Insertion order is preserved** for rendering and positional construction
-//!   ([`iter`](Record::iter) walks declaration order), but **equality ignores it**:
-//!   `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. The
-//!   order-blind `PartialEq` is `IndexMap`'s, forwarded for free.
+//! - **Insertion order is preserved** for rendering and positional construction, but
+//!   **equality ignores it**: `(x :Number, y :Str)` and `(y :Str, x :Number)` are the
+//!   same record. The order-blind `PartialEq` is `IndexMap`'s, forwarded for free.
 //! - **Hashing agrees with that order-blind equality**: a commutative fold
 //!   (`wrapping_add`, not XOR — XOR cancels on a duplicate) over a per-field
 //!   `mix(hash(name), hash(value))`. The `mix` binds name to value before the fold,
 //!   so `{x: Number}` and `{y: Number}` hash apart.
 //!
-//! Names are unique within a record — the structural invariant `IndexMap` keys carry
-//! for free. The `STRUCT` / `SIG` parser ([`parse_pair_list`](crate::parse)) already
-//! rejects a duplicate field before one reaches [`from_pairs`]; if one ever arrived,
-//! `IndexMap`'s last-wins insert would still leave the keys unique, so `Hash`/`Eq`
-//! stay well-defined.
-//!
-//! [record-substrate]: ../../../../roadmap/type_language/record-substrate.md
+//! Names are unique within a record — an `IndexMap` key invariant. The `STRUCT` / `SIG`
+//! parser rejects duplicate fields upstream; if one ever reached [`from_pairs`], the
+//! last-wins insert still leaves keys unique, so `Hash`/`Eq` stay well-defined.
 
 use indexmap::IndexMap;
 use std::hash::{Hash, Hasher};
 
-/// An ordered identifier-keyed map with order-blind equality and a commutative
-/// name+value hash. See the module-level documentation for the invariants.
+/// See the module-level documentation for the invariants.
 #[derive(Clone, Debug, Default)]
 pub struct Record<V> {
     fields: IndexMap<String, V>,
 }
 
 impl<V> Record<V> {
-    /// Empty record. Equivalent to `from_pairs([])`.
     pub fn new() -> Self {
         Record {
             fields: IndexMap::new(),
@@ -41,8 +34,7 @@ impl<V> Record<V> {
     }
 
     /// Build from `(name, value)` pairs in declaration order. Last-wins on a duplicate
-    /// name (the upstream `parse_pair_list` rejects duplicates before this point, so the
-    /// last-wins arm is a defensive default, not a routine path).
+    /// name — a defensive default; the parser rejects duplicates upstream.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (String, V)>) -> Self {
         Record {
             fields: pairs.into_iter().collect(),
@@ -54,43 +46,34 @@ impl<V> Record<V> {
         self.fields.iter()
     }
 
-    /// Consume into owned `(name, value)` pairs in insertion order — the by-value dual of
-    /// [`iter`](Record::iter), for rebuilding a record over a different value type.
+    /// Consume into owned `(name, value)` pairs in insertion order.
     pub fn into_pairs(self) -> impl Iterator<Item = (String, V)> {
         self.fields.into_iter()
     }
 
-    /// Field names in insertion order.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.fields.keys()
     }
 
-    /// Field values in insertion order.
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.fields.values()
     }
 
-    /// Look up a field's value by name. O(1).
     pub fn get(&self, name: &str) -> Option<&V> {
         self.fields.get(name)
     }
 
-    /// Insert (or replace) `name`'s value, returning the previous value if any. A new
-    /// name appends in insertion order; a replace keeps the existing position. Backs the
-    /// runtime carriers (e.g. the argument bundle) built up one field at a time.
+    /// A new name appends in insertion order; a replace keeps the existing position.
     pub fn insert(&mut self, name: String, value: V) -> Option<V> {
         self.fields.insert(name, value)
     }
 
-    /// Remove and return `name`'s value, if present. O(1); does not preserve order (used
-    /// when a consume-by-name carrier moves a value out, where residual order is moot).
+    /// `swap_remove`: O(1) but does not preserve order.
     pub fn remove(&mut self, name: &str) -> Option<V> {
         self.fields.swap_remove(name)
     }
 
     /// Map each field's value through `f`, preserving names and declaration order.
-    /// Used to derive a value-level record's memoized type record
-    /// (`Record<KObject>` → `Record<KType>` via `ktype()`).
     pub fn map<U>(&self, f: impl Fn(&V) -> U) -> Record<U> {
         Record {
             fields: self
@@ -101,12 +84,10 @@ impl<V> Record<V> {
         }
     }
 
-    /// Number of fields.
     pub fn len(&self) -> usize {
         self.fields.len()
     }
 
-    /// Whether the record has no fields.
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }

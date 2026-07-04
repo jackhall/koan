@@ -46,8 +46,7 @@ impl<'a> PendingTypes<'a> {
     }
 
     /// Install a new in-flight binder entry and return an RAII guard whose Drop
-    /// removes the entry. The guard holds an `Rc` clone of the map, so it stays valid for the
-    /// guard's whole life regardless of how long the originating `&self` borrow lasts.
+    /// removes the entry.
     ///
     /// Panics on borrow conflict — pending-type writes happen at body-entry,
     /// outside the re-entrant `try_apply` hot path. Panics on duplicate name —

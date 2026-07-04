@@ -26,12 +26,9 @@ pub enum KLiteral {
 
 impl KLiteral {
     /// The owned [`KObject`] this literal denotes — region-pure (no borrow), so a construction site can
-    /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure rather than resolving
-    /// it at the ambient lifetime and bundling it under an asserted witness. Generic in `'a` (rather than
-    /// `'static`) because [`KObject`] is invariant in its lifetime: every arm owns its data (a copied
-    /// `f64` / `bool`, a cloned `String`, `Null`), so the value is constructible at *any* lifetime — in
-    /// particular the `yoke` brand the caller hands it to. The region-pure peer of
-    /// [`ExpressionPart::resolve`]'s `Literal` arms, which carry the enclosing `resolve`'s `'a`.
+    /// build it **inside** a [`yoke`](crate::witnessed::Witnessed::yoke) closure. Generic in `'a`
+    /// (rather than `'static`) despite [`KObject`] being invariant in its lifetime: every arm owns its
+    /// data, so the value is constructible at *any* lifetime — in particular the caller's `yoke` brand.
     pub fn to_kobject<'a>(&self) -> KObject<'a> {
         match self {
             KLiteral::Number(n) => KObject::Number(*n),
@@ -42,14 +39,14 @@ impl KLiteral {
     }
 }
 
-/// A bare type identifier as written in source (`Number`, `Point`, `T`, `Mo.Ty`) — a single
-/// name token, never compound syntax.
+/// A bare type identifier as written in source (`Number`, `Point`, `Mo.Ty`) — a single name
+/// token, never compound syntax.
 ///
 /// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string. The
 /// identifier stays a flat name even when it *denotes* a compound type (a `NEWTYPE` / `UNION`
-/// name resolves to a record / tagged type); compound *syntax* (`:(LIST OF X)`,
-/// `:(FN … -> …)`) is a dispatch expression (`SigiledTypeExpr`), not a `TypeIdentifier`. The
-/// position tag rides on the carrier variant (`ExpressionPart::Type`), not on this struct.
+/// name resolves to a record / tagged type); compound *syntax* (`:(LIST OF …)`, `:(FN … -> …)`)
+/// is a `SigiledTypeExpr`, not a `TypeIdentifier`. The position tag rides on the carrier variant
+/// (`ExpressionPart::Type`), not on this struct.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeIdentifier(String);
 
@@ -103,9 +100,7 @@ pub enum ExpressionPart<'a> {
     Literal(KLiteral),
     /// A resolved sub-result travelling as its producer's sealed carrier — value and reach as one
     /// unit. The lifetime-free cell rests on the working expression across steps; the consuming
-    /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand, so a
-    /// dep that survives past its resolving step travels as its carrier, never as a bare relocated
-    /// value.
+    /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand.
     Spliced(Sealed<CarriedFamily, FrameSet>),
 }
 
@@ -148,8 +143,7 @@ impl<'a> ExpressionPart<'a> {
     /// [`KExpression::is_splice_free`].
     fn is_splice_free(&self) -> bool {
         match self {
-            // A spliced cell carries a resolved value, not raw AST — QUOTE's semantic guard rejects
-            // it: the cell is a scheduler-introduced carrier, never a syntactic part.
+            // A spliced cell is a scheduler-introduced carrier, not raw syntactic AST.
             ExpressionPart::Spliced(_) => false,
             ExpressionPart::Expression(e)
             | ExpressionPart::SigiledTypeExpr(e)
@@ -203,20 +197,14 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// Slot-aware resolve producing an owned [`Held`] cell. A type rides the `Type` arm raw; a
-    /// runtime value rides the `Object` arm. Runs at [`KFunction::bind_args`] time (an already-picked
-    /// builtin call). `scope` is the call scope: a spliced **cell** is adopted into it (its reach
-    /// folded, its value re-anchored at the scope brand) before the cell is owned-ified, so a cloned
-    /// type that still borrows the producer region stays pinned; every other arm owns its value by
-    /// value with no region to borrow from.
-    ///
-    /// - A `Spliced` cell adopts through `scope`, then routes the adopted value through the
-    ///   type/object owning — a carried type into the `Type` arm, a carried object into the `Object` arm.
-    /// - A parser `Type`-name token into a proper-type slot lowers to a concrete `KType` via
-    ///   [`KType::from_type_identifier`], or to the [`KType::Unresolved`] transient for a bare user
-    ///   name (a name not in the builtin table) — scope-aware elaboration defers to
-    ///   [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
-    /// - Lazy `:(...)` / `:{…}` slots capture the inner expression raw in the `Object` arm.
+    /// Slot-aware resolve producing an owned [`Held`] cell, run at [`KFunction::bind_args`] time. A
+    /// type rides the `Type` arm; a runtime value rides the `Object` arm. A spliced cell is first
+    /// adopted into `scope` (reach folded, value re-anchored at the scope brand) so a cloned type
+    /// that still borrows the producer region stays pinned before it is owned-ified; every other arm
+    /// owns its value outright. A `Type`-name token in a proper-type slot lowers via
+    /// [`KType::from_type_identifier`], falling back to the [`KType::Unresolved`] transient for a bare
+    /// user name (scope-aware elaboration defers to
+    /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)).
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
@@ -225,8 +213,6 @@ impl<'a> ExpressionPart<'a> {
         scope: &'a crate::machine::core::Scope<'a>,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
-        // A spliced cell is adopted into the call scope, then owned-ified through type/object
-        // handling — a cloned type keeps its region borrows pinned by the scope's now-folded reach.
         if let ExpressionPart::Spliced(cell) = self {
             return match scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Held::Type(kt.clone()),
@@ -257,10 +243,8 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
-            // Every SigiledTypeExpr must reach a value either through the dispatcher's
-            // fast lane or via sub-Dispatch — both unwrap it preserving the type-context
-            // marker. Reaching `resolve()` means a builtin grabbed the raw part and lost
-            // that marker.
+            // Reaches a value only through the dispatcher's type-context fast lane or sub-Dispatch,
+            // both of which unwrap it; hitting `resolve()` means a builtin lost the marker.
             ExpressionPart::SigiledTypeExpr(_) => {
                 unreachable!("SigiledTypeExpr only valid in type-context dispatch")
             }
@@ -292,11 +276,9 @@ impl<'a> ExpressionPart<'a> {
                     .collect();
                 KObject::record(fields)
             }
-            // A spliced cell is opened / adopted at the consuming scope's brand before resolution
-            // (the bind path in `resolve_for` / `extract_carried_args`, or `single_poll`'s own
-            // `Spliced` arm), so its value never reaches the region-less `resolve()`. The container
-            // arms above recurse safely: a splice is only ever written at a top-level part slot
-            // (`part_walk`, the eager-sub finish), never into a container literal's elements.
+            // A spliced cell is opened / adopted at the consuming scope's brand before resolution, so
+            // its value never reaches the region-less `resolve()`. The container arms above recurse
+            // safely: a splice is only written at a top-level part slot, never into a literal's elements.
             ExpressionPart::Spliced(_) => unreachable!(
                 "a spliced cell is adopted at the binding scope before resolve(); \
                  resolve() runs only on region-pure parts"
@@ -305,13 +287,10 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// The owned [`KObject`] a **region-pure** part denotes, at *any* lifetime — the lifetime-generic
-    /// peer of [`resolve`](Self::resolve) for the aggregate static-cell sites that `yoke` (build the
-    /// value inside the witness closure rather than bundling it under an asserted witness). The borrow-free
-    /// variants (keyword, bare identifier, type name, literal) own their data, so the value is
-    /// constructible at the caller's `yoke` brand — where [`resolve`]'s `KObject<'a>` cannot go, the
-    /// type being invariant in `'a`. The borrow-bearing variants (`Expression`, `Spliced`, the
-    /// structured literals) carry the ambient `'a` and are classified to owned sub-dispatches *before*
-    /// any static cell, so they never reach here.
+    /// peer of [`resolve`](Self::resolve) for static-cell sites that `yoke`. The borrow-free variants
+    /// (keyword, bare identifier, type name, literal) own their data, so the value is constructible at
+    /// the caller's `yoke` brand, where [`resolve`]'s invariant `KObject<'a>` cannot go. Borrow-bearing
+    /// variants are classified to owned sub-dispatches before any static cell, so they never reach here.
     pub fn resolve_region_pure<'b>(&self) -> KObject<'b> {
         match self {
             ExpressionPart::Keyword(s) | ExpressionPart::Identifier(s) => {
@@ -347,8 +326,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            // `Sealed` is not `Copy`; `duplicate` copies the erased value and clones the witness, so
-            // the producer's seal semantics match `DepTerminal.carrier.duplicate()` everywhere.
+            // `duplicate` copies the erased value and clones the witness (`Sealed` is not `Copy`).
             ExpressionPart::Spliced(cell) => ExpressionPart::Spliced(cell.duplicate()),
         }
     }
@@ -519,12 +497,9 @@ fn operator_probe_for(
 /// `span` and `file` are `None` for hand-built ASTs.
 ///
 /// `untyped_key`, `shape`, and `operator_probe` are a structural cache filled by
-/// [`KExpression::fill_cache`] whenever the parts vector is complete (construction,
-/// parse-frame finalization, redundant-wrapper peeling). They are invariant under the
-/// dispatch-time splice that replaces an eager `Slot` part with a `Spliced` (also a
-/// `Slot`), so the dispatch driver reads them rather than re-deriving per call. The
-/// same AST node re-dispatches on every call of its enclosing function, so the eager
-/// cache amortizes across all invocations.
+/// [`KExpression::fill_cache`] whenever the parts vector is complete. They are invariant under the
+/// dispatch-time splice that replaces an eager `Slot` part with a `Spliced` (also a `Slot`), so the
+/// dispatch driver reads the cache rather than re-deriving on every call of the enclosing function.
 pub struct KExpression<'a> {
     pub parts: Vec<Spanned<ExpressionPart<'a>>>,
     pub span: Option<Span>,
@@ -536,16 +511,14 @@ pub struct KExpression<'a> {
     /// sub-expressions, and each splice's lifetime-free `Sealed` carrier cell — so no field
     /// concretely borrows `'a`. The parameter is retained as a phantom so the family stays a
     /// `KExpression<'r>` for the witnessed substrate (its `Reattachable` impl keys on `'r`), and
-    /// is held **invariant** to mirror the variance a borrowing `KExpression` carried (`KObject<'a>`
-    /// is invariant, `KType` being invariant). Zero-size, so the layout is identical across every
+    /// is held **invariant** to mirror the variance a borrowing `KExpression` would carry (`KObject<'a>`
+    /// and `KType` are both invariant). Zero-size, so the layout is identical across every
     /// `'a` and the [`reattachable!`] retype below stays a no-op transmute.
     _marker: PhantomData<fn(&'a ()) -> &'a ()>,
 }
 
-// `KExpression` is fully owned: every part is owned data or a lifetime-free `Sealed` splice cell,
-// so the layout is identical for every `'a` and the family routes the single audited lifetime-retype
-// as a no-op. An expression binds no live borrow at all, so an AST-embedding object is region-pure
-// and allocs through the witnessed object surface (see [`KExpression::is_splice_free`]).
+// `KExpression` is fully owned (owned data + lifetime-free `Sealed` splice cells), so the layout is
+// identical for every `'a` and this lifetime-retype is a no-op transmute.
 reattachable! { KExpression<'static> => KExpression<'r> }
 
 impl<'a> KExpression<'a> {
@@ -576,13 +549,11 @@ impl<'a> KExpression<'a> {
         expr
     }
 
-    /// True when no part anywhere in the tree is a `Spliced` cell, i.e. the expression is raw,
-    /// unevaluated AST (a quoted expression, an FN body). Splices appear only when the scheduler folds
-    /// a resolved dep value into a parent's parts, and each splice cell carries its own producer reach.
-    /// This is the precondition that lets an AST-embedding object alloc through the **region-pure**
-    /// witnessed surface ([`alloc_object_witnessed`](crate::machine::core::KoanRegion::alloc_object_witnessed)):
-    /// a splice-free expression names no producer reach, so the embedding object's reach is the empty
-    /// (foreign-reach-only) set.
+    /// True when no part anywhere in the tree is a `Spliced` cell — the expression is raw, unevaluated
+    /// AST (a quoted expression, an FN body). This is the precondition that lets an AST-embedding object
+    /// alloc through the **region-pure** witnessed surface
+    /// ([`alloc_object_witnessed`](crate::machine::core::RegionBrand::alloc_object_witnessed)): a
+    /// splice-free expression names no producer reach, so the embedding object's reach is the empty set.
     pub fn is_splice_free(&self) -> bool {
         self.parts.iter().all(|p| p.value.is_splice_free())
     }

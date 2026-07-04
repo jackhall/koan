@@ -13,12 +13,8 @@
 /// AnyType > { Module, Signature, ProperType > { Tagged, NewType, TypeConstructor } }
 /// ```
 ///
-/// `kind_of` (the value-classification direction) descends a nominal to its family —
-/// [`ProperType`](KKind::ProperType) only for a non-nominal, non-module, non-signature type;
-/// [`Module`](KKind::Module) / [`Signature`](KKind::Signature) for those carriers; and
-/// [`Tagged`](KKind::Tagged) / [`NewType`](KKind::NewType) /
-/// [`TypeConstructor`](KKind::TypeConstructor) for a user-declared nominal. [`AnyType`](KKind::AnyType)
-/// is a *slot* expectation only ("accepts any proper type value"), never a classification.
+/// [`AnyType`](KKind::AnyType) is a *slot* expectation only ("accepts any proper type value"),
+/// never a value classification produced by [`kind_of`](super::ktype::KType::kind_of).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KKind {
     /// A proper (non-module, non-signature) type value with no finer nominal family —
@@ -55,10 +51,9 @@ pub enum KKind {
 
 impl KKind {
     /// Reflexive subsumption: does a slot of kind `self` admit a type value classified as
-    /// `other`? `ProperType` / `AnyType` admit the proper subtree (`ProperType` itself and the three
-    /// nominal families); every other kind admits only itself — the module / signature wall
-    /// keeps `:Type` from admitting a module, and a nominal-family slot admits only its own
-    /// family.
+    /// `other`? `ProperType` / `AnyType` admit the whole proper subtree; every other kind admits
+    /// only itself — the module / signature wall keeps `:Type` from admitting a module, and a
+    /// nominal-family slot admits only its own family.
     pub fn admits(self, other: KKind) -> bool {
         use KKind::*;
         match self {

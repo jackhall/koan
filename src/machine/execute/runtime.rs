@@ -201,9 +201,7 @@ impl<'run> KoanRuntime<'run> {
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
 pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
     match action {
-        // Terminal: the witnessed carrier (or error) the builtin already computed inside its witness
-        // closure (scope was mutated in place first) rides straight through — `finalize` seals it, no
-        // asserted-co-location bundle.
+        // Already a witnessed carrier (or error): `finalize` seals it as-is, no co-location bundle.
         Action::Done(result) => Outcome::Done(result),
 
         Action::Tail {
@@ -443,9 +441,6 @@ impl<'run> KoanRuntime<'run> {
         idx: usize,
     ) -> NodeStep {
         match outcome {
-            // The value terminal: a construction carrier already naming its reach rides straight
-            // through to the Done boundary, where the workload hook seals it (a declared-return
-            // re-stamp aside, untouched). An error carries no value and finalizes bare.
             Outcome::Done(result) => {
                 self.close_owned_scope(idx);
                 match result {
@@ -611,19 +606,13 @@ impl<'run> KoanRuntime<'run> {
                 }
             }
             Outcome::Forward(producer) => {
-                // The slot's result *is* `producer`'s. If `producer` is ready, finalize the slot by
-                // pulling its terminal into this slot's own frame (the consumer-pull lift — the
-                // producer keeps its value in its own frame, which frees out from under a bare copy),
-                // then this slot's consumers pull from here. Otherwise splice the slot out: move its
-                // consumers onto `producer`'s notify list and alias the slot to `producer`.
+                // The slot's result *is* `producer`'s. Ready: pull its terminal into this slot's own
+                // frame (the consumer-pull lift — the producer keeps its value in its frame, which
+                // would free out from under a bare copy), and consumers pull from here. Not ready:
+                // `Alias` drives `splice_forward` — move consumers onto `producer` and alias the slot.
                 if self.sched.is_result_ready(producer) {
-                    // The forwarded terminal *is* this slot's; `run_step` relocates it into this
-                    // slot's region carrying its own witness (the forwarded terminal already enforced
-                    // its own contract, so no re-check). `Alias` is the not-ready twin below.
                     NodeStep::ForwardReady(producer)
                 } else {
-                    // Not ready: `NodeStep::Alias` drives `splice_forward` (move consumers onto the
-                    // producer + alias the slot) in the execute loop.
                     NodeStep::Alias(producer)
                 }
             }

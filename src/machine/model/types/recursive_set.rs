@@ -52,8 +52,7 @@ pub struct NominalMember<'a> {
     pub name: String,
     /// Origin scope, diagnostics only — never identity.
     pub scope_id: ScopeId,
-    /// Always one of the three nominal families `Tagged` / `NewType` / `TypeConstructor`;
-    /// `kind_of` reads it off a `SetRef` / `Variant` to classify a nominal type value.
+    /// Always one of the three nominal families `Tagged` / `NewType` / `TypeConstructor`.
     pub kind: KKind,
     schema: RefCell<Option<NominalSchema<'a>>>,
 }
@@ -231,7 +230,6 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
 }
 
 impl<'a> NominalSchema<'a> {
-    /// Surface family of this schema.
     pub fn kind(&self) -> KKind {
         match self {
             NominalSchema::Tagged(_) => KKind::Tagged,

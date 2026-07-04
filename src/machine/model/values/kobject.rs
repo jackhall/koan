@@ -247,11 +247,9 @@ impl<'a> KObject<'a> {
             KObject::Dict(_, k, v) => KType::Dict(k.clone(), v.clone()),
             KObject::KFunction(f) => function_value_ktype(f),
             KObject::KExpression(_) => KType::KExpression,
-            // A user-`UNION` (`Tagged` kind) value reports its *variant* refinement, so a
-            // slot typed `:(Maybe Some)` dispatches on it. A `TypeConstructor` value
-            // (`Result`) keeps the bare/applied union identity: erased `type_args` reports
-            // the `SetRef`, a populated carrier synthesizes the applied form so dispatch
-            // sees the full instantiation (`Result<Number, MyErr>`).
+            // A `Tagged`-kind value reports its *variant* refinement (a slot typed
+            // `:(Maybe Some)` dispatches on it); a `TypeConstructor` value keeps the union
+            // identity — bare `SetRef` when `type_args` is erased, else the applied form.
             KObject::Tagged {
                 tag,
                 set,
@@ -280,8 +278,6 @@ impl<'a> KObject<'a> {
                     }
                 }
             }
-            // O(1): read the memoized per-field type record rather than re-walking the
-            // fields, mirroring `List` / `Dict`.
             KObject::Record(_, field_types) => KType::Record(field_types.clone()),
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
         }
@@ -406,7 +402,6 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFunction(f) => f.summarize(),
             KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
-            // Round-trips the `{x = 1, y = "a"}` value surface (`=` pairs).
             KObject::Record(fields, _) => {
                 let parts: Vec<String> = fields
                     .iter()
@@ -415,8 +410,6 @@ impl<'a> Parseable<'a> for KObject<'a> {
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::Null => "null".to_string(),
-            // Render as `Distance(<inner summary>)`; `type_id.name()` returns the bare
-            // declared name (the SetRef member's name for a NEWTYPE).
             KObject::Wrapped { inner, type_id } => {
                 format!("{}({})", type_id.name(), Parseable::summarize(inner.get()),)
             }

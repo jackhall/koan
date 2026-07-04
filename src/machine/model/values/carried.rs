@@ -10,23 +10,19 @@ use crate::witnessed::reattachable;
 
 use super::KObject;
 
-/// Two-arm value currency. `Copy` like the `&'a` references it wraps, so it threads through
-/// the `Ok` arm of a node result, the value a `Done` carrier wraps, and the lift path without clones.
+/// Two-arm value currency. `Copy` like the `&'a` references it wraps, so it threads through node
+/// results and the lift path without clones.
 #[derive(Clone, Copy)]
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),
     Type(&'a KType<'a>),
 }
 
-/// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner. It is the
-/// `Workload::Value` the scheduler stores in a `Witnessed<CarriedFamily, _>` slot and re-anchors on
-/// read (`Witnessed::read`), and the family the transient re-anchor routes (the
-/// consumer-pull dep terminals and an `Outcome::Forward` pull, born at the step brand via
-/// `read_lifted` into the opened `dest` region). Layout-invariant: a `Carried<'a>` is two `&'a`
-/// references, whose representation does not depend on `'a`.
+/// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner and the
+/// scheduler's `Workload::Value`, stored in a `Witnessed<CarriedFamily, _>` slot and re-anchored on read.
 pub struct CarriedFamily;
 
-// `CarriedFamily` is one type generic only in `'r`, layout identical for every `'r`; the shared
+// A `Carried<'r>` is two `&'r` references, layout identical for every `'r`; the shared
 // `reattachable!` macro discharges that obligation once.
 reattachable! {
     CarriedFamily => Carried<'r>,
@@ -71,20 +67,16 @@ impl<'a> Carried<'a> {
     }
 }
 
-/// Owned by-value cell: a runtime object or a type carried as a first-class value. The owned
-/// dual of the borrowed channel currency [`Carried`], holding each arm inline (by value, no `Rc`).
-/// It is the cell type of a `List` / `Dict` / `Record` and the currency a builtin's bound argument
-/// record (`Record<Held>`) holds — produced by
-/// [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for), which
-/// resolves each already-picked argument part into an owned value with no region to borrow from.
+/// Owned by-value cell — the owned dual of the borrowed [`Carried`], holding each arm inline (no `Rc`).
+/// The cell type of a `List` / `Dict` / `Record` and the currency a builtin's bound argument record
+/// (`Record<Held>`) holds.
 pub enum Held<'a> {
     Object(KObject<'a>),
     Type(KType<'a>),
 }
 
 impl<'a> Held<'a> {
-    /// Owned-ify a borrowed channel [`Carried`] into a cell: deep-clone the object arm,
-    /// clone the type arm. Used by the literal-aggregate `AwaitDeps` finish.
+    /// Owned-ify a borrowed [`Carried`] into a cell: deep-clone the object arm, clone the type arm.
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),

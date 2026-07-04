@@ -9,48 +9,38 @@ use crate::witnessed::{reattachable, Witnessed};
 
 use super::runtime::KoanRuntime;
 
-/// `Reattachable` carrier family for a declared-return re-stamp's two region-resident operands: the
-/// contract's home region the re-tagged value lands in, and the declared `KType` it is stamped with.
-/// Both live in the home region (a strict ancestor of the producer frame) the finalized carrier's
-/// witness already pins via its `outer` chain, so [`finalize_terminal`](NodeFinalize::finalize_terminal)
-/// folds them in with
-/// [`merge`](Witnessed::merge) — the re-stamp is born co-located, no asserted bundle. Layout-invariant:
-/// a `(RegionBrand<'r>, &'r KType<'r>)` is two thin pointers whose representation never depends on `'r`.
+/// `Reattachable` carrier family for a declared-return re-stamp's two home-region operands: the
+/// contract's home region and the declared `KType`. Both live in the home region — a strict ancestor
+/// of the producer frame the finalized carrier's witness already pins via its `outer` chain — so
+/// [`finalize_terminal`](NodeFinalize::finalize_terminal) folds them in with [`merge`](Witnessed::merge).
+/// Layout-invariant: `(RegionBrand<'r>, &'r KType<'r>)` is two thin pointers whose representation
+/// never depends on `'r`.
 struct ContractHomeFamily;
 
 reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
 
-/// The workload's Done-boundary contract hook: seal a finished node's **value** terminal against its
-/// declared return contract, returning the slot's final terminal. The driver opens the slot's
-/// contract at the step brand (alongside the continuation, via
+/// Seal a finished node's **value** terminal against its declared return contract, returning the
+/// slot's final terminal. The driver opens the slot's contract at the step brand (via
 /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open)) and hands this hook the live
-/// [`ReturnContract`] plus the (optional) per-call frame. The scheduler decides *when* (the Done
-/// boundary); this hook owns the `ReturnContract`- / `KType`-naming *how*, so the scheduler core names
-/// neither. Errors carry no value and finalize bare through [`finalize_error`], which never reaches
-/// this hook.
+/// [`ReturnContract`] plus the optional per-call frame. The scheduler decides *when* (the Done
+/// boundary); this hook owns the `ReturnContract`/`KType` *how*, so the generic scheduler
+/// ([`crate::scheduler`]) names no Koan type. Errors carry no value and finalize bare through
+/// [`finalize_error`], which never reaches this hook.
 ///
-/// Peer of [`relocate_carried`](super::lift::relocate_carried): both are workload hooks the Done
-/// boundary calls. The lift relocates a value across a dep edge; finalize seals the terminal against
-/// the return contract. They stay separate — the contract layer is never folded into the lift (see
-/// [`lift`](super::lift)).
+/// Peer of [`relocate_carried`](super::lift::relocate_carried): both are Done-boundary workload hooks,
+/// but the contract layer is never folded into the lift (see [`lift`](super::lift)).
 ///
-/// A Koan-typed workload hook: the generic scheduler ([`crate::scheduler`]) drives the Done
-/// boundary through this trait and names no Koan type itself.
-///
-/// The terminal arrives **already witnessed** — a lifetime-free [`Witnessed`] carrier — so nothing is
+/// The terminal arrives **already witnessed** (a lifetime-free [`Witnessed`] carrier), so nothing is
 /// erased here; the declared-return re-stamp runs at the merge brand, where the carrier value and the
 /// contract's home-region declared type meet.
 pub(in crate::machine::execute) trait NodeFinalize {
-    /// Seal the slot's value terminal: a [`Witnessed`] carrier the producer built inside its witness
-    /// closure, naming its *foreign* reach. Fold the producing frame into that foreign-only witness —
-    /// the scope-reach seal at close, the pin a value born under the empty set (the brand-confined
-    /// alloc surface, or a region-pure [`resident`](Witnessed::resident)) relies on — and then enforce
-    /// the declared return: with no declared type the producer-folded carrier passes through; a
+    /// Seal the slot's value terminal. Fold the producing frame into the carrier's *foreign-only*
+    /// witness — the scope-reach seal that pins a value born under the empty set (the brand-confined
+    /// alloc surface) — then enforce the declared return: no declared type passes through; a
     /// declared-return re-stamp re-tags the value into the contract's home region via
     /// [`merge`](Witnessed::merge), re-sealed under that same witness (which pins `home` through its
-    /// `outer` chain). The fold is idempotent for a carrier that already names its dest frame, so
-    /// existing construction terminals seal unchanged. A `None` frame (a frameless / run producer) has
-    /// no frame to fold and seals as-is.
+    /// `outer` chain). The fold is idempotent for a carrier already naming its dest frame, so existing
+    /// construction terminals seal unchanged; a `None` frame (frameless / run producer) seals as-is.
     fn finalize_terminal<'o>(
         &self,
         carrier: Witnessed<CarriedFamily, FrameSet>,
@@ -66,41 +56,29 @@ impl NodeFinalize for KoanRuntime<'_> {
         frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
-        // A frameless / run producer carries no per-call return obligation (the run_loop frame-gates
-        // the contract to `None` here anyway) and no producer frame to fold: its backing already
-        // outlives the carrier, so the foreign-reach-only witness is the exact reach. Seal as-is.
+        // A frameless / run producer has no per-call return obligation (the contract is gated to
+        // `None`) and no producer frame to fold: its backing already outlives the carrier. Seal as-is.
         let Some(producer) = frame else {
             return Ok(carrier);
         };
-        // The scope-reach seal at close: fold the producing frame into the carrier's foreign-only
-        // witness — the pin that makes a value born under the empty set (the brand-confined alloc
-        // surface) storable. Applied before the pass-through / re-stamp split so both carry it: the
-        // re-stamp's `home_carrier` inherits the folded witness, keeping the re-homed value pinned.
-        // Idempotent for a carrier that already names its dest frame (producer == dest, subsumed), so
-        // the existing dest-witnessed construction terminals seal unchanged.
+        // Fold the producing frame in: the scope-reach seal that makes a value born under the empty set
+        // (the brand-confined alloc surface) storable. Applied before the pass-through / re-stamp split
+        // so both carry it; idempotent when the carrier already names its dest frame.
         let carrier = carrier.reseal_under(FrameSet::singleton(producer.storage_rc()));
-        // No declared return (or a non-`Resolved` FN-def carrier): pass through — the producer-folded
-        // witness is the exact reach, no asserted bundle.
+        // No declared return (or a non-`Resolved` FN-def carrier): the folded witness is the exact reach.
         let Some((declared, label, per_call)) = pull_declared_return(contract) else {
             return Ok(carrier);
         };
-        // Check the declared return at the merge brand, where the carrier value and the declared type
-        // — folded in from the contract's home region — meet at one `'b`. This is the only place a
-        // `&KType<'o>` and the lifetime-free carrier can be compared: `KType` is invariant in its
-        // lifetime, so a free-`'o` declared type and a branded carrier value cannot be compared
-        // outside a shared brand. The home region is a strict ancestor the carrier's witness already
-        // pins via its `outer` chain, so the union re-seals under the carrier's own witness
-        // (subsumption drops the home duplicate). The **object** channel coarsens/re-stamps into the
-        // home region (e.g. `List<Number>` through `:(LIST OF Any)`); the **type** channel checks but
-        // passes the value through unchanged — it never re-tags. A failed check is captured and raised
-        // after the fold (the discarded re-home is harmless).
+        // Check the declared return at the merge brand, where the carrier value and the home-region
+        // declared type meet at one `'b`. `KType` is invariant in its lifetime, so a free-`'o` declared
+        // type and the lifetime-free carrier can only be compared under a shared brand. The **object**
+        // channel coarsens/re-stamps into the home region; the **type** channel checks but passes the
+        // value through unchanged. A failed check is captured and raised after the fold.
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        // `home` and `declared` both live in the contract's home region, which the producer's own
-        // witness — folded by the merge just below — already pins via its `outer` chain. So bundle
-        // under the empty set and let the merge supply the pin: a within-step transient, immediately
-        // merged, whose result witness is identical (`merge(carrier.witness, ∅) == carrier.witness`).
+        // `home` and `declared` live in the home region the merge pins via the carrier's `outer` chain,
+        // so bundle under the empty set: `merge(carrier.witness, ∅) == carrier.witness`.
         let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::resident((home, declared));
         let mut mismatch: Option<KError> = None;
         let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
@@ -141,13 +119,10 @@ impl NodeFinalize for KoanRuntime<'_> {
     }
 }
 
-/// Label a `Done`-step **error** with its frame-gated return contract's trace frame — the callee's
-/// declared-return frame — and return it for a bare finalize. An error carries no value, so it needs
-/// no witness and no declared-return re-stamp (the value check / coarsen lives in
-/// [`finalize_terminal`](NodeFinalize::finalize_terminal), which errors never reach). A `None` frame
-/// (a frameless slot or the non-dying run frame) carries no per-call return obligation, so the error
-/// passes through unlabelled. Reads no scope: the contract rides the step open, witnessed by the cart
-/// `Rc`.
+/// Label a `Done`-step **error** with its return contract's trace frame and return it for a bare
+/// finalize. An error carries no value, so it needs no witness and no declared-return re-stamp (that
+/// check lives in [`finalize_terminal`](NodeFinalize::finalize_terminal), which errors never reach). A
+/// `None` frame carries no per-call return obligation, so the error passes through unlabelled.
 pub(in crate::machine::execute) fn finalize_error(
     error: KError,
     frame: Option<&Rc<CallFrame>>,
@@ -168,9 +143,7 @@ pub(in crate::machine::execute) fn finalize_error(
 
 /// Pull the declared return type off `contract` plus its diagnostic label and the `per_call` flag, or
 /// `None` when nothing is declared — no contract, or a `Function` whose signature return is
-/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature). [`finalize_terminal`] reads it
-/// so the value check can run *inside* the re-stamp `merge` (where the carrier value and the declared
-/// type meet at one brand).
+/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature).
 fn pull_declared_return<'o>(
     contract: Option<ReturnContract<'o>>,
 ) -> Option<(&'o KType<'o>, String, bool)> {

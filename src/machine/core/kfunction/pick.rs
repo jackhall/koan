@@ -11,12 +11,9 @@ use crate::machine::model::types::{KType, SignatureElement};
 use super::KFunction;
 
 /// Per-slot classification produced by [`KFunction::classify_for_pick`]:
-/// - `eager_indices`: `Some(indices)` iff the picked function is a *lazy candidate* (has at
-///   least one `KType::KExpression` slot bound by an `ExpressionPart::Expression`); the
-///   carried indices are the `Expression` parts in *non*-`KExpression` slots that must
-///   evaluate eagerly. `None` when the function isn't a lazy candidate — the scheduler
-///   then schedules every eager-shaped part (`Expression` / `ListLiteral` / `DictLiteral`)
-///   as a sub-Dispatch.
+/// - `eager_indices`: `Some(indices)` when the picked function is a *lazy candidate* — the
+///   carried indices are the eager `Expression` parts in *non*-`KExpression` slots. `None`
+///   when not a lazy candidate, so every eager-shaped part schedules as its own sub-Dispatch.
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots

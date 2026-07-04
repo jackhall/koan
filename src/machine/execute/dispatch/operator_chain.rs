@@ -1,19 +1,16 @@
 //! Operator-chain dispatch arm: resolve the operator group for a
-//! `Slot (Keyword Slot)+` chain, then hand off to the fold pre-pass.
+//! `Slot (Keyword Slot)+` chain.
 //!
 //! Recognition is structural and parse-cached (see
-//! [`crate::machine::model::ast::classify_dispatch_shape`]); this arm performs the
-//! *resolution* step — looking the chain's cached operator probe up in the per-scope
-//! operator registry, walked through the scope chain (innermost visible wins, like
-//! every other name; see [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
+//! [`crate::machine::model::ast::classify_dispatch_shape`]); this arm resolves the
+//! chain's cached operator probe against the per-scope operator registry, walked
+//! through the scope chain (innermost visible wins, like every other name; see
+//! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
 //!
 //! A miss — a cross-group operator mix, or an operator no module declared — surfaces a
-//! structured [`KErrorKind::DispatchFailed`]. A hit reaches the fold seam: the fold
-//! itself (precedence climb + nested binary sub-dispatch) is the follow-on increment,
-//! so the hit currently terminates with an explicit "not yet implemented" rather than
-//! a silent fallthrough. In production the registry is empty until the `OP` binder
-//! lands, so every chain misses and errors cleanly; the hit path is exercised only by
-//! test fixtures that register an `OperatorGroup`.
+//! structured [`KErrorKind::DispatchFailed`]. A hit reaches the fold seam (precedence
+//! climb + nested binary sub-dispatch), which is not yet implemented, so it terminates
+//! with an explicit error rather than a silent fallthrough.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -23,13 +20,11 @@ use crate::machine::{KError, KErrorKind};
 use super::ctx::SchedulerView;
 use super::Outcome;
 
-/// Resolve the chain's operator group via the cached probe and route to the fold
-/// seam. The probe is `Some` for every `OperatorChain` (the classifier guarantees it),
-/// so a `None` probe is a classification bug.
+/// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
+/// `None` probe is a classification bug.
 ///
-/// This handler issues no scheduler write — every path is a terminal — so it decides
-/// against a read-only [`SchedulerView`] and returns a [`Outcome::Done`]; the
-/// router applies it through [`KoanRuntime::apply_outcome`](super::super::runtime::KoanRuntime).
+/// Every path is terminal (no scheduler write), so this decides against a read-only
+/// [`SchedulerView`] and returns [`Outcome::Done`].
 pub(in crate::machine::execute) fn run<'step, 'b>(
     ctx: &SchedulerView<'step, '_>,
     s: &'b Scope<'b>,
@@ -39,17 +34,14 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
         .operator_probe()
         .expect("OperatorChain shape guarantees a cached operator probe");
     let chain = ctx.chain_deref();
-    // The resolved `group` is consumed transiently (`covers` / branch) — never placed in the
-    // returned `Outcome` — so no `'b -> 'step` re-anchor is needed.
     match s.resolve_operator_group_with_chain(probe, chain) {
         None => Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: undeclared_operator_reason(probe),
         }))),
         Some(group) => {
-            // A hit on a key whose probe operators aren't all members would be a
-            // registry-build bug (the powerset keys only name members), but guard it:
-            // a mismatch is a cross-group mix surfacing as a clean non-match.
+            // Guard against a registry-build bug: a hit whose probe operators aren't all
+            // members surfaces as a clean cross-group non-match rather than a wrong fold.
             let operators = chain_operators(expr);
             if !group.covers(&operators) {
                 return Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
@@ -57,7 +49,6 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                     reason: cross_group_reason(probe),
                 })));
             }
-            // Fold seam: the precedence climb + binary sub-dispatch is the follow-on.
             Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                 expr: expr.summarize(),
                 reason: "operator-chain folding not yet implemented".to_string(),

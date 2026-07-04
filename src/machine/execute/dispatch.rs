@@ -116,10 +116,8 @@ pub(super) fn resolve_name_part<'step>(
     }
 }
 
-/// Map a still-finalizing producer for a parked name onto a [`NameOutcome`]: a
-/// ready-but-errored producer surfaces its error, a ready-and-bound producer means the
-/// name finalized to a non-shadowing value (`Unbound`), a parking edge that would close a
-/// wake cycle is `Cycle`, and otherwise the name parks on the producer.
+/// Map a still-finalizing producer for a parked name onto a [`NameOutcome`]. A `Ready`
+/// producer means the name finalized to a non-shadowing value, hence `Unbound`.
 fn disposition_for_producer<'step>(
     scheduler: &Scheduler<KoanWorkload>,
     name: &str,
@@ -221,11 +219,9 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<TraceFrame>) -> KErr
 
 // ---------- Outcome constructors (the dispatch-currency → Outcome mapping) ----------
 
-/// Park the slot on `producers` (notify edges) and re-run its `resume` decide on wake — the
-/// closure-carrying `ParkSelf` shape every park-and-replay family uses. `carrier` is the parked
-/// expression's pre-rendered summary the deadlock report surfaces (`None` when the park carries no
-/// renderable form); rendering it here keeps the AST out of the scheduler. The producers are the
-/// to-wait set the decide already filtered.
+/// Park the slot on `producers` and re-run its `resume` decide on wake. `carrier` is the
+/// parked expression's pre-rendered summary for the deadlock report (`None` when the park
+/// carries no renderable form) — rendering it here keeps the AST out of the scheduler.
 pub(in crate::machine::execute) fn park_resume<'step>(
     producers: Vec<NodeId>,
     carrier: Option<String>,
@@ -355,8 +351,7 @@ pub(in crate::machine::execute) fn decide_with_presubs<'step>(
     pre_subs: Vec<(usize, NodeId)>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = expr.summarize();
-    // A birth decide waits on no deps and ignores the (empty) results slice; it runs on first poll,
-    // classifies, and routes. `ignore_results` adapts the decide closure to the unified `NodeContinuation`.
+    // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
     NodeWork::new(
         ResolvedDeps::new(),
         ignore_results(Box::new(move |view, idx| {

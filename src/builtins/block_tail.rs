@@ -14,36 +14,31 @@ use crate::machine::Scope;
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {
-    /// Tail-replace into the whole expression — no leading statements, no split (EVAL evaluates a
-    /// single quoted expression; splitting it would run a parenthesized group as a block).
+    /// Tail-replace the whole expression, no split: splitting a single quoted expression would run a
+    /// parenthesized group as a block.
     Single(KExpression<'a>),
-    /// Split into leading statements + a tail; the leading statements run as owned deps before the
-    /// tail continues (MATCH / TRY arms, USING).
+    /// Split into leading statements + a tail; the leading statements run as owned deps before the tail.
     Block(KExpression<'a>),
 }
 
 /// The block scope the tail runs in — what `block_entry` names and where a `seed` binds.
 pub(crate) enum BlockScope<'a> {
-    /// No lexical block push; the tail runs in the frame's own scope with the chain unchanged (EVAL).
+    /// No lexical block push; the tail runs in the frame's own scope with the chain unchanged.
     None,
-    /// The `FreshChild` frame's own child scope is the block (MATCH / TRY arms). The frame itself
-    /// becomes `block_entry`, and a `seed` binds into its scope through
+    /// The `FreshChild` frame's own child scope is the block. The frame itself becomes `block_entry`,
+    /// and a `seed` binds into its scope through
     /// [`CallFrame::with_scope`](crate::machine::CallFrame::with_scope).
     FrameOwn,
-    /// A caller-allocated overlay scope in a cart-ancestor region (USING under `Inherit`). Its `id`
-    /// becomes `block_entry`, and a `seed` binds into it directly.
+    /// A caller-allocated overlay scope in a cart-ancestor region. Its `id` becomes `block_entry`, and
+    /// a `seed` binds into it directly.
     Overlay(&'a Scope<'a>),
 }
 
-/// A step run against the block scope before the tail dispatches: MATCH / TRY bind `it`, USING folds
-/// the opened module's carrier onto the overlay, EVAL has none. `for<'b>` so it binds whether the
+/// A step run against the block scope before the tail dispatches. `for<'b>` so it binds whether the
 /// block scope arrives as a short `with_scope` borrow (`FrameOwn`) or the `'a` overlay (`Overlay`).
 pub(crate) type BlockSeed<'a> = Box<dyn for<'b> FnOnce(&Scope<'b>) + 'a>;
 
-/// Run a block and yield its last statement as the tail — the shared constructor. `frame_placement`
-/// is the cart policy (`FreshChild` mints a per-call frame; `Inherit` keeps the call-site cart);
-/// `block` is where the body binds; `seed` optionally primes that scope; `body` splits (or not) into
-/// leading statements + a tail; `contract` is the tail's declared return, if any.
+/// Run a block and yield its last statement as the tail — the shared constructor.
 pub(crate) fn block_tail<'a>(
     frame_placement: FramePlacement<'a>,
     block: BlockScope<'a>,

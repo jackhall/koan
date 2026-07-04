@@ -68,9 +68,8 @@ fn frameset_merge_keeps_unrelated() {
     assert!(merged.sole().is_none(), "unrelated regions both kept");
 }
 
-/// The single-owner `Rc<FrameStorage>` witness exposes exactly its own region — the `yoke` seam, now a
-/// total single-region type rather than a runtime narrowing of a set. A singleton `FrameSet` exposes
-/// its sole frame; the empty set exposes none.
+/// The single-owner `Rc<FrameStorage>` witness (the `yoke` seam) exposes exactly its own region. A
+/// singleton `FrameSet` exposes its sole frame; the empty set exposes none.
 #[test]
 fn single_owner_exposes_region_and_frameset_sole() {
     let root = FrameStorage::run_root();
@@ -82,9 +81,9 @@ fn single_owner_exposes_region_and_frameset_sole() {
     assert!(FrameSet::empty().is_empty());
 }
 
-/// `with_scope` opens the child scope at a `for<'b>` brand — the frame-side read folded onto `open`.
-/// A scalar copies out; a bind / lookup consumed in place stays inside the brand (the value is
-/// allocated at the same `'b` via the opened scope's own region), so nothing branded escapes.
+/// `with_scope` opens the child scope at a `for<'b>` brand. A scalar copies out; a bind / lookup
+/// consumed in place stays inside the brand (the value is allocated at the same `'b` via the opened
+/// scope's own region), so nothing branded escapes.
 #[test]
 fn with_scope_opens_child_scope_at_brand() {
     let region = FrameStorage::run_root();
@@ -184,8 +183,7 @@ fn call_frame_chained_outer_frame_walkable() {
     let region = FrameStorage::run_root();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
     let outer = CallFrame::new_test(run_scope, None);
-    // Build the inner frame parented on the outer frame's child scope, read at the brand. The
-    // returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
+    // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
     let inner =
         outer.with_scope(|outer_child| CallFrame::new_test(outer_child, Some(outer.storage_rc())));
     drop(outer);
@@ -336,8 +334,8 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
         "the per-call frame's storage must not strong-own its run-root escape target",
     );
     drop(run_root);
-    // `escapee` is still held here, yet the run root is gone — the old escape cycle would have kept
-    // it alive (the leak); without the stored back-edge it drops.
+    // `escapee` is still held here, yet the run root is gone — a stored child→run-root back-edge would
+    // keep it alive (a leak); without one it drops.
     assert!(
         run_root_weak.upgrade().is_none(),
         "run root drops once its own strong ref is released — the escaped storage holds no cycle",
@@ -345,10 +343,9 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
     drop(escapee);
 }
 
-/// Spike for the [`alloc_witnessed`](super::Region::alloc_witnessed) construction inversion: a value
-/// `yoke`d into a frame's region comes back bundled with that frame as its reach witness, co-located
-/// by construction. Read back after the original frame handle drops — the bundled witness is the sole
-/// owner of the region the carrier's reference points into. This is the region-pure / single-frame
+/// A value `yoke`d into a frame's region comes back bundled with that frame as its reach witness,
+/// co-located by construction. Read back after the original frame handle drops — the bundled witness
+/// is the sole owner of the region the carrier's reference points into. The region-pure / single-frame
 /// shape the object and type families' common case takes.
 #[test]
 fn alloc_witnessed_yokes_a_co_located_value() {
@@ -365,8 +362,8 @@ fn alloc_witnessed_yokes_a_co_located_value() {
     assert_eq!(got, 7.0);
 }
 
-/// Spike for the cross-region `merge` the construction inversion folds a *foreign* region-resident
-/// element with (a list/dict element borrowing into another frame's region). The foreign value is
+/// The cross-region `merge` folds a *foreign* region-resident element in (a list/dict element
+/// borrowing into another frame's region). The foreign value is
 /// `yoke`d in an unrelated frame; merging it into a carrier built here succeeds because `FrameSet` is
 /// a *set* witness — it represents the union of two unrelated regions (where a single-region witness
 /// returns `None`, cf. `merge_rejects_unrelated_carts` in `witnessed/tests.rs`). After both call
@@ -405,9 +402,9 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
 struct AggBuildFamily;
 crate::witnessed::reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
 
-/// Spike for the **aggregate** construction inversion: a list / dict / record built from several dep
-/// producers — the shape the object family folds with shipped verbs only (no new substrate
-/// primitive). The accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
+/// The **aggregate** construction fold: a list / dict / record built from several dep producers —
+/// the shape the object family folds with shipped verbs only (no new substrate primitive). The
+/// accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
 /// `Sealed` carrier is folded in with [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into),
 /// which re-anchors it at the shared brand, binds it into the cells, and re-seals under the union of
 /// every reached region (a `FrameSet` set witness — the multi-foreign case a single-region witness
@@ -601,8 +598,7 @@ fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
 /// A `KObject::KFunction` whose captured scope lives in `home`'s own region — a closure value genuinely
 /// reaching that per-call region, so dereferencing the returned `&KObject` (its inner `&KFunction`, or
 /// that function's captured scope) touches the region's memory. Both the function and its wrapping
-/// object land in `home`'s region. Built for the multi-region reach tests; the body is never run.
-/// Mirrors `alloc_local_kf` in the lift slate.
+/// object land in `home`'s region; the body is never run. Mirrors `alloc_local_kf` in the lift slate.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};

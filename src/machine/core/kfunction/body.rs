@@ -72,7 +72,7 @@ reattachable!(ContractFamily => ReturnContract<'r>);
 /// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free node
 /// `NodeFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`
 /// point into the cart's frame *outer* region (a strict ancestor — see
-/// `branch_walk::resolve_arm_return_contract` and `invoke`'s `Outcome::Continue` tail
+/// `branch_walk::resolve_arm_contract` and `invoke`'s `Outcome::Continue` tail
 /// construction), which the co-stored `cart: Rc<CallFrame>` keeps live via its `FrameStorage.outer`
 /// / escape chain; the cart is the liveness witness the caller holds across `reattach`. The
 /// `Function` / `Arm` discriminant is readable without a re-anchor for the chain-shape decision

@@ -6,11 +6,8 @@
 //! decision tree to an [`FnPlan`] with two terminal shapes, so the caller in
 //! `super::fn_def` reduces to a two-arm match.
 //!
-//! The FUNCTOR and anonymous-FN binders ride the same path, selected by the
-//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`:
-//! `Functor` flips the `KFunction::is_functor` carrier bit and gates the
-//! FUNCTOR-only return-type admissibility check; `Anonymous` (the `FN :{…}`
-//! record-schema binder) skips registration. No closure plumbing.
+//! The keyworded FN, FUNCTOR, and anonymous-FN binders ride the same path,
+//! selected by the [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
 
 use crate::machine::core::kfunction::action::Action;
 use crate::machine::core::kfunction::KFunction;
@@ -186,10 +183,6 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
-/// Variant used by the keyworded FN (`FnKind::Function`), the FUNCTOR builtin
-/// (`FnKind::Functor`), and the anonymous record-schema binder
-/// (`FnKind::Anonymous`).
-///
 /// `Functor` additionally validates a `Resolved` return type against
 /// [`KType::is_admissible_functor_return`] before the `KFunction` is registered;
 /// `Deferred` carriers ride the surface-form check at the FUNCTOR-binder site,
@@ -221,8 +214,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
-    // multi-token signature like `(a ADD b)`. An anonymous FN has no keyword,
-    // so `name` is `None` and registration is skipped below.
+    // multi-token signature like `(a ADD b)`.
     let name = elements.iter().find_map(|e| match e {
         SignatureElement::Keyword(s) => Some(s.clone()),
         _ => None,
@@ -245,9 +237,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame.
     let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
-    // An anonymous FN registers nothing — its only handle is the returned value
-    // (LET-bound or dropped into a function-typed slot). A keyworded FN / FUNCTOR
-    // registers under its lead keyword.
     if !matches!(kind, FnKind::Anonymous) {
         let name = match name {
             Some(n) => n,
@@ -280,19 +269,12 @@ pub(crate) fn fn_action<'a>(
     }
 }
 
-/// Schedule a `AwaitDeps` over `park_producers` plus any newly scheduled
+/// Schedule an `AwaitDeps` over `park_producers` plus any newly scheduled
 /// sub-Dispatches for parens-wrapped parameter types, then re-run the signature
 /// elaboration in the finish closure.
 ///
-/// Build the dep-finish as an `Action` — park producers become `DepRequest::Existing`, the
-/// optional return-type sub and the param-type subs become `DepRequest::Dispatch { OwnScope }`
-/// (in that order, so the `[park ++ rt? ++ subs]` result layout the `splice_layout` /
-/// `ReturnTypeExpr { results_pos }` indices assume holds), and the finish wraps the
-/// [`finalize_fn_with_kind`] result in `Action::Done`.
-///
-/// Splice protocol: each entry in `inputs.sub_dispatches` becomes a `DepRequest::Dispatch`;
-/// the finish closure splices each result into `signature_expr.parts[slot_idx]` as
-/// `Spliced(obj)` before re-running `parse_fn_param_list` against the now-final scope.
+/// Dep order is `[park ++ rt? ++ subs]`, so the owned indices `splice_layout` and
+/// `ReturnTypeExpr` record stay stable regardless of how many producers are parked.
 pub(crate) fn defer<'a>(
     signature_expr: KExpression<'a>,
     inputs: DeferredInputs<'a>,

@@ -43,8 +43,8 @@ macro_rules! try_action {
 /// during a step (the slot's cart — or a cart ancestor via the `FrameStorage.outer` chain, for a
 /// `YokedChild` overlay scope — is held by the step machinery for the whole step); or the **run
 /// root** (the run storage is held by the interpreter for the whole run). The single owner of this
-/// invariant's assertion; step-scoped callers should route through `SchedulerView::dest_frame` or
-/// `FinishCtx::frame` instead of upgrading directly.
+/// invariant's assertion; step-scoped callers should route through `SchedulerView::dest_frame` or a
+/// finish's `ctx.frame()` instead of upgrading directly.
 pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
     scope.region_owner().upgrade().expect(
         "a scope's region owner is held while the scope can run: its cart (or a cart ancestor) for the step, the run storage for the run root",
@@ -52,8 +52,7 @@ pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
 }
 
 /// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
-/// the args aren't a record or the named field is a type cell. Two lifetimes: the borrow (`'c`,
-/// `BodyCtx`'s) is shorter than the content (`'a`, the run).
+/// the args aren't a record or the named field is a type cell.
 pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObject<'a>> {
     match args {
         KObject::Record(fields, _) => fields.get(name).and_then(Held::as_object),
@@ -378,9 +377,9 @@ pub enum BodyPlacement<'a> {
     Overlay(&'a Scope<'a>),
 }
 
-/// Where a [`DepRequest::Dispatch`] attaches — collapses the `_here` / `_in_frame` / `_with_chain` zoo.
+/// Where a [`DepRequest::Dispatch`] attaches.
 pub enum DepPlacement<'a> {
-    /// The slot's own `NodeScope` (`add_dispatch_here`) — binders' type sub-dispatches.
+    /// The slot's own `NodeScope` (`dispatch_in_own_scope`) — binders' type sub-dispatches.
     OwnScope,
     /// A builtin-minted child scope (module/sig/recursive/using body), carried by reference. In a
     /// `AwaitDeps` a multi-statement body fans out one sub-dispatch per top-level statement

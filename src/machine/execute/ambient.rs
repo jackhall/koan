@@ -18,10 +18,8 @@ use super::nodes::NodePayload;
 use super::runtime::KoanRuntime;
 
 /// The ambient per-step context the driver carries while realizing a decided
-/// [`Outcome`](super::outcome::Outcome). Holds the active per-call frame, the slot's ping-pong
-/// reserve, the lazily-built run frame, the executing slot's opaque payload (scope handle + lexical
-/// chain), and whether that slot already carries a kept return contract. Concrete Koan types: the
-/// driver is the workload, so the erasure the scheduler core needs is unnecessary here.
+/// [`Outcome`](super::outcome::Outcome). Concrete Koan types: the driver is the workload, so the
+/// erasure the scheduler core needs is unnecessary here.
 #[derive(Default)]
 pub(in crate::machine::execute) struct AmbientContext {
     /// Active per-call cart (`Rc<CallFrame>`) of the slot currently being executed. See
@@ -35,9 +33,9 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// never `None` during a top-level step and a body's re-dispatch against its own scope is
     /// uniformly framed (Yoked) at every depth.
     run_frame: Option<Rc<CallFrame>>,
-    /// The executing slot's own opaque workload payload, installed per step (scope handle + lexical
-    /// chain). A body that re-dispatches *against its own scope*, or that needs the ambient chain,
-    /// reads this back through [`KoanRuntime::active_payload`]. `None` between slot steps.
+    /// The executing slot's opaque workload payload (scope handle + lexical chain), installed per
+    /// step. A body that re-dispatches *against its own scope*, or that needs the ambient chain,
+    /// reads it back through [`KoanRuntime::active_payload`]. `None` between slot steps.
     active_payload: Option<NodePayload>,
     /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
@@ -50,9 +48,8 @@ pub(in crate::machine::execute) struct AmbientContext {
     tail_reuse_count: usize,
 }
 
-/// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_payload`,
-/// and `active_reserve` swap that brackets each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute).
-/// Bookkeeping spine for the ping-pong reserve-frame rotation; see
+/// Save/restore of the per-step `active_frame`, `active_payload`, and `active_reserve`, bracketing
+/// each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute). See
 /// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute) struct SlotStepGuard {
     prev_frame: Option<Rc<CallFrame>>,
@@ -62,11 +59,9 @@ pub(in crate::machine::execute) struct SlotStepGuard {
     prev_reserve: Option<Rc<CallFrame>>,
 }
 
-/// The frames of a just-finished step, returned by [`KoanRuntime::exit_slot_step`]. Owns `prev_frame`
-/// — the slot's frame *at step end* (an in-step invoke may have swapped the ambient `active_frame`, so
-/// this returned value, not the ambient `active_frame`, is the authoritative source) — and the
-/// post-step reserve. The step's scope is opened at the step brand in `run_step`, so `PostStep` no
-/// longer carries the slot's payload.
+/// The frames of a just-finished step, returned by [`KoanRuntime::exit_slot_step`]: the slot's frame
+/// *at step end* plus the post-step reserve. An in-step invoke may have swapped the ambient
+/// `active_frame`, so this returned `prev_frame`, not the ambient `active_frame`, is authoritative.
 pub(in crate::machine::execute) struct PostStep {
     /// The slot's cart at step end. Always present: `enter_slot_step` installs the node's cart and
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
@@ -84,8 +79,6 @@ impl AmbientContext {
         self.active_frame.as_ref()
     }
 
-    /// Borrow the executing slot's opaque workload payload (scope handle + lexical chain), installed
-    /// per step by [`KoanRuntime::enter_slot_step`]. `None` between slot steps.
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
         self.active_payload.as_ref()
     }
@@ -110,18 +103,16 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Restore the values saved by [`Self::enter_slot_step`] and return the
-    /// [`PostStep`] token (post-step frame + reserve).
+    /// Restore the values saved by [`Self::enter_slot_step`] and return the [`PostStep`] token.
     ///
-    /// `post_step_reserve` carries the slot's reserve at step end. The Replace arm reads it to
+    /// `post_step_reserve` carries the slot's reserve at step end, which the Replace arm reads to
     /// decide rotation: with a new frame, the post-step reserve is two iterations old and gets
     /// dropped; without one, it rides along on the reinstalled node. An invoke that reused the
-    /// reserve via `acquire_tail_frame` already consumed it, so it reads back `None` there.
+    /// reserve via `acquire_tail_frame` already consumed it, so it reads back `None`.
     ///
-    /// This is the single boundary where the "every step runs against a cart" invariant is
-    /// asserted: `active_frame` is `Some` for the whole step (`enter_slot_step` installs the
-    /// node's non-optional cart; an invoke reuses the *reserve*, never the active cart, so nothing
-    /// empties it), so the `expect` cannot fire. `active_frame` itself stays `Option` because it is
+    /// The `expect` asserts the "every step runs against a cart" invariant: `enter_slot_step`
+    /// installs the node's non-optional cart and an invoke reuses the *reserve*, never the active
+    /// cart, so `active_frame` is `Some` for the whole step. It stays `Option` because it is
     /// legitimately `None` *between* steps.
     pub(in crate::machine::execute) fn exit_slot_step(&mut self, guard: SlotStepGuard) -> PostStep {
         let post_step_frame = std::mem::replace(&mut self.ambient.active_frame, guard.prev_frame);
@@ -136,9 +127,8 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Borrow the executing slot's opaque workload payload (scope handle + lexical chain), installed
-    /// per step by [`Self::enter_slot_step`]. The single accessor the workload reads its
-    /// name-resolution state back through. `None` between slot steps.
+    /// Borrow the executing slot's opaque workload payload — the accessor the workload reads its
+    /// name-resolution state (scope handle + lexical chain) back through. `None` between slot steps.
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
         self.ambient.active_payload()
     }

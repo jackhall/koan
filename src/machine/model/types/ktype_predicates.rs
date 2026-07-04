@@ -76,13 +76,9 @@ impl<'a> KType<'a> {
             // Record-value subtyping: width-superset + covariant depth (the dual of the
             // contravariant width-drop `param_record_more_specific` for function params).
             (Record(a), Record(b)) => record_value_more_specific(a, b),
-            // Function subtyping: contravariant params with width-subset, covariant
-            // return (see `param_record_more_specific`). A param the more-specific side
-            // doesn't declare is fine (width drop); a param it declares but the other
-            // side lacks makes them incomparable, so the helper's `keys()` guard returns
-            // `false`. The variant tags stay matched separately (KFunction never compares
-            // against KFunctor), but the shared `params`/`ret` shape lets both arms
-            // delegate to one helper.
+            // Function subtyping: contravariant params (width-subset), covariant return —
+            // see `param_record_more_specific`. KFunction and KFunctor never compare against
+            // each other; the shared `params`/`ret` shape lets both arms use one helper.
             (
                 KFunction {
                     params: pa,
@@ -290,9 +286,9 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            // A user-`UNION` value's `ktype()` is now a `Variant`, but a union-typed slot
-            // still admits every variant. A `TypeConstructor` (`Result`) value reports a
-            // `SetRef` / `ConstructorApply` and is handled by the identity fallback below.
+            // A user-`UNION` value's `ktype()` is a `Variant`, but a union-typed slot admits
+            // every variant. A `TypeConstructor` (`Result`) value reports a `SetRef` /
+            // `ConstructorApply`, handled by the identity fallback below.
             KType::SetRef { set, index } => match obj {
                 KObject::Tagged {
                     set: s2, index: i2, ..
@@ -308,11 +304,11 @@ impl<'a> KType<'a> {
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
     /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
     /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot when
-    /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type — including
-    /// a now-`Tagged`/`NewType`-classified nominal — while the module/sig wall keeps `Proper`
-    /// from admitting a module); `Any` by anything; a module/signature *value* slot by
-    /// structural identity. Other concrete slots compare against the `OfKind(Proper)` dispatch
-    /// identity a non-module/sig type carrier reports, so they admit no bare type value.
+    /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type, including a
+    /// `Tagged`/`NewType`-classified nominal, while the module/sig wall keeps `Proper` from
+    /// admitting a module); `Any` by anything; a module/signature *value* slot by structural
+    /// identity. Other concrete slots compare against the `OfKind(Proper)` dispatch identity a
+    /// non-module/sig type carrier reports, so they admit no bare type value.
     pub fn matches_type(&self, t: &KType<'a>) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a module / signature
         // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
@@ -464,8 +460,7 @@ impl<'a> KType<'a> {
     /// lifetimes), and the core [`accepts_cell`](Self::accepts_cell) delegates to after opening. The
     /// value is re-anchored to `self`'s `'a` for the same-lifetime [`accepts_carried`](Self::accepts_carried):
     /// the one cross-lifetime step `KType` invariance forces, the same lifetime-only cast
-    /// [`accepts_part`](Self::accepts_part) carries for a part. Removal tracked by the
-    /// structural-value-equality roadmap item.
+    /// [`accepts_part`](Self::accepts_part) carries for a part.
     pub(crate) fn accepts_resolved(&self, c: Carried<'_>) -> bool {
         // SAFETY: `Carried<'_>` and `Carried<'a>` share layout (the value channel is layout-invariant
         // in its lifetime). The read is synchronous and read-only — the value outlives the call and

@@ -7,11 +7,8 @@
 //! [`KError::to_tagged`](crate::machine::KError::to_tagged), or `_` (wildcard catching
 //! dispatcher-internal kinds without a public tag).
 //!
-//! `expr` is `KExpression` so the catch path can intercept evaluation — an eager
-//! slot would short-circuit through eager-subs dep-error propagation before `TRY`'s
-//! body ran. Wiring uses an `add_catch` slot: `<expr>` is sub-dispatched and a
-//! finish closure walks `<branches>` against the `Result`, dispatching the matched
-//! arm (per-call `CallFrame` for `it`) or re-raising on no-match.
+//! `expr` is `KExpression` so the catch path can intercept evaluation — an eager slot
+//! would short-circuit through eager-subs dep-error propagation before `TRY`'s body ran.
 
 use crate::machine::model::types::KKind;
 
@@ -21,9 +18,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::branch_walk::find_branch_body;
 use super::{arg, kw, sig};
 
-/// Watches `expr` in a fresh `child_under` body scope, then a `Catch` finish walks the arms
-/// against the `Result` and tail-replaces into the matched arm (per-call frame with `it` bound)
-/// carrying the `-> :T` `Arm` contract, re-raising on no match.
+/// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
+/// into the matched arm under the `-> :T` contract and re-raising on no match.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -40,13 +36,10 @@ pub fn body<'a>(
     let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
     let outer_frame = ctx.frame.map(|f| f.storage_rc());
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
-        // On `ok`, `it` is the bare success value; on error, the per-variant payload Struct
-        // unwrapped from `KError::to_tagged`'s Tagged carrier.
-        // TRY-WITH reads the watched value (relocated into the consumer region) to bind `it` and
-        // tail-replaces into the matched branch; it builds no object, so it ignores `ok.carrier`.
-        // Alongside the `it` value, capture the scrutinee's reach so the `it` binding stores it: on
-        // `ok`, the watched value's own carrier witness; on error, the freshly-built Tagged payload is
-        // region-pure (reaches nothing foreign), so the empty set.
+        // On `ok`, `it` is the bare success value and its carrier witness supplies the
+        // scrutinee reach the `it` binding stores. On error, `it` is the per-variant payload
+        // Struct unwrapped from `KError::to_tagged`; that Tagged is region-pure (reaches nothing
+        // foreign), so its reach is the empty set.
         let (tag, it_value, it_witness, original_err): (
             String,
             KObject<'a>,

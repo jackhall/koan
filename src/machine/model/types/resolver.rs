@@ -24,13 +24,10 @@ use super::recursive_set::{NominalMember, RecursiveSet};
 #[cfg(test)]
 mod tests;
 
-/// Outcome of resolving a `TypeIdentifier` to a `T` — the shared spine of the type-name
-/// resolution path. `Done` carries the resolved payload (an owned `KType` at the model layer, as
-/// `TypeResolution<KType>`; a region reference plus reach at the execute layer, as
-/// `TypeResolution<TypeHit>`); `Park` the producer `NodeId`s a still-finalizing referent waits
-/// on; `Unbound` the miss diagnostic. The `Park`/`Unbound` arms are payload-free, so a layer lifts
-/// the `Done` payload through [`Self::and_then_done`] while forwarding the other two unchanged — no
-/// hand-written per-layer re-wrap.
+/// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: model uses
+/// `TypeResolution<KType>`, execute uses `TypeResolution<TypeHit>`. `Park` carries the producer
+/// `NodeId`s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
+/// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
 pub enum TypeResolution<T> {
     Done(T),
@@ -39,9 +36,9 @@ pub enum TypeResolution<T> {
 }
 
 impl<T> TypeResolution<T> {
-    /// Transform the `Done` payload, which may itself resolve to a `Park` / `Unbound` — the
-    /// execute layer's finalize gate turns a `Done` into a `Park` when a referenced type is
-    /// still in flight. `Park` / `Unbound` forward unchanged.
+    /// Transform the `Done` payload, which may itself resolve to a `Park` / `Unbound` (the execute
+    /// layer's finalize gate turns a `Done` into a `Park` when a referenced type is still in
+    /// flight). `Park` / `Unbound` forward unchanged.
     pub fn and_then_done<U>(self, f: impl FnOnce(T) -> TypeResolution<U>) -> TypeResolution<U> {
         match self {
             TypeResolution::Done(payload) => f(payload),
@@ -89,12 +86,11 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 }
 
 /// Walk a `TypeIdentifier` against the elaborator's scope. Bare leaves route through the
-/// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
-/// `Scope::resolve` for the placeholder path, and finally the builtin-table fallback via
+/// threaded set first (recursive back-edge), then `resolve_type_with_chain`, then
+/// `resolve_with_chain` for the placeholder path, and finally the builtin-table fallback via
 /// [`KType::from_type_identifier`] so fixture scopes that skip builtin registration still
-/// resolve builtin names.
-/// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
-/// walk — they sub-Dispatch through the standalone dispatcher.
+/// resolve builtin names. Parameterized shapes sub-Dispatch through the standalone dispatcher,
+/// not this walk.
 pub fn elaborate_type_identifier<'a>(
     el: &mut Elaborator<'_, 'a>,
     t: &TypeIdentifier,
@@ -106,32 +102,27 @@ pub fn elaborate_type_identifier<'a>(
         return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
     }
     if let Some(set) = el.scope.nearest_recursive_set() {
-        // A bare leaf naming a member of the enclosing `RECURSIVE TYPES` block is a
-        // co-declared sibling (or self): lower to the same transient `RecursiveRef`
-        // back-edge, sealed to a `SetLocal` index at the member's finalize. This is the
-        // block's threading — it makes cross-references resolve independent of source
-        // order, with no forward placeholder. Checked before `resolve_type` so a member
-        // lowers to the back-edge rather than the set's pre-installed external `SetRef`.
+        // A bare leaf naming an enclosing `RECURSIVE TYPES` member is a co-declared sibling
+        // (or self): the block's threading makes cross-references resolve independent of source
+        // order. Checked before `resolve_type_with_chain` so a member lowers to the back-edge
+        // rather than the set's pre-installed external `SetRef`.
         if set.index_of(name).is_some() {
             return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
-        // A finalized type resolves directly.
         Some(NameLookup::Bound(kt)) => return TypeResolution::Done(kt.clone()),
-        // A *visible* type placeholder is an earlier-declared type still finalizing: park on
-        // its producer and re-elaborate when it terminalizes. A forward reference (a later
-        // sibling) is filtered out by the chain before reaching here — a position error, not a
-        // park. Mutual recursion across the cut uses a `RECURSIVE TYPES` block, threaded above.
+        // A visible placeholder is an earlier-declared type still finalizing: park on its
+        // producer and re-elaborate when it terminalizes. A forward reference is filtered by the
+        // chain before reaching here — a position error, not a park. Mutual recursion across the
+        // cut uses a `RECURSIVE TYPES` block, threaded above.
         Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }
-    // Not a type (finalized or in flight). Consult the value side only to sharpen the miss
-    // message: a name bound — or still binding — in the value language gets the layering
-    // diagnostic; an unknown name gets the unknown-name failure. The builtin-table fallback is
-    // reached through `KType::from_type_identifier` (the scopeless owner `resolve_for` also
-    // lowers through), so the `from_name` consult lives in one place; it is tried in both arms
-    // so fixture scopes that skip builtin registration still resolve builtin names.
+    // Not a type. Consult the value side only to sharpen the miss message: a name bound (or
+    // binding) in the value language gets the layering diagnostic, an unknown name the
+    // unknown-name failure. The builtin-table fallback via `from_type_identifier` is tried in
+    // both arms so fixture scopes that skip builtin registration still resolve builtin names.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
         Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
             match KType::<'a>::from_type_identifier(t) {
@@ -142,7 +133,6 @@ pub fn elaborate_type_identifier<'a>(
                 )),
             }
         }
-        // The plain miss reuses `from_type_identifier`'s `unknown type name` message verbatim.
         None => match KType::<'a>::from_type_identifier(t) {
             Ok(kt) => TypeResolution::Done(kt),
             Err(msg) => TypeResolution::Unbound(msg),
@@ -186,12 +176,12 @@ pub fn finalize_nominal_member<'a>(
     bind_index: crate::machine::core::BindingIndex,
 ) -> SealOutcome<'a> {
     // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type:
-    // - An existing `SetRef` whose member is still *pending* (unfilled) is the seal's
-    //   contribution for *this* declaration — reuse its set + index.
-    // - An existing `SetRef` whose member is filled, with the same `(scope_id, kind)`, is a
-    //   parallel finalize of *this* declaration — short-circuit on it (idempotent).
-    // - Any other existing `SetRef` is a genuine prior type of this name; mint a fresh
-    //   singleton so the install path below raises the `Rebind` a redeclaration deserves.
+    // - `SetRef` with a pending (unfilled) member: the seal's contribution for this
+    //   declaration — reuse its set + index.
+    // - `SetRef` with a filled member and matching `(scope_id, kind)`: a parallel finalize of
+    //   this declaration — short-circuit (idempotent).
+    // - any other `SetRef`: a genuine prior type of this name; mint a fresh singleton so the
+    //   install path below raises the `Rebind` a redeclaration deserves.
     let pre_installed = match scope
         .bindings()
         .lookup_type(name, None)
@@ -239,7 +229,7 @@ pub fn finalize_nominal_member<'a>(
     }
 }
 
-/// Outcome of [`finalize_nominal_member`].
+/// Outcome of the `build_schema` closure passed to [`finalize_nominal_member`].
 pub enum SchemaSealResult<'a> {
     /// The schema sealed cleanly.
     Ok(super::recursive_set::NominalSchema<'a>),

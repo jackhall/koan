@@ -58,8 +58,7 @@ impl LexicalFrame {
     }
 
     /// First frame's `index` whose `scope_id` matches, walking head-first. `None`
-    /// means no frame on this chain mentions that scope; the visibility predicate
-    /// reads `None` as "scope complete, every entry visible".
+    /// (no frame mentions that scope) reads as "scope complete, every entry visible".
     pub fn index_for(&self, scope_id: ScopeId) -> Option<usize> {
         let mut current: Option<&LexicalFrame> = Some(self);
         while let Some(frame) = current {
@@ -84,10 +83,8 @@ impl LexicalFrame {
 
 /// Body chain for a user-fn invoke. Walks `body_scope`'s lexical `outer` chain,
 /// stacks one frame per scope that also appears on the call-site chain, then
-/// prepends `(body_scope.id, body_index)` as the head.
-///
-/// Depth is bounded by source-level nesting, not call depth — tail-recursion
-/// through the same FN produces a structurally equal chain each iteration.
+/// prepends `(body_scope.id, body_index)` as the head. Depth is bounded by
+/// source-level nesting, not call depth (see module header).
 pub fn assemble_body_chain<'a>(
     body_scope: &Scope<'a>,
     call_site_chain: Rc<LexicalFrame>,

@@ -5,11 +5,11 @@
 //! admission instead of re-resolving each part per scope. Each scope is decided
 //! in walk order (innermost first): a visible in-flight pending overload parks
 //! the scope (it would shadow once finalized); a strict [`OverloadBucket::pick_strict`]
-//! Picks (tie ⇒ `Ambiguous`, or `Deferred` when an eager part may break it); a
+//! picks (tie ⇒ `Ambiguous`, or `Deferred` when an eager part may break it); a
 //! strict-Empty bucket runs one relaxed-admission pass per candidate that may
 //! park (forward-reference producers) or defer (eager parts). Only a *dead*
 //! unbound bare-name lean and total non-admission are post-walk terminals — a
-//! dead lean must not pre-empt an outer scope that could strict-Pick the bare
+//! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
 use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
@@ -92,11 +92,6 @@ impl<'step> Scope<'step> {
     /// test-only callers; production paths always supply the slot's chain.
     /// An empty `bare_outcomes` reverts admission to shape-only
     /// `arg.matches(part)`.
-    ///
-    /// Innermost scope with a terminal decision wins (lexical shadowing). A
-    /// dead unbound bare-name lean is the sole non-terminal — it is accumulated
-    /// and surfaced post-walk only if no scope terminated, so an outer scope can
-    /// still strict-Pick the bare name as an `:Identifier` / `:Any` slot.
     pub fn resolve_dispatch<'e>(
         &self,
         expr: &KExpression<'e>,
@@ -106,12 +101,9 @@ impl<'step> Scope<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         let key = expr.untyped_key();
-        // Builtin dispatch buckets are unshadowable — no user overload may join them — so a
-        // builtin bucket is authoritative. Consult the immutable root directly and return its
-        // terminal decision, skipping the user-chain walk for the hottest names. Only a
-        // `Terminal` decision short-circuits; a non-terminal root falls through to the full
-        // walk below unchanged, so precedence is preserved. The `idx == 0` gate keeps a
-        // synthetic root-position user bucket on the ordinary walk.
+        // Builtin dispatch buckets are unshadowable, so the root bucket is authoritative:
+        // consult it directly and short-circuit on a `Terminal` decision. A non-terminal
+        // root falls through to the full walk below unchanged, preserving precedence.
         let root = self.root_scope();
         if root.bindings().has_builtin_function(&key) {
             let cutoff = chain.and_then(|c| c.index_for(root.id));

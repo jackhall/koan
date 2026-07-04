@@ -29,11 +29,10 @@ pub enum FieldListOutcome<'a> {
     Err(String),
 }
 
-/// Walk-order feed of resolved sub-dispatch carriers for the dep-finish re-walk. The first
-/// walk records one sub-Dispatch per sigil field (in DFS order, descending into nested
-/// records); the re-walk replays the same traversal and [`pop`](ResultFeed::pop)s each
-/// resolved carrier back in. A concrete cursor (rather than a `dyn Iterator`) so it
-/// reborrows cleanly when a nested record recurses through the shared walker.
+/// Walk-order feed of resolved sub-dispatch carriers for the dep-finish re-walk: the
+/// re-walk replays the first walk's DFS traversal and [`pop`](ResultFeed::pop)s each
+/// carrier back in. A concrete cursor (not a `dyn Iterator`) so it reborrows cleanly when a
+/// nested record recurses through the shared walker.
 pub struct ResultFeed<'b, 'a> {
     results: &'b [Carried<'a>],
     pos: usize,
@@ -44,7 +43,6 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
         ResultFeed { results, pos: 0 }
     }
 
-    /// The next resolved carrier in walk order, or `None` once exhausted.
     fn pop(&mut self) -> Option<Carried<'a>> {
         let next = self.results.get(self.pos).copied();
         if next.is_some() {
@@ -56,17 +54,15 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 
 /// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
 /// scheduler-aware [`elaborate_type_identifier`], accumulating parking producers and
-/// pending sub-Dispatches across the whole walk so the caller can install one
-/// dep-finish for the merged set. `name_kind` selects which token shapes are valid as a
-/// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
-/// `IdentifierOrType` so capitalized type-parameter names like `Ty` are accepted).
+/// pending sub-Dispatches across the whole walk so the caller installs one dep-finish for
+/// the merged set. `name_kind` selects valid field-name tokens (STRUCT / UNION pass
+/// `Identifier`; FN / FUNCTOR pass `IdentifierOrType` to accept capitalized type-parameter
+/// names).
 ///
-/// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch,
-/// collected into `Pending.sub_dispatches`) and `Some(iter)` on the dep-finish re-walk
-/// (each sigil field consumes the next resolved `Carried::Type` from `iter` in DFS
-/// walk order instead of re-scheduling). Because the re-walk re-descends the field list
-/// in the same deterministic order the first walk produced the subs, positional
-/// consumption needs no slot index — and nested field-lists fall out for free.
+/// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch) and
+/// `Some` on the re-walk (each consumes the next resolved carrier in DFS order). The
+/// re-walk re-descends in the same deterministic order, so positional consumption needs no
+/// slot index and nested field-lists fall out for free.
 pub fn parse_typed_field_list_via_elaborator<'a>(
     expr: &KExpression<'a>,
     context: &str,
@@ -82,20 +78,19 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                 TypeResolution::Done(kt) => Ok(kt),
                 TypeResolution::Park(producers) => {
                     parks.extend(producers);
-                    // Placeholder; discarded under the Pending outcome. Lets the walk
-                    // continue so every parking producer is collected in one pass.
+                    // Placeholder, discarded under Pending; lets the walk collect every
+                    // parking producer in one pass.
                     Ok(KType::Any)
                 }
                 TypeResolution::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),
             },
-            // Sigils (`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch through the
-            // standalone dispatcher, which carries no SCC context, so self-references
-            // are pre-resolved to `RecursiveRef` carriers first — `STRUCT Tree =
-            // (children :(LIST OF Tree))` must lower Tree to `RecursiveRef("Tree")`.
+            // Sigils sub-Dispatch through the standalone dispatcher, which carries no SCC
+            // context, so self-references are pre-resolved to `RecursiveRef` carriers first
+            // (see `rewrite_threaded_self_refs`).
             ExpressionPart::SigiledTypeExpr(boxed) => {
                 match results.as_mut().and_then(|feed| feed.pop()) {
-                    // Re-walk: take the resolved carrier. The `Type`-arm check is the
-                    // single guard that a sub returning a value-by-expression is rejected.
+                    // Re-walk: the `Type`-arm is the single guard rejecting a sub that
+                    // resolved to a value-by-expression.
                     Some(Carried::Type(kt)) => Ok(kt.clone()),
                     Some(Carried::Object(other)) => Err(format!(
                         "{context} type for `{}` resolved to non-type value `{}`",
@@ -105,7 +100,6 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     None if results.is_some() => Err(format!(
                         "{context}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                     )),
-                    // First walk: pre-resolve threaded self-refs, then schedule a sub-Dispatch.
                     None => {
                         let rewritten = rewrite_threaded_self_refs(
                             boxed,
@@ -119,11 +113,9 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            // A nested record type `:{…}` elaborates *inline* through this same walker,
-            // sharing the elaborator (so a self-reference threads) and the `results`
-            // iterator (so a deferred inner sigil consumes in DFS order). Its own
-            // parks / sub-dispatches merge into the outer set — there is no sub-Dispatch
-            // of the record node itself, and nesting needs no slot bookkeeping.
+            // A nested record type `:{…}` elaborates inline through this same walker,
+            // sharing the elaborator and `results` feed; its parks / sub-dispatches merge
+            // into the outer set. No sub-Dispatch of the record node, no slot bookkeeping.
             ExpressionPart::RecordType(boxed) => {
                 match parse_typed_field_list_via_elaborator(
                     boxed,
@@ -146,8 +138,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            // A spliced cell is adopted into the elaborating scope (folding its reach) and its value
-            // read at that brand, then routed through type/non-type handling.
+            // A spliced cell is adopted into the elaborating scope (folding its reach),
+            // then routed through type/non-type handling.
             ExpressionPart::Spliced(cell) => match elaborator.scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Ok(kt.clone()),
                 Carried::Object(other) => Err(format!(
@@ -178,14 +170,13 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
     }
 }
 
-/// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
-/// into the standalone dispatcher, which carries no SCC threading context. Every bare
+/// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches into
+/// the standalone dispatcher, which carries no SCC threading context. Every bare
 /// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced` cell sealing a
-/// `RecursiveRef(name)` type carrier — the same type-side transport `:(LIST OF Number)`
-/// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
-/// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a
-/// scheduler-deadlock cycle. Recurses into nested sigils (`:(LIST OF (LIST OF Tree))`,
-/// `:(MAP Tree -> Number)`); non-threaded names are left for the dispatcher to resolve.
+/// `RecursiveRef(name)` carrier, so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree`
+/// to `RecursiveRef` instead of parking on its own placeholder and closing a
+/// scheduler-deadlock cycle. Recurses into nested sigils and records; non-threaded names
+/// are left for the dispatcher.
 fn rewrite_threaded_self_refs<'a>(
     inner: &KExpression<'a>,
     threaded: &HashSet<String>,
@@ -197,10 +188,9 @@ fn rewrite_threaded_self_refs<'a>(
         .map(|p| {
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    // The self-ref is minted fresh in this scope's region and spliced into a
-                    // *sub-dispatched* expression (it crosses into another node), so it travels as a
-                    // cell: a region-resident type carrier (the `RecursiveRef` is owned, reaching
-                    // nothing foreign — empty reach) sealed as its own unit.
+                    // Minted fresh in this scope's region and spliced into a sub-dispatched
+                    // expression (it crosses into another node), so it travels as a cell: a
+                    // region-resident type carrier reaching nothing foreign (empty reach).
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
                     ExpressionPart::Spliced(Sealed::seal(
                         scope.resident_type_carrier(obj, &FrameSet::empty()),
@@ -209,8 +199,8 @@ fn rewrite_threaded_self_refs<'a>(
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),
                 )),
-                // A `:{…}` nested inside a sub-dispatched sigil (`:(LIST OF :{x :Self})`)
-                // must thread its self-references the same way before it sub-dispatches.
+                // A record nested inside a sub-dispatched sigil must thread its
+                // self-references the same way.
                 ExpressionPart::RecordType(b) => ExpressionPart::RecordType(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),
                 )),

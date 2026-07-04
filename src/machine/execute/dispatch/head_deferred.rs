@@ -1,26 +1,19 @@
 //! Head-deferred dispatch shapes — `HeadDeferred` and `TypeHeadDeferred`.
 //!
-//! Both evaluate the head (`parts[0]`) first as a sub-dispatch, parking the slot
-//! on it as a single-dep [`NodeWork`](super::super::nodes::NodeWork);
-//! once it resolves, the finish applies the value to `parts[1..]` via the shared
-//! apply-a-callable tail. The `type_only` flag selects the admitted arm set:
+//! Both evaluate the head (`parts[0]`) first as an owned sub-dispatch and park the
+//! slot on it; once it resolves, the finish classifies the value and applies it to
+//! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
+//! the admitted arm set (see [`classify_head`]):
 //!
-//! - `HeadDeferred` (head is a nested `Expression`, `type_only = false`): the
-//!   resumed value may be a `KFunction` (functor or not — the `Function` arm), a
-//!   bound functor reached through the type table (`Carried::Type(KFunctor { body:
-//!   Some })` — also the `Function` arm), or a `Carried::Type(SetRef)` (the
-//!   `Constructor` arm); any other value is a non-callable `DispatchFailed`.
-//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): the
-//!   resumed value is admitted only when it is type-shaped — a constructible type
-//!   (`Constructor`), a functor value (`KFunction` with `is_functor`), or a
-//!   type-bound functor (`Carried::Type(KFunctor { body: Some })`), all via the
-//!   `Function` arm. A bare functor *annotation* (`KFunctor { body: None }`) is
-//!   type-shaped but not invocable and a plain function or non-type value surface
-//!   a type-shaped `TypeMismatch`.
+//! - `HeadDeferred` (`type_only = false`): admits any `KFunction`, a type-bound
+//!   functor, or a `SetRef` constructor.
+//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only
+//!   type-shaped heads — a `SetRef` constructor, a functor, or a type-bound functor.
+//!   A plain function or a bare functor annotation surfaces a type-shaped
+//!   `TypeMismatch`.
 //!
-//! The head sub-dispatch is an Owned edge; the park/resume pair mirrors
-//! `park_on_literal_producer` + the `type_call` head-placeholder resume, no new
-//! scheduler primitive.
+//! The park/resume pair mirrors `park_on_literal` + the `type_call`
+//! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -57,29 +50,23 @@ pub(in crate::machine::execute) fn initial_type<'step>(expr: KExpression<'step>)
     park_on_head(expr, head, true)
 }
 
-/// Park the slot on the head sub-dispatch as a single-dep [`Outcome::ParkThenContinue`]: the
-/// harness submits `head` as an owned dep and parks the slot on it. When the head resolves, the
-/// finish classifies it into a [`ResolvedCallable`] and hands off to the shared apply-a-callable
-/// tail — which may itself resolve, park, or error, so the re-park-capable dispatch finish (its
-/// `Outcome` may be a fresh `ParkThenContinue`/`Redispatch`) is required. A dep error short-circuits
-/// frameless in `run_step`, so the finish only runs on a resolved head.
+/// Park the slot on the head sub-dispatch. When the head resolves, the finish classifies it into a
+/// [`ResolvedCallable`] and hands off to the shared apply-a-callable tail; that tail may itself
+/// re-park, so the finish must be re-park-capable. A dep error short-circuits frameless in
+/// `run_step`, so the finish only runs on a resolved head.
 fn park_on_head<'step>(
     expr: KExpression<'step>,
     head: KExpression<'step>,
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-        // The head sub is the sole owned dep. Its reach — the regions its computed identity/callable
-        // points into — is named on its delivered carrier's witness. A `SetRef` constructor identity
-        // threads it to the construction finish (the operand names the identity's own region); a
-        // callable ignores it and rides the `adopt_sealed` below instead.
+        // `reach` names the regions the resolved identity points into: a `SetRef` constructor threads
+        // it to the construction finish (the operand names the identity's own region); a callable
+        // ignores it and rides the `adopt_sealed` below.
         let head_terminal = terminals.owned(0);
         let reach = head_terminal.carrier.witness().clone();
-        // The resolved callable survives across steps (the apply tail may itself re-park), and owned
-        // deps cascade-free on resolve. Adopt the head's carrier into the consumer scope: fold its
-        // reach so the callable's captured (foreign) environment outlives the application, and
-        // re-anchor the value at the scope brand — copy-free, the callable's survival is the carrier
-        // (its witness the pin), not a relocated copy in the consumer region.
+        // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
+        // environment outlives the application, and re-anchor the value at the consumer scope brand.
         let head = ctx.current_scope().adopt_sealed(&head_terminal.carrier);
         let callable = match classify_head(head, type_only, reach) {
             Ok(c) => c,
@@ -87,8 +74,6 @@ fn park_on_head<'step>(
         };
         apply_callable(ctx, callable, &expr)
     });
-    // The head sub is the only dep; a dep error propagates frameless (the resumed dispatch
-    // attaches its own frame), matching the resume behaviour.
     Await::on(Deps::from_owned([DepRequest::Dispatch {
         expr: head,
         placement: DepPlacement::OwnScope,
@@ -106,10 +91,8 @@ fn classify_head<'step>(
     reach: FrameSet,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
-        // A runtime value head. A functor (`KFunction` with `is_functor`) is admitted in
-        // both modes — its result is a module, so it is the type-shaped head's only
-        // function arm. A plain function is admitted only in the non-type mode; under
-        // `TypeHeadDeferred` it is the pruned arm and falls through to the `TypeMismatch`.
+        // A functor's result is a module, so it is admitted in both modes; a plain function is the
+        // pruned arm under `type_only` and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
             KObject::KFunction(f) if f.is_functor => Ok(ResolvedCallable::Function(f)),
             KObject::KFunction(f) if !type_only => Ok(ResolvedCallable::Function(f)),
@@ -123,11 +106,9 @@ fn classify_head<'step>(
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },
-        // A type-channel head. A bound functor carries its callable on
-        // `KType::KFunctor { body: Some(f) }`; calling it yields a module, so it is the
-        // `Function` arm in both modes. A bare `:(FUNCTOR …)` annotation (`body: None`) is
-        // type-shaped but not invocable; a `SetRef` is a constructor. Anything else is a
-        // type-shaped non-callable.
+        // A type-bound functor (`body: Some`) yields a module, so it is admitted in both modes; a
+        // bare functor annotation (`body: None`) is type-shaped but not invocable; a `SetRef` is a
+        // constructor.
         Carried::Type(kt) => match kt {
             KType::KFunctor { body: Some(f), .. } => Ok(ResolvedCallable::Function(f)),
             KType::KFunctor { body: None, .. } => Err(KError::new(KErrorKind::TypeMismatch {

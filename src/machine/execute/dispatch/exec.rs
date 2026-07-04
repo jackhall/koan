@@ -75,17 +75,11 @@ pub(super) fn invoke<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
 ) -> Outcome<'step> {
-    // The per-argument reach carriers, read back off the working expression's spliced cells (value
-    // and reach as one unit) — the body-facing projection derived from the cells themselves rather
-    // than threaded through a side-channel. A literal arg is region-pure and contributes no cell.
+    // Per-argument reach carriers, read back off the spliced cells (value and reach as one unit). A
+    // literal arg is region-pure and contributes no cell.
     let arg_carriers = carriers_from_expr(&working_expr);
-    // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
-    // through the shared `run_action` interpreter. Builtins run in the current frame, so the
-    // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
-        // Re-key the slot-indexed arg carriers onto their parameter names (the body reads them by
-        // name).
         let arg_carriers = map_arg_carriers(picked, arg_carriers);
         let args = match picked.bind_args(&working_expr, view.current_scope()) {
             Ok(args) => args,
@@ -94,9 +88,9 @@ pub(super) fn invoke<'step>(
         return run_action_builtin(view, f, args, arg_carriers);
     }
 
-    // Validate each argument against its declared parameter type before the (type-trusting)
-    // `bind_by_name`: a uniquely-picked call is admitted shape-only by dispatch, so a non-satisfying
-    // typed argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
+    // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
+    // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
+    // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
     if let Err(e) = picked.validate_call_args(&working_expr) {
         return Outcome::Done(Err(e));
     }
@@ -124,19 +118,17 @@ pub(super) fn invoke<'step>(
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
     // Deposit each delivered argument's reach into the per-call scope's reach-set — the same scope
     // `run_user_fn` deep-clones the arguments into and binds the parameters on — so every foreign
-    // region an argument borrows into outlives the call. This is the bind-precise fold replacing the
-    // relocate-seam reconstruction for user-fn object args (the seam wrongly folds into the caller
-    // scope). Each carrier names the consumer frame ∪ foreign reach, and `fold_reach` omits the home
-    // frame, so a region-pure argument deposits nothing while a multi-region one contributes every
-    // region it reaches. Slot identity is irrelevant here, so all carriers fold uniformly.
+    // region an argument borrows into outlives the call. Each carrier names the consumer frame ∪
+    // foreign reach, and `fold_reach` omits the home frame, so a region-pure argument deposits
+    // nothing while a multi-region one contributes every region it reaches. Slot identity is
+    // irrelevant, so all carriers fold uniformly.
     frame.with_scope(|call_scope| {
         for (_slot, carrier) in &arg_carriers {
             call_scope.fold_reach(carrier.witness());
         }
     });
-    // Re-key the arg carriers onto their parameter names so `run_user_fn` can store each parameter
-    // binding's reach from its own delivered carrier — the same carriers folded into the call-scope
-    // reach above, keyed to match `bound`.
+    // Re-key onto parameter names so `run_user_fn` stores each binding's reach from its own carrier,
+    // keyed to match `bound`.
     let named_carriers = map_arg_carriers(picked, arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
@@ -146,11 +138,10 @@ pub(super) fn invoke<'step>(
     let in_chain = view.in_contract_chain();
     match run_user_fn(picked, bound, &named_carriers, &exec_frame, in_chain) {
         ExecOutcome::Tail { leading, tail, ret } => {
-            // The return contract carried on the tail-replace. A resolved return reads its type off
-            // the signature; a deferred `Type` return carries the resolved per-call type — already
-            // re-homed into the captured-scope region by `run_user_fn` — as a `PerCall` contract,
-            // checked + stamped at the lift boundary like any FN return, so the body is a proper tail
-            // call and a recursive deferred body stays TCO-flat.
+            // A resolved return reads its type off the signature; a deferred `Type` return carries
+            // the per-call type (already re-homed into the captured-scope region by `run_user_fn`)
+            // as a `PerCall` contract, checked + stamped at the lift boundary like any FN return, so
+            // a recursive deferred body stays TCO-flat.
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked),
                 PerCallReturn::Resolved(ret_ref) => ReturnContract::PerCall {
@@ -158,9 +149,9 @@ pub(super) fn invoke<'step>(
                     ret: ret_ref,
                 },
             };
-            // The frame is already the slot's installed cart (the producer's `ReuseReserve`), so the
-            // tail re-enters it with `Inherit` — re-installing would clobber the ping-pong reserve —
-            // and the block entry carries it so the lowering fans any leading statements into it.
+            // The frame is already the slot's installed cart, so the tail re-enters it with
+            // `Inherit` — re-installing would clobber the ping-pong reserve — and the block entry
+            // carries it so the lowering fans any leading statements into it.
             super::super::runtime::run_action(Action::Tail {
                 leading: leading.into_iter().map(|e| (*e).clone()).collect(),
                 tail: tail.clone(),
@@ -175,10 +166,10 @@ pub(super) fn invoke<'step>(
             tail,
         } => {
             // First-call deferred `Expression` return: the leading body statements and the
-            // return-type expression run as body-chain siblings in the installed cart, and the
-            // lowering's finish reads the last result — the resolved type — into a `PerCall`
-            // contract before tail-replacing into the body terminal, a proper tail call, so the
-            // recursion (subsequent calls skip resolution) stays TCO-flat.
+            // return-type expression run as body-chain siblings in the installed cart; the
+            // lowering's finish reads the last result (the resolved type) into a `PerCall` contract
+            // before tail-replacing into the body terminal, so the recursion — subsequent calls skip
+            // resolution — stays TCO-flat.
             let mut statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
             statements.push(type_expr.clone());
@@ -194,10 +185,9 @@ pub(super) fn invoke<'step>(
     }
 }
 
-/// Read each spliced cell back off the working expression as its `(slot, carrier)` pair — one
-/// delivery per argument, the body-facing projection derived from the cells themselves rather than a
-/// side-channel. A literal part carries no cell (region-pure, "no entry = no foreign reach"); a
-/// `duplicate` per cell leaves the working expression's cells intact for the bind that reads them.
+/// Read each spliced cell back off the working expression as its `(slot, carrier)` pair. A literal
+/// part carries no cell (region-pure, "no entry = no foreign reach"); `duplicate` leaves the working
+/// expression's cells intact for the bind that reads them.
 fn carriers_from_expr<'step>(
     working_expr: &KExpression<'step>,
 ) -> Vec<(usize, Sealed<CarriedFamily, FrameSet>)> {
@@ -212,11 +202,9 @@ fn carriers_from_expr<'step>(
         .collect()
 }
 
-/// Re-key the delivered arg carriers — indexed by their working-expr part slot — onto the parameter
-/// name the builtin body reads. A committed call's parts line up 1:1 with `picked`'s signature
-/// elements (`validate_call_args` enforces it), so the element at a carrier's slot names its
-/// parameter. Only spliced / bound-name args carry a carrier; a scalar-literal arg is region-pure and
-/// simply has no entry, which the body reads as "no foreign reach".
+/// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
+/// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
+/// carrier's slot names its parameter. A region-pure arg has no entry, read as "no foreign reach".
 fn map_arg_carriers<'step>(
     picked: &KFunction<'step>,
     arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
@@ -230,10 +218,10 @@ fn map_arg_carriers<'step>(
     record
 }
 
-/// Lower an action-harness builtin: wrap its owned `args` record as the `KObject::Record` the
-/// `BodyCtx` exposes, build the read-only `BodyCtx`, call the `ActionFn`, then interpret the
-/// returned `Action` through the shared `run_action`. `arg_carriers` are the per-parameter reach
-/// carriers (a value-embedding body folds / merges the one it embeds; an absent entry is region-pure).
+/// Lower an action-harness builtin: expose its owned `args` as the `BodyCtx`'s `KObject::Record`,
+/// call the `ActionFn`, then interpret the returned `Action` through the shared `run_action`.
+/// `arg_carriers` are the per-parameter reach carriers (a value-embedding body folds / merges the
+/// one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
@@ -243,8 +231,6 @@ fn run_action_builtin<'step>(
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::KObject;
 
-    // `bind_args` already produced a fresh, owned `Held` record — move it straight into the
-    // region-allocated `KObject::Record` the read-only `BodyCtx` exposes.
     let args_obj: &'step KObject<'step> = view
         .current_scope()
         .brand()
@@ -267,10 +253,10 @@ fn run_action_builtin<'step>(
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`
-/// part contributes its carried value, a literal is resolved into the run region, and keyword parts
-/// (the signature's own literals) contribute nothing. Returns `None` if a value part is neither
-/// spliced nor a literal — unreachable by construction (the bind sites resolve value parts first),
-/// which the caller surfaces as a diagnostic.
+/// part contributes its carried value, a literal resolves into the run region, keyword parts
+/// contribute nothing. Returns `None` if a value part is neither spliced nor a literal — unreachable
+/// by construction (the bind sites resolve value parts first), which the caller surfaces as a
+/// diagnostic.
 fn extract_carried_args<'step>(
     view: &SchedulerView<'step, '_>,
     working_expr: &KExpression<'step>,
@@ -279,13 +265,13 @@ fn extract_carried_args<'step>(
     for part in &working_expr.parts {
         match &part.value {
             ExpressionPart::Keyword(_) => {}
-            // A spliced cell is adopted into the call scope: its reach folds into the scope and its
-            // value re-anchors at `'step`, copy-free, so the argument survives the call as its carrier.
-            // `view.current_scope()` *is* the call scope here — the run loop opens each step's scope
-            // from the Continue-installed cart — so the fold never lands in the caller's scope.
+            // Adopt the spliced cell into the call scope: its reach folds in and its value re-anchors
+            // at `'step` copy-free. `view.current_scope()` *is* the call scope (the run loop opens
+            // each step's scope from the Continue-installed cart), so the fold never lands in the
+            // caller's scope.
             ExpressionPart::Spliced(cell) => args.push(view.current_scope().adopt_sealed(cell)),
-            // A literal value part isn't `Spliced`-spliced; resolve it into the run region now
-            // (mirrors `literal_pass_through`) so it joins the args as a `'step` `Carried`.
+            // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
+            // the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {
                 let object = view
                     .current_scope()
