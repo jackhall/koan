@@ -346,12 +346,12 @@ pub(crate) fn defer<'a>(
                     terminal.value.ktype().name(),
                 )))));
             }
-            // A surviving copy: the spliced type must live in the consumer region because owned
-            // deps cascade-free on resolve, so the producer's region may be gone by the time the
-            // re-elaborated signature reads it. The copy-free carrier-carrying form is the
-            // `carrier-carrying-spliced-parts` roadmap item.
-            let value = terminal.relocate(fctx.scope.brand());
-            spliced_parts[slot_idx].value = ExpressionPart::Spliced(value);
+            // The resolved type slot travels as its producer's own sealed carrier — value and reach
+            // as one unit — opened where the signature is assembled (`parse_fn_param_list` adopts it
+            // through the elaborator's scope). The early-error check above reads `terminal.value`,
+            // still delivered at the step brand; the carrier is the survival, not a relocated copy.
+            spliced_parts[slot_idx].value =
+                ExpressionPart::SplicedSealed(terminal.carrier.duplicate());
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

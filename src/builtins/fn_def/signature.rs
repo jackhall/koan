@@ -142,6 +142,28 @@ pub(crate) fn parse_fn_param_list<'a>(
                             other.summarize(),
                         ));
                     }
+                    Some(ExpressionPart::SplicedSealed(cell)) => {
+                        // The resolved type slot arrives as a carrier; adopt it into the elaborating
+                        // scope (folding its reach) and read it at that brand where the signature is
+                        // assembled, then route the same type/non-type handling as a bare splice.
+                        match elaborator.scope.adopt_sealed(cell) {
+                            Carried::Type(kt) => {
+                                elements.push(SignatureElement::Argument(Argument {
+                                    name: name.clone(),
+                                    ktype: kt.clone(),
+                                }));
+                                i += 2;
+                            }
+                            other => {
+                                return ParamListOutcome::Err(format!(
+                                    "FN signature parameter `{name}` type slot resolved to a \
+                                     non-type value `{}` (expected a type expression like \
+                                     `:Number` or `:(LIST OF Str)`)",
+                                    other.summarize(),
+                                ));
+                            }
+                        }
+                    }
                     _ => {
                         return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` requires a `:<Type>` annotation \
