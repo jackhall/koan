@@ -342,70 +342,39 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
-    /// literals admit shape-only (element types unknown until evaluation); evaluated
-    /// containers compare their memoized carried type against the slot via
-    /// `satisfied_by` — pure type-level, no element walk. Non-satisfying containers
-    /// fall through the scope walk rather than failing the bind.
-    pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
-        // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
-        // layout (the lifetime is phantom for a structural match); `part` is only read to compare
-        // against `self` — never mutated, no borrow escapes. Coercing once here lets the body's
-        // same-lifetime comparisons (`== self`, `satisfied_by`, `Rc::ptr_eq`) stand unchanged.
-        // Removal tracked by the structural-value-equality roadmap item (a lifetime-agnostic
-        // `KType` / part comparison).
-        let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
+    /// Per-value admissibility for a resolved [`Carried`] argument — the same-lifetime core the
+    /// spliced arms of [`accepts_part`] delegate to, and the classifier a spliced cell opens against
+    /// at its own brand. `self` and `c` share `'a`, so every comparison is a same-lifetime check
+    /// (`== self`, `satisfied_by`, `Rc::ptr_eq`); a differently-branded value is re-anchored to the
+    /// slot type's brand before it reaches here. "Dispatch trusts the carried element type": a
+    /// container's memoized carried `KType` is read via `satisfied_by`, never by walking its contents.
+    pub fn accepts_carried(&self, c: Carried<'a>) -> bool {
         match self {
             KType::Any => true,
-            KType::Number => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Number(_))
-                    | ExpressionPart::Spliced(Carried::Object(KObject::Number(_)))
-            ),
-            KType::Str => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::String(_))
-                    | ExpressionPart::Spliced(Carried::Object(KObject::KString(_)))
-            ),
-            KType::Bool => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Boolean(_))
-                    | ExpressionPart::Spliced(Carried::Object(KObject::Bool(_)))
-            ),
-            KType::Null => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Null)
-                    | ExpressionPart::Spliced(Carried::Object(KObject::Null))
-            ),
-            KType::List(elem) => match part {
-                ExpressionPart::ListLiteral(_) => true,
-                ExpressionPart::Spliced(Carried::Object(KObject::List(_, carried))) => {
-                    elem.satisfied_by(carried)
+            KType::Number => matches!(c, Carried::Object(KObject::Number(_))),
+            KType::Str => matches!(c, Carried::Object(KObject::KString(_))),
+            KType::Bool => matches!(c, Carried::Object(KObject::Bool(_))),
+            KType::Null => matches!(c, Carried::Object(KObject::Null)),
+            // Evaluated container: compare the memoized carried element/field type against the slot
+            // via `satisfied_by` — pure type-level, no element walk.
+            KType::List(elem) => match c {
+                Carried::Object(KObject::List(_, carried)) => elem.satisfied_by(carried),
+                _ => false,
+            },
+            KType::Dict(k_ty, v_ty) => match c {
+                Carried::Object(KObject::Dict(_, carried_k, carried_v)) => {
+                    k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
                 }
                 _ => false,
             },
-            KType::Dict(k_ty, v_ty) => match part {
-                ExpressionPart::DictLiteral(_) => true,
-                ExpressionPart::Spliced(Carried::Object(KObject::Dict(
-                    _,
-                    carried_k,
-                    carried_v,
-                ))) => k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v),
-                _ => false,
-            },
-            // Mirrors the List/Dict split: an unevaluated record literal admits
-            // shape-only (field types unknown until evaluation, so two record-typed
-            // overloads tie and defer-then-reevaluate); an evaluated record compares its
-            // memoized field-type record against the slot via `satisfied_by`.
-            KType::Record(_) => match part {
-                ExpressionPart::RecordLiteral(_) => true,
-                ExpressionPart::Spliced(Carried::Object(KObject::Record(_, carried))) => {
+            KType::Record(_) => match c {
+                Carried::Object(KObject::Record(_, carried)) => {
                     self.satisfied_by(&KType::Record(carried.clone()))
                 }
                 _ => false,
             },
-            KType::KFunction { params, ret } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
+            KType::KFunction { params, ret } => match c {
+                Carried::Object(KObject::KFunction(f)) => {
                     if f.is_functor {
                         return false;
                     }
@@ -413,8 +382,8 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::KFunctor { params, ret, .. } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::KFunction(f))) => {
+            KType::KFunctor { params, ret, .. } => match c {
+                Carried::Object(KObject::KFunction(f)) => {
                     if !f.is_functor {
                         return false;
                     }
@@ -422,56 +391,40 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-            KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
-            KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
-            KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
-            // Type-accepting slot, **type-channel-only**, by shallow kind via `kind_of`
-            // subsumption. A raw parser type token is a proper type name, admitted only for
-            // `Proper` / `Any`. A first-class type value is admitted iff the slot kind
-            // subsumes the value's `kind_of` — so `Proper` / `Any` take any non-module /
-            // non-signature type (incl. a `Tagged` / `NewType` / `TypeConstructor` nominal),
-            // `Module` / `Signature` take only their own carriers, and a nominal-kind slot
-            // takes only its own family. `kind_of(Module) == Module` keeps the module/sig wall
-            // automatic — `OfKind(Proper)` never admits a module, so a chained `[ATTR <m>
-            // <field>]` call cannot tie between `body_module` and `body_type_lhs`.
-            KType::OfKind(k) => match part {
-                ExpressionPart::Type(_) => matches!(k, KKind::ProperType | KKind::AnyType),
-                ExpressionPart::Spliced(Carried::Type(ty)) => k.admits(ty.kind_of()),
-                _ => false,
-            },
-            // Strict `(set ptr, index)` equality is the per-declaration identity check for a
-            // sealed nominal type — `obj.ktype()` yields a `SetRef` whose `PartialEq` keys on
-            // the shared allocation and index. A user-`UNION` value reports a `Variant`, so a
-            // union-typed slot admits any variant of that union explicitly.
-            KType::SetRef { set, index } => match part {
-                ExpressionPart::Spliced(Carried::Object(KObject::Tagged {
-                    set: s2,
-                    index: i2,
-                    ..
-                })) if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
-                ExpressionPart::Spliced(obj) => &obj.ktype() == self,
-                _ => false,
-            },
-            // A variant slot admits exactly its own tagged values via `(set, index, tag)`
-            // identity.
-            KType::Variant { .. } => {
-                matches!(part, ExpressionPart::Spliced(obj) if &obj.ktype() == self)
+            // Part-shape-only slots (identifier / expression / type-expr / record-type) admit a
+            // parser part shape, never a resolved value.
+            KType::Identifier | KType::KExpression | KType::SigiledTypeExpr | KType::RecordType => {
+                false
             }
-            KType::Module { .. } => matches!(
-                part,
-                ExpressionPart::Spliced(obj) if obj.ktype() == *self
-            ),
-            KType::AbstractType { .. } => matches!(
-                part,
-                ExpressionPart::Spliced(obj) if obj.ktype() == *self
-            ),
-            // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot
-            // check). Unascribed source modules carry an empty `compatible_sigs` and never
-            // match; they must pass through `:|` / `:!` first. A signature *value* is
-            // admitted by the `OfKind(Signature)` wildcard above, never here.
-            KType::Signature { sig, pinned_slots } => match part {
-                ExpressionPart::Spliced(Carried::Type(KType::Module { module: m, .. })) => {
+            // Type-accepting slot, type-channel-only, by shallow kind via `kind_of` subsumption: a
+            // first-class type value is admitted iff the slot kind subsumes the value's `kind_of`, so
+            // `Proper` / `Any` take any non-module / non-signature type, `Module` / `Signature` take
+            // only their own carriers, and a nominal-kind slot only its own family. An object value
+            // reports a non-type `kind_of` and is refused.
+            KType::OfKind(k) => match c {
+                Carried::Type(ty) => k.admits(ty.kind_of()),
+                _ => false,
+            },
+            // Strict `(set ptr, index)` equality is the per-declaration identity check for a sealed
+            // nominal type — `ktype()` yields a `SetRef` whose `PartialEq` keys on the shared
+            // allocation and index. A user-`UNION` value reports a `Variant`, so a union-typed slot
+            // admits any variant of that union via the `ktype()` fallback.
+            KType::SetRef { set, index } => match c {
+                Carried::Object(KObject::Tagged {
+                    set: s2, index: i2, ..
+                }) if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
+                _ => &c.ktype() == self,
+            },
+            // A variant slot admits exactly its own tagged values via `(set, index, tag)` identity.
+            KType::Variant { .. } => &c.ktype() == self,
+            KType::Module { .. } => c.ktype() == *self,
+            KType::AbstractType { .. } => c.ktype() == *self,
+            // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot check).
+            // Unascribed source modules carry an empty `compatible_sigs` and never match; they must
+            // pass through `:|` / `:!` first. A signature *value* is admitted by the
+            // `OfKind(Signature)` wildcard above, never here.
+            KType::Signature { sig, pinned_slots } => match c {
+                Carried::Type(KType::Module { module: m, .. }) => {
                     if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
@@ -487,25 +440,83 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef`
-            // is sealed away before dispatch, and `SetLocal` only appears inside a member's
-            // schema (reached by navigation, which carries the ambient set).
-            // Transient: consumed by `Scope::resolve_type_identifier` before reaching a real slot.
+            // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef` is sealed
+            // away before dispatch, and `SetLocal` only appears inside a member's schema.
             KType::RecursiveRef(_) | KType::Unresolved(_) => true,
             KType::SetLocal(_) => false,
-            // A whole-set handle names a group of types, not a value type — it admits no
-            // argument; the `RECURSIVE TYPES` group name is a reserved value-language seam.
+            // A whole-set handle names a group of types, not a value type — it admits no argument.
             KType::RecursiveGroup(_) => false,
-            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing
-            // argument slot, so it admits nothing on its own.
+            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing argument slot.
             KType::DeferredReturn(_) => false,
-            // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`
-            // `ktype()`, so admit only a `Spliced(Carried::Type(_))` with structurally-equal
-            // inner `KType`.
-            KType::ConstructorApply { .. } => match part {
-                ExpressionPart::Spliced(Carried::Type(kt)) => *kt == self,
+            // Meta-type path: no runtime carrier synthesizes a `ConstructorApply` `ktype()`, so admit
+            // only a `Carried::Type` with structurally-equal inner `KType`.
+            KType::ConstructorApply { .. } => match c {
+                Carried::Type(kt) => kt == self,
                 _ => false,
             },
+        }
+    }
+
+    /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
+    /// literals admit shape-only (element types unknown until evaluation); a resolved
+    /// value part ([`ExpressionPart::Spliced`]) classifies through the same-lifetime
+    /// [`accepts_carried`](Self::accepts_carried). Non-satisfying containers
+    /// fall through the scope walk rather than failing the bind.
+    pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
+        // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
+        // layout (the lifetime is phantom for a structural match); `part` is only read to compare
+        // against `self` — never mutated, no borrow escapes. Coercing once here lets the body's
+        // same-lifetime comparisons (`== self`, `satisfied_by`, `Rc::ptr_eq`) stand unchanged.
+        // Removal tracked by the structural-value-equality roadmap item (a lifetime-agnostic
+        // `KType` / part comparison).
+        let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
+        // A resolved sub-result classifies through the same-lifetime `accepts_carried`, so the
+        // value-shaped admission logic lives in the one predicate the cell-open path also routes.
+        if let ExpressionPart::Spliced(c) = part {
+            return self.accepts_carried(*c);
+        }
+        match self {
+            KType::Any => true,
+            KType::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
+            KType::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
+            KType::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
+            KType::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
+            // An unevaluated container literal admits shape-only (element types unknown until
+            // evaluation, so two container-typed overloads tie and defer-then-reevaluate).
+            KType::List(_) => matches!(part, ExpressionPart::ListLiteral(_)),
+            KType::Dict(_, _) => matches!(part, ExpressionPart::DictLiteral(_)),
+            KType::Record(_) => matches!(part, ExpressionPart::RecordLiteral(_)),
+            // Function / functor slots admit no parser part shape — only a resolved value, handled
+            // above by `accepts_carried`.
+            KType::KFunction { .. } | KType::KFunctor { .. } => false,
+            KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
+            KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
+            KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
+            KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
+            // A raw parser type token is a proper type name, admitted only for `Proper` / `Any`; a
+            // first-class type *value* reaches `accepts_carried` above.
+            KType::OfKind(k) => match part {
+                ExpressionPart::Type(_) => matches!(k, KKind::ProperType | KKind::AnyType),
+                _ => false,
+            },
+            // The nominal / module / signature / constructor slots classify only resolved values
+            // (via `accepts_carried`); no parser part shape satisfies them.
+            KType::SetRef { .. }
+            | KType::Variant { .. }
+            | KType::Module { .. }
+            | KType::AbstractType { .. }
+            | KType::Signature { .. }
+            | KType::ConstructorApply { .. } => false,
+            // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef` is
+            // sealed away before dispatch (consumed by `Scope::resolve_type_identifier`), and
+            // `SetLocal` only appears inside a member's schema.
+            KType::RecursiveRef(_) | KType::Unresolved(_) => true,
+            KType::SetLocal(_) => false,
+            // A whole-set handle names a group of types, not a value type — it admits no argument;
+            // the `RECURSIVE TYPES` group name is a reserved value-language seam.
+            KType::RecursiveGroup(_) => false,
+            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing argument slot.
+            KType::DeferredReturn(_) => false,
         }
     }
 }

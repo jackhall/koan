@@ -656,6 +656,27 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         Sealed { inner: witnessed }
     }
 
+    /// Recover the bundled [`Witnessed`] — the exact inverse of [`seal`](Self::seal), a field move
+    /// that consumes the seal. Lets a dormant slot value re-enter circulation as its producer's own
+    /// carrier (a spliced single part becoming a slot terminal) rather than being re-wrapped by
+    /// pairing the read-back value with a freshly-asserted witness — strictly better witnessing.
+    /// Adds no `unsafe`: the carrier stays erased through the move; only a later accessor re-anchors.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+    /// use workgraph::witnessed::{Sealed, Witnessed};
+    ///
+    /// let cart = Cart(vec![7]);
+    /// let sealed: Sealed<RefFamily, Cart> =
+    ///     Sealed::seal(Witnessed::yoke(cart, |region| &region[0]));
+    /// // Unseal recovers the carrier; the value reads back unchanged.
+    /// let witnessed = sealed.unseal();
+    /// assert_eq!(witnessed.with(|r| **r), 7);
+    /// ```
+    pub fn unseal(self) -> Witnessed<T, W> {
+        self.inner
+    }
+
     /// Open the sealed carrier at a **rank-2** (`for<'b>`) brand — the destination verb. The value is
     /// re-anchored and handed *by value* to a closure whose result `R` cannot mention the
     /// universally-quantified `'b`, so nothing branded by the fabricated content lifetime escapes the

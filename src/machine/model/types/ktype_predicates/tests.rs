@@ -158,6 +158,39 @@ fn record_disjoint_fields_incomparable() {
     assert!(!xz.is_more_specific_than(&xy));
 }
 
+/// `accepts_carried` is the same-lifetime core `accepts_part`'s `Spliced` arm delegates to: a
+/// resolved value classifies identically whether reached as a spliced part or opened directly. Also
+/// pins the value-shaped arms (object type-tag, type-channel `OfKind`) the delegation now owns.
+#[test]
+fn accepts_carried_matches_spliced_delegation() {
+    use crate::machine::core::FrameStorage;
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
+    let s: &KObject<'_> = region.alloc_object(KObject::KString("hi".into()));
+
+    for (ty, carried) in [
+        (KType::Number, Carried::Object(n)),
+        (KType::Str, Carried::Object(s)),
+        (KType::Any, Carried::Object(n)),
+    ] {
+        // The delegation equivalence: routing through the fabricated part and opening directly agree.
+        assert_eq!(
+            ty.accepts_carried(carried),
+            ty.accepts_part(&ExpressionPart::Spliced(carried)),
+        );
+    }
+    // A numeric value is admitted by `:Number` / `:Any`, refused by `:Str`.
+    assert!(KType::Number.accepts_carried(Carried::Object(n)));
+    assert!(KType::Any.accepts_carried(Carried::Object(n)));
+    assert!(!KType::Str.accepts_carried(Carried::Object(n)));
+    // A type-channel value reaches the `OfKind` arm; a proper-type slot admits it.
+    let kt_number = KType::Number;
+    assert!(KType::OfKind(KKind::ProperType).accepts_carried(Carried::Type(&kt_number)));
+    // An object value reports a non-type `kind_of` and is refused by a type-channel slot.
+    assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n)));
+}
+
 /// A `{x = 1, y = "a"}` value (carried type `:{x :Number, y :Str}`) admits and matches a
 /// narrower `:{x :Number}` slot (width drop); rejects a field-type mismatch (`:{x :Str}`)
 /// and a slot demanding a field the value lacks (`:{x :Number, q :Bool}`). A bare record

@@ -12,7 +12,7 @@ use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Erased, Sealed, Witnessed};
 
 /// Lexical environment. Only the root scope holds a writer in `out`; child scopes
 /// have `None` and `write_out` walks `outer` to find one.
@@ -799,6 +799,37 @@ impl<'a> Scope<'a> {
         let mut witness = FrameSet::singleton(home.clone());
         witness.fold_omitting(foreign, |region| home.pins_region(region));
         self.brand().seal_resident(Carried::Object(obj), witness)
+    }
+
+    /// Adopt a sealed dep carrier into this scope, copy-free: fold its witness into the scope's
+    /// reach-set — so every region the value reaches stays alive for the scope's life — then
+    /// re-anchor the sealed value at the scope's own brand. Where [`resident_value_carrier`] seals a
+    /// value already living **in** this region, adoption is the consumption verb for a carrier
+    /// produced **elsewhere**: the value stays put in its producer's region and the fold is what
+    /// pins that region, so the dep survives past its resolving step as its carrier rather than as a
+    /// relocated copy (the head-deferred callable, an FN signature type slot, a spliced argument).
+    ///
+    /// The pin is deposited **before** the re-anchor: `fold_reach` places the witness's frame `Rc`s
+    /// into the scope's reach-set, which the scope holds until it drops, so the returned `Carried<'a>`
+    /// cannot outlive its backing — `'a` is bounded by the scope, and the scope keeps its reach-set
+    /// (and thus every folded region) live for all of `'a`.
+    // Exercised by the scope-reach tests; the production consumers (head-deferred finish, FN
+    // signature slots, spliced arguments) route it as each producer site delivers carriers.
+    #[allow(dead_code)]
+    pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> Carried<'a> {
+        // Fold FIRST: pin every region the value reaches into this scope's reach-set before any
+        // borrow of the value is fabricated (see the SAFETY note below).
+        self.fold_reach(cell.witness());
+        // Copy the carrier out as its brand-free erased storage form — the rank-2 `open` forbids a
+        // `Carried<'b>` from escaping, but the lifetime-free `Erased` may.
+        let erased: Erased<CarriedFamily> = cell.open(|live| Erased::<CarriedFamily>::erase(live));
+        // SAFETY: [`Erased::reattach`]'s contract — a held liveness witness pins the pointee for all
+        // of the fabricated `'a`. That witness is this scope's reach-set: `fold_reach` above deposited
+        // `cell`'s frame `Rc`s into it (omitting only regions the scope already pins), and the scope
+        // holds its reach-set — hence those `Rc`s — until it drops. `'a` is the scope's own content
+        // lifetime (`&'a self` on a `Scope<'a>`), so the re-anchored `Carried<'a>` cannot outlive the
+        // pin. Copy-free: the value stays in its producer's region; only the borrow is re-anchored.
+        unsafe { erased.reattach() }
     }
 
     /// The home-omitted foreign reach of `witness` as this scope would fold it into its reach-set —

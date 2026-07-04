@@ -65,3 +65,25 @@ fn resolve_type_inner_scope_shadows_outer() {
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
     assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));
 }
+
+/// `adopt_sealed` re-anchors a producer's sealed carrier at the consumer scope's brand **without
+/// copying**: the adopted borrow points at the very same object the producer sealed, and the
+/// consumer's fold pins the reached region for the value's new lifetime.
+#[test]
+fn adopt_sealed_reanchors_the_same_value_copy_free() {
+    use crate::machine::model::values::{Carried, KObject};
+    use crate::witnessed::Sealed;
+
+    let storage = FrameStorage::run_root();
+    let producer = run_root_bare(&storage);
+    // A value resident in the producer scope's region, sealed as its own carrier.
+    let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
+    let cell = Sealed::seal(producer.resident_value_carrier(obj, &FrameSet::empty()));
+
+    // A separate (open) consumer scope adopts the carrier.
+    let consumer = producer.brand().alloc_scope(Scope::child_under(producer));
+    let adopted: Carried = consumer.adopt_sealed(&cell);
+
+    // Copy-free: the adopted borrow points at the very same object, not a relocated clone.
+    assert!(std::ptr::eq(adopted.object(), obj));
+}
