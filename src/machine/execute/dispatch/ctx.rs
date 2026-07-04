@@ -20,10 +20,9 @@ use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::values::CarriedFamily;
-use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::Spanned;
-use crate::witnessed::{Sealed, StepContext};
+use crate::witnessed::StepContext;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -230,7 +229,6 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         mut working_expr: KExpression<'step>,
         staged_subs: Vec<(usize, PendingSub<'step>)>,
         picked: Option<&'step KFunction<'step>>,
-        inline_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
     ) -> Outcome<'step> {
         use super::super::TerminalDepFinish;
         let mut deps: Vec<DepRequest<'step>> = Vec::with_capacity(staged_subs.len());
@@ -256,35 +254,26 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             part_indices.push(i);
         }
         if deps.is_empty() {
-            // No subs to resolve — `working_expr` is already fully resolved, so route to the finish
-            // now instead of parking on a dep-finish. Only the inline-resolved wrap slots carry a
-            // reach carrier here; a scalar-literal arg is region-pure ("no foreign reach").
-            return finish_eager_subs(working_expr, picked, inline_carriers);
+            // No subs to resolve — `working_expr` is already fully resolved (its inline-resolved wrap
+            // slots are already spliced cells), so route to the finish now instead of parking.
+            return finish_eager_subs(working_expr, picked);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
             "<bind>",
             &working_expr,
         ));
-        let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+        let finish: TerminalDepFinish<'step> = Box::new(move |_ctx, terminals| {
             // The short-circuit already guaranteed every dep resolved; splice each value into the slot
-            // it was staged from, and collect each dep's carrier (keyed by that slot) to deliver to the
-            // body. Each staged sub is a surviving copy — the spliced value re-dispatches through the
-            // `'step` working expression and owned deps cascade-free on resolve, so relocate it into the
-            // consumer region; the dep's own carrier rides on (a `duplicate` per arg — the producer
-            // keeps its seal) to `run_action_builtin` / the user-fn arg fold, naming each arg's reach.
-            // The copy-free carrier-carrying form is the `carrier-carrying-spliced-parts` roadmap item.
-            // Start from the inline-resolved wrap slots' carriers and add each staged sub's carrier,
-            // so the body receives every value arg's reach (inline plus eager-sub).
-            let mut arg_carriers = inline_carriers;
-            arg_carriers.reserve(part_indices.len());
-            // Every eager sub is an owned dep, so its result lands in the owned suffix in staging
-            // order — 1:1 with `part_indices`.
+            // it was staged from as its producer's own sealed carrier — value and reach as one unit,
+            // opened or adopted by the consuming bind at its own step brand. No relocation and no
+            // side-channel: the carrier is the survival, and `invoke` reads each cell back for the
+            // body-facing reach projection. Every eager sub is an owned dep, so its result lands in the
+            // owned suffix in staging order — 1:1 with `part_indices`.
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
                 working_expr.parts[*slot].value =
-                    ExpressionPart::Spliced(terminal.relocate(ctx.current_scope().brand()));
-                arg_carriers.push((*slot, terminal.carrier.duplicate()));
+                    ExpressionPart::SplicedSealed(terminal.carrier.duplicate());
             }
-            finish_eager_subs(working_expr, picked, arg_carriers)
+            finish_eager_subs(working_expr, picked)
         });
         Await::on(Deps::from_owned(deps))
             .error_frame(dep_error_frame)
@@ -302,12 +291,11 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 fn finish_eager_subs<'step>(
     working_expr: KExpression<'step>,
     picked: Option<&'step KFunction<'step>>,
-    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     match picked {
-        Some(f) => super::exec::invoke_continue(f, working_expr, arg_carriers),
-        // The re-resolve path commits its call in `keyworded::finish`; thread the arg carriers through
-        // so the re-resolved builtin / user-fn still receives every value arg's reach.
-        None => super::keyworded::redispatch_continue(working_expr, arg_carriers),
+        Some(f) => super::exec::invoke_continue(f, working_expr),
+        // The re-resolve path commits its call in `keyworded::finish`; the spliced cells ride on the
+        // working expression, so the re-resolved builtin / user-fn reads each arg's reach off them.
+        None => super::keyworded::redispatch_continue(working_expr),
     }
 }

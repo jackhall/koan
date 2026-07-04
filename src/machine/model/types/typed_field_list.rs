@@ -6,6 +6,8 @@ use super::ktype::KType;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
+use crate::machine::FrameSet;
+use crate::witnessed::Sealed;
 use crate::machine::model::Parseable;
 use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
@@ -201,8 +203,14 @@ fn rewrite_threaded_self_refs<'a>(
         .map(|p| {
             let value = match &p.value {
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
+                    // The self-ref is minted fresh in this scope's region and spliced into a
+                    // *sub-dispatched* expression (it crosses into another node), so it travels as a
+                    // cell: a region-resident type carrier (the `RecursiveRef` is owned, reaching
+                    // nothing foreign — empty reach) sealed as its own unit.
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Spliced(Carried::Type(obj))
+                    ExpressionPart::SplicedSealed(Sealed::seal(
+                        scope.resident_type_carrier(obj, &FrameSet::empty()),
+                    ))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

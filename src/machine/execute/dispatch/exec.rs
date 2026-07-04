@@ -32,7 +32,6 @@ use crate::witnessed::Sealed;
 pub(super) fn invoke_continue<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
-    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
@@ -41,7 +40,7 @@ pub(super) fn invoke_continue<'step>(
         },
     };
     Outcome::Continue {
-        work: invoke_work(picked, working_expr, arg_carriers),
+        work: invoke_work(picked, working_expr),
         frame,
         contract: None,
         block_entry: BlockEntry::None,
@@ -54,13 +53,12 @@ pub(super) fn invoke_continue<'step>(
 fn invoke_work<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
-    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
     NodeWork::new(
         ResolvedDeps::new(),
         ignore_results(Box::new(move |view, _idx| {
-            invoke(view, picked, working_expr, arg_carriers)
+            invoke(view, picked, working_expr)
         })),
         Some(carrier),
     )
@@ -76,8 +74,11 @@ pub(super) fn invoke<'step>(
     view: &SchedulerView<'step, '_>,
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
-    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
 ) -> Outcome<'step> {
+    // The per-argument reach carriers, read back off the working expression's spliced cells (value
+    // and reach as one unit) — the body-facing projection derived from the cells themselves rather
+    // than threaded through a side-channel. A literal arg is region-pure and contributes no cell.
+    let arg_carriers = carriers_from_expr(&working_expr);
     // An action-harness builtin: build a read-only `BodyCtx`, get the `Action`, and lower it
     // through the shared `run_action` interpreter. Builtins run in the current frame, so the
     // builtin call's `Continue` carries `FramePlacement::Inherit` and this reads nothing.
@@ -191,6 +192,24 @@ pub(super) fn invoke<'step>(
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
     }
+}
+
+/// Read each spliced cell back off the working expression as its `(slot, carrier)` pair — one
+/// delivery per argument, the body-facing projection derived from the cells themselves rather than a
+/// side-channel. A literal part carries no cell (region-pure, "no entry = no foreign reach"); a
+/// `duplicate` per cell leaves the working expression's cells intact for the bind that reads them.
+fn carriers_from_expr<'step>(
+    working_expr: &KExpression<'step>,
+) -> Vec<(usize, Sealed<CarriedFamily, FrameSet>)> {
+    working_expr
+        .parts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, part)| match &part.value {
+            ExpressionPart::SplicedSealed(cell) => Some((i, cell.duplicate())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Re-key the delivered arg carriers — indexed by their working-expr part slot — onto the parameter

@@ -158,17 +158,6 @@ pub(in crate::machine::execute) struct PartWalkResult<'step> {
     pub new_parts: Vec<Spanned<ExpressionPart<'step>>>,
     pub producers_to_wait: Vec<NodeId>,
     pub staged_subs: Vec<(usize, PendingSub<'step>)>,
-    /// Reach carriers for the wrap slots that resolved to a value **inline** (spliced in place rather
-    /// than sub-dispatched), keyed by part slot. The committed call threads them to the body so a
-    /// bound-name arg names its reach by construction; a staged sub's carrier is collected later, at
-    /// the eager-subs finish.
-    pub arg_carriers: Vec<(
-        usize,
-        crate::witnessed::Sealed<
-            crate::machine::model::values::CarriedFamily,
-            crate::machine::FrameSet,
-        >,
-    )>,
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.

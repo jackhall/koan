@@ -625,7 +625,6 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine" [label="uses", style="dashed"];
@@ -679,7 +678,6 @@ digraph {
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::ast" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::keyworded" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::keyworded" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine" [label="uses", style="dashed"];
@@ -875,6 +873,7 @@ digraph {
     "koan::machine::model::types::signature" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::model::types::typed_field_list" -> "koan" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
