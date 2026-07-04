@@ -78,7 +78,9 @@ pub(crate) fn resolve_or_await<'a>(
 ) -> Action<'a> {
     match resolve(scope) {
         // The synchronous arm hands the continuation the same `FinishCtx` shape a wake-time finish
-        // receives, built over the caller's own scope and its frame's step context.
+        // receives, built over the caller's own scope and its frame's step context. `scope_frame(scope)`
+        // matches the wake side's provenance — the harness `StepContext` also wraps the scope-derived
+        // dest frame — so both arms allocate in the same region, USING windows included.
         TypeResolution::Done(kt) => {
             let fctx = FinishCtx {
                 scope,

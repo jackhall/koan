@@ -281,6 +281,8 @@ fn extract_carried_args<'step>(
             ExpressionPart::Keyword(_) => {}
             // A spliced cell is adopted into the call scope: its reach folds into the scope and its
             // value re-anchors at `'step`, copy-free, so the argument survives the call as its carrier.
+            // `view.current_scope()` *is* the call scope here — the run loop opens each step's scope
+            // from the Continue-installed cart — so the fold never lands in the caller's scope.
             ExpressionPart::Spliced(cell) => {
                 args.push(view.current_scope().adopt_sealed(cell))
             }

@@ -294,9 +294,9 @@ impl<'a> ExpressionPart<'a> {
             }
             // A spliced cell is opened / adopted at the consuming scope's brand before resolution
             // (the bind path in `resolve_for` / `extract_carried_args`, or `single_poll`'s own
-            // `Spliced` arm), so its value never reaches the region-less `resolve()`: a cell can only
-            // be read under a brand, and `resolve()` has no scope to adopt it into. Only region-pure
-            // parts flow here.
+            // `Spliced` arm), so its value never reaches the region-less `resolve()`. The container
+            // arms above recurse safely: a splice is only ever written at a top-level part slot
+            // (`part_walk`, the eager-sub finish), never into a container literal's elements.
             ExpressionPart::Spliced(_) => unreachable!(
                 "a spliced cell is adopted at the binding scope before resolve(); \
                  resolve() runs only on region-pure parts"
