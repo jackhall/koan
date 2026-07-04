@@ -19,7 +19,6 @@
 
 use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::RegionBrand;
 use crate::machine::model::values::{Carried, CarriedFamily};
 
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
@@ -28,7 +27,6 @@ use crate::witnessed::reattachable;
 use crate::witnessed::{Sealed, Witnessed};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
-use super::lift::relocate_carried;
 use super::nodes::NodeWork;
 use super::runtime::KoanWorkload;
 
@@ -122,6 +120,11 @@ impl<'step> Outcome<'step> {
 pub(in crate::machine::execute) enum Continuation<'step> {
     Finish(DepFinish<'step>),
     FinishWitnessed(WitnessedDepFinish<'step>),
+    /// The action-harness `AwaitDeps` continuation: reads the resolved dep *terminals* directly
+    /// (un-relocated `value` + reach `carrier`) and returns the next [`Outcome`] — it already IS a
+    /// [`TerminalDepFinish`], so it runs through [`short_circuit`] with no value-copy projection. A
+    /// finish that must copy a dep (a signature splice) calls [`DepTerminal::relocate`] site-explicitly.
+    FinishTerminal(TerminalDepFinish<'step>),
     Catch {
         watched: DepRequest<'step>,
         finish: CatchFinish<'step>,
@@ -208,6 +211,19 @@ impl<'step> Await<'step> {
             dep_error_frame: self.dep_error_frame,
         }
     }
+
+    /// Seal the envelope over a terminal finish (un-relocated dep terminals in, [`Outcome`] out) — the
+    /// action-harness `AwaitDeps` delivery, run through [`short_circuit`] with no value-copy projection.
+    pub(in crate::machine::execute) fn finish_terminal(
+        self,
+        finish: TerminalDepFinish<'step>,
+    ) -> Outcome<'step> {
+        Outcome::ParkThenContinue {
+            deps: self.deps,
+            continuation: Continuation::FinishTerminal(finish),
+            dep_error_frame: self.dep_error_frame,
+        }
+    }
 }
 
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's terminal as a
@@ -217,32 +233,13 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
         + 'a,
 >;
 
-/// A resolved dep terminal as the continuation receives it, **un-relocated**. It holds the producer
-/// slot's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) — the producer
-/// keeps its terminal for other consumers), so a **construction finish** folds the dep *witnessed* via
-/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach named on the carrier
-/// by construction (the [`alloc` construction
-/// inversion](../../../../design/per-node-memory.md#construction-yoke-merge-map-and-one-wrapper-per-node)). `value` is the same
-/// value re-anchored **live at the step brand** (read out of the producer slot, pinned by the step
-/// open) for the **value-copy** finishes still on the bare channel: the [`relocate_values`]
-/// projection [`relocate`](DepTerminal::relocate)s it into the consumer region (a bare structural
-/// copy: the spine is rebuilt, a surviving closure / module borrow is preserved verbatim). Such a borrow stays alive without a per-relocate reach fold: its
-/// reach rides the dep's own carrier, read off `carrier.witness()` and unioned into the consumer-step
-/// `pin` before the open, and folded onto the scope reach-set only when the value is *bound*
-/// (`let` / user-fn arg). The dep's reach is read off the carrier the same way for every dep.
-pub(in crate::machine::execute) struct DepTerminal<'a> {
-    pub(in crate::machine::execute) value: Carried<'a>,
-    pub(in crate::machine::execute) carrier: Sealed<CarriedFamily, FrameSet>,
-}
-
-impl<'a> DepTerminal<'a> {
-    /// Relocate the terminal's value into the consumer region (a bare structural copy via
-    /// [`relocate_carried`]) — the one consumption [`relocate_values`] and [`catch_continuation`]
-    /// share.
-    pub(in crate::machine::execute) fn relocate(&self, dest: RegionBrand<'a>) -> Carried<'a> {
-        relocate_carried(self.value, dest)
-    }
-}
+/// The resolved dep terminal (value + reach carrier, un-relocated) both the value-copy and witnessed
+/// finishes read — defined in core so the builtin-`Action` currency can name it, re-exported here for
+/// the execute-side dep-delivery machinery. Its `value` is re-anchored live at the step brand (pinned
+/// by the step open); its reach rides the dep's own `carrier` (`carrier.witness()`), unioned into the
+/// consumer-step `pin` before the open and folded onto the scope reach-set only when the value is
+/// *bound* (`let` / user-fn arg).
+pub(in crate::machine::execute) use crate::machine::core::kfunction::action::DepTerminal;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
 /// [`NodeWork`](super::nodes::NodeWork) carries. It receives the dep terminals in submission order

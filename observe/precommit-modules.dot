@@ -764,7 +764,6 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
-    "koan::machine::execute::outcome" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::outcome" -> "koan::machine::model" [label="uses", style="dashed"];

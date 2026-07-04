@@ -338,15 +338,20 @@ pub(crate) fn defer<'a>(
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let mut spliced_parts = signature_expr.parts.clone();
         for &(slot_idx, owned_pos) in &splice_layout {
-            let carrier = *results.owned(owned_pos);
-            if !matches!(carrier, Carried::Type(_)) {
+            let terminal = results.owned(owned_pos);
+            if !matches!(terminal.value, Carried::Type(_)) {
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \
                      got a {} value",
-                    carrier.ktype().name(),
+                    terminal.value.ktype().name(),
                 )))));
             }
-            spliced_parts[slot_idx].value = ExpressionPart::Spliced(carrier);
+            // A surviving copy: the spliced type must live in the consumer region because owned
+            // deps cascade-free on resolve, so the producer's region may be gone by the time the
+            // re-elaborated signature reads it. The copy-free carrier-carrying form is the
+            // `carrier-carrying-spliced-parts` roadmap item.
+            let value = terminal.relocate(fctx.scope.brand());
+            spliced_parts[slot_idx].value = ExpressionPart::Spliced(value);
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

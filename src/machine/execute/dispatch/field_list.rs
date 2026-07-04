@@ -198,9 +198,12 @@ pub(crate) fn defer_field_list_action<'a>(
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
+        // The owned sub-Dispatch carriers, read live at the step brand (un-relocated); the re-walk
+        // clones each type into the region as it folds the field list.
+        let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
             rewalk
-                .run(fctx.scope, results.owned_slice())
+                .run(fctx.scope, &owned)
                 .and_then(|fields| finalize(fctx, fields)),
         )
     });

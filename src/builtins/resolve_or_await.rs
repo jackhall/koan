@@ -4,7 +4,7 @@
 //! routing site states its own carrier shape and slot name and nothing else.
 
 use crate::machine::core::kfunction::action::{
-    scope_frame, Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx,
+    scope_frame, Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
 };
 use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
@@ -103,11 +103,13 @@ pub(crate) fn resolve_or_await<'a>(
 /// Read the type a sub-dispatch resolved to out of a dep-finish's owned results; a non-type
 /// result is the slot's canonical shape error.
 pub(crate) fn expect_type_result<'a>(
-    results: &DepResults<'_, Carried<'a>>,
+    results: &DepResults<'_, &DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
 ) -> Result<KType<'a>, KError> {
-    match *results.owned(owned_pos) {
+    // The sub-dispatch's resolved type read live at the step brand (un-relocated); `on_resolved`
+    // re-allocates it into the destination region when it constructs.
+    match results.owned(owned_pos).value {
         Carried::Type(kt) => Ok(kt.clone()),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
     }

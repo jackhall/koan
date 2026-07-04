@@ -17,8 +17,8 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use arena::KoanRegionTestExt;
+pub(crate) use arena::{relocate_carried, KoanRegionExt, KoanStepContextExt};
 pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily};
-pub(crate) use arena::{KoanRegionExt, KoanStepContextExt};
 pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
     PendingBinderGuard, PendingTypeEntry, TypeHit, ValueHit,

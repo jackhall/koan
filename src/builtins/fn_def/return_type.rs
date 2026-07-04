@@ -6,11 +6,12 @@ use std::collections::HashMap;
 use crate::builtins::resolve_or_await::{
     classify_type_hit, expect_type_result, resolve_at_wake, unbound_error,
 };
+use crate::machine::core::kfunction::action::DepTerminal;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::types::{DeferredReturn, ReturnType};
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
 use std::rc::Rc;
@@ -231,7 +232,7 @@ pub(super) fn make_capture<'a>(te: TypeIdentifier) -> ReturnTypeCapture<'a> {
 pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
-    results: DepResults<'_, Carried<'a>>,
+    results: DepResults<'_, &DepTerminal<'a>>,
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),

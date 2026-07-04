@@ -9,7 +9,9 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use super::KFunction;
-use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope};
+use crate::machine::core::{
+    relocate_carried, CallFrame, FrameStorage, LexicalFrame, RegionBrand, Scope,
+};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
@@ -228,11 +230,35 @@ pub struct FinishCtx<'a> {
     pub ctx: StepContext<FrameStorage>,
 }
 
-/// A `AwaitDeps` finish: re-entered at wake with the resolved dep values as a [`DepResults`] view
-/// (addressed by `park` / `owned` position), yielding another `Action` the harness recurses into.
-/// Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
+/// A resolved dep terminal as a continuation receives it, **un-relocated**. It holds the producer
+/// slot's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) — the producer
+/// keeps its terminal for other consumers), so a **construction finish** folds the dep *witnessed* via
+/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach named on the carrier
+/// by construction. `value` is the same value re-anchored **live at the step brand** (pinned by the
+/// step open) for a **value-copy** finish that reads it: [`relocate`](Self::relocate) copies it into
+/// the consumer region. Defined here in core (not the execute layer that resolves it) so the
+/// builtin-`Action` currency — [`AwaitContinue`] — can name it.
+pub struct DepTerminal<'a> {
+    pub value: Carried<'a>,
+    pub carrier: Sealed<CarriedFamily, FrameSet>,
+}
+
+impl<'a> DepTerminal<'a> {
+    /// Relocate the terminal's value into the consumer region (a bare structural copy via
+    /// [`relocate_carried`](crate::machine::core::relocate_carried)) — the consumption a value-copy
+    /// finish that must outlive the resolving step runs (the carrier-carrying copy-free form is the
+    /// `carrier-carrying-spliced-parts` roadmap item).
+    pub fn relocate(&self, dest: RegionBrand<'a>) -> Carried<'a> {
+        relocate_carried(self.value, dest)
+    }
+}
+
+/// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
+/// (addressed by `park` / `owned` position) of un-relocated [`DepTerminal`]s — each carrying its
+/// step-brand `value` and its own reach `carrier` — yielding another `Action` the harness recurses
+/// into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
 pub type AwaitContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, Carried<'a>>) -> Action<'a> + 'a>;
+    Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a>;
 
 /// The watched value as a `Catch` finish receives it on success: the value **relocated** into the
 /// consumer region (for a finish that reads it — TRY-WITH's `it` bind) plus the watched producer's own

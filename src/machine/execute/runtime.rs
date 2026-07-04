@@ -35,7 +35,7 @@ use crate::witnessed::SealedExtern;
 use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::relocate_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
-use super::outcome::{dep_error_frame, Await, Continuation, Outcome};
+use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
 use super::run_loop::RegionRefFamily;
 use super::{
     catch_continuation, ignore_results, relocate_values, seal_witnessed, short_circuit,
@@ -315,7 +315,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     }
                 }
             }
-            let wrapped: DepFinish<'step> = Box::new(move |view, results, _carriers| {
+            let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                     ctx: view.step_ctx(),
@@ -324,7 +324,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
             });
             Await::on(built)
                 .error_frame(dep_error_frame())
-                .finish(wrapped)
+                .finish_terminal(wrapped)
         }
 
         Action::Catch { watched, finish } => {
@@ -586,6 +586,12 @@ impl<'run> KoanRuntime<'run> {
                         short_circuit(dep_error_frame, seal_witnessed(finish)),
                         None,
                     ),
+                    // The action-harness `AwaitDeps` delivery: the finish already reads the resolved
+                    // terminals directly, so it runs through the same `short_circuit` loop with no
+                    // value-copy projection.
+                    Continuation::FinishTerminal(finish) => {
+                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
+                    }
                     // The action-harness catch carries its single watched dep unrealized (its
                     // placement differs from a dep-finish body's fan-out); realize and own it here.
                     // `catch_continuation` runs the finish without short-circuiting on a dep error.
