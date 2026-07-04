@@ -25,7 +25,6 @@ use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::FrameSet;
 use crate::scheduler::{Deps, ProducerDisposition};
-use crate::witnessed::Witnessed;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -189,17 +188,10 @@ pub(super) fn literal_pass_through<'step>(
             });
             Outcome::Done(Ok(carrier))
         }
-        // A spliced value is already resolved and region-pure relative to its producer frame (as the
-        // bare terminal it replaces was, pinned by that frame alone). Seal it region-pure through
-        // `Witnessed::resident` — born under the empty set, the producer frame folded in at
-        // finalize/close — the exact witness the retired bare path computed.
-        ExpressionPart::Spliced(c) => {
-            Outcome::Done(Ok(Witnessed::<CarriedFamily, FrameSet>::resident(c)))
-        }
         // A spliced cell already *is* the producer's own carrier — recover it directly with `unseal`
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
-        ExpressionPart::SplicedSealed(cell) => Outcome::Done(Ok(cell.unseal())),
+        ExpressionPart::Spliced(cell) => Outcome::Done(Ok(cell.unseal())),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),

@@ -206,7 +206,7 @@ fn carriers_from_expr<'step>(
         .iter()
         .enumerate()
         .filter_map(|(i, part)| match &part.value {
-            ExpressionPart::SplicedSealed(cell) => Some((i, cell.duplicate())),
+            ExpressionPart::Spliced(cell) => Some((i, cell.duplicate())),
             _ => None,
         })
         .collect()
@@ -279,10 +279,9 @@ fn extract_carried_args<'step>(
     for part in &working_expr.parts {
         match &part.value {
             ExpressionPart::Keyword(_) => {}
-            ExpressionPart::Spliced(carried) => args.push(*carried),
             // A spliced cell is adopted into the call scope: its reach folds into the scope and its
             // value re-anchors at `'step`, copy-free, so the argument survives the call as its carrier.
-            ExpressionPart::SplicedSealed(cell) => {
+            ExpressionPart::Spliced(cell) => {
                 args.push(view.current_scope().adopt_sealed(cell))
             }
             // A literal value part isn't `Spliced`-spliced; resolve it into the run region now

@@ -3,7 +3,7 @@
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 2
 src/machine/core/scope.rs: 1
-src/machine/model/types/ktype_predicates.rs: 2
+src/machine/model/types/ktype_predicates.rs: 1
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -255,16 +255,15 @@ the field end-to-end.
 
 - `module_child_scope_transmute_does_not_dangle`
 
-**`KType::accepts_part` / `accepts_cell` lifetime coercion** ([src/machine/model/types/ktype_predicates.rs](../src/machine/model/types/ktype_predicates.rs))
-— two read-only lifetime coercions for the same structural-admission purpose. `accepts_part`'s entry
-`transmute::<&ExpressionPart<'e>, &ExpressionPart<'a>>` coerces a `'b`-branded part to the type's
-lifetime; `accepts_cell` opens a spliced cell and `transmute::<Carried<'b>, Carried<'a>>`s the value
-to the slot's lifetime for the same-lifetime `accepts_carried`. Both are sound because the predicate
-only *reads* — no mutation, no borrow escapes (only a `bool`) — and the value outlives the call.
-Interim until a lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap item).
+**`KType::accepts_resolved` value-classification lifetime coercion** ([src/machine/model/types/ktype_predicates.rs](../src/machine/model/types/ktype_predicates.rs))
+— a single read-only lifetime coercion for structural admission. `accepts_cell` opens a spliced cell
+and hands the opened value to `accepts_resolved`, which `transmute::<Carried<'_>, Carried<'a>>`s it to
+the slot's lifetime for the same-lifetime `accepts_carried`. Sound because the predicate only *reads*
+— no mutation, no borrow escapes (only a `bool`) — and the value outlives the call. Interim until a
+lifetime-agnostic `KType` equality lands (the structural-value-equality roadmap item).
 
-- `accepts_part_lifetime_coercion_reads_soundly`
-- `spliced_cell_classifies_like_bare_splice`
+- `spliced_cell_classifies_by_opening`
+- `accepts_carried_matches_spliced_delegation`
 
 **`NodeScope::YokedChild` lifetime fabrication** ([src/machine/execute/nodes.rs](../src/machine/execute/nodes.rs))
 — a cart-ancestor block scope evicted off a lifetime-free scheduler node (`NodeScope::YokedChild`) is

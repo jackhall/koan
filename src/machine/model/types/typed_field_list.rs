@@ -146,15 +146,9 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                     }
                 }
             }
-            ExpressionPart::Spliced(Carried::Type(kt)) => Ok((**kt).clone()),
-            ExpressionPart::Spliced(Carried::Object(other)) => Err(format!(
-                "{context} type for `{}` resolved to non-type value `{}`",
-                name,
-                other.summarize(),
-            )),
             // A spliced cell is adopted into the elaborating scope (folding its reach) and its value
-            // read at that brand, then routed through the same type/non-type handling as a bare splice.
-            ExpressionPart::SplicedSealed(cell) => match elaborator.scope.adopt_sealed(cell) {
+            // read at that brand, then routed through type/non-type handling.
+            ExpressionPart::Spliced(cell) => match elaborator.scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Ok(kt.clone()),
                 Carried::Object(other) => Err(format!(
                     "{context} type for `{}` resolved to non-type value `{}`",
@@ -186,8 +180,8 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
 
 /// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
 /// into the standalone dispatcher, which carries no SCC threading context. Every bare
-/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced(Carried::Type(
-/// RecursiveRef(name)))` carrier — the same type-side transport `:(LIST OF Number)`
+/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced` cell sealing a
+/// `RecursiveRef(name)` type carrier — the same type-side transport `:(LIST OF Number)`
 /// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
 /// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a
 /// scheduler-deadlock cycle. Recurses into nested sigils (`:(LIST OF (LIST OF Tree))`,
@@ -208,7 +202,7 @@ fn rewrite_threaded_self_refs<'a>(
                     // cell: a region-resident type carrier (the `RecursiveRef` is owned, reaching
                     // nothing foreign — empty reach) sealed as its own unit.
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::SplicedSealed(Sealed::seal(
+                    ExpressionPart::Spliced(Sealed::seal(
                         scope.resident_type_carrier(obj, &FrameSet::empty()),
                     ))
                 }

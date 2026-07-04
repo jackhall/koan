@@ -1,6 +1,6 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
-use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
+use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, spliced_part};
 use crate::machine::core::FrameStorage;
 use crate::machine::model::Carried;
 
@@ -9,7 +9,6 @@ use crate::machine::model::Carried;
 /// or whose `compatible_sigs` set doesn't contain the slot's `sig.sig_id()`.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
-    use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::values::{Module, ModuleSignature};
     use crate::machine::model::KType;
     let region = FrameStorage::run_root();
@@ -78,9 +77,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     // A module rides the type channel, so its satisfaction of a `Signature` slot is the
     // `accepts_part(Carried::Type(Module))` path; `matches_value` is value-only and rejects
     // modules outright.
-    assert!(slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_num_obj))));
-    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_str_obj))));
-    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_none_obj))));
+    assert!(slot.accepts_part(&spliced_part(Carried::Type(m_num_obj))));
+    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_str_obj))));
+    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_none_obj))));
 
     let child_d = region
         .brand()
@@ -100,7 +99,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_unascribed_obj = region.brand().alloc_ktype(KType::Module {
         module: m_unascribed,
     });
-    assert!(!slot.accepts_part(&ExpressionPart::Spliced(Carried::Type(m_unascribed_obj))));
+    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_unascribed_obj))));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at

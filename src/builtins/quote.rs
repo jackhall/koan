@@ -13,15 +13,15 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    // A quoted expression is raw, unevaluated AST — splice-free, so borrow-free owned data that
-    // references no other region. It is therefore region-pure: the `KObject::KExpression` allocs
-    // through the witnessed object surface born under the empty (foreign-reach-only) set, the active
-    // frame folded in at close. A `Spliced(Carried)` part would hold a live region reference the
+    // A quoted expression is raw, unevaluated AST — splice-free, so it references no other region.
+    // It is therefore region-pure: the `KObject::KExpression` allocs through the witnessed object
+    // surface born under the empty (foreign-reach-only) set, the active frame folded in at close. A
+    // `Spliced` part is a resolved value, not raw AST, and its cell carries the producer reach the
     // empty set could not name, so the splice-free precondition is asserted.
     debug_assert!(
         expr.is_splice_free(),
-        "QUOTE expr must be splice-free raw AST: a Spliced(Carried) part holds a live region \
-         reference the region-pure witnessed alloc would mis-witness as empty reach"
+        "QUOTE expr must be splice-free raw AST: a Spliced cell is a resolved value, not raw AST, \
+         and carries a producer reach the region-pure witnessed alloc would mis-witness as empty"
     );
     let carrier = ctx
         .scope

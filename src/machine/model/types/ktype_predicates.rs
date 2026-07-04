@@ -459,46 +459,40 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Classify a spliced **cell** against this slot without adopting it — the pure probe path an
-    /// overload picker takes (it may reject the candidate, so pinning the cell's regions into the
-    /// scope would be wrong). The cell opens at a fresh brand and the opened value is re-anchored to
-    /// `self`'s `'a` for the same-lifetime [`accepts_carried`](Self::accepts_carried). Re-anchoring
-    /// is the one cross-lifetime step `KType` invariance forces — the same lifetime-only cast
-    /// [`accepts_part`](Self::accepts_part) already carries for a resolved value; removal tracked by
-    /// the structural-value-equality roadmap item.
+    /// Classify a resolved value against this slot **across lifetimes** — the probe an overload
+    /// picker runs (a candidate signature at `'step` against a resolved arg at `'e`, two invariant
+    /// lifetimes), and the core [`accepts_cell`](Self::accepts_cell) delegates to after opening. The
+    /// value is re-anchored to `self`'s `'a` for the same-lifetime [`accepts_carried`](Self::accepts_carried):
+    /// the one cross-lifetime step `KType` invariance forces, the same lifetime-only cast
+    /// [`accepts_part`](Self::accepts_part) carries for a part. Removal tracked by the
+    /// structural-value-equality roadmap item.
+    pub(crate) fn accepts_resolved(&self, c: Carried<'_>) -> bool {
+        // SAFETY: `Carried<'_>` and `Carried<'a>` share layout (the value channel is layout-invariant
+        // in its lifetime). The read is synchronous and read-only — the value outlives the call and
+        // only the `bool` verdict escapes, nothing content-branded — so the re-anchored borrow cannot
+        // dangle. A *probe*: it never adopts (no reach fold).
+        let c: Carried<'a> = unsafe { std::mem::transmute::<Carried<'_>, Carried<'a>>(c) };
+        self.accepts_carried(c)
+    }
+
+    /// Classify a spliced **cell** against this slot without adopting it — opens the cell at a fresh
+    /// brand and routes the opened value through [`accepts_resolved`](Self::accepts_resolved) (which
+    /// re-anchors it to the slot's lifetime). The cell's witness pins the value across the open; the
+    /// picker may reject the candidate, so this deliberately does not adopt.
     pub(crate) fn accepts_cell(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> bool {
-        cell.open(|c| {
-            // SAFETY: `Carried<'b>` and `Carried<'a>` share layout (the value channel is
-            // layout-invariant in its lifetime). The value is pinned by `cell.witness()` for the
-            // whole of this synchronous read, and `self`'s contents outlive the call, so the
-            // re-anchored borrow cannot dangle; only the `bool` verdict escapes the open — nothing
-            // content-branded. This is a *probe*, so it deliberately does not adopt (no reach fold).
-            let c: Carried<'a> = unsafe { std::mem::transmute::<Carried<'_>, Carried<'a>>(c) };
-            self.accepts_carried(c)
-        })
+        cell.open(|c| self.accepts_resolved(c))
     }
 
     /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
-    /// literals admit shape-only (element types unknown until evaluation); a resolved
-    /// value part ([`ExpressionPart::Spliced`]) classifies through the same-lifetime
-    /// [`accepts_carried`](Self::accepts_carried), a spliced cell
-    /// ([`ExpressionPart::SplicedSealed`]) through [`accepts_cell`](Self::accepts_cell). Non-satisfying
-    /// containers fall through the scope walk rather than failing the bind.
-    pub fn accepts_part<'e>(&self, part: &ExpressionPart<'e>) -> bool {
-        // SAFETY: read-only admission predicate. `ExpressionPart<'e>` and `ExpressionPart<'a>` share
-        // layout (the lifetime is phantom for a structural match); `part` is only read to compare
-        // against `self` — never mutated, no borrow escapes. Coercing once here lets the body's
-        // same-lifetime comparisons (`== self`, `satisfied_by`, `Rc::ptr_eq`) stand unchanged.
-        // Removal tracked by the structural-value-equality roadmap item (a lifetime-agnostic
-        // `KType` / part comparison).
-        let part: &ExpressionPart<'a> = unsafe { std::mem::transmute(part) };
-        // A resolved sub-result classifies through the same-lifetime `accepts_carried`, so the
-        // value-shaped admission logic lives in the one predicate the cell-open path also routes; a
-        // spliced cell opens at its own brand through `accepts_cell` first.
-        if let ExpressionPart::Spliced(c) = part {
-            return self.accepts_carried(*c);
-        }
-        if let ExpressionPart::SplicedSealed(cell) = part {
+    /// literals admit shape-only (element types unknown until evaluation); a spliced cell
+    /// ([`ExpressionPart::Spliced`]) classifies through [`accepts_cell`](Self::accepts_cell),
+    /// which opens it at its own brand. Non-satisfying containers fall through the scope walk
+    /// rather than failing the bind.
+    pub fn accepts_part(&self, part: &ExpressionPart<'_>) -> bool {
+        // A spliced cell opens at its own brand through `accepts_cell` (the one confined lifetime
+        // cast lives inside `accepts_resolved`, which it routes). Every remaining arm is a
+        // lifetime-agnostic shape check on the parser part, so no coercion of `part` is needed.
+        if let ExpressionPart::Spliced(cell) = part {
             return self.accepts_cell(cell);
         }
         match self {

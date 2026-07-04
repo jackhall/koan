@@ -209,8 +209,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). `Spliced(Carried::Type(_))` post-dep-finish wakes
-    // admit only against `ProperType`. A third overload (below) carries the
+    // (`-> Er.Type`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
+    // admits only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
     // FN supplies only `binder_bucket` (no `binder_name`): sibling FN overloads

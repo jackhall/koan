@@ -244,7 +244,7 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
-            ExpressionPart::Spliced(_) | ExpressionPart::SplicedSealed(_) => "spliced".to_string(),
+            ExpressionPart::Spliced(_) => "spliced".to_string(),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe).collect();
                 format!("L[{}]", inner.join(" "))

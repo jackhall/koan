@@ -4,20 +4,15 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::Carried;
 use crate::machine::model::Record;
+use crate::witnessed::{Sealed, Witnessed};
 use std::rc::Rc;
 
-/// Miri coverage for the `accepts_part` entry transmute
-/// (`&ExpressionPart<'e> -> &ExpressionPart<'a>`) — the read-only lifetime coercion that lets the
-/// dispatch decouple admit a `'b`-branded part against a type at the type's lifetime. Pins that the
-/// coerced read is sound under tree borrows (no dangle, no disabled-tag) while the part is alive.
-#[test]
-fn accepts_part_lifetime_coercion_reads_soundly() {
-    let kt = KType::Number;
-    let part = ExpressionPart::Spliced(Carried::Type(&kt));
-    // Fires the entry transmute; the boolean value is irrelevant — soundness under Miri is the point.
-    let _ = kt.accepts_part(&part);
-    // The part is still valid and readable after the coerced read.
-    assert!(matches!(part, ExpressionPart::Spliced(_)));
+/// Seal a resolved value into a region-pure `Spliced` cell — the test-side peer of the scheduler's
+/// splice, so a classification test can build the exact carrier a real splice rests on the working
+/// expression. `Witnessed::resident` asserts the empty reach: the value borrows only stack-local
+/// test data, not a foreign region.
+fn spliced(c: Carried<'_>) -> ExpressionPart<'_> {
+    ExpressionPart::Spliced(Sealed::seal(Witnessed::resident(c)))
 }
 
 /// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
@@ -174,11 +169,8 @@ fn accepts_carried_matches_spliced_delegation() {
         (KType::Str, Carried::Object(s)),
         (KType::Any, Carried::Object(n)),
     ] {
-        // The delegation equivalence: routing through the fabricated part and opening directly agree.
-        assert_eq!(
-            ty.accepts_carried(carried),
-            ty.accepts_part(&ExpressionPart::Spliced(carried)),
-        );
+        // The delegation equivalence: classifying the spliced cell and opening the value directly agree.
+        assert_eq!(ty.accepts_carried(carried), ty.accepts_part(&spliced(carried)));
     }
     // A numeric value is admitted by `:Number` / `:Any`, refused by `:Str`.
     assert!(KType::Number.accepts_carried(Carried::Object(n)));
@@ -191,30 +183,38 @@ fn accepts_carried_matches_spliced_delegation() {
     assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n)));
 }
 
-/// A spliced **cell** (`SplicedSealed`) classifies through `accepts_part` identically to the same
-/// value as a bare `Spliced` part / direct `accepts_carried` — the cell opens at its own brand and
-/// re-anchors for the same-lifetime predicate. Also pins the cell's `summarize` / `is_splice_free`.
+/// A spliced **cell** classifies through `accepts_part` by opening at its own brand and re-anchoring
+/// for the same-lifetime predicate: a `7.0` value is admitted by `:Number` / `:Any` and refused by
+/// `:Str`, matching a direct `accepts_carried`. Built through the scope's own carrier surface
+/// (`resident_value_carrier` + `Sealed::seal`) — the exact construction a real splice rests on the
+/// working expression — so the open exercises the confined lifetime cast under Miri. Also pins the
+/// cell's `is_splice_free` (a resolved value is not raw AST, so QUOTE's guard rejects it).
 #[test]
-fn spliced_cell_classifies_like_bare_splice() {
+fn spliced_cell_classifies_by_opening() {
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::{FrameSet, FrameStorage};
-    use crate::machine::model::values::KObject;
     use crate::machine::model::ast::KExpression;
+    use crate::machine::model::values::KObject;
     use crate::witnessed::Sealed;
 
     let storage = FrameStorage::run_root();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
     let carrier = scope.resident_value_carrier(obj, &FrameSet::empty());
-    let cell_part = ExpressionPart::SplicedSealed(Sealed::seal(carrier));
-    let bare_part = ExpressionPart::Spliced(Carried::Object(obj));
+    let cell_part = ExpressionPart::Spliced(Sealed::seal(carrier));
 
-    for ty in [KType::Number, KType::Any, KType::Str] {
+    for (ty, admits) in [
+        (KType::Number, true),
+        (KType::Any, true),
+        (KType::Str, false),
+    ] {
         assert_eq!(
             ty.accepts_part(&cell_part),
-            ty.accepts_part(&bare_part),
-            "cell and bare splice must classify identically for {ty:?}",
+            admits,
+            "cell classification for {ty:?}",
         );
+        // Agrees with opening the value directly.
+        assert_eq!(ty.accepts_part(&cell_part), ty.accepts_carried(Carried::Object(obj)));
     }
 
     // A cell is a resolved value, not raw AST — QUOTE's splice-free guard rejects it.
@@ -237,15 +237,15 @@ fn record_value_admission_and_matches() {
     ])));
 
     let narrow = record_ty(vec![("x", KType::Number)]);
-    assert!(narrow.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
+    assert!(narrow.accepts_part(&spliced(Carried::Object(value))));
     assert!(narrow.matches_value(value));
 
     let mismatch = record_ty(vec![("x", KType::Str)]);
-    assert!(!mismatch.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
+    assert!(!mismatch.accepts_part(&spliced(Carried::Object(value))));
     assert!(!mismatch.matches_value(value));
 
     let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
-    assert!(!extra.accepts_part(&ExpressionPart::Spliced(Carried::Object(value))));
+    assert!(!extra.accepts_part(&spliced(Carried::Object(value))));
     assert!(!extra.matches_value(value));
 
     // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
@@ -269,12 +269,12 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_str: &KType<'_> = region.brand().alloc_ktype(KType::Str);
     let kt_bool: &KType<'_> = region.brand().alloc_ktype(KType::Bool);
     let kt_null: &KType<'_> = region.brand().alloc_ktype(KType::Null);
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_number))));
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_str))));
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_bool))));
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_null))));
+    assert!(t.accepts_part(&spliced(Carried::Type(kt_number))));
+    assert!(t.accepts_part(&spliced(Carried::Type(kt_str))));
+    assert!(t.accepts_part(&spliced(Carried::Type(kt_bool))));
+    assert!(t.accepts_part(&spliced(Carried::Type(kt_null))));
     // NewType / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
-    // slot admits them via the generic `Spliced(Carried::Type(_))` arm.
+    // slot admits them when the spliced cell opens to a `Carried::Type`.
     let tagged_set = RecursiveSet::singleton(
         "Maybe".into(),
         ScopeId::SENTINEL,
@@ -287,8 +287,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let struct_token: &KType<'_> = region
         .brand()
         .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(tagged_token))));
-    assert!(t.accepts_part(&ExpressionPart::Spliced(Carried::Type(struct_token))));
+    assert!(t.accepts_part(&spliced(Carried::Type(tagged_token))));
+    assert!(t.accepts_part(&spliced(Carried::Type(struct_token))));
     let child = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
@@ -299,7 +299,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_module(Module::new("IntMod".into(), child));
     let kt_module: &KType<'_> = region.brand().alloc_ktype(KType::Module { module });
-    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_module))));
+    assert!(!t.accepts_part(&spliced(Carried::Type(kt_module))));
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
@@ -307,11 +307,11 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         sig,
         pinned_slots: Vec::new(),
     });
-    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Type(kt_sig))));
+    assert!(!t.accepts_part(&spliced(Carried::Type(kt_sig))));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
-    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(n))));
-    assert!(!t.accepts_part(&ExpressionPart::Spliced(Carried::Object(s))));
+    assert!(!t.accepts_part(&spliced(Carried::Object(n))));
+    assert!(!t.accepts_part(&spliced(Carried::Object(s))));
 }
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
@@ -327,9 +327,9 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    assert!(newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
+    assert!(newtype_ty.accepts_part(&spliced(Carried::Type(&newtype_tv))));
     assert!(KType::OfKind(KKind::ProperType)
-        .accepts_part(&ExpressionPart::Spliced(Carried::Type(&newtype_tv))));
+        .accepts_part(&spliced(Carried::Type(&newtype_tv))));
 
     // A Tagged type value is the wrong family — declined.
     let tagged_tv = KType::SetRef {
@@ -340,7 +340,7 @@ fn of_kind_nominal_is_type_channel_only() {
         ),
         index: 0,
     };
-    assert!(!newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Type(&tagged_tv))));
+    assert!(!newtype_ty.accepts_part(&spliced(Carried::Type(&tagged_tv))));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
@@ -349,7 +349,7 @@ fn of_kind_nominal_is_type_channel_only() {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    assert!(!newtype_ty.accepts_part(&ExpressionPart::Spliced(Carried::Object(w))));
+    assert!(!newtype_ty.accepts_part(&spliced(Carried::Object(w))));
     assert!(!newtype_ty.matches_value(w));
 }
 

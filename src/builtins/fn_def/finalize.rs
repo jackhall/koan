@@ -351,7 +351,7 @@ pub(crate) fn defer<'a>(
             // through the elaborator's scope). The early-error check above reads `terminal.value`,
             // still delivered at the step brand; the carrier is the survival, not a relocated copy.
             spliced_parts[slot_idx].value =
-                ExpressionPart::SplicedSealed(terminal.carrier.duplicate());
+                ExpressionPart::Spliced(terminal.carrier.duplicate());
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

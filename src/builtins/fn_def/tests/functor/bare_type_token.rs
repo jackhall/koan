@@ -109,8 +109,8 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
 }
 
 /// Module carriers stay out of `:Type` slots — the cut-(a) wall at
-/// [`KType::accepts_part`]'s `Spliced(Carried::Type(KType::Module
-/// { .. }))` arm. Asserts only that no value comes back; either
+/// [`KType::accepts_part`], where a `Spliced` cell carrying a `KType::Module { .. }`
+/// opens and is refused. Asserts only that no value comes back; either
 /// `DispatchFailed` (admission-time reject) or per-node `TypeMismatch`
 /// (committed-then-failed bind) satisfies the wall's contract.
 #[test]

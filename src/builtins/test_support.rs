@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::FrameStorage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -17,6 +17,7 @@ use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::default_scope;
 
@@ -178,6 +179,14 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 /// whose bodies return distinct markers so the test can assert which overload won.
 pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<'a> {
     scope.brand().alloc_object(KObject::KString(label.into()))
+}
+
+/// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
+/// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
+/// on the working expression. `Witnessed::resident` asserts the empty reach: the value borrows only
+/// caller-held test data, not a foreign region.
+pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
+    ExpressionPart::Spliced(Sealed::seal(Witnessed::resident(c)))
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

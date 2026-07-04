@@ -271,7 +271,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // owned suffix in staging order — 1:1 with `part_indices`.
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
                 working_expr.parts[*slot].value =
-                    ExpressionPart::SplicedSealed(terminal.carrier.duplicate());
+                    ExpressionPart::Spliced(terminal.carrier.duplicate());
             }
             finish_eager_subs(working_expr, picked)
         });

@@ -28,7 +28,6 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                     | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::RecordType(_))
                     | Some(ExpressionPart::Spliced(_))
-                    | Some(ExpressionPart::SplicedSealed(_))
             );
             if next_is_type_slot {
                 names.push(name);
@@ -128,24 +127,10 @@ pub(crate) fn parse_fn_param_list<'a>(
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
-                    Some(ExpressionPart::Spliced(Carried::Type(kt))) => {
-                        elements.push(SignatureElement::Argument(Argument {
-                            name: name.clone(),
-                            ktype: (*kt).clone(),
-                        }));
-                        i += 2;
-                    }
-                    Some(ExpressionPart::Spliced(other)) => {
-                        return ParamListOutcome::Err(format!(
-                            "FN signature parameter `{name}` type slot resolved to a non-type \
-                             value `{}` (expected a type expression like `:Number` or `:(LIST OF Str)`)",
-                            other.summarize(),
-                        ));
-                    }
-                    Some(ExpressionPart::SplicedSealed(cell)) => {
-                        // The resolved type slot arrives as a carrier; adopt it into the elaborating
-                        // scope (folding its reach) and read it at that brand where the signature is
-                        // assembled, then route the same type/non-type handling as a bare splice.
+                    Some(ExpressionPart::Spliced(cell)) => {
+                        // The resolved type slot arrives as a carrier cell; adopt it into the
+                        // elaborating scope (folding its reach) and read it at that brand where the
+                        // signature is assembled, then route it through type/non-type handling.
                         match elaborator.scope.adopt_sealed(cell) {
                             Carried::Type(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
@@ -229,7 +214,6 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
                             | ExpressionPart::Spliced(_)
-                            | ExpressionPart::SplicedSealed(_)
                     )
                 });
                 if next_is_type_slot {
@@ -248,7 +232,6 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
                             | ExpressionPart::Spliced(_)
-                            | ExpressionPart::SplicedSealed(_)
                     )
                 });
                 if next_is_type_slot {

@@ -344,7 +344,7 @@ fn part_walk<'step>(
                         _ => Sealed::seal(Witnessed::resident(*c)),
                     };
                     new_parts.push(Spanned {
-                        value: ExpressionPart::SplicedSealed(cell),
+                        value: ExpressionPart::Spliced(cell),
                         span,
                     });
                 }

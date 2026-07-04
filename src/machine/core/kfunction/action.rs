@@ -245,9 +245,10 @@ pub struct DepTerminal<'a> {
 
 impl<'a> DepTerminal<'a> {
     /// Relocate the terminal's value into the consumer region (a bare structural copy via
-    /// [`relocate_carried`](crate::machine::core::relocate_carried)) — the consumption a value-copy
-    /// finish that must outlive the resolving step runs (the carrier-carrying copy-free form is the
-    /// `carrier-carrying-spliced-parts` roadmap item).
+    /// [`relocate_carried`](crate::machine::core::relocate_carried)) — the catch channel's value-copy
+    /// delivery (`catch_continuation` reads it for TRY-WITH's `it` bind). The catch channel's
+    /// carrier-only, copy-free delivery is a listed not-yet-planned objective; every other survives-the-
+    /// step consumer already travels its dep as its sealed carrier.
     pub fn relocate(&self, dest: RegionBrand<'a>) -> Carried<'a> {
         relocate_carried(self.value, dest)
     }
