@@ -43,7 +43,7 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
-- [Regions wholesale: the at-will allocation surface](regions-wholesale.md)
+- [Allocation capability: the library region handle](allocation-capability.md)
   — the last boundary move that reshapes the library's public surface.
 
 **Unblocks:** none tracked — the project's terminal item.

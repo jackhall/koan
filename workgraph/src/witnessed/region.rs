@@ -28,10 +28,58 @@ use typed_arena::Arena;
 
 use super::{erase_to_static, with_branded_ref, Reattachable};
 
-/// A workload's declaration of what a [`Region`] stores for it. `Storage` is the bundle of
-/// typed sub-arenas the frame owns; the workload's [`Stored`] impls project each family out of it.
+/// One family's typed sub-arena — the library-owned storage cell a [`FamilyList`] bundle is built
+/// from. The inner arena is private to the crate: holding a `&FamilyArena` grants no allocation
+/// surface of its own; the only path in is the engine's single [`Region::store`] path.
+pub struct FamilyArena<K: Reattachable + 'static> {
+    arena: Arena<K::At<'static>>,
+}
+
+impl<K: Reattachable + 'static> Default for FamilyArena<K> {
+    fn default() -> Self {
+        FamilyArena {
+            arena: Arena::new(),
+        }
+    }
+}
+
+impl<K: Reattachable + 'static> FamilyArena<K> {
+    /// Number of values stored in this cell. Read-only.
+    pub fn len(&self) -> usize {
+        self.arena.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn arena(&self) -> &Arena<K::At<'static>> {
+        &self.arena
+    }
+}
+
+/// A cons-list of storage families — `(A, (B, (C, ())))` — from which the library derives the
+/// arena bundle a [`Region`] owns: one [`FamilyArena`] cell per family, in list order.
+pub trait FamilyList {
+    type Arenas: Default;
+}
+
+impl FamilyList for () {
+    type Arenas = ();
+}
+
+impl<K: Reattachable + 'static, Rest: FamilyList> FamilyList for (K, Rest) {
+    type Arenas = (FamilyArena<K>, Rest::Arenas);
+}
+
+/// The arena bundle a profile's family list derives.
+pub type StorageOf<W> = <<W as StorageProfile>::Families as FamilyList>::Arenas;
+
+/// A workload's declaration of what a [`Region`] stores for it: a [`FamilyList`] cons-list of the
+/// families it stores. The library derives the bundle of library-owned [`FamilyArena`] cells from
+/// it; the workload's [`Stored`] impls project each family's cell out by tuple path.
 pub trait StorageProfile: Sized {
-    type Storage: Default;
+    type Families: FamilyList;
 }
 
 /// Per-family storage policy, implemented by the workload. The lifetime family itself comes from the
@@ -39,7 +87,7 @@ pub trait StorageProfile: Sized {
 /// erase/reattach discipline routes — so the store-side erasure here and the read-side re-anchor in
 /// the scheduler share one audited primitive instead of each carrying its own transmute. A live value
 /// enters the engine as `At<'a>`. One trait carries every storage-safety answer for a family — which
-/// sub-arena it lands in, whether it would self-cycle, and any post-store side effect — so
+/// cell it lands in, whether it would self-cycle, and any post-store side effect — so
 /// [`store`](Region::store) reasons about the gate-erase-store sequence once instead of forking it
 /// per type.
 ///
@@ -47,10 +95,10 @@ pub trait StorageProfile: Sized {
 /// engine is the only path to the private [`Region::storage`], so an impl can supply policy
 /// but cannot route a value past the single store engine.
 pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
-    /// Project this family's sub-arena out of the workload storage bundle. This return type is the
-    /// binding chokepoint: storing `At<'static>` into `Arena<Self::At<'static>>` only type-checks
-    /// when the family is wired to the matching sub-arena.
-    fn sub_arena(storage: &W::Storage) -> &Arena<Self::At<'static>>;
+    /// Project this family's cell out of the library-owned storage bundle. This return type is the
+    /// binding chokepoint: every cell has a distinct type, so only the matching tuple path
+    /// type-checks — a wrong path is a compile error, not a runtime bug.
+    fn cell(storage: &StorageOf<W>) -> &FamilyArena<Self>;
     /// Post-store hook, run inside the engine on the storing frame. Default no-op; a family overrides
     /// it to record the stored address for [`Region::owns_addr`] membership queries.
     fn record_local(_frame: &Region<W>, _stored: &Self::At<'static>) {}
@@ -60,10 +108,10 @@ pub trait Stored<W: StorageProfile>: Reattachable + Sized + 'static {
 /// store `K::At<'static>` (phantom); a surface re-anchors the store on the way out — to a `for<'b>`
 /// brand ([`alloc`](Self::alloc)) or the caller's `'a` ([`alloc_resident`](Self::alloc_resident)).
 pub struct Region<W: StorageProfile> {
-    /// The workload's typed sub-arena bundle. PRIVATE and never exposed by reference: the only
-    /// path in is [`store`](Self::store), the sole store engine, so storage is never reachable by
-    /// reference.
-    storage: W::Storage,
+    /// The library-owned typed cell bundle, derived from the workload's family list. PRIVATE and
+    /// never exposed by reference: the only path in is [`store`](Self::store), the sole store
+    /// engine, so storage is never reachable by reference.
+    storage: StorageOf<W>,
     /// Stable addresses of values a family opts to record (via [`Stored::record_local`]), backing
     /// [`owns_addr`](Self::owns_addr). `usize` rather than `*const _` keeps the field
     /// lifetime-erased and `Send`/`Sync`-neutral.
@@ -73,15 +121,15 @@ pub struct Region<W: StorageProfile> {
 impl<W: StorageProfile> Region<W> {
     pub fn new() -> Self {
         Self {
-            storage: W::Storage::default(),
+            storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
         }
     }
 
-    /// Number of values stored in family `K`'s sub-arena. Read-only; exposes no `&Arena`, so it
+    /// Number of values stored in family `K`'s cell. Read-only; exposes no `&Arena`, so it
     /// cannot be used to bypass the gate.
     pub fn family_len<K: Stored<W>>(&self) -> usize {
-        K::sub_arena(&self.storage).len()
+        K::cell(&self.storage).len()
     }
 
     /// Whether `addr` was recorded by a prior [`Stored::record_local`] on this frame.
@@ -96,7 +144,7 @@ impl<W: StorageProfile> Region<W> {
     }
 
     /// The single store path for any family `K`: erase the live form to `'static`, write it to the
-    /// family's sub-arena, and fire [`Stored::record_local`] on the storing frame. Hands back the
+    /// family's cell, and fire [`Stored::record_local`] on the storing frame. Hands back the
     /// stored `&K::At<'static>` for a surface to re-anchor. `storage` is private and this is the only
     /// path that reaches it, so every allocation — branded or bare — routes here.
     ///
@@ -104,7 +152,9 @@ impl<W: StorageProfile> Region<W> {
     /// module is a bare borrow into its defining region, kept alive by its carrier's witness set), so
     /// storing it where requested can never form an allocation back-edge.
     fn store<K: Stored<W>>(&self, value: K::At<'_>) -> &K::At<'static> {
-        let stored = K::sub_arena(&self.storage).alloc(erase_to_static::<K>(value));
+        let stored = K::cell(&self.storage)
+            .arena()
+            .alloc(erase_to_static::<K>(value));
         // The post-store hook fires on the storing frame (this one — `store` writes where called),
         // so a recorded address tracks its true owner.
         K::record_local(self, stored);

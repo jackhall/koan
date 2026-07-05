@@ -69,11 +69,15 @@ a concept, not a final identifier.
   splicing and alias resolution ([src/scheduler/](../workgraph/src/scheduler.rs)).
 - **Regions, wholesale**: arenas, region owners, liveness. The generic
   region engine ([witnessed/region.rs](../workgraph/src/witnessed/region.rs))
-  is library code; [arena.rs](../src/machine/core/arena.rs) holds only
-  Koan's profile (`KoanStorageProfile`, `KoanRegion`, brand/type families,
-  `FrameSet`, `CallFrame`) and allocates through the generic engine via the
-  `RegionOwner` seam (the `Rc<F>` blanket impl that lets a foreign
-  region-owner type pick up the library's `WitnessRegion`).
+  is library code, including the per-family storage bundle: a workload
+  declares only its family list (`FamilyList`, a `(K, Rest)` cons-list), and
+  the library derives and owns the arena bundle from it — one `FamilyArena`
+  cell per family, keyed by `Stored::cell` through a tuple-field path so a
+  wrong binding is a compile error rather than a runtime bug. [arena.rs](../src/machine/core/arena.rs)
+  holds only Koan's profile (`KoanStorageProfile`, `KoanRegion`, brand/type
+  families, `FrameSet`, `CallFrame`) and allocates through the generic
+  engine via the `RegionOwner` seam (the `Rc<F>` blanket impl that lets a
+  foreign region-owner type pick up the library's `WitnessRegion`).
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
 - The reach set, as an opaque type

@@ -28,7 +28,7 @@ use std::rc::Rc;
 use stable_deref_trait::StableDeref;
 
 mod region;
-pub use region::{Region, StorageProfile, Stored};
+pub use region::{FamilyArena, FamilyList, Region, StorageOf, StorageProfile, Stored};
 
 mod region_set;
 pub use region_set::{PinsRegion, RegionSet};

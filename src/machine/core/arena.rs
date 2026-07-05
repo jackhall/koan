@@ -1,7 +1,7 @@
 //! The Koan instantiation of the generic [`Region`](crate::witnessed::Region)
 //! storage substrate: `KoanRegion = Region<KoanStorageProfile>`, the per-family
-//! [`Stored`](crate::witnessed::Stored) impls (which sub-arena a family lands in), and the
-//! Koan-typed `alloc_*` wrappers. `CallFrame`
+//! [`Stored`](crate::witnessed::Stored) impls (which library-owned cell a family lands in), and
+//! the Koan-typed `alloc_*` wrappers. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
 //! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
 //!
@@ -16,8 +16,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use typed_arena::Arena;
-
 use super::scope::Scope;
 use super::scope_id::ScopeId;
 use super::scope_ptr::ScopeRefFamily;
@@ -28,30 +26,33 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    PinsRegion, Reattachable, Region, RegionOwner, RegionSet, Sealed, StepContext, StorageProfile,
-    Stored, WitnessRegion, Witnessed,
+    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet, Sealed, StepContext,
+    StorageOf, StorageProfile, Stored, WitnessRegion, Witnessed,
 };
 
-/// The Koan storage bundle: one typed sub-arena per stored family. Each sub-arena stores the
-/// family's `'static` form (phantom); the [`Region`] engine re-anchors to the caller's `'a`
-/// on the way out. The `KType` region backs per-type identity binding storage (`Bindings::types`);
-/// the `OperatorGroup` region backs the per-scope operator registry (`Bindings::operators`).
-#[derive(Default)]
-pub struct KoanStorage {
-    objects: Arena<KObject<'static>>,
-    functions: Arena<KFunction<'static>>,
-    scopes: Arena<Scope<'static>>,
-    modules: Arena<Module<'static>>,
-    signatures: Arena<ModuleSignature<'static>>,
-    ktypes: Arena<KType<'static>>,
-    operator_groups: Arena<OperatorGroup>,
-}
-
-/// The Koan workload: binds the generic [`Region`] to the Koan family set.
+/// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
+/// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
+/// (`Bindings::types`); the `OperatorGroup` cell backs the per-scope operator registry
+/// (`Bindings::operators`).
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
-    type Storage = KoanStorage;
+    type Families = (
+        KObject<'static>,
+        (
+            KFunction<'static>,
+            (
+                Scope<'static>,
+                (
+                    Module<'static>,
+                    (
+                        ModuleSignature<'static>,
+                        (KType<'static>, (OperatorGroup, ())),
+                    ),
+                ),
+            ),
+        ),
+    );
 }
 
 /// Run-lifetime allocator. A [`Region`] carrying the Koan family set; lives for one program
@@ -229,47 +230,47 @@ reattachable!(BareRegionFamily => &'r KoanRegion);
 // cycle gate.
 
 impl Stored<KoanStorageProfile> for KObject<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<KObject<'static>> {
-        &s.objects
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.0
     }
     fn record_local(frame: &KoanRegion, stored: &KObject<'static>) {
         frame.record_addr(stored as *const _ as usize);
     }
 }
 
-impl Stored<KoanStorageProfile> for KType<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<KType<'static>> {
-        &s.ktypes
-    }
-}
-
 impl Stored<KoanStorageProfile> for KFunction<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<KFunction<'static>> {
-        &s.functions
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for Scope<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<Scope<'static>> {
-        &s.scopes
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for Module<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<Module<'static>> {
-        &s.modules
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
-    fn sub_arena(s: &KoanStorage) -> &Arena<ModuleSignature<'static>> {
-        &s.signatures
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .0
+    }
+}
+
+impl Stored<KoanStorageProfile> for KType<'static> {
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for OperatorGroup {
-    fn sub_arena(s: &KoanStorage) -> &Arena<OperatorGroup> {
-        &s.operator_groups
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .1 .0
     }
 }
 

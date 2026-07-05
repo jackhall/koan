@@ -47,7 +47,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [One chain-walk for scope name resolution](refactor/unify-scope-lookup-ladders.md)
-- [Regions wholesale: the at-will allocation surface](scheduler_library/regions-wholesale.md)
+- [Allocation capability: the library region handle](scheduler_library/allocation-capability.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
