@@ -42,7 +42,11 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
             _ => panic!("expected TypeResolution::Done for a registered type"),
         };
     let produced: Sealed<CarriedFamily, CarrierWitness> =
-        Sealed::seal(foreign_scope.resident_type_carrier(foreign_hit.kt, &foreign_hit.reach));
+        Sealed::seal(foreign_scope.resident_type_carrier(
+            foreign_hit.kt,
+            &foreign_hit.reach,
+            foreign_hit.borrows_into_home,
+        ));
 
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the
     // type-channel mirror of a `LET` binding a module value returned from elsewhere.
@@ -64,7 +68,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     );
 
     // Build the cell as the splice now does.
-    let cell = Sealed::seal(scope.resident_type_carrier(hit.kt, &hit.reach));
+    let cell = Sealed::seal(scope.resident_type_carrier(hit.kt, &hit.reach, hit.borrows_into_home));
 
     // The consumer lives in its own frame, independent of `scope`'s (`storage`) and the type's
     // original producer frame (`foreign`) — nothing but its own adopted fold may keep them alive.

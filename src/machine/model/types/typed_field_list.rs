@@ -192,9 +192,11 @@ fn rewrite_threaded_self_refs<'a>(
                     // expression (it crosses into another node), so it travels as a cell: a
                     // region-resident type carrier reaching nothing foreign (empty reach).
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Spliced(Sealed::seal(
-                        scope.resident_type_carrier(obj, &FrameSet::empty()),
-                    ))
+                    ExpressionPart::Spliced(Sealed::seal(scope.resident_type_carrier(
+                        obj,
+                        &FrameSet::empty(),
+                        false,
+                    )))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

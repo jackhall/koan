@@ -179,7 +179,10 @@ pub(crate) fn build_type_operand<'step>(
     reach: &FrameSet,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(dest_frame);
-    let identity_carrier = scope.resident_type_carrier(identity, reach);
+    // The `type_id` borrow targets the identity's declaring scope; when that is this same per-call
+    // frame the home-omitted `reach` cannot record it, so materialize home back into reach (the
+    // conservative reseal — an ancestor-declared identity's home ride is redundant but harmless).
+    let identity_carrier = scope.resident_type_carrier(identity, reach, true);
     dest_brand.merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
         let kt = match carried {
             Carried::Type(t) => t,

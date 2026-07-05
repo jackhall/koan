@@ -257,7 +257,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
     // carrier is built with an empty foreign reach, witnessed by that scope's home frame alone.
     // `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok(scope.resident_value_carrier(obj, &FrameSet::empty()))
+    Ok(scope.resident_value_carrier(obj, &FrameSet::empty(), true))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

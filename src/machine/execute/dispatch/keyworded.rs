@@ -347,10 +347,13 @@ fn part_walk<'step>(
                                 .current_scope()
                                 .resolve_type_identifier(t, ctx.active_chain())
                             {
-                                TypeResolution::Done(hit) => Sealed::seal(
-                                    ctx.current_scope()
-                                        .resident_type_carrier(hit.kt, &hit.reach),
-                                ),
+                                TypeResolution::Done(hit) => {
+                                    Sealed::seal(ctx.current_scope().resident_type_carrier(
+                                        hit.kt,
+                                        &hit.reach,
+                                        hit.borrows_into_home,
+                                    ))
+                                }
                                 _ => {
                                     return Err(KError::new(KErrorKind::ShapeError(format!(
                                         "resolved type `{}` lost its resolution",

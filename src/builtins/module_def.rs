@@ -8,6 +8,7 @@
 //! like any other forward reference, and the parent binding lands at dep-finish, not when
 //! MODULE's body returns to the dispatcher.
 
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
@@ -46,7 +47,11 @@ pub fn body<'a>(
                 .bindings()
                 .lookup_type_carrier(&name_for_finish, None)
             {
-                return Action::Done(Ok(fctx.scope.resident_type_carrier(hit.kt, &hit.reach)));
+                return Action::Done(Ok(fctx.scope.resident_type_carrier(
+                    hit.kt,
+                    &hit.reach,
+                    hit.borrows_into_home,
+                )));
             }
             // The module's home-omitted foreign reach, folded from the child scope held **directly** here
             // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
@@ -66,16 +71,22 @@ pub fn body<'a>(
                 }
             }
             let identity = KType::Module { module };
+            // The module's `child_scope` is a same-region child of this frame, so the identity borrows
+            // into home — the home-omitted `reach` cannot record that, so it rides the binding's bit
+            // (the finalize gate must keep the frame the child scope lives in, not sever the module).
             match fctx.scope.register_type_upsert(
                 name_for_finish.clone(),
                 identity,
                 bind_index,
-                reach.clone(),
+                StoredReach {
+                    foreign: reach.clone(),
+                    borrows_into_home: true,
+                },
             ) {
                 Ok(kt_ref) => {
                     // Witness the registered `&KType` in place from the stored reach — no re-clone, no
                     // `child_scope()` walk.
-                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach)))
+                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach, true)))
                 }
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",

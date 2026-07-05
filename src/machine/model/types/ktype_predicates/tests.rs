@@ -195,7 +195,7 @@ fn spliced_cell_classifies_by_opening() {
     let storage = FrameStorage::run_root();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
-    let carrier = scope.resident_value_carrier(obj, &FrameSet::empty());
+    let carrier = scope.resident_value_carrier(obj, &FrameSet::empty(), false);
     let cell_part = ExpressionPart::Spliced(Sealed::seal(carrier));
 
     for (ty, admits) in [

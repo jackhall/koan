@@ -132,7 +132,10 @@ pub fn body_opaque<'a>(
     // named binding — and sealed onto the terminal carrier, witnessing the module in place.
     let reach = ctx.scope.reach_of_child(new_scope);
     let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
-    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, &reach)))
+    // The opaque view's `new_scope` is a same-region child of this frame, so the module value borrows
+    // into home — the home-omitted `reach` drops that fact, so materialize it back via the bit (the
+    // finalize gate must keep the frame `new_scope` lives in, not sever it).
+    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, &reach, true)))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -158,7 +161,10 @@ pub fn body_transparent<'a>(
     // to this frame — so its reach folds that source's region and reach, sealed onto the terminal.
     let reach = ctx.scope.reach_of_child(m.child_scope());
     let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
-    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, &reach)))
+    // A transparent view reuses the foreign source module's child scope: it borrows nothing into this
+    // home frame (its interior points at the source region, named by `reach`), so the bit is unset and
+    // the finalize gate may sever the top node from a dying home frame.
+    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, &reach, false)))
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing

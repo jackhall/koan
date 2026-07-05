@@ -79,7 +79,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     let producer = run_root_bare(&storage);
     // A value resident in the producer scope's region, sealed as its own carrier.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
-    let cell = Sealed::seal(producer.resident_value_carrier(obj, &FrameSet::empty()));
+    let cell = Sealed::seal(producer.resident_value_carrier(obj, &FrameSet::empty(), false));
 
     // A separate (open) consumer scope adopts the carrier.
     let consumer = producer.brand().alloc_scope(Scope::child_under(producer));

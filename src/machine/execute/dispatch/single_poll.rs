@@ -89,9 +89,11 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
-        TypeResolution::Done(resolved) => {
-            Outcome::Done(Ok(s.resident_type_carrier(resolved.kt, &resolved.reach)))
-        }
+        TypeResolution::Done(resolved) => Outcome::Done(Ok(s.resident_type_carrier(
+            resolved.kt,
+            &resolved.reach,
+            resolved.borrows_into_home,
+        ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and

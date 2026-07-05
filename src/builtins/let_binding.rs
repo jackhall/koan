@@ -134,9 +134,9 @@ pub fn body<'a>(
             ctx.scope.fold_reach(carrier.witness());
         }
         // The terminal witnesses the aliased type in place from that stored reach.
-        let carrier = ctx
-            .scope
-            .resident_type_carrier(region.alloc_ktype(kt), &reach);
+        let carrier =
+            ctx.scope
+                .resident_type_carrier(region.alloc_ktype(kt), &reach, borrows_into_home);
         Action::Done(Ok(carrier))
     } else {
         let value = rhs
@@ -193,7 +193,11 @@ pub fn body<'a>(
         // The bound value lives in this scope's region with its foreign reach `reach`, so its terminal
         // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
         // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::Done(Ok(ctx.scope.resident_value_carrier(allocated, &reach)))
+        Action::Done(Ok(ctx.scope.resident_value_carrier(
+            allocated,
+            &reach,
+            borrows_into_home,
+        )))
     }
 }
 

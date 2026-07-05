@@ -79,6 +79,19 @@ impl CarrierWitness {
         }
     }
 
+    /// A resident value's witness: its home frame as a **residence pin** (liveness-only — the value
+    /// lives in that region but the pin is not propagated as reach) plus its exact borrow `reach`. The
+    /// pivot from [`Self::reach_only`]: a resident value no longer folds its home into reach, so a
+    /// fully-owned value's reach is empty and the finalize gate severs it from a dying home frame. A
+    /// value that genuinely borrows into home carries home in `reach` too (the materialized bind bit),
+    /// so the gate keeps it.
+    pub fn residence(home: Rc<FrameStorage>, reach: FrameSet) -> Self {
+        CarrierWitness {
+            pins: vec![CarrierPin::Frame(home)],
+            reach,
+        }
+    }
+
     /// Whether this witness pins and reaches nothing — the frameless / run-region terminal, whose
     /// backing outlives the carrier so no re-home is needed.
     pub fn is_empty(&self) -> bool {

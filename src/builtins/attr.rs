@@ -208,13 +208,13 @@ fn access_type_member<'a>(
                 Some(MemberResolution::Value {
                     obj,
                     reach,
-                    borrows_into_home: _,
-                }) => Ok(decl.resident_value_carrier(obj, &reach)),
+                    borrows_into_home,
+                }) => Ok(decl.resident_value_carrier(obj, &reach, borrows_into_home)),
                 Some(MemberResolution::Type {
                     kt,
                     reach,
-                    borrows_into_home: _,
-                }) => Ok(decl.resident_type_carrier(kt, &reach)),
+                    borrows_into_home,
+                }) => Ok(decl.resident_type_carrier(kt, &reach, borrows_into_home)),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     s.path, field
@@ -307,11 +307,12 @@ fn access_module_member<'a>(
         return Ok(
             match module_scope.bindings().lookup_type_carrier(field, None) {
                 Some(NameLookup::Bound(hit)) => {
-                    module_scope.resident_type_carrier(hit.kt, &hit.reach)
+                    module_scope.resident_type_carrier(hit.kt, &hit.reach, hit.borrows_into_home)
                 }
                 _ => module_scope.resident_type_carrier(
                     module_scope.brand().alloc_ktype(minted),
                     &FrameSet::empty(),
+                    false,
                 ),
             },
         );
@@ -326,14 +327,18 @@ fn access_module_member<'a>(
         Some(MemberResolution::Value {
             obj,
             reach,
-            borrows_into_home: _,
+            borrows_into_home,
         }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // The re-tag allocates in the module region (not the read site's): `obj` is a
                 // pre-existing reference into that region, so it crosses as a fold operand — its
                 // carrier (named by the member's own `reach`) unions into the wrapped result's
                 // witness via `alloc_carried_with`.
-                let obj_carrier = Sealed::seal(module_scope.resident_value_carrier(obj, &reach));
+                let obj_carrier = Sealed::seal(module_scope.resident_value_carrier(
+                    obj,
+                    &reach,
+                    borrows_into_home,
+                ));
                 let ctx = StepContext::new(scope_frame(module_scope));
                 return Ok(
                     ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {
@@ -345,13 +350,13 @@ fn access_module_member<'a>(
                     }),
                 );
             }
-            Ok(module_scope.resident_value_carrier(obj, &reach))
+            Ok(module_scope.resident_value_carrier(obj, &reach, borrows_into_home))
         }
         Some(MemberResolution::Type {
             kt,
             reach,
-            borrows_into_home: _,
-        }) => Ok(module_scope.resident_type_carrier(kt, &reach)),
+            borrows_into_home,
+        }) => Ok(module_scope.resident_type_carrier(kt, &reach, borrows_into_home)),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

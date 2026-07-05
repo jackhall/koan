@@ -315,8 +315,11 @@ impl<'step> KoanRuntime<'step> {
                 // and `reach` names any genuinely-foreign region (a module's child scope).
                 NameOutcome::Resolved(Carried::Type(kt)) => {
                     let reach = s.resolve_type_reach(leaf_name, active_chain.map(|c| &**c));
+                    // The resolved type lives in an ancestor region (kept alive by the read scope's home
+                    // frame's `outer` chain), never in the read scope's own home, so it borrows nothing
+                    // into home: the bit is unset and `reach` names only its genuinely-foreign regions.
                     Some(Slot::Static(Sealed::seal(
-                        s.resident_type_carrier(kt, &reach),
+                        s.resident_type_carrier(kt, &reach, false),
                     )))
                 }
                 // The value case is handled above via the reach-carrying binding-scope carrier

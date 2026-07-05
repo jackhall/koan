@@ -832,7 +832,15 @@ impl<'a> Scope<'a> {
             scope
                 .bindings()
                 .lookup_value_carrier(name, scope.binding_cutoff(chain))
-                .map(|hit| hit.map(|value| scope.resident_value_carrier(value.obj, &value.reach)))
+                .map(|hit| {
+                    hit.map(|value| {
+                        scope.resident_value_carrier(
+                            value.obj,
+                            &value.reach,
+                            value.borrows_into_home,
+                        )
+                    })
+                })
         })
     }
 
@@ -847,15 +855,34 @@ impl<'a> Scope<'a> {
         &self,
         obj: &'a KObject<'a>,
         foreign: &FrameSet,
+        borrows_into_home: bool,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the binding scope's region owner is held while its value is read");
-        let mut reach = FrameSet::singleton(home.clone());
+        self.brand().seal_resident(
+            Carried::Object(obj),
+            self.resident_witness(&home, foreign, borrows_into_home),
+        )
+    }
+
+    /// Build a resident carrier's witness: the home frame as a residence pin, plus the value's exact
+    /// borrow reach — its home-omitted `foreign` reach, with home materialized back in only when the
+    /// binding recorded that the value `borrows_into_home`. A fully-owned value (empty foreign, bit
+    /// unset) thus gets an empty reach, so the finalize gate severs it from a dying home frame.
+    fn resident_witness(
+        &self,
+        home: &Rc<FrameStorage>,
+        foreign: &FrameSet,
+        borrows_into_home: bool,
+    ) -> CarrierWitness {
+        let mut reach = FrameSet::empty();
         reach.fold_omitting(foreign, |region| home.pins_region(region));
-        self.brand()
-            .seal_resident(Carried::Object(obj), CarrierWitness::reach_only(reach))
+        if borrows_into_home {
+            reach = FrameSet::union(&reach, &FrameSet::singleton(Rc::clone(home)));
+        }
+        CarrierWitness::residence(Rc::clone(home), reach)
     }
 
     /// Adopt a sealed dep carrier into this scope, copy-free: fold its witness into the scope's
@@ -909,15 +936,16 @@ impl<'a> Scope<'a> {
         &self,
         kt: &'a crate::machine::model::types::KType<'a>,
         foreign: &FrameSet,
+        borrows_into_home: bool,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the binding scope's region owner is held while its type is read");
-        let mut reach = FrameSet::singleton(home.clone());
-        reach.fold_omitting(foreign, |region| home.pins_region(region));
-        self.brand()
-            .seal_resident(Carried::Type(kt), CarrierWitness::reach_only(reach))
+        self.brand().seal_resident(
+            Carried::Type(kt),
+            self.resident_witness(&home, foreign, borrows_into_home),
+        )
     }
 
     /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope,
