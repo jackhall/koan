@@ -753,12 +753,16 @@ digraph {
     "koan::machine::execute::dispatch::submit" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::submit" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::lift" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::builtins" [label="uses", style="dashed"];
