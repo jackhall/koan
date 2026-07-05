@@ -87,6 +87,38 @@ impl<T> NameLookup<T> {
     }
 }
 
+/// A binding's stored reach plus the one-bit answer to "does the bound value borrow into **this**
+/// scope's own region?" ([`Self::borrows_into_home`]). `foreign` is the home-omitted reach — never the
+/// scope's own home frame, whose `Rc` stored in-region would close the
+/// `frame → region → scope → bindings → frame` cycle — so the home-borrow fact cannot be recovered
+/// from it and is remembered as the bit instead. A read materializes the bit back into an explicit
+/// reach member (Phase-4 reads); until then a bind threads it through unread.
+///
+/// `From<FrameSet>` defaults the bit to `false`: a value delivered by a region-pure or foreign carrier
+/// borrows into no home region, which is every builtin registration and every test bind. Only a
+/// production bind whose delivered carrier's reach covers the binding scope's region sets it `true`.
+#[derive(Clone, Default)]
+pub struct StoredReach {
+    pub foreign: FrameSet,
+    pub borrows_into_home: bool,
+}
+
+impl StoredReach {
+    /// The empty reach that borrows into no home — the region-pure / no-carrier default.
+    pub fn empty() -> Self {
+        StoredReach::default()
+    }
+}
+
+impl From<FrameSet> for StoredReach {
+    fn from(foreign: FrameSet) -> Self {
+        StoredReach {
+            foreign,
+            borrows_into_home: false,
+        }
+    }
+}
+
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
 /// member access. Produced by [`crate::machine::core::Scope::lookup_member`], which checks the
 /// module-own value side then the type side in one call. The `data`/`types` cross-kind exclusion
@@ -98,6 +130,9 @@ pub enum MemberResolution<'a> {
         /// the module body bound it — so an ATTR read wraps the member in a carrier built from its
         /// stored reach rather than re-asserting single-frame co-location.
         reach: FrameSet,
+        /// Whether the member borrows into the module scope's own region (threaded from the stored
+        /// row; a read materializes it as an explicit reach member).
+        borrows_into_home: bool,
     },
     Type {
         kt: &'a KType<'a>,
@@ -105,6 +140,9 @@ pub enum MemberResolution<'a> {
         /// stored on the module's own `types` entry — so an ATTR type read witnesses the existing
         /// `&KType` in place from its stored reach rather than walking the value.
         reach: FrameSet,
+        /// Whether the member type borrows into the module scope's own region (threaded from the
+        /// stored row).
+        borrows_into_home: bool,
     },
 }
 
@@ -115,6 +153,9 @@ pub enum MemberResolution<'a> {
 pub struct ValueHit<'a> {
     pub obj: &'a KObject<'a>,
     pub reach: FrameSet,
+    /// Whether the bound value borrows into the binding scope's own region (threaded from the stored
+    /// row; a read materializes it as an explicit reach member).
+    pub borrows_into_home: bool,
 }
 
 /// The type-side reach-carrying payload of a `NameLookup<TypeHit>`: the bound `&KType` witnessed in
@@ -126,6 +167,9 @@ pub struct ValueHit<'a> {
 pub struct TypeHit<'a> {
     pub kt: &'a KType<'a>,
     pub reach: FrameSet,
+    /// Whether the bound type borrows into the binding scope's own region (threaded from the stored
+    /// row; a read materializes it as an explicit reach member).
+    pub borrows_into_home: bool,
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -187,7 +231,7 @@ pub struct Bindings<'a> {
     /// hands the reach back so the read witnesses the existing `&'a KType` in place from its stored
     /// reach, never re-deriving it by walking the value. Foreign-only (home-omitted) for the same
     /// cycle-safety rule as [`Self::data`].
-    types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex, FrameSet)>>,
+    types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex, StoredReach)>>,
     /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
     /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
     /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
@@ -195,7 +239,7 @@ pub struct Bindings<'a> {
     /// rather than re-asserting single-frame co-location. The reach is foreign-only (home-omitted)
     /// so it never stores the region's own home frame `Rc` in-region — that would close a
     /// `frame → region → scope → bindings → frame` strong cycle and leak the region.
-    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>>,
+    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, StoredReach)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
     /// Bucket-key → entries for FN / FUNCTOR overloads whose binder has
@@ -224,9 +268,10 @@ pub struct Bindings<'a> {
     type_identifier_memo: RefCell<HashMap<(TypeIdentifier, Option<usize>), TypeMemoEntry<'a>>>,
 }
 
-/// A `type_identifier_memo` value: the cached `&KType` plus the resolved binding's home-omitted
-/// foreign reach, so a memo hit rebuilds the read carrier without re-walking the chain.
-type TypeMemoEntry<'a> = (&'a KType<'a>, FrameSet);
+/// A `type_identifier_memo` value: the cached `&KType` plus the resolved binding's [`StoredReach`]
+/// (home-omitted reach + the home-borrow bit), so a memo hit rebuilds the read carrier without
+/// re-walking the chain.
+type TypeMemoEntry<'a> = (&'a KType<'a>, StoredReach);
 
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
@@ -246,7 +291,7 @@ impl<'a> Bindings<'a> {
         &self,
         te: &TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<(&'a KType<'a>, FrameSet)> {
+    ) -> Option<(&'a KType<'a>, StoredReach)> {
         self.type_identifier_memo
             .borrow()
             .get(&(te.clone(), cutoff))
@@ -325,7 +370,8 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(TypeHit {
                     kt,
-                    reach: reach.clone(),
+                    reach: reach.foreign.clone(),
+                    borrows_into_home: reach.borrows_into_home,
                 }));
             }
         }
@@ -348,7 +394,8 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Value {
                     obj,
-                    reach: reach.clone(),
+                    reach: reach.foreign.clone(),
+                    borrows_into_home: reach.borrows_into_home,
                 });
             }
         }
@@ -356,7 +403,8 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Type {
                     kt,
-                    reach: reach.clone(),
+                    reach: reach.foreign.clone(),
+                    borrows_into_home: reach.borrows_into_home,
                 });
             }
         }
@@ -375,7 +423,8 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(ValueHit {
                     obj,
-                    reach: reach.clone(),
+                    reach: reach.foreign.clone(),
+                    borrows_into_home: reach.borrows_into_home,
                 }));
             }
         }
@@ -551,14 +600,14 @@ impl<'a> Bindings<'a> {
         te: TypeIdentifier,
         cutoff: Option<usize>,
         kt: &'a KType<'a>,
-        reach: FrameSet,
+        reach: impl Into<StoredReach>,
     ) {
         let mut memo = self.type_identifier_memo.borrow_mut();
-        memo.entry((te, cutoff)).or_insert((kt, reach));
+        memo.entry((te, cutoff)).or_insert((kt, reach.into()));
     }
 
     #[cfg(test)]
-    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex, FrameSet)>> {
+    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex, StoredReach)>> {
         self.data.borrow()
     }
 
@@ -580,7 +629,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex, FrameSet)>> {
+    pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex, StoredReach)>> {
         self.types.borrow()
     }
 
@@ -634,9 +683,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<StoredReach>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true, index, reach)
+        self.try_apply(name, obj, obj.as_function(), true, index, reach.into())
     }
 
     /// Bare-`FN` overload registration: adds `fn_ref` to the `functions`
@@ -656,7 +705,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
         // A bare-`FN` registration writes `functions` only, not `data`, so it stores no reach.
-        self.try_apply(name, obj, Some(fn_ref), false, index, FrameSet::empty())
+        self.try_apply(name, obj, Some(fn_ref), false, index, StoredReach::empty())
     }
 
     /// Register `name` → `kt` in `types`. Errors `Rebind` if already present in `types`, or
@@ -667,9 +716,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<StoredReach>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply_type(name, kt, index, reach)
+        self.try_apply_type(name, kt, index, reach.into())
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
@@ -686,8 +735,9 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<StoredReach>,
     ) -> Result<ApplyOutcome, KError> {
+        let reach = reach.into();
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
             Err(_) => return Ok(ApplyOutcome::Conflict),
@@ -791,7 +841,7 @@ impl<'a> Bindings<'a> {
     /// `src.functions` separately. Panics on `Conflict` — a fresh `Bindings`
     /// should never hit a borrow conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, FrameSet)> = src
+        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex, StoredReach)> = src
             .data
             .borrow()
             .iter()
@@ -817,7 +867,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: StoredReach,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
@@ -865,7 +915,7 @@ impl<'a> Bindings<'a> {
         fn_part: Option<&'a KFunction<'a>>,
         write_data: bool,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: StoredReach,
     ) -> Result<ApplyOutcome, KError> {
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow

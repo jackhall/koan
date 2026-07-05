@@ -205,12 +205,16 @@ fn access_type_member<'a>(
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             match decl.bindings().lookup_member(field, None) {
-                Some(MemberResolution::Value { obj, reach }) => {
-                    Ok(decl.resident_value_carrier(obj, &reach))
-                }
-                Some(MemberResolution::Type { kt, reach }) => {
-                    Ok(decl.resident_type_carrier(kt, &reach))
-                }
+                Some(MemberResolution::Value {
+                    obj,
+                    reach,
+                    borrows_into_home: _,
+                }) => Ok(decl.resident_value_carrier(obj, &reach)),
+                Some(MemberResolution::Type {
+                    kt,
+                    reach,
+                    borrows_into_home: _,
+                }) => Ok(decl.resident_type_carrier(kt, &reach)),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     s.path, field
@@ -319,7 +323,11 @@ fn access_module_member<'a>(
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
-        Some(MemberResolution::Value { obj, reach }) => {
+        Some(MemberResolution::Value {
+            obj,
+            reach,
+            borrows_into_home: _,
+        }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // The re-tag allocates in the module region (not the read site's): `obj` is a
                 // pre-existing reference into that region, so it crosses as a fold operand — its
@@ -339,9 +347,11 @@ fn access_module_member<'a>(
             }
             Ok(module_scope.resident_value_carrier(obj, &reach))
         }
-        Some(MemberResolution::Type { kt, reach }) => {
-            Ok(module_scope.resident_type_carrier(kt, &reach))
-        }
+        Some(MemberResolution::Type {
+            kt,
+            reach,
+            borrows_into_home: _,
+        }) => Ok(module_scope.resident_type_carrier(kt, &reach)),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

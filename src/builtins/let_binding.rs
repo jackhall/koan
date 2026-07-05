@@ -1,3 +1,4 @@
+use crate::machine::core::StoredReach;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
@@ -109,10 +110,21 @@ pub fn body<'a>(
             .arg_carrier("value")
             .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
             .unwrap_or_default();
-        if let Err(e) = ctx
-            .scope
-            .register_user_type(name, kt.clone(), bind_index, reach.clone())
-        {
+        // Whether the aliased type borrows into this scope's own region: the home-omitted `reach`
+        // above cannot record it (home is dropped), so it is captured as the binding's bit for a
+        // later read to materialize back into an explicit reach member.
+        let borrows_into_home = ctx
+            .arg_carrier("value")
+            .is_some_and(|carrier| carrier.witness().reach_covers(ctx.scope.region()));
+        if let Err(e) = ctx.scope.register_user_type(
+            name,
+            kt.clone(),
+            bind_index,
+            StoredReach {
+                foreign: reach.clone(),
+                borrows_into_home,
+            },
+        ) {
             return done_err(e);
         }
         // Deposit the bound type's reach onto the scope's reach-set so an identity reaching a foreign
@@ -154,10 +166,20 @@ pub fn body<'a>(
             .arg_carrier("value")
             .map(|carrier| ctx.scope.foreign_reach_of(carrier.witness()))
             .unwrap_or_default();
-        if let Err(e) = ctx
-            .scope
-            .bind_value(name, allocated, bind_index, reach.clone())
-        {
+        // Whether the bound value borrows into this scope's own region — captured as the binding's
+        // bit because the home-omitted `reach` drops the home frame (see the type route above).
+        let borrows_into_home = ctx
+            .arg_carrier("value")
+            .is_some_and(|carrier| carrier.witness().reach_covers(ctx.scope.region()));
+        if let Err(e) = ctx.scope.bind_value(
+            name,
+            allocated,
+            bind_index,
+            StoredReach {
+                foreign: reach.clone(),
+                borrows_into_home,
+            },
+        ) {
             return done_err(e);
         }
         // Deposit the bound value's reach into the scope's reach-set so every foreign region it

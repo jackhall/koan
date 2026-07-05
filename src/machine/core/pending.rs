@@ -5,8 +5,8 @@
 
 use std::cell::RefCell;
 
-use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::StoredReach;
 use crate::machine::model::values::KObject;
 
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
@@ -22,7 +22,7 @@ enum PendingWrite<'a> {
         index: BindingIndex,
         /// The bound value's home-omitted foreign reach, carried through the deferred write so a
         /// drained bind stores the same reach a direct bind would (see [`Bindings::try_bind_value`]).
-        reach: FrameSet,
+        reach: StoredReach,
     },
     Function {
         name: String,
@@ -36,7 +36,7 @@ enum PendingWrite<'a> {
         index: BindingIndex,
         /// The bound type's home-omitted foreign reach, carried through the deferred write so a
         /// drained type register stores the same reach a direct register would.
-        reach: FrameSet,
+        reach: StoredReach,
     },
 }
 
@@ -56,7 +56,7 @@ impl<'a> PendingQueue<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: StoredReach,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
@@ -86,7 +86,7 @@ impl<'a> PendingQueue<'a> {
         name: String,
         kt: &'a crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: StoredReach,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Type {
             name,
@@ -209,7 +209,7 @@ mod tests {
             "Foo".to_string(),
             kt,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         );
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);

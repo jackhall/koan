@@ -32,7 +32,11 @@ impl<'step> Scope<'step> {
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
         if let Some((kt, reach)) = self.type_identifier_memo_get(te, cutoff) {
-            return TypeResolution::Done(TypeHit { kt, reach });
+            return TypeResolution::Done(TypeHit {
+                kt,
+                reach: reach.foreign,
+                borrows_into_home: reach.borrows_into_home,
+            });
         }
         let chain_for_reach = chain.clone();
         let mut elaborator = Elaborator::new(self).with_chain(chain);
@@ -47,7 +51,11 @@ impl<'step> Scope<'step> {
                 // reach for a module). Cached alongside `kt` so a hit rebuilds the read carrier.
                 let reach = self.resolve_type_reach(te.as_str(), chain_for_reach.as_deref());
                 self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, reach.clone());
-                TypeResolution::Done(TypeHit { kt: kt_ref, reach })
+                TypeResolution::Done(TypeHit {
+                    kt: kt_ref,
+                    reach,
+                    borrows_into_home: false,
+                })
             } else {
                 TypeResolution::Park(pending)
             }

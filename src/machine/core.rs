@@ -22,7 +22,7 @@ pub use arena::{CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, Regi
 pub(crate) use arena::{KoanRegionExt, KoanStepContextExt};
 pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
-    PendingBinderGuard, PendingTypeEntry, TypeHit, ValueHit,
+    PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit, ValueHit,
 };
 pub use carrier_witness::{CarrierPin, CarrierWitness};
 pub(crate) use kerror::kerror_ktype;

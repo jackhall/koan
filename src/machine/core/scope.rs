@@ -406,7 +406,10 @@ impl<'a> Scope<'a> {
         &self,
         te: &crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<(&'a crate::machine::model::types::KType<'a>, FrameSet)> {
+    ) -> Option<(
+        &'a crate::machine::model::types::KType<'a>,
+        crate::machine::core::StoredReach,
+    )> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -512,8 +515,9 @@ impl<'a> Scope<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<crate::machine::core::StoredReach>,
     ) -> Result<(), KError> {
+        let reach = reach.into();
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call
             // site, so a local bind whose name is already a surfaced module member
@@ -594,8 +598,9 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<crate::machine::core::StoredReach>,
     ) {
+        let reach = reach.into();
         if self.bindings.is_borrowed() {
             self.write_target().register_type(name, ktype, index, reach);
             return;
@@ -624,7 +629,7 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<crate::machine::core::StoredReach>,
     ) -> Result<(), KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -648,8 +653,9 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: FrameSet,
+        reach: impl Into<crate::machine::core::StoredReach>,
     ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
+        let reach = reach.into();
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
