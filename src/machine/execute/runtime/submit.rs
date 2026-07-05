@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::scope_frame;
-use crate::machine::core::{assemble_body_chain, KoanRegion, ScopeId, ScopeRefFamily};
+use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 use crate::witnessed::SealedExtern;
@@ -20,21 +20,6 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
         a as *const Scope<'_> as *const (),
         b as *const Scope<'_> as *const (),
     )
-}
-
-/// Whether `target` region is reached by walking `cart_scope`'s `outer` chain. The cart's
-/// `FrameStorage.outer` chain pins every such region, so a scope found here is cart-witnessed (a
-/// `YokedChild`), not run-lived.
-fn cart_chain_reaches_region(cart_scope: &Scope<'_>, target: &KoanRegion) -> bool {
-    let target = target as *const KoanRegion as *const ();
-    let mut cur = Some(cart_scope);
-    while let Some(s) = cur {
-        if std::ptr::eq(s.region() as *const KoanRegion as *const (), target) {
-            return true;
-        }
-        cur = s.outer();
-    }
-    false
 }
 
 #[cfg(test)]
@@ -106,7 +91,7 @@ impl<'run> KoanRuntime<'run> {
             if f.with_scope(|fs| scopes_eq(fs, scope)) {
                 return NodeScope::Yoked;
             }
-            if f.with_scope(|fs| cart_chain_reaches_region(fs, scope.region())) {
+            if f.with_scope(|fs| fs.chain_reaches_region(scope.region())) {
                 return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");

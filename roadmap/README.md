@@ -35,7 +35,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
-- [Own the chain-reaches-region predicate](refactor/fold-chain-reaches-region-predicate.md)
 - [Fold the two type-write paths](refactor/fold-type-write-paths.md)
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)

@@ -187,6 +187,33 @@ impl<'a> Scope<'a> {
         );
     }
 
+    /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region` —
+    /// the lexical-ancestor half of the reach-set omission predicate. Holding a scope keeps its own
+    /// region alive, so a region reached here is one this chain already pins and must be omitted from a
+    /// folded reach-set (re-pinning it, paired with a sibling bind of a call's result, would close a
+    /// `frame → region → scope → frame` cycle). Composed with `FrameStorage::pins_region` (the storage
+    /// `outer` half) at the two reach folds via [`Self::fold_foreign_into`]; used alone at
+    /// `runtime/submit.rs`'s cart check, which needs only the lexical half.
+    pub(crate) fn chain_reaches_region(&self, region: &KoanRegion) -> bool {
+        self.ancestors()
+            .any(|scope| std::ptr::eq(scope.region(), region))
+    }
+
+    /// Fold `witness`'s reach into `target`, omitting every region this scope already keeps alive: its
+    /// home frame's own / storage-`outer` ancestor region ([`FrameStorage::pins_region`]) or a lexical
+    /// `outer`-chain ancestor region ([`Self::chain_reaches_region`]). A per-call frame carries no
+    /// storage `outer` under TCO, so the lexical half is what catches a closure's captured (ancestor)
+    /// scope — omitting it keeps a sibling bind of the call's result from closing a region cycle. The
+    /// shared core of [`Self::fold_reach`] (target = the scope's own reach-set) and
+    /// [`Self::foreign_reach_of`] (target = a fresh set): they differ only in which `target` they pass.
+    fn fold_foreign_into(&self, target: &mut FrameSet, witness: &FrameSet) {
+        let home = self.region_owner.upgrade();
+        target.fold_omitting(witness, |region| {
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+                || self.chain_reaches_region(region)
+        });
+    }
+
     /// Fold a value's reach into this scope's reach-set, omitting any region the home frame already
     /// pins (its own or an ancestor). Called as a value is bound under the scope (a `let` / user-fn
     /// arg / applied-here closure) and at the run-root drain, so the foreign regions it borrows into
@@ -198,18 +225,7 @@ impl<'a> Scope<'a> {
             "fold_reach into sealed scope {:?}",
             self.id,
         );
-        let home = self.region_owner.upgrade();
-        self.reach.borrow_mut().fold_omitting(witness, |region| {
-            // Omit any region this scope already keeps alive: its own / a storage-`outer` ancestor
-            // (`FrameStorage::pins_region`), or a lexical `outer`-chain ancestor. A per-call frame's
-            // storage `outer` is None under TCO, so the lexical walk is what catches the closure's
-            // captured (ancestor) scope — re-pinning it, paired with a sibling bind of the call's
-            // result, would close a region cycle.
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self
-                    .ancestors()
-                    .any(|scope| std::ptr::eq(scope.region(), region))
-        });
+        self.fold_foreign_into(&mut self.reach.borrow_mut(), witness);
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -836,21 +852,15 @@ impl<'a> Scope<'a> {
         unsafe { erased.reattach() }
     }
 
-    /// The home-omitted foreign reach of `witness` as this scope would fold it into its reach-set —
-    /// its home frame and lexical-ancestor regions omitted (mirrors [`Self::fold_reach`]) — as a
-    /// standalone [`FrameSet`] to **store on a binding entry**. Cycle-safe by the same rule
-    /// `fold_reach` obeys: the home frame's own `Rc` never lands in the set, so storing it inside the
-    /// scope's own region opens no `frame → region → scope → bindings → frame` strong cycle. A
-    /// region-pure or ancestor-resident value yields the empty set.
+    /// The home-omitted foreign reach of `witness` as this scope would fold it into its reach-set — its
+    /// home frame and lexical-ancestor regions omitted — as a standalone [`FrameSet`] to **store on a
+    /// binding entry**. Cycle-safe by the same rule [`Self::fold_reach`] obeys (both route
+    /// [`Self::fold_foreign_into`]): the home frame's own `Rc` never lands in the set, so storing it
+    /// inside the scope's own region opens no `frame → region → scope → bindings → frame` strong cycle.
+    /// A region-pure or ancestor-resident value yields the empty set.
     pub(crate) fn foreign_reach_of(&self, witness: &FrameSet) -> FrameSet {
-        let home = self.region_owner.upgrade();
         let mut foreign = FrameSet::empty();
-        foreign.fold_omitting(witness, |region| {
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self
-                    .ancestors()
-                    .any(|scope| std::ptr::eq(scope.region(), region))
-        });
+        self.fold_foreign_into(&mut foreign, witness);
         foreign
     }
 
