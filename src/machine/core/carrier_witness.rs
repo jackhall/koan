@@ -113,6 +113,21 @@ impl CarrierWitness {
         &self.pins
     }
 
+    /// The finalize sever's witness rebuild. The value's top node has been copied out of its origin
+    /// frame `producer` into an owned `backing`, and the gate that reached here already proved the
+    /// value's **reach** does not cover `producer` — so nothing the carrier holds still borrows into
+    /// `producer`, and its residence can be released: drop every `Frame` pin that keeps `producer`
+    /// alive. Foreign `Frame` pins (borrows into other live regions), owned pins, and the exact reach
+    /// are kept verbatim, and `backing` is added — the pin that keeps the copied top node alive.
+    pub(crate) fn severed(mut self, producer: &KoanRegion, backing: CarrierPin) -> Self {
+        self.pins.retain(|pin| match pin {
+            CarrierPin::Frame(frame) => !frame.pins_region(producer),
+            CarrierPin::Object(_) | CarrierPin::Type(_) => true,
+        });
+        self.pins.push(backing);
+        self
+    }
+
     /// Collapse to a plain [`FrameSet`] naming every region this witness keeps alive through a frame
     /// (its reach ∪ every `Frame` pin's owner) — the reach a site threads onward as a stored
     /// [`FrameSet`] when it has no scope to home-omit against. Owned (`Object`/`Type`) backings carry

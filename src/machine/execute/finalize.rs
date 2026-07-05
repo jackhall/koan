@@ -7,6 +7,7 @@ use crate::machine::model::{Carried, KType};
 use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, Witnessed};
 
+use super::lift::sever_residence;
 use super::runtime::KoanRuntime;
 
 /// `Reattachable` carrier family for a declared-return re-stamp's two home-region operands: the
@@ -61,16 +62,26 @@ impl NodeFinalize for KoanRuntime<'_> {
         let Some(producer) = frame else {
             return Ok(carrier);
         };
-        // Fold the producing frame in: the scope-reach seal that makes a value born under the empty set
-        // (the brand-confined alloc surface) storable. Applied before the pass-through / re-stamp split
-        // so both carry it; idempotent when the carrier already names its dest frame.
+        // No declared return (or a non-`Resolved` FN-def carrier): the Done-boundary gate. If the
+        // carrier's **reach** already covers the producer, the value genuinely borrows into the dying
+        // frame — the reach names it, so seal as-is (residence pinned via reach, no fold needed).
+        // Otherwise the value borrows nothing into the frame, so sever its residence: copy the top node
+        // into an owned backing and release the frame. A fully-owned scalar thus seals with empty reach.
+        let Some((declared, label, per_call)) = pull_declared_return(contract) else {
+            let carrier = if carrier.witness().reach_covers(producer.region()) {
+                carrier
+            } else {
+                sever_residence(carrier, producer)
+            };
+            return Ok(carrier);
+        };
+        // Declared-return re-stamp path: the re-stamp deep-clones the value into the contract's home
+        // region below, so it comes to reside there — a residence pinned transitively by the producer
+        // frame's `outer` chain. Keep the producer fold here (over-retain) rather than severing, so that
+        // home residence stays pinned; the sever's home-region pin is a follow-up (see the roadmap item).
         let carrier = carrier.reseal_under(CarrierWitness::reach_only(FrameSet::singleton(
             producer.storage_rc(),
         )));
-        // No declared return (or a non-`Resolved` FN-def carrier): the folded witness is the exact reach.
-        let Some((declared, label, per_call)) = pull_declared_return(contract) else {
-            return Ok(carrier);
-        };
         // Check the declared return at the merge brand, where the carrier value and the home-region
         // declared type meet at one `'b`. `KType` is invariant in its lifetime, so a free-`'o` declared
         // type and the lifetime-free carrier can only be compared under a shared brand. The **object**

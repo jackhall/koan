@@ -595,6 +595,60 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         Witnessed { value, witness }
     }
 
+    /// Bundle a carrier derived from an **owned, stable backing the witness itself holds** —
+    /// co-location by construction, the born-witnessed twin of [`Self::yoke`] for a backing that is
+    /// not a region but an owned `Rc`-behind pointee. `view` reads only through `backing` (re-anchored
+    /// to a fresh `for<'b>` brand so it cannot smuggle a foreign borrow, exactly like `yoke`), and
+    /// `witness_of` embeds that **same** `backing` into the witness `W` before the bundle — so the
+    /// produced carrier's value points into a pointee the witness pins. The finalize sever routes this:
+    /// a top node copied out of a dying frame into an `Rc<Node<'static>>` becomes a carrier witnessed
+    /// by a pin holding that `Rc`, so the value survives its origin frame's death with no fabricated
+    /// lifetime.
+    ///
+    /// Sound for the same reason as [`Self::yoke`]: `view`'s result is re-anchored through the audited
+    /// [`with_branded_ref`] brand and immediately erased to `'static` (forgetting the borrow of the
+    /// backing) before `witness_of` moves the backing into the witness; the [`Witness`] contract then
+    /// keeps the backing live and fixed-address under the held witness, so the later re-anchor cannot
+    /// dangle. The `for<'b>` quantifier on `view` rejects any non-backing borrow.
+    ///
+    /// ```
+    /// use workgraph::witnessed::doctest_fixture::RefFamily;
+    /// use workgraph::witnessed::Witnessed;
+    /// use std::rc::Rc;
+    ///
+    /// // Backing family is `RefFamily` (`&'static u32`); the view re-anchors it and the value points
+    /// // back through the backing the `Rc` witness holds.
+    /// let backing: Rc<&'static u32> = Rc::new(&42);
+    /// let w: Witnessed<RefFamily, Rc<&'static u32>> =
+    ///     Witnessed::yoke_backing::<RefFamily>(backing, |rc| rc, |reanchored| *reanchored);
+    /// assert_eq!(w.with(|v| **v), 42);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use workgraph::witnessed::doctest_fixture::RefFamily;
+    /// use workgraph::witnessed::Witnessed;
+    /// use std::rc::Rc;
+    ///
+    /// let outside: u32 = 7;
+    /// let backing: Rc<&'static u32> = Rc::new(&42);
+    /// // Try to view a borrow of `outside` (not backing-derived) — rejected by the `for<'b>` brand.
+    /// let _: Witnessed<RefFamily, Rc<&'static u32>> =
+    ///     Witnessed::yoke_backing::<RefFamily>(backing, |rc| rc, |_reanchored| &outside);
+    /// ```
+    pub fn yoke_backing<Backing: Reattachable>(
+        backing: Rc<Backing::At<'static>>,
+        witness_of: impl FnOnce(Rc<Backing::At<'static>>) -> W,
+        view: impl for<'b> FnOnce(&'b Backing::At<'b>) -> T::At<'b>,
+    ) -> Self {
+        // Re-anchor the backing through the audited brand, build the value at `'b`, and erase it to
+        // `'static` — all before `backing` moves into the witness. `Erased<T>` does not name `'b`, so
+        // the brand admits it out; the erased value points into the backing the witness then pins.
+        let value = with_branded_ref::<Backing, Erased<T>>(&backing, |reanchored| {
+            Erased::erase(view(reanchored))
+        });
+        Self::from_erased(value, witness_of(backing))
+    }
+
     /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow — the internal
     /// borrow-bounded reader [`Sealed::open`] copies its value through. The borrow-bounded sibling of
     /// [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the closure,
