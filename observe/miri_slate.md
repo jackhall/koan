@@ -34,6 +34,11 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
+- `src/machine/execute/dispatch/keyworded.rs` — the type-channel splice reach group pins a
+  safe-code discipline (`part_walk`'s wrap-slot arm must route a resolved type through
+  `resolve_type_identifier` + `resident_type_carrier`, never seal empty reach); the real
+  `unsafe` is `Erased::reattach` inside `Scope::adopt_sealed`, so keyworded.rs carries none
+  of its own.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -81,7 +86,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-33 tests, grouped by the unsafe site each pins down. Names below are the exact
+34 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -217,6 +222,16 @@ value — so the folded reach-set is the sole pin on the region the re-anchored 
 borrows catches a use-after-free if the fold-then-reanchor order or the pin regresses.
 
 - `adopt_sealed_reach_fold_pins_the_producer_region_after_drop`
+
+**Type-channel splice reach** ([src/machine/execute/dispatch/keyworded.rs](../src/machine/execute/dispatch/keyworded.rs))
+— `part_walk`'s wrap-slot arm re-consults `Scope::resolve_type_identifier` and seals the hit through
+`Scope::resident_type_carrier` instead of the old `Witnessed::resident` empty-witness fallback
+(total-carrier-resolution). This test registers a `KType::Module` reaching into a foreign frame,
+drives the exact splice-arm surface, adopts the sealed cell into an independent consumer frame, drops
+every other direct handle, then reads — tree borrows catches a use-after-free if the splice arm
+regresses to sealing empty reach.
+
+- `spliced_type_carrier_pins_the_producer_region_after_drop`
 
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
@@ -415,9 +430,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-04: 154s — 34 tests, 0 leaks, 0 UB
 - 2026-07-04: 141s — 33 tests, 0 leaks, 0 UB
 - 2026-07-04: 145s — 33 tests, 0 leaks, 0 UB
 - 2026-07-04: 153s — 33 tests, 0 leaks, 0 UB
 - 2026-07-03: 142s — 30 tests, 0 leaks, 0 UB
-- 2026-07-03: 143s — 30 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

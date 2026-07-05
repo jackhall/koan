@@ -3,11 +3,12 @@
 
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
     BindingIndex, DispatchOutcome, KError, KErrorKind, NameLookup, NameOutcome, NodeId, TraceFrame,
 };
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::Sealed;
 
 use super::super::ignore_results;
 use super::super::nodes::NodeWork;
@@ -323,23 +324,46 @@ fn part_walk<'step>(
             match &bare_outcomes[i] {
                 Some(NameOutcome::Resolved(c)) => {
                     // A resolved bound name splices inline as its binding-scope carrier — value and
-                    // reach as one cell — so the body names its reach by construction. An object rides
-                    // the value channel (`resolve_value_carrier`), a first-class type the type channel
-                    // (`resolve_type_carrier`); the binding storage already stores each one's reach, so
-                    // neither rebuilds it by walking the value. A resolved name that names no bound
-                    // carrier (a region-pure builtin) seals region-pure — the empty reach, its
-                    // producer frame folded at finalize, exactly as a single-part splice does.
-                    let carrier = bare_name_of(&part.value).and_then(|name| match c {
-                        Carried::Object(_) => ctx
-                            .current_scope()
-                            .resolve_value_carrier(&name, ctx.chain_deref()),
-                        Carried::Type(_) => ctx
-                            .current_scope()
-                            .resolve_type_carrier(&name, ctx.chain_deref()),
-                    });
-                    let cell = match carrier {
-                        Some(NameLookup::Bound(carrier)) => Sealed::seal(carrier),
-                        _ => Sealed::seal(Witnessed::resident(*c)),
+                    // reach as one cell. An object rides the value channel (`resolve_value_carrier`,
+                    // total over resolvable value names); a first-class type re-consults the memoized
+                    // type-resolution surface, whose hit carries the binding's stored reach.
+                    let cell = match (c, &part.value) {
+                        (Carried::Object(_), _) => {
+                            let name = bare_name_of(&part.value).unwrap_or_default();
+                            match ctx
+                                .current_scope()
+                                .resolve_value_carrier(&name, ctx.chain_deref())
+                            {
+                                Some(NameLookup::Bound(carrier)) => Sealed::seal(carrier),
+                                _ => {
+                                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                                        "resolved value `{name}` names no binding carrier"
+                                    ))))
+                                }
+                            }
+                        }
+                        (Carried::Type(_), ExpressionPart::Type(t)) => {
+                            match ctx
+                                .current_scope()
+                                .resolve_type_identifier(t, ctx.active_chain())
+                            {
+                                TypeResolution::Done(hit) => Sealed::seal(
+                                    ctx.current_scope()
+                                        .resident_type_carrier(hit.kt, &hit.reach),
+                                ),
+                                _ => {
+                                    return Err(KError::new(KErrorKind::ShapeError(format!(
+                                        "resolved type `{}` lost its resolution",
+                                        t.render()
+                                    ))))
+                                }
+                            }
+                        }
+                        (Carried::Type(_), _) => {
+                            return Err(KError::new(KErrorKind::ShapeError(
+                                "a type resolved from a non-type part".into(),
+                            )))
+                        }
                     };
                     new_parts.push(Spanned {
                         value: ExpressionPart::Spliced(cell),

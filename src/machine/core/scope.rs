@@ -764,30 +764,6 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Type-channel twin of [`Self::resolve_value_carrier`]: resolve `name` to the bound `&KType`
-    /// wrapped in a [`Witnessed`] carrier naming its reach, so an inline type splice embeds a carrier
-    /// by construction (the binding's stored reach, [`Bindings::lookup_type_carrier`]) instead of
-    /// rebuilding it by walking the type. Walks the same `outer` chain; at the binding scope wraps via
-    /// [`Self::resident_type_carrier`] — the witness is that scope's home frame ∪ the type's stored
-    /// foreign reach.
-    pub(crate) fn resolve_type_carrier(
-        &self,
-        name: &str,
-        chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<Witnessed<CarriedFamily, FrameSet>>> {
-        self.ancestors().find_map(|scope| {
-            match scope
-                .bindings()
-                .lookup_type_carrier(name, scope.binding_cutoff(chain))?
-            {
-                NameLookup::Bound(hit) => Some(NameLookup::Bound(
-                    scope.resident_type_carrier(hit.kt, &hit.reach),
-                )),
-                NameLookup::Parked(producer) => Some(NameLookup::Parked(producer)),
-            }
-        })
-    }
-
     /// Build the terminal carrier for a value living **in this scope's region** from its binding's
     /// stored reach: witness = this scope's home frame ∪ `foreign` (the value's home-omitted foreign
     /// reach, captured at bind time). The home frame is fetched **fresh** here (never stored — that
