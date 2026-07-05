@@ -511,8 +511,9 @@ pub struct KExpression<'a> {
     /// sub-expressions, and each splice's lifetime-free `Sealed` carrier cell — so no field
     /// concretely borrows `'a`. The parameter is retained as a phantom so the family stays a
     /// `KExpression<'r>` for the witnessed substrate (its `Reattachable` impl keys on `'r`), and
-    /// is held **invariant** to mirror the variance a borrowing `KExpression` would carry (`KObject<'a>`
-    /// and `KType` are both invariant). Zero-size, so the layout is identical across every
+    /// is held **invariant** in `'a` — the variance of the lifetime-bearing families a `KExpression`
+    /// composes (`KObject<'a>` and `KType` are both invariant) — so the phantom grants no laxer
+    /// variance than the parts themselves. Zero-size, so the layout is identical across every
     /// `'a` and the [`reattachable!`] retype below stays a no-op transmute.
     _marker: PhantomData<fn(&'a ()) -> &'a ()>,
 }

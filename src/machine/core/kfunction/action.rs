@@ -182,8 +182,9 @@ pub struct BodyCtx<'a, 'c> {
     /// region that value reaches. A value-embedding body folds the carrier of the value it deposits (a
     /// bind into the scope reach-set) or `merge`s the one it embeds (a `Wrapped` / re-tagged `Record`),
     /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
-    /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach".
-    pub arg_carriers: &'c Record<Sealed<CarriedFamily, FrameSet>>,
+    /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
+    /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
+    pub arg_carriers: &'c Record<&'c Sealed<CarriedFamily, FrameSet>>,
     /// The step construction context for this slot's own scope — the same `ctx.region()` /
     /// `ctx.alloc()` / `ctx.alloc_with()` surface a wake-time [`FinishCtx`] carries.
     pub ctx: StepContext<FrameStorage>,
@@ -202,8 +203,8 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 
     /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
-    pub fn arg_carrier(&self, name: &str) -> Option<&Sealed<CarriedFamily, FrameSet>> {
-        self.arg_carriers.get(name)
+    pub fn arg_carrier(&self, name: &str) -> Option<&'c Sealed<CarriedFamily, FrameSet>> {
+        self.arg_carriers.get(name).copied()
     }
 
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
@@ -225,6 +226,20 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 pub struct FinishCtx<'a> {
     pub scope: &'a Scope<'a>,
     pub ctx: StepContext<FrameStorage>,
+}
+
+impl<'a> FinishCtx<'a> {
+    /// Build a `FinishCtx` from a scope alone, reconstructing the step context over the scope's own
+    /// frame — for a synchronous site that holds a scope but no live step context (a resolve
+    /// combinator's `Done` arm, a unit test). `scope_frame(scope)` names the same dest frame the
+    /// harness step context wraps at wake, so both allocate in the same region. A site that already
+    /// holds the live step context (a builtin body) uses [`BodyCtx::finish_ctx`] instead.
+    pub fn for_scope(scope: &'a Scope<'a>) -> Self {
+        FinishCtx {
+            scope,
+            ctx: StepContext::new(scope_frame(scope)),
+        }
+    }
 }
 
 /// A resolved dep terminal as a continuation receives it. `value` is the terminal re-anchored

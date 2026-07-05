@@ -115,7 +115,7 @@ pub(crate) fn home_return_type<'a>(
 pub fn run_user_fn<'ast, 'step>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'step>>,
-    arg_carriers: &Record<Sealed<CarriedFamily, FrameSet>>,
+    arg_carriers: &Record<&Sealed<CarriedFamily, FrameSet>>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
 ) -> ExecOutcome<'ast, 'step>

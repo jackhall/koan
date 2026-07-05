@@ -4,7 +4,7 @@
 //! routing site states its own carrier shape and slot name and nothing else.
 
 use crate::machine::core::kfunction::action::{
-    scope_frame, Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
+    Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
 };
 use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
@@ -13,7 +13,7 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{FrameSet, KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
-use crate::witnessed::{Sealed, StepContext};
+use crate::witnessed::Sealed;
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -78,17 +78,10 @@ pub(crate) fn resolve_or_await<'a>(
     on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>) -> Action<'a> + 'a,
 ) -> Action<'a> {
     match resolve(scope) {
-        // The synchronous arm hands the continuation the same `FinishCtx` shape a wake-time finish
-        // receives, built over the caller's own scope and its frame's step context. `scope_frame(scope)`
-        // matches the wake side's provenance — the harness `StepContext` also wraps the scope-derived
-        // dest frame — so both arms allocate in the same region, USING windows included.
-        TypeResolution::Done(kt) => {
-            let fctx = FinishCtx {
-                scope,
-                ctx: StepContext::new(scope_frame(scope)),
-            };
-            on_resolved(&fctx, kt)
-        }
+        // The synchronous arm hands the continuation the same `FinishCtx` a wake-time finish
+        // receives: `FinishCtx::for_scope` reconstructs the step context over the scope's own frame,
+        // matching the wake side's provenance, so both arms allocate in the same region.
+        TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope), kt),
         TypeResolution::Park(producers) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));

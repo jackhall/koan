@@ -116,19 +116,10 @@ pub(super) fn invoke<'step>(
     let frame = view
         .current_frame()
         .expect("a user-fn invoke runs against the Continue-installed per-call cart");
-    // Deposit each delivered argument's reach into the per-call scope's reach-set — the same scope
-    // `run_user_fn` deep-clones the arguments into and binds the parameters on — so every foreign
-    // region an argument borrows into outlives the call. Each carrier names the consumer frame ∪
-    // foreign reach, and `fold_reach` omits the home frame, so a region-pure argument deposits
-    // nothing while a multi-region one contributes every region it reaches. Slot identity is
-    // irrelevant, so all carriers fold uniformly.
-    frame.with_scope(|call_scope| {
-        for (_slot, carrier) in &arg_carriers {
-            call_scope.fold_reach(carrier.witness());
-        }
-    });
     // Re-key onto parameter names so `run_user_fn` stores each binding's reach from its own carrier,
-    // keyed to match `bound`.
+    // keyed to match `bound`. `extract_carried_args` already folded every delivered arg's reach into
+    // this same per-call scope (through `adopt_sealed`), so every foreign region an argument borrows
+    // into is pinned for the call's life — no separate deposit here.
     let named_carriers = map_arg_carriers(picked, arg_carriers);
     let exec_frame = ExecFrame {
         region: frame.clone(),
@@ -185,18 +176,19 @@ pub(super) fn invoke<'step>(
     }
 }
 
-/// Read each spliced cell back off the working expression as its `(slot, carrier)` pair. A literal
-/// part carries no cell (region-pure, "no entry = no foreign reach"); `duplicate` leaves the working
-/// expression's cells intact for the bind that reads them.
-fn carriers_from_expr<'step>(
-    working_expr: &KExpression<'step>,
-) -> Vec<(usize, Sealed<CarriedFamily, FrameSet>)> {
+/// Borrow each spliced cell back off the working expression as its `(slot, carrier)` pair. A literal
+/// part carries no cell (region-pure, "no entry = no foreign reach"). The cells are borrowed, not
+/// duplicated: the working expression outlives the call, and every reader downstream (the per-call
+/// reach store, a value-embedding builtin's fold) takes a `&Sealed`, so nothing is copied here.
+fn carriers_from_expr<'e, 'step>(
+    working_expr: &'e KExpression<'step>,
+) -> Vec<(usize, &'e Sealed<CarriedFamily, FrameSet>)> {
     working_expr
         .parts
         .iter()
         .enumerate()
         .filter_map(|(i, part)| match &part.value {
-            ExpressionPart::Spliced(cell) => Some((i, cell.duplicate())),
+            ExpressionPart::Spliced(cell) => Some((i, cell)),
             _ => None,
         })
         .collect()
@@ -205,10 +197,10 @@ fn carriers_from_expr<'step>(
 /// Re-key the slot-indexed arg carriers onto their parameter names. A committed call's parts line up
 /// 1:1 with `picked`'s signature elements (`validate_call_args` enforces it), so the element at a
 /// carrier's slot names its parameter. A region-pure arg has no entry, read as "no foreign reach".
-fn map_arg_carriers<'step>(
+fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
-    arg_carriers: Vec<(usize, Sealed<CarriedFamily, FrameSet>)>,
-) -> Record<Sealed<CarriedFamily, FrameSet>> {
+    arg_carriers: Vec<(usize, &'e Sealed<CarriedFamily, FrameSet>)>,
+) -> Record<&'e Sealed<CarriedFamily, FrameSet>> {
     let mut record = Record::new();
     for (slot, carrier) in arg_carriers {
         if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
@@ -226,7 +218,7 @@ fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: Record<crate::machine::model::values::Held<'step>>,
-    arg_carriers: Record<Sealed<CarriedFamily, FrameSet>>,
+    arg_carriers: Record<&Sealed<CarriedFamily, FrameSet>>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::KObject;

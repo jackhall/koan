@@ -247,12 +247,7 @@ mod tests {
             index: 0,
         };
         scope.preinstall_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
-        let fctx = crate::machine::core::kfunction::action::FinishCtx {
-            scope,
-            ctx: crate::witnessed::StepContext::new(
-                crate::machine::core::kfunction::action::scope_frame(scope),
-            ),
-        };
+        let fctx = crate::machine::core::kfunction::action::FinishCtx::for_scope(scope);
         let first = super::finalize_union(
             &fctx,
             "Maybe".into(),
