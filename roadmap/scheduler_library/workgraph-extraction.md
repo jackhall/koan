@@ -41,7 +41,10 @@ are not).
 API stabilization gates this item: any boundary-moving item lands first so
 the surface being documented and frozen is the final one.
 
-**Requires:** none — the storage-bundle and allocation-capability
-prerequisites have shipped.
+**Requires:**
+
+- [Region-hosted witness sets](region-hosted-witness-sets.md) — moves the
+  library surface (`Workload::Witness`, the set machinery) before identifiers
+  freeze.
 
 **Unblocks:** none tracked — the project's terminal item.

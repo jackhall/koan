@@ -48,7 +48,10 @@ a concept, not a final identifier.
   naming the set of regions a stored value's borrows can reach. Only the
   library mints one — from region handles and carriers — so a reach set
   always represents the true union; no caller can assert or assemble one by
-  hand.
+  hand. Reach sets are **region-hosted**: each set is stored frozen in a
+  region's witness-set sub-arena and carriers hold references to it, per
+  [witness-hosting.md](witness-hosting.md), which owns the representation,
+  the resident/walking carrier forms, and the pinning invariant.
 - **Slot / node** — one unit of scheduled work with an identity (`NodeId`),
   dep edges, and eventually a terminal.
 - **Dep** — a producer another slot waits on. **Park** deps are

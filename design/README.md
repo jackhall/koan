@@ -38,6 +38,11 @@ Root concerns:
   soundness guarantees, the two-currency step contract, and the consumer
   API (`producer_disposition`, `Deps`, `Await`, the step construction
   context).
+- [witness-hosting.md](witness-hosting.md) — the witness-set
+  representation: reach sets stored frozen in per-region sub-arenas,
+  the resident (bare-reference) and walking (host-`Rc` + set-reference)
+  carrier forms, the mint rules for composition, the pinning invariant,
+  and the scope/bindings layers holding no witness state of their own.
 - [per-call-region/](per-call-region/README.md) — the
   single owner of the `Rc<CallFrame>` contract: anchor carriers,
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame
