@@ -2,11 +2,11 @@
 //! type definitions, values, and functions). See
 //! [design/typing/modules.md](../../design/typing/modules.md) for the surface design.
 //!
-//! Body statements dispatch on the OUTER scheduler against a fresh child scope, so a
-//! body statement referencing an earlier sibling at the same outer block parks on the
-//! outer placeholder like any other forward reference. The MODULE slot returns an
-//! `Action::AwaitDeps` over those body slots, so the parent binding lands at dep-finish,
-//! not when MODULE's body returns to the dispatcher.
+//! Body statements dispatch on the OUTER scheduler against a fresh child scope via
+//! [`await_body_in_scope`](super::await_body::await_body_in_scope), so a body statement
+//! referencing an earlier sibling at the same outer block parks on the outer placeholder
+//! like any other forward reference, and the parent binding lands at dep-finish, not when
+//! MODULE's body returns to the dispatcher.
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
@@ -15,15 +15,15 @@ use crate::machine::{NameLookup, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// The MODULE body: mints the child scope, dispatches the body block
-/// against it (an `InScope` dep-finish dependency), and the finish installs the `KType::Module` identity into
-/// the parent scope.
+/// The MODULE body: mints the child scope, dispatches the body block against it via
+/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish installs
+/// the `KType::Module` identity into the parent scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, AwaitContinue, DepPlacement,
-        DepRequest,
+        require_bare_type_name, require_kexpression, Action,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
@@ -34,63 +34,56 @@ pub fn body<'a>(
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-        // The body's binds into `child_scope` are all resolved (AwaitDeps), and nothing below binds
-        // into it (the mirror reads it; `register_type_upsert` writes the outer scope) — so seal its
-        // reach-set here, before the module captures it: the sealed foreign reach rides the escaping
-        // module value.
-        child_scope.close();
-        // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
-        // `&KType` in place from its **stored** reach.
-        if let Some(NameLookup::Bound(hit)) = fctx
-            .scope
-            .bindings()
-            .lookup_type_carrier(&name_for_finish, None)
-        {
-            return Action::Done(Ok(fctx.scope.resident_type_carrier(hit.kt, &hit.reach)));
-        }
-        // The module's home-omitted foreign reach, folded from the child scope held **directly** here
-        // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
-        // the terminal carrier.
-        let reach = fctx.scope.reach_of_child(child_scope);
-        let module: &'a Module<'a> = fctx
-            .scope
-            .brand()
-            .alloc_module(Module::new(name_for_finish.clone(), child_scope));
-        // Mirror the module's type-side bindings into `type_members`. The cross-kind exclusion
-        // keeps `data` and `types` disjoint by name, so this is an exact mirror of `iter_types`
-        // (no value-member name can also be a type name to filter out).
-        {
-            let mut tm = module.type_members.borrow_mut();
-            for (member, kt) in child_scope.bindings().iter_types() {
-                tm.insert(member, kt.clone());
+    await_body_in_scope(
+        child_scope,
+        body_expr,
+        ChildScopeSeal::SealBeforeFinish,
+        move |fctx| {
+            // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
+            // `&KType` in place from its **stored** reach.
+            if let Some(NameLookup::Bound(hit)) = fctx
+                .scope
+                .bindings()
+                .lookup_type_carrier(&name_for_finish, None)
+            {
+                return Action::Done(Ok(fctx.scope.resident_type_carrier(hit.kt, &hit.reach)));
             }
-        }
-        let identity = KType::Module { module };
-        match fctx.scope.register_type_upsert(
-            name_for_finish.clone(),
-            identity,
-            bind_index,
-            reach.clone(),
-        ) {
-            Ok(kt_ref) => {
-                // Witness the registered `&KType` in place from the stored reach — no re-clone, no
-                // `child_scope()` walk.
-                Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach)))
+            // The module's home-omitted foreign reach, folded from the child scope held **directly** here
+            // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
+            // the terminal carrier.
+            let reach = fctx.scope.reach_of_child(child_scope);
+            let module: &'a Module<'a> = fctx
+                .scope
+                .brand()
+                .alloc_module(Module::new(name_for_finish.clone(), child_scope));
+            // Mirror the module's type-side bindings into `type_members`. The cross-kind exclusion
+            // keeps `data` and `types` disjoint by name, so this is an exact mirror of `iter_types`
+            // (no value-member name can also be a type name to filter out).
+            {
+                let mut tm = module.type_members.borrow_mut();
+                for (member, kt) in child_scope.bindings().iter_types() {
+                    tm.insert(member, kt.clone());
+                }
             }
-            Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
-                "<module>",
-                format!("MODULE {} body", name_for_finish),
-            )))),
-        }
-    });
-    Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
-            expr: body_expr,
-            placement: DepPlacement::InScope(child_scope),
-        }],
-        finish,
-    }
+            let identity = KType::Module { module };
+            match fctx.scope.register_type_upsert(
+                name_for_finish.clone(),
+                identity,
+                bind_index,
+                reach.clone(),
+            ) {
+                Ok(kt_ref) => {
+                    // Witness the registered `&KType` in place from the stored reach — no re-clone, no
+                    // `child_scope()` walk.
+                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach)))
+                }
+                Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
+                    "<module>",
+                    format!("MODULE {} body", name_for_finish),
+                )))),
+            }
+        },
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

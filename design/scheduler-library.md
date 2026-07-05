@@ -249,8 +249,11 @@ picture:
 - **Protocol combinators** own the recurring builtin shapes above
   `Action`: resolve-a-type-or-await-its-producer (with the re-resolve-on-
   wake step inside — [resolve_or_await.rs](../src/builtins/resolve_or_await.rs)),
-  and schedule-an-aggregate-literal. A builtin states *which* protocol it
-  is, not the protocol's moving parts.
+  schedule-an-aggregate-literal, and mint-a-child-scope-then-await-its-body
+  (dispatch the body block against the child as an `InScope` dep, then run a
+  finish that seals the child first when the caller asks for that —
+  [await_body.rs](../src/builtins/await_body.rs)). A builtin states *which*
+  protocol it is, not the protocol's moving parts.
 - **Scope binding folds reaches through carriers.** Binding a value into a
   scope takes the value's carrier and unions its reach set into the
   scope's — policy code composing library values, never inspecting them.

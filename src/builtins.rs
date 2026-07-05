@@ -9,6 +9,7 @@ use crate::machine::FrameSet;
 
 mod ascribe;
 mod attr;
+mod await_body;
 mod block_tail;
 mod branch_walk;
 mod catch;

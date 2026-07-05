@@ -2,13 +2,13 @@
 //! interface a module can be ascribed to). See
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
-//! Construction mirrors [`module_def`](super::module_def): body statements dispatch
-//! against a fresh child scope on the outer scheduler; a `AwaitDeps` over those slots
-//! captures the populated scope into a [`ModuleSignature`] value, allocates it in the
-//! parent's region, and binds it under the signature's name. Body declarations are
-//! `LET name = (FN <signature> -> <return> = ...)` for operations and
-//! `LET Carrier = TypeIdentifier` for abstract type declarations. The ascription operators
-//! (`:|` / `:!`) iterate the stored scope at ascription time.
+//! Routes [`await_body_in_scope`](super::await_body::await_body_in_scope) like
+//! `module_def` / `recursive_types`: body statements dispatch against a fresh child scope
+//! on the outer scheduler, and the finish captures the populated scope into a
+//! [`ModuleSignature`] value, allocates it in the parent's region, and binds it under the
+//! signature's name. Body declarations are `LET name = (FN <signature> -> <return> = ...)`
+//! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
+//! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::KKind;
@@ -19,15 +19,16 @@ use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// The SIG body: mints the declaration scope, dispatches the SIG body
-/// block against it (an `InScope` dep-finish dependency), and the finish captures that scope into a
-/// [`ModuleSignature`] and installs the `KType::Signature` identity into the parent scope.
+/// The SIG body: mints the declaration scope, dispatches the SIG body block against it via
+/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish captures
+/// that scope into a [`ModuleSignature`] and installs the `KType::Signature` identity into
+/// the parent scope.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
+    use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action, AwaitContinue, DepPlacement,
-        DepRequest,
+        require_bare_type_name, require_kexpression, Action,
     };
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG"));
@@ -40,38 +41,33 @@ pub fn body<'a>(
 
     let bind_index = ctx.bind_index();
     let name_for_finish = name;
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
-        // The body's VAL/FN binds into `decl_scope` are all resolved (AwaitDeps), and nothing below
-        // binds into it — so seal its reach-set before the signature captures it.
-        decl_scope.close();
-        let sig: &'a ModuleSignature<'a> = fctx
-            .scope
-            .brand()
-            .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
-        let identity = KType::Signature {
-            sig,
-            pinned_slots: Vec::new(),
-        };
-        match fctx.scope.register_type_upsert(
-            name_for_finish.clone(),
-            identity,
-            bind_index,
-            FrameSet::empty(),
-        ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
-            Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
-                "<signature>",
-                format!("SIG {} body", name_for_finish),
-            )))),
-        }
-    });
-    Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
-            expr: body_expr,
-            placement: DepPlacement::InScope(decl_scope),
-        }],
-        finish,
-    }
+    await_body_in_scope(
+        decl_scope,
+        body_expr,
+        ChildScopeSeal::SealBeforeFinish,
+        move |fctx| {
+            let sig: &'a ModuleSignature<'a> = fctx
+                .scope
+                .brand()
+                .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
+            let identity = KType::Signature {
+                sig,
+                pinned_slots: Vec::new(),
+            };
+            match fctx.scope.register_type_upsert(
+                name_for_finish.clone(),
+                identity,
+                bind_index,
+                FrameSet::empty(),
+            ) {
+                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
+                Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
+                    "<signature>",
+                    format!("SIG {} body", name_for_finish),
+                )))),
+            }
+        },
+    )
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
