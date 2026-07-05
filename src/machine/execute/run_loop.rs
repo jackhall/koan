@@ -129,8 +129,8 @@ impl<'run> KoanRuntime<'run> {
         // in this consumer's own scope region, where the value dies with the consumer and no surviving
         // producer copy outlives its dying frame. The `dest` region is the scope's own region (right
         // even for a transparent USING window). The lift delivers deps *un-relocated*; the copy into
-        // `dest` runs site-explicitly inside the continuation (`DepTerminal::relocate`, `catch`, or a
-        // construction fold), not here.
+        // `dest` runs inside a construction fold's witnessed transfer, not here — the catch channel
+        // duplicates the watched carrier instead of copying.
         let owned_indices: Vec<usize> = deps.owned().iter().map(|d| d.index()).collect();
         // Read each producer terminal out (borrow-bounded) into the dep slice — value plus its `reach`.
         // The slice erases into one carrier opened in-band at `'b` (see `DepResultsFamily`).

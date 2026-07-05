@@ -240,7 +240,7 @@ so no single dominating witness exists — the set is held whole and composed by
 since splicing the source into the destination's `outer` chain to collapse it risks
 re-forming the `src`↔`dst` cycle. This closes the one case `open` cannot: a value
 whose source backing is dying but whose consumer outlives it. In Koan: the
-consumer-pull lift across a dependency edge — `relocate_carried` copies the dep into the consumer
+consumer-pull lift across a dependency edge — `copy_carried` copies the dep into the consumer
 `dest` region at the step brand (the spine sharing its `Rc` payloads, a closure / future / module
 riding its bare borrow), and `transfer_into` re-seals it under the set union of its reached sources
 and `dest`. The lift delivers each dep **both** as a live bare `Carried` and as its producer slot's
@@ -258,7 +258,7 @@ directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recove
 `KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
-[`relocate_carried`](../src/machine/core/arena.rs) structural copy, transient reach rides each dep's
+[`copy_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
 carrier, and only a *bound* value deposits onto the scope reach-set (below).
 
 A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the

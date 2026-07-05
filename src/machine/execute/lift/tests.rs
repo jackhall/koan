@@ -1,7 +1,7 @@
-//! Tests for [`relocate_carried`] — the value-relocation hook. It structurally copies a
+//! Tests for [`copy_carried`] — the witnessed-transfer copy hook. It structurally copies a
 //! [`Carried`] into a destination region: the top node is re-allocated there, while the composite
 //! spine shares its `Rc` payloads and a `KFunction` / first-class `Module` rides a bare
-//! borrow preserved verbatim. No region anchor is embedded in the value — the regions a relocated
+//! borrow preserved verbatim. No region anchor is embedded in the value — the regions a copied
 //! value reaches are pinned by the carrier's witness set at the `transfer_into` layer, not here.
 
 use super::*;
@@ -52,7 +52,7 @@ fn object_top_node_relocates_into_dest() {
     let dest = CallFrame::new_test(scope, None);
 
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
-    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
+    let relocated = copy_carried(Carried::Object(obj), dest.brand());
     match relocated {
         Carried::Object(r) => {
             assert!(dest.region().owns_object(r), "relocated node lives in dest");
@@ -87,7 +87,7 @@ fn list_relocation_shares_inner_rc() {
         .alloc_object(KObject::list_with_type(Rc::clone(&items), KType::Any));
     let before = Rc::strong_count(&items);
 
-    let relocated = relocate_carried(Carried::Object(list), dest.brand());
+    let relocated = copy_carried(Carried::Object(list), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
             assert!(
@@ -132,7 +132,7 @@ fn dict_relocation_shares_inner_rc() {
         KType::Any,
     ));
 
-    let relocated = relocate_carried(Carried::Object(dict), dest.brand());
+    let relocated = copy_carried(Carried::Object(dict), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _, _)) => {
             assert!(
@@ -174,7 +174,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
         type_args: Rc::new(vec![]),
     });
 
-    let relocated = relocate_carried(Carried::Object(tagged), dest.brand());
+    let relocated = copy_carried(Carried::Object(tagged), dest.brand());
     match relocated {
         Carried::Object(
             r @ KObject::Tagged {
@@ -210,7 +210,7 @@ fn kfunction_borrow_preserved_verbatim() {
     let kf_ref = alloc_local_kf(&source);
     let obj: &KObject = source.brand().alloc_object(KObject::KFunction(kf_ref));
 
-    let relocated = relocate_carried(Carried::Object(obj), dest.brand());
+    let relocated = copy_carried(Carried::Object(obj), dest.brand());
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
             assert!(
@@ -255,7 +255,7 @@ fn type_recursive_setref_relocates_and_navigates() {
     };
     let before = Rc::strong_count(&set);
 
-    let relocated = relocate_carried(Carried::Type(&type_value), dest.brand());
+    let relocated = copy_carried(Carried::Type(&type_value), dest.brand());
     assert_eq!(
         Rc::strong_count(&set),
         before + 1,

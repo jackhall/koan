@@ -83,9 +83,9 @@ pub fn body<'a>(
         });
         let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, &reach);
         let witnessed = match result {
-            // The watched value's carrier folds onto the result: `transfer_into` relocates it into the
+            // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.
-            Ok(ok) => ok.carrier.transfer_into::<RegionTypeFamily, CarriedFamily>(
+            Ok(carrier) => carrier.transfer_into::<RegionTypeFamily, CarriedFamily>(
                 home,
                 |value, (region, identity), _brand| {
                     Carried::Object(region.alloc_object(build_result(

@@ -65,8 +65,10 @@ pub fn body<'a>(
     arm_tail(
         ctx.scope,
         ctx.frame.map(|f| f.storage_rc()),
-        value.deep_clone(),
-        scrutinee_witness,
+        super::branch_walk::ItSource::Value {
+            value: value.deep_clone(),
+            reach: scrutinee_witness,
+        },
         branch_body,
         contract,
     )

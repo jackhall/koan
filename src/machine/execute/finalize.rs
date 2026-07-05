@@ -27,8 +27,8 @@ reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
 /// ([`crate::scheduler`]) names no Koan type. Errors carry no value and finalize bare through
 /// [`finalize_error`], which never reaches this hook.
 ///
-/// Peer of [`relocate_carried`](super::lift::relocate_carried): both are Done-boundary workload hooks,
-/// but the contract layer is never folded into the lift (see [`lift`](super::lift)).
+/// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks, but
+/// the contract layer is never folded into the lift (see [`lift`](super::lift)).
 ///
 /// The terminal arrives **already witnessed** (a lifetime-free [`Witnessed`] carrier), so nothing is
 /// erased here; the declared-return re-stamp runs at the merge brand, where the carrier value and the

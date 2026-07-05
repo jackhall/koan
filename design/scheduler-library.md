@@ -198,8 +198,17 @@ pre-relocated value handoff: a finish reads each dep's step-brand value and
 reach carrier un-relocated. A dep whose value must outlive the resolving step
 travels as its sealed carrier — the value stays in its producer's region and
 the consumer adopts the carrier at its own step brand, folding the reach that
-pins it — never as a relocated copy. The one site-explicit value copy that
-remains is the catch channel (`DepTerminal::relocate`).
+pins it — never as a relocated copy. Every delivery, including the catch
+channel, is carrier-only; no dep crosses to a finish as a pre-copied value.
+The one structural copy that remains, `copy_carried`
+([lift.rs](../src/machine/execute/lift.rs)), is not a delivery at all — it is
+the fold callback a witnessed transfer (`Sealed::transfer_into` /
+`Scheduler::transfer_lifted`) runs *inside* the two storage-bound folds that
+still need one: `KoanRuntime::relocate_terminal`'s `Forward`-ready pull /
+run-root drain, and `park_on_literal`'s literal fold. Both run the copy at the
+destination brand as part of assembling a result carrier, so the copy's reach
+is folded into that carrier's witness by construction — no pinless copy is
+expressible outside a witnessed fold.
 
 **The step construction context** ([`StepContext`](../workgraph/src/witnessed/step_ctx.rs)).
 What a finish receives and the only way it can build a result:

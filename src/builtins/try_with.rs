@@ -23,7 +23,7 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use super::branch_walk::{arm_tail, resolve_arm_contract};
+    use super::branch_walk::{arm_tail, resolve_arm_contract, ItSource};
     use crate::machine::core::kfunction::action::{
         require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
@@ -36,29 +36,26 @@ pub fn body<'a>(
     let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
     let outer_frame = ctx.frame.map(|f| f.storage_rc());
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
-        // On `ok`, `it` is the bare success value and its carrier witness supplies the
-        // scrutinee reach the `it` binding stores. On error, `it` is the per-variant payload
-        // Struct unwrapped from `KError::to_tagged`; that Tagged is region-pure (reaches nothing
-        // foreign), so its reach is the empty set.
-        let (tag, it_value, it_witness, original_err): (
-            String,
-            KObject<'a>,
-            crate::machine::FrameSet,
-            Option<KError>,
-        ) = match result {
-            Ok(ok) => (
-                "Ok".to_string(),
-                ok.value.object().deep_clone(),
-                ok.carrier.witness().clone(),
-                None,
-            ),
+        // On success `it` is the watched value, adopted from its sealed carrier at bind time. On
+        // error `it` is the per-variant payload unwrapped from `KError::to_tagged`; that Tagged is
+        // region-pure, so its reach is the empty set.
+        let (tag, it_source, original_error): (String, ItSource<'a>, Option<KError>) = match result
+        {
+            Ok(carrier) => ("Ok".to_string(), ItSource::Carrier(carrier), None),
             Err(e) => {
                 let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand());
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
                 };
-                (tag, payload, crate::machine::FrameSet::empty(), Some(e))
+                (
+                    tag,
+                    ItSource::Value {
+                        value: payload,
+                        reach: crate::machine::FrameSet::empty(),
+                    },
+                    Some(e),
+                )
             }
         };
         let body_expr = match find_branch_body(&branches_expr, &tag, true) {
@@ -66,7 +63,7 @@ pub fn body<'a>(
             // On no match: re-raise the original `KError`, or `ShapeError` on the success path
             // without an `Ok` or `_` arm.
             Ok(None) => {
-                return match original_err {
+                return match original_error {
                     Some(e) => Action::Done(Err(e)),
                     None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
                         "TRY missing Ok arm".to_string(),
@@ -75,14 +72,7 @@ pub fn body<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(
-            fctx.scope,
-            outer_frame,
-            it_value,
-            it_witness,
-            body_expr,
-            contract,
-        )
+        arm_tail(fctx.scope, outer_frame, it_source, body_expr, contract)
     });
     Action::Catch {
         watched: DepRequest::Dispatch {

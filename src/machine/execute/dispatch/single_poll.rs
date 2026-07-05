@@ -16,7 +16,7 @@ use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
-use super::super::lift::relocate_carried;
+use super::super::lift::copy_carried;
 use super::super::run_loop::{dest_brand, RegionRefFamily};
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
@@ -212,7 +212,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .owned(0)
             .carrier
             .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {
-                relocate_carried(value, region)
+                copy_carried(value, region)
             }))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)

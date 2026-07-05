@@ -9,9 +9,7 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use super::KFunction;
-use crate::machine::core::{
-    relocate_carried, CallFrame, FrameStorage, LexicalFrame, RegionBrand, Scope,
-};
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
@@ -229,28 +227,17 @@ pub struct FinishCtx<'a> {
     pub ctx: StepContext<FrameStorage>,
 }
 
-/// A resolved dep terminal as a continuation receives it, **un-relocated**. It holds the producer
-/// slot's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) — the producer
-/// keeps its terminal for other consumers), so a **construction finish** folds the dep *witnessed* via
-/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach named on the carrier
-/// by construction. `value` is the same value re-anchored **live at the step brand** (pinned by the
-/// step open) for a **value-copy** finish that reads it: [`relocate`](Self::relocate) copies it into
-/// the consumer region. Defined here in core (not the execute layer that resolves it) so the
-/// builtin-`Action` currency — [`AwaitContinue`] — can name it.
+/// A resolved dep terminal as a continuation receives it. `value` is the terminal re-anchored
+/// **live at the step brand** (pinned by the step open) for a value-reading finish that reads it
+/// directly (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal); `carrier`
+/// is the producer's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) —
+/// the producer keeps its terminal for other consumers) for a **construction finish** that folds the
+/// dep *witnessed* via [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach
+/// named on the result by construction. Defined here in core (not the execute layer that resolves it)
+/// so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
 pub struct DepTerminal<'a> {
     pub value: Carried<'a>,
     pub carrier: Sealed<CarriedFamily, FrameSet>,
-}
-
-impl<'a> DepTerminal<'a> {
-    /// Relocate the terminal's value into the consumer region (a bare structural copy via
-    /// [`relocate_carried`](crate::machine::core::relocate_carried)) — the catch channel's value-copy
-    /// delivery (`catch_continuation` reads it for TRY-WITH's `it` bind). The catch channel's
-    /// carrier-only, copy-free delivery is a listed not-yet-planned objective; every other survives-the-
-    /// step consumer already travels its dep as its sealed carrier.
-    pub fn relocate(&self, dest: RegionBrand<'a>) -> Carried<'a> {
-        relocate_carried(self.value, dest)
-    }
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
@@ -260,19 +247,11 @@ impl<'a> DepTerminal<'a> {
 pub type AwaitContinue<'a> =
     Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a>;
 
-/// The watched value as a `Catch` finish receives it on success: the value **relocated** into the
-/// consumer region (for a finish that reads it — TRY-WITH's `it` bind) plus the watched producer's own
-/// [`Sealed`] carrier (for a finish that builds a *witnessed* result — CATCH's `Result`, folded via
-/// [`transfer_into`](crate::witnessed::Sealed::transfer_into) so it names every region the watched
-/// value reaches). On a watched error the finish gets the `KError` instead.
-pub struct CatchOk<'a> {
-    pub value: Carried<'a>,
-    pub carrier: Sealed<CarriedFamily, FrameSet>,
-}
-
-/// A `Catch` finish: re-entered with the watched slot's [`CatchOk`] (or error), yielding a `Action`.
-pub type CatchContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a>, Result<CatchOk<'a>, KError>) -> Action<'a> + 'a>;
+/// A `Catch` finish: re-entered with the watched slot's sealed carrier (value and reach as one unit,
+/// adopted or opened at the finish's own step brand) or the watched `KError`.
+pub type CatchContinue<'a> = Box<
+    dyn FnOnce(&FinishCtx<'a>, Result<Sealed<CarriedFamily, FrameSet>, KError>) -> Action<'a> + 'a,
+>;
 
 /// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type

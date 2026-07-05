@@ -14,7 +14,7 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{BlockEntry, CatchOk, FramePlacement};
+use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::machine::core::kfunction::body::ReturnContract;
 #[cfg(test)]
 use crate::machine::model::values::Carried;
@@ -23,7 +23,7 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
-use crate::witnessed::Witnessed;
+use crate::witnessed::{Sealed, Witnessed};
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -99,8 +99,8 @@ impl<'step> Outcome<'step> {
 /// (A bare-name forward is not a continuation — it splices out via [`Outcome::Forward`], never parking.)
 pub(in crate::machine::execute) enum Continuation<'step> {
     /// Reads the resolved dep terminals directly (un-relocated value + reach carrier) and returns the
-    /// next [`Outcome`]. A finish whose value must outlive the resolving step copies it
-    /// site-explicitly via [`DepTerminal::relocate`].
+    /// next [`Outcome`]. A finish whose value must outlive the resolving step folds the dep's carrier
+    /// via [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into).
     FinishTerminal(TerminalDepFinish<'step>),
     FinishWitnessed(WitnessedDepFinish<'step>),
     Catch {
@@ -171,9 +171,13 @@ impl<'step> Await<'step> {
 }
 
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's
-/// terminal as a `Result` so the closure can branch on either outcome, plus a read-only view.
+/// sealed carrier (value and reach as one unit, adopted or opened at the finish's own step brand) or
+/// its error, plus a read-only view.
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
-    dyn for<'view> FnOnce(&SchedulerView<'a, 'view>, Result<CatchOk<'a>, KError>) -> Outcome<'a>
+    dyn for<'view> FnOnce(
+            &SchedulerView<'a, 'view>,
+            Result<Sealed<CarriedFamily, FrameSet>, KError>,
+        ) -> Outcome<'a>
         + 'a,
 >;
 
@@ -287,12 +291,9 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results.all()[0] {
-            // Relocate the value into the consumer region for a value-reading finish and hand the
-            // producer's own carrier alongside for a witnessed finish (folded via `transfer_into`).
-            Ok(t) => Ok(CatchOk {
-                value: t.relocate(view.current_scope().brand()),
-                carrier: t.carrier.duplicate(),
-            }),
+            // The watched producer's own sealed carrier, duplicated (the producer keeps its
+            // terminal); the finish adopts or opens it at its own step brand.
+            Ok(t) => Ok(t.carrier.duplicate()),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

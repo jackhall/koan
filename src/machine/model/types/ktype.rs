@@ -163,9 +163,10 @@ pub enum KType<'a> {
     },
     /// First-class module value's type. A bare borrow into the region the functor call minted the
     /// module in; that region is pinned by the value carrier's witness set when the module flows down
-    /// a dep edge (see [`relocate_carried`](crate::machine::execute) / `transfer_into`). A *concrete*
-    /// module is rejected as a function's resolved return type (a module value's identity is not a
-    /// return type — return a signature or the `:Module` kind), so it never rides the contract channel.
+    /// a dep edge (see [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into)). A
+    /// *concrete* module is rejected as a function's resolved return type (a module value's identity
+    /// is not a return type — return a signature or the `:Module` kind), so it never rides the
+    /// contract channel.
     Module {
         module: &'a Module<'a>,
     },

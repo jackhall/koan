@@ -209,26 +209,6 @@ impl<'a> RegionBrand<'a> {
     }
 }
 
-/// The workload's value-relocation hook: structurally copy a [`Carried`] into `dest`'s region so the
-/// copy outlives the producer's dying frame. Only the top-level node is re-allocated into `dest`; the
-/// composite spine shares its `Rc` payloads ([`KObject::deep_clone`]), and a `KFunction` / first-class
-/// `Module` rides a *bare* borrow into its defining region — preserved verbatim, never deep-copied (a
-/// closure may reference anything reachable from its captured scope). Those surviving borrows are kept
-/// alive by the carrier's witness set ([`FrameSet`]), which
-/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) assembles as the set union of the
-/// producer's reached regions and `dest` — so this hook owns only the copy, never a region anchor.
-///
-/// Runs at the destination brand `'b`, so the copy allocs into `dest` natively: no fabricated
-/// lifetime, no caller `unsafe`. Lives in core alongside [`RegionBrand`] so the
-/// [`DepTerminal`](super::kfunction::action::DepTerminal) relocation (named in the builtin-`Action`
-/// currency) reaches it without depending on the execute layer.
-pub(crate) fn relocate_carried<'b>(value: Carried<'b>, dest: RegionBrand<'b>) -> Carried<'b> {
-    match value {
-        Carried::Object(v) => Carried::Object(dest.alloc_object(v.deep_clone())),
-        Carried::Type(t) => Carried::Type(dest.alloc_ktype(t.clone())),
-    }
-}
-
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every

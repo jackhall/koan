@@ -1,14 +1,26 @@
-//! The value-relocation hook [`relocate_carried`] now lives in
-//! [`machine::core`](crate::machine::core::relocate_carried) — alongside [`RegionBrand`] — so the
-//! [`DepTerminal`](crate::machine::core::kfunction::action::DepTerminal) relocation named in the
-//! builtin-`Action` currency reaches it without depending on the execute layer. Re-exported here so
-//! the execute-side callers (dep delivery, single-poll) keep their `super::lift::relocate_carried`
-//! path, and the relocation-behavior tests stay co-located with the workload that runs it.
+//! The witnessed-transfer copy hook and its behavior tests.
 
-pub(in crate::machine::execute) use crate::machine::core::relocate_carried;
-
-#[allow(unused_imports)]
 use crate::machine::core::RegionBrand;
+use crate::machine::model::values::Carried;
+
+/// The structural-copy callback a witnessed transfer's fold runs
+/// ([`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) /
+/// `Scheduler::transfer_lifted`): copy a [`Carried`] into `dest`'s region at the fold brand. Only
+/// the top-level node is re-allocated; the composite spine shares its `Rc` payloads
+/// ([`deep_clone`](crate::machine::model::KObject::deep_clone)), and a `KFunction` / first-class
+/// `Module` rides a bare borrow
+/// preserved verbatim — kept alive by the witness set the transfer layer assembles, so this hook
+/// owns only the copy, never a region anchor. It is not a delivery channel: dep terminals cross to
+/// finishes as sealed carriers.
+pub(in crate::machine::execute) fn copy_carried<'b>(
+    value: Carried<'b>,
+    dest: RegionBrand<'b>,
+) -> Carried<'b> {
+    match value {
+        Carried::Object(v) => Carried::Object(dest.alloc_object(v.deep_clone())),
+        Carried::Type(t) => Carried::Type(dest.alloc_ktype(t.clone())),
+    }
+}
 
 #[cfg(test)]
 mod tests;

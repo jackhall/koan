@@ -33,7 +33,7 @@ use crate::machine::{CallFrame, FrameSet, KError, KErrorKind, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest};
-use super::lift::relocate_carried;
+use super::lift::copy_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
 use super::run_loop::RegionRefFamily;
@@ -151,7 +151,7 @@ impl<'run> KoanRuntime<'run> {
     ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
         self.sched
             .transfer_lifted(producer, dest, |value, region, _brand| {
-                relocate_carried(value, region)
+                copy_carried(value, region)
             })
             .map_err(|e| e.clone())
     }
@@ -568,7 +568,7 @@ impl<'run> KoanRuntime<'run> {
                     // label. Both install the same `Wait` over the realized deps (edges already
                     // installed above), the short-circuit baked into the continuation by
                     // `short_circuit` — the one loop the terminal delivery runs through. A finish whose
-                    // value must outlive the resolving step copies it via `DepTerminal::relocate`.
+                    // value must outlive the resolving step folds the dep's carrier (`transfer_into`).
                     Continuation::FinishTerminal(finish) => {
                         NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
                     }

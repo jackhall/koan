@@ -23,8 +23,8 @@ use super::default_scope;
 
 /// Extract a top-level terminal at the scope lifetime `'a`. The terminal is opened at a rank-2 brand
 /// and its value **copied out** into `scope`'s region through the brand — a deep clone re-homed at
-/// `'a` (the same relocation [`relocate_carried`](crate::machine::execute) does across a dep edge),
-/// so nothing branded escapes the open. A returned closure / module's deep clone preserves the bare
+/// `'a` (the same copy a witnessed transfer's fold runs across a dep edge), so nothing branded
+/// escapes the open. A returned closure / module's deep clone preserves the bare
 /// borrow into its per-call region, so (like the production drain) fold the slot's witness onto
 /// `scope`'s reach-set: the caller drops the scheduler right after this returns, and `scope` outlives
 /// it, so its reach-set keeps every region the result reaches alive. Test-only — production code reads

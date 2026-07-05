@@ -75,8 +75,8 @@ the call-site scope and pin every prior frame's bindings alive.
 
 ## Per-call region protocol
 
-The per-call region's lifecycle — how a relocated value's reached regions are
-kept alive (the [`relocate_carried`](../src/machine/execute/lift.rs) copy plus the
+The per-call region's lifecycle — how a copied value's reached regions are
+kept alive (the [`copy_carried`](../src/machine/execute/lift.rs) fold copy plus the
 carrier-set reach read off each dep's witness for both channels), how the scheduler propagates the active frame, how
 builtin-built frames chain the call-site frame's storage through
 `FrameStorage.outer`, and how the TCO step reuses the frame shell over a
@@ -217,7 +217,7 @@ so the whole tail nests inside the brand and carries no loose witness-borrow rea
 consumer-pull lift and the `Outcome::Forward` ready pull re-anchor their reads at a *node* lifetime,
 not a fabricated `'run`: each dep terminal is read out borrow-bounded, erased into one
 `DepResultsFamily` slice carrier, and opened **in-band** at `'b` alongside the continuation. Inside
-that brand [`relocate_carried`](../src/machine/execute/lift.rs) copies each dep into the consumer
+that brand [`copy_carried`](../src/machine/execute/lift.rs) copies each dep into the consumer
 `dest` region with a plain `'b → 'b` structural alloc — the composite spine sharing its `Rc` payloads,
 a closure / future / module riding its bare `&'b` borrow into the source region — and the
 `Outcome::Forward` pull lands in that same region at the brand, so every dep value is born at `'b`
