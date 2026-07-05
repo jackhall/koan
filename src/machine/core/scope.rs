@@ -727,6 +727,32 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Walk `self` and its `outer` ancestors, returning the first scope's `probe` hit — the single
+    /// ancestor-with-cutoff traversal every name-resolution ladder shares. Each ladder supplies the
+    /// per-scope `probe`, which reads that scope's `bindings` gated by its
+    /// [`binding_cutoff`](Self::binding_cutoff); the innermost visible hit wins.
+    fn walk_chain<T>(&self, probe: impl Fn(&Scope<'a>) -> Option<T>) -> Option<T> {
+        self.ancestors().find_map(probe)
+    }
+
+    /// Builtin-first resolution: a builtin entry is unshadowable and authoritative, so consult the
+    /// immutable run-global root in one hop and return its hit; a non-builtin name finds nothing in
+    /// the root and falls through to the innermost-wins [`Self::walk_chain`]. The `is_builtin` gate is
+    /// the `idx == 0` [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_operator`] predicate,
+    /// so a synthetic root-position user entry still resolves by the chain walk below.
+    fn resolve_builtin_first<T>(
+        &self,
+        is_builtin: impl Fn(&Bindings<'a>) -> bool,
+        root_hit: impl FnOnce(&Bindings<'a>) -> Option<T>,
+        probe: impl Fn(&Scope<'a>) -> Option<T>,
+    ) -> Option<T> {
+        let root = self.root_scope().bindings();
+        if is_builtin(root) {
+            return root_hit(root);
+        }
+        self.walk_chain(probe)
+    }
+
     /// Chain-gated companion to [`Self::resolve`]. Per-scope hits are filtered through the
     /// [`binding_cutoff`](Self::binding_cutoff), so hidden entries (later siblings, or value-style
     /// binders before their lexical position) are skipped and the walk continues outward.
@@ -735,7 +761,7 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KObject<'a>>> {
-        self.ancestors().find_map(|scope| {
+        self.walk_chain(|scope| {
             scope
                 .bindings()
                 .lookup_value(name, scope.binding_cutoff(chain))
@@ -753,16 +779,11 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<Witnessed<CarriedFamily, FrameSet>>> {
-        self.ancestors().find_map(|scope| {
-            match scope
+        self.walk_chain(|scope| {
+            scope
                 .bindings()
-                .lookup_value_carrier(name, scope.binding_cutoff(chain))?
-            {
-                NameLookup::Bound(hit) => Some(NameLookup::Bound(
-                    scope.resident_value_carrier(hit.obj, &hit.reach),
-                )),
-                NameLookup::Parked(producer) => Some(NameLookup::Parked(producer)),
-            }
+                .lookup_value_carrier(name, scope.binding_cutoff(chain))
+                .map(|hit| hit.map(|value| scope.resident_value_carrier(value.obj, &value.reach)))
         })
     }
 
@@ -952,42 +973,39 @@ impl<'a> Scope<'a> {
         name: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<NameLookup<&'a KType<'a>>> {
-        // Builtins are unshadowable, so a builtin type is authoritative: consult the
-        // immutable root in one hop and return it without walking the user chain. The
-        // `idx == 0` gate keeps this to genuine builtins, so a synthetic root-position
-        // user type still resolves by innermost-wins precedence below.
-        let root = self.root_scope();
-        if root.bindings().has_builtin_type(name) {
-            return root.bindings().lookup_type(name, None);
-        }
-        self.ancestors().find_map(|scope| {
-            scope
-                .bindings()
-                .lookup_type(name, scope.binding_cutoff(chain))
-        })
+        self.resolve_builtin_first(
+            |root| root.has_builtin_type(name),
+            |root| root.lookup_type(name, None),
+            |scope| {
+                scope
+                    .bindings()
+                    .lookup_type(name, scope.binding_cutoff(chain))
+            },
+        )
     }
 
     /// The home-omitted foreign reach of the `types` binding `name` resolves to under `chain` — the
     /// reach a bare-type-leaf read stores on its carrier, computed at the memo-miss so a hit rebuilds
-    /// the carrier without re-walking. Mirrors [`Self::resolve_type_with_chain`]'s walk (builtins
-    /// first, then innermost-wins) via the reach-carrying [`Bindings::lookup_type_carrier`]. A builtin,
-    /// a `from_name` / `RecursiveRef` fallback that names no binding, or a placeholder reaches nothing
+    /// the carrier without re-walking. Shares [`Self::resolve_type_with_chain`]'s builtin-first walk
+    /// via [`Self::resolve_builtin_first`], but probes the reach-carrying
+    /// [`Bindings::lookup_type_carrier`] and projects each hit to its stored reach. A builtin, a
+    /// `from_name` / `RecursiveRef` fallback that names no binding, or a placeholder reaches nothing
     /// foreign, so all yield the empty set.
     pub(crate) fn resolve_type_reach(&self, name: &str, chain: Option<&LexicalFrame>) -> FrameSet {
-        if self.root_scope().bindings().has_builtin_type(name) {
-            return FrameSet::empty();
-        }
-        self.ancestors()
-            .find_map(|scope| {
+        self.resolve_builtin_first(
+            |root| root.has_builtin_type(name),
+            |_root| Some(FrameSet::empty()),
+            |scope| {
                 scope
                     .bindings()
                     .lookup_type_carrier(name, scope.binding_cutoff(chain))
-            })
-            .map(|hit| match hit {
-                NameLookup::Bound(bound) => bound.reach,
-                NameLookup::Parked(_) => FrameSet::empty(),
-            })
-            .unwrap_or_default()
+                    .map(|hit| match hit {
+                        NameLookup::Bound(bound) => bound.reach,
+                        NameLookup::Parked(_) => FrameSet::empty(),
+                    })
+            },
+        )
+        .unwrap_or_default()
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`
@@ -1000,18 +1018,15 @@ impl<'a> Scope<'a> {
         probe: &str,
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::operators::OperatorGroup> {
-        // A builtin operator group is unshadowable and authoritative — consult the root
-        // in one hop. The `idx == 0` gate keeps synthetic root-position user operators on
-        // the innermost-wins walk below.
-        let root = self.root_scope();
-        if root.bindings().has_builtin_operator(probe) {
-            return root.bindings().lookup_operator_group(probe, None);
-        }
-        self.ancestors().find_map(|scope| {
-            scope
-                .bindings()
-                .lookup_operator_group(probe, scope.binding_cutoff(chain))
-        })
+        self.resolve_builtin_first(
+            |root| root.has_builtin_operator(probe),
+            |root| root.lookup_operator_group(probe, None),
+            |scope| {
+                scope
+                    .bindings()
+                    .lookup_operator_group(probe, scope.binding_cutoff(chain))
+            },
+        )
     }
 
     /// Register `probe → group` in this scope's operator registry. The `OP` binder

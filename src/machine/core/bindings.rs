@@ -76,6 +76,15 @@ impl<T> NameLookup<T> {
             NameLookup::Parked(_) => None,
         }
     }
+
+    /// Map the bound payload, threading a `Parked` producer through unchanged — the combinator the
+    /// carrier ladder uses to re-wrap a hit without restating the two-arm match.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> NameLookup<U> {
+        match self {
+            NameLookup::Bound(payload) => NameLookup::Bound(f(payload)),
+            NameLookup::Parked(id) => NameLookup::Parked(id),
+        }
+    }
 }
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature
