@@ -41,9 +41,7 @@ are not).
 API stabilization gates this item: any boundary-moving item lands first so
 the surface being documented and frozen is the final one.
 
-**Requires:**
-
-- [Allocation capability: the library region handle](allocation-capability.md)
-  — the last boundary move that reshapes the library's public surface.
+**Requires:** none — the storage-bundle and allocation-capability
+prerequisites have shipped.
 
 **Unblocks:** none tracked — the project's terminal item.

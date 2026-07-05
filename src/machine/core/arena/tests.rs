@@ -531,13 +531,11 @@ fn fold_omitting_skips_the_home_frame_and_keeps_foreign_reach() {
 #[test]
 fn alloc_engine_brand_coexists_with_sibling_alloc() {
     let storage = FrameStorage::run_root();
-    let region = storage.region();
-    // The engine stores `value`, hands the brand-fresh `&'b KObject<'b>` to the closure, and lets only
-    // the carrier escape — `Witnessed::resident` (the empty-witness constructor) names no `'b`.
-    let carrier: Witnessed<CarriedFamily, FrameSet> = region
-        .alloc::<KObject<'static>, _>(KObject::Number(1.0), |live| {
-            Witnessed::resident(Carried::Object(live))
-        });
+    // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
+    // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
+    // names no `'b`.
+    let carrier: Witnessed<CarriedFamily, FrameSet> =
+        storage.brand().alloc_object_witnessed(KObject::Number(1.0));
     // A sibling alloc into the same region coexists — the membership-table write and the prior store
     // do not alias under tree borrows.
     let sibling = storage.brand().alloc_object(KObject::Number(2.0));

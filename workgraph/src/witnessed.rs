@@ -28,7 +28,10 @@ use std::rc::Rc;
 use stable_deref_trait::StableDeref;
 
 mod region;
-pub use region::{FamilyArena, FamilyList, Region, StorageOf, StorageProfile, Stored};
+pub use region::{
+    FamilyArena, FamilyList, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile,
+    Stored,
+};
 
 mod region_set;
 pub use region_set::{PinsRegion, RegionSet};
@@ -378,6 +381,20 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         // the witness's region, so co-location is structural rather than asserted.
         let value = Erased::erase(f(witness.region()));
         Self::from_erased(value, witness)
+    }
+
+    /// [`Self::yoke`] for a witness pinning a library [`Region`]: the closure receives the region's
+    /// [`RegionHandle`] allocation capability instead of the bare region, so a yoked construction
+    /// allocates through the same handle every other site uses. Sound for the same reason `yoke` is —
+    /// the `for<'b>` quantifier admits only region-derived or owned references, and nothing
+    /// handle-flavoured escapes the closure.
+    pub fn yoke_handle<P, F>(witness: W, f: F) -> Self
+    where
+        P: StorageProfile,
+        W: WitnessRegion<Region = Region<P>>,
+        F: for<'b> FnOnce(RegionHandle<'b, P>) -> T::At<'b>,
+    {
+        Self::yoke(witness, |region| f(RegionHandle::new(region)))
     }
 
     /// Read the carrier: re-anchor it behind a **rank-2** (`for<'b>`) closure, so the fabricated

@@ -6,7 +6,10 @@
 
 use std::cell::Cell;
 
-use super::{PinsRegion, Reattachable, RegionOwner, SealedExtern, Witness, WitnessRegion};
+use super::{
+    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern, StorageOf,
+    StorageProfile, Stored, Witness, WitnessRegion,
+};
 
 /// A shared-reference carrier family: `&'r u32`.
 pub struct RefFamily;
@@ -56,4 +59,26 @@ unsafe impl PinsRegion for Cart {
 /// this in-crate wrapper to construct one at all.
 pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
+}
+
+/// Single-family profile for the region/handle doctests.
+pub struct FixtureProfile;
+impl StorageProfile for FixtureProfile {
+    type Families = (RefFamily, ());
+}
+impl Stored<FixtureProfile> for RefFamily {
+    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
+        &storage.0
+    }
+}
+
+/// A region owner for the fixture profile.
+pub struct RegionCart(pub Region<FixtureProfile>);
+// SAFETY: the owned `Region`'s arena pages stay fixed-address while the `RegionCart` is held
+// (behind an `Rc` at every use site).
+unsafe impl RegionOwner for RegionCart {
+    type Region = Region<FixtureProfile>;
+    fn region(&self) -> &Region<FixtureProfile> {
+        &self.0
+    }
 }

@@ -40,7 +40,9 @@ pub struct Scope<'a> {
     /// region-open and inherited by same-region children. Allocation sites reach it through
     /// [`Self::brand`]; identity compares read the bare region through [`Self::region`]. Storing the
     /// brand (not a bare `&KoanRegion`) is what lets a scope hand out the alloc capability without a
-    /// forgeable constructor: nothing can turn the bare `region()` back into a brand.
+    /// forgeable constructor: the no-forgeable-constructor rule is the library's — `RegionBrand` wraps a
+    /// `RegionHandle`, whose only public minter is `RegionHandle::from_owner` and whose field and `new`
+    /// are crate-private to `workgraph` — so nothing can turn the bare `region()` back into a brand.
     brand: RegionBrand<'a>,
     /// Owning-on-upgrade handle to the [`FrameStorage`] whose region this scope lives in. Read via
     /// [`Self::region_owner`] to recover a captured function's / module's region owner without

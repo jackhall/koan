@@ -73,11 +73,19 @@ a concept, not a final identifier.
   declares only its family list (`FamilyList`, a `(K, Rest)` cons-list), and
   the library derives and owns the arena bundle from it — one `FamilyArena`
   cell per family, keyed by `Stored::cell` through a tuple-field path so a
-  wrong binding is a compile error rather than a runtime bug. [arena.rs](../src/machine/core/arena.rs)
-  holds only Koan's profile (`KoanStorageProfile`, `KoanRegion`, brand/type
-  families, `FrameSet`, `CallFrame`) and allocates through the generic
-  engine via the `RegionOwner` seam (the `Rc<F>` blanket impl that lets a
-  foreign region-owner type pick up the library's `WitnessRegion`).
+  wrong binding is a compile error rather than a runtime bug. The allocation
+  capability itself is a library type,
+  [`RegionHandle`](../workgraph/src/witnessed/region.rs): the engine's
+  `alloc` / `alloc_resident` are `pub(crate)` to `workgraph`, so a bare
+  `&Region` has no allocation surface at all — the only public minter is
+  `RegionHandle::from_owner`, gated on the (unsafe-to-implement) `RegionOwner`
+  contract. [arena.rs](../src/machine/core/arena.rs) holds only Koan's
+  profile (`KoanStorageProfile`, `KoanRegion`, `FrameSet`, `CallFrame`) and a
+  thin `RegionBrand` veneer over `RegionHandle` adding Koan-family-typed
+  `alloc_*` wrappers, carrying no capability rule of its own; it allocates
+  through the generic engine via the `RegionOwner` seam (the `Rc<F>` blanket
+  impl that lets a foreign region-owner type pick up the library's
+  `WitnessRegion`).
 - The witnessed substrate ([witnessed.rs](../workgraph/src/witnessed.rs)): brands,
   carriers, erase-store, reattach.
 - The reach set, as an opaque type
@@ -235,11 +243,12 @@ threading argument carriers onward). Views cannot escape; carriers can,
 safely.
 
 **Two allocation modes, one substrate.** The step context is the
-maximally-checked path. Outside a step, an embedder allocates through held
-region handles — the `yoke` / `merge` construction surface of
+maximally-checked path. Outside a step, an embedder allocates through a held
+[`RegionHandle`](../workgraph/src/witnessed/region.rs) — the `yoke` /
+`yoke_handle` / `merge` construction surface of
 [per-node-memory.md](per-node-memory.md) — with the same carrier and
-reach-set types. In Koan: `CallFrame` holds the handles; `Scope` allocates
-through them.
+reach-set types. In Koan: `CallFrame` holds the handle (wrapped in the
+`RegionBrand` veneer); `Scope` allocates through it.
 
 ## Koan above the library
 

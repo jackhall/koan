@@ -9,7 +9,10 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::{Reattachable, RegionOwner, Sealed, SetWitness, UnionWitness, Witnessed};
+use super::{
+    Reattachable, Region, RegionHandle, RegionOwner, Sealed, SetWitness, StorageProfile,
+    UnionWitness, Witnessed,
+};
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
 /// what makes [`Self::region`] infallible (guarantee 4, reused). Cheap to clone (an `Rc` clone).
@@ -143,6 +146,41 @@ impl<F: RegionOwner> StepContext<F> {
             )
         });
         acc.map::<T>(finalize_alloc_with::<F, T, V>(build))
+    }
+
+    /// [`Self::alloc`] for a frame owning a library [`Region`]: the build closure receives the
+    /// region's [`RegionHandle`] instead of the bare region.
+    pub fn alloc_handle<P, T, W>(
+        &self,
+        build: impl for<'b> FnOnce(RegionHandle<'b, P>) -> T::At<'b>,
+    ) -> Witnessed<T, W>
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        T: Reattachable,
+        W: SetWitness<Rc<F>>,
+    {
+        self.alloc::<T, W>(|region| build(RegionHandle::new(region)))
+    }
+
+    /// [`Self::alloc_with`] for a frame owning a library [`Region`]: same dep folding, build closure
+    /// receives the [`RegionHandle`].
+    pub fn alloc_with_handle<P, T, V, W>(
+        &self,
+        deps: &[&Sealed<V, W>],
+        build: impl for<'b> FnOnce(RegionHandle<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
+    ) -> Witnessed<T, W>
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        T: Reattachable,
+        V: Reattachable,
+        V::At<'static>: Copy,
+        W: UnionWitness + SetWitness<Rc<F>> + Clone,
+    {
+        self.alloc_with::<T, V, W>(deps, |region, views| {
+            build(RegionHandle::new(region), views)
+        })
     }
 }
 

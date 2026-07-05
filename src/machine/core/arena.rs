@@ -26,8 +26,8 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet, Sealed, StepContext,
-    StorageOf, StorageProfile, Stored, WitnessRegion, Witnessed,
+    FamilyArena, PinsRegion, Reattachable, Region, RegionHandle, RegionHandleFamily, RegionOwner,
+    RegionSet, Sealed, StepContext, StorageOf, StorageProfile, Stored, WitnessRegion, Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -60,19 +60,10 @@ impl StorageProfile for KoanStorageProfile {
 /// alias unchanged.
 pub type KoanRegion = Region<KoanStorageProfile>;
 
-/// The frame-lifetime **allocation capability** for a [`KoanRegion`] — a `Copy` newtype over a
-/// `&'a KoanRegion` that carries every `alloc_*` method. It is the *only* way to allocate into a
-/// region: a bare `&KoanRegion` (the references that "scope around" — `scope.region()`,
-/// `frame.region()`) exposes identity queries (`owns_object`) but **no**
-/// `alloc_*`, so nothing can mint a region resident from an ambient region reference and "an
-/// allocated value is always born inside the Witnessed/Sealed abstraction" is a type rule, not an
-/// audited convention.
-///
-/// **Un-forgeable from a bare region.** The wrapped field is private to this module and the sole
-/// public minter is [`FrameStorage::brand`], which requires `&FrameStorage` — the storage that owns
-/// the region. The ambient `&KoanRegion` holders never hold the `FrameStorage`, so they cannot mint a
-/// brand; the capability reaches an allocation site only by riding the [`Scope`] (which stores the
-/// brand it was built under) or being threaded as a parameter.
+/// Koan's typed veneer over the library [`RegionHandle`] allocation capability for a [`KoanRegion`] —
+/// a `Copy` newtype adding only the Koan-family-typed `alloc_*` methods. The capability rules
+/// themselves — owner-only minting, "a bare region cannot allocate" — are `workgraph`'s, enforced on
+/// [`RegionHandle`] and compile-guarded there; this type carries no capability rule of its own.
 ///
 /// **Frame-lifetime, not a per-alloc `for<'b>` brand.** A structural resident (a binding entry, a
 /// `Module`'s child `&Scope`) must outlive any one brand window, so it needs a real `&'a` — which only
@@ -80,7 +71,7 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// (the witnessed surface, where [`Region::alloc`] hands a `for<'b>` brand and returns a `Witnessed`
 /// carrier); this handle is for the co-located plumbing.
 ///
-/// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this brand, so
+/// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this veneer, so
 /// nothing can mint a region resident from an ambient region reference:
 ///
 /// ```compile_fail
@@ -89,14 +80,14 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// let _ = region.alloc_object(todo!());
 /// ```
 #[derive(Clone, Copy)]
-pub struct RegionBrand<'a>(&'a KoanRegion);
+pub struct RegionBrand<'a>(RegionHandle<'a, KoanStorageProfile>);
 
 impl<'a> RegionBrand<'a> {
     /// The bare region this brand authorizes — for identity compares (`ptr::eq`, `pins_region`). A
-    /// bare `&KoanRegion` cannot be turned *back* into a brand (the field is private and the only
-    /// minter is [`FrameStorage::brand`]), so handing out the identity reference opens no hole.
+    /// bare `&KoanRegion` cannot be turned *back* into a brand — the library's [`RegionHandle`] enforces
+    /// that — so handing out the identity reference opens no hole.
     pub fn region(self) -> &'a KoanRegion {
-        self.0
+        self.0.region()
     }
 
     /// Store a [`KObject`] into the region; the value lands here (no value holds an owning `Rc` back
@@ -119,7 +110,7 @@ impl<'a> RegionBrand<'a> {
     pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
         debug_assert!(
             std::ptr::eq(
-                self.0 as *const KoanRegion,
+                self.0.region() as *const KoanRegion,
                 f.captured_scope().region() as *const KoanRegion
             ),
             "alloc_function invariant :KFunction must be allocated into the same KoanRegion \
@@ -214,14 +205,6 @@ reattachable! {
 /// Layout-invariant: two thin pointers, representation independent of `'r`.
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionBrand<'r>, &'r KType<'r>));
-
-/// `Reattachable` family for a **reference** to a [`KoanRegion`] — `&'r KoanRegion`, a thin pointer
-/// (`KoanRegion` is lifetime-free, so the reference is layout-invariant in `'r`). It lets the fresh
-/// per-call region erase and re-brand at the construction-door brand alongside the foreign parent
-/// scope, so [`build_frame_child_witnessed`] can present the region as a `RegionBrand<'b>` at the very
-/// `'b` the parent re-anchors to — the unification the per-call frame child needs.
-pub struct BareRegionFamily;
-reattachable!(BareRegionFamily => &'r KoanRegion);
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
@@ -335,13 +318,13 @@ impl KoanRegionExt for KoanRegion {
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
-        // `yoke` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
+        // `yoke_handle` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
         // ([`WitnessRegion`]), then [`into_set`](Witnessed::into_set) widens that one pin into the
         // `FrameSet` the aggregate world accumulates in — `yoke`'s source == bundle identity preserved,
         // the single→set widening a separate lift. Turbofish `T` at the yoke: inference does not drive
         // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so it
         // sees `<_ as Reattachable>::At` and fails to match the projection.
-        Witnessed::<T, Rc<FrameStorage>>::yoke(owner, |region| build(RegionBrand(region)))
+        Witnessed::<T, Rc<FrameStorage>>::yoke_handle(owner, |handle| build(RegionBrand(handle)))
             .into_set::<FrameSet>()
     }
 
@@ -410,7 +393,9 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc::<CarriedFamily, FrameSet>(|region| build(RegionBrand(region)))
+        self.alloc_handle::<KoanStorageProfile, CarriedFamily, FrameSet>(|handle| {
+            build(RegionBrand(handle))
+        })
     }
 
     fn alloc_carried_with(
@@ -418,9 +403,10 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         deps: &[&Sealed<CarriedFamily, FrameSet>],
         build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc_with::<CarriedFamily, CarriedFamily, FrameSet>(deps, |region, views| {
-            build(RegionBrand(region), views)
-        })
+        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily, FrameSet>(
+            deps,
+            |handle, views| build(RegionBrand(handle), views),
+        )
     }
 
     fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, FrameSet> {
@@ -519,12 +505,12 @@ impl FrameStorage {
     }
 
     /// Mint the region's [`RegionBrand`] — the **sole** allocation capability for this storage's
-    /// region. The minter requires `&FrameStorage` (the storage that *owns* the region), so a holder
-    /// of a bare `&KoanRegion` — the references that scope around — cannot mint one: allocation is
-    /// reachable only by riding this brand (it is stored on the [`Scope`] built at region-open, and
-    /// threaded from there). This is the one place an allocation capability comes into existence.
+    /// region. Minting is the library's [`RegionHandle::from_owner`] rule (it requires `&FrameStorage`,
+    /// the storage that *owns* the region, via its `RegionOwner` impl); this method pairs it with the
+    /// Koan veneer. Allocation is reachable only by riding this brand (it is stored on the [`Scope`]
+    /// built at region-open, and threaded from there).
     pub(crate) fn brand(&self) -> RegionBrand<'_> {
-        RegionBrand(&self.region)
+        RegionBrand(RegionHandle::from_owner(self))
     }
 
     /// True iff holding `self`'s `Rc` keeps the region at `region_ptr` alive — `self`'s own region or
@@ -576,27 +562,30 @@ unsafe impl PinsRegion for FrameStorage {
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
 /// longer-lived lexical parent into the fresh region, with no retype outside the witnessed substrate.
 ///
-/// The fresh region (as [`BareRegionFamily`]) and the foreign parent (as [`ScopeRefFamily`]) are erased
-/// and [`zip`](SealedExtern::zip)ped, then opened at **one** `for<'b>` brand against `storage` — the
-/// fresh frame's `Rc`, which pins both the region it owns and, via its `outer` chain, the parent. Inside
+/// The fresh region's [`RegionHandle`] and the foreign parent (as [`ScopeRefFamily`]) are erased and
+/// [`zip`](SealedExtern::zip)ped, then opened at **one** `for<'b>` brand against `storage` — the fresh
+/// frame's `Rc`, which pins both the region it owns and, via its `outer` chain, the parent. Inside
 /// the brand the real invariant `Scope<'b>` is built coupling the parent at `'b` (its `root`
 /// falling out as `outer.root`), allocated through the brand's [`RegionBrand`], and erased witness-less.
 /// `Scope`'s invariance is honoured by construction — the only retypes are the substrate's audited brand
-/// ([`SealedExtern::open`]) and store ([`Region::alloc`]) — so the per-call child stops being a re-anchor
-/// audited outside Witnessed/Sealed. Branding the two refs at *independent* `'b`s is what invariance
-/// rejects; one [`zip`](SealedExtern::zip)ped `open` unifies them at a single `'b`.
+/// ([`SealedExtern::open`]) and store ([`RegionHandle::alloc`]) — so the per-call child stops being a
+/// re-anchor audited outside Witnessed/Sealed. Branding the two refs at *independent* `'b`s is what
+/// invariance rejects; one [`zip`](SealedExtern::zip)ped `open` unifies them at a single `'b`.
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
 ) -> SealedExtern<ScopeRefFamily> {
-    let region = SealedExtern::<BareRegionFamily>::erase(storage.region());
+    let handle = SealedExtern::<RegionHandleFamily<KoanStorageProfile>>::erase(
+        RegionHandle::from_owner(&**storage),
+    );
     let parent = SealedExtern::<ScopeRefFamily>::erase(outer);
     let region_owner = Rc::downgrade(storage);
-    region.zip(parent).open(storage, |(region_b, outer_b)| {
-        // `region_b: &'b KoanRegion`, `outer_b: &'b Scope<'b>` — the region and parent unified at the
-        // one brand. The child stores both by plain coercion (no retype of its own).
-        let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(region_b), region_owner);
-        region_b
+    handle.zip(parent).open(storage, |(handle_b, outer_b)| {
+        // `handle_b: RegionHandle<'b, KoanStorageProfile>`, `outer_b: &'b Scope<'b>` — the region
+        // handle and parent unified at the one brand. The child stores both by plain coercion (no
+        // retype of its own).
+        let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
+        handle_b
             .alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live))
     })
 }

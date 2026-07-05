@@ -7,8 +7,9 @@
 //! [`alloc`](Region::alloc) hands the freshly-stored value to a `for<'b>` closure (so it enters
 //! circulation only wrapped by the Witnessed/Sealed abstraction, never as a bare region reference),
 //! and [`alloc_resident`](Region::alloc_resident) re-anchors it to the caller's `'a` as a co-located
-//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are reachable only
-//! through an embedder's brand type (Koan's `RegionBrand`) — a bare `&Region` has no allocation
+//! `&'a` (content == borrow == `'a`, the tight no-free-lifetime shape). Both are `pub(crate)` — the
+//! only public allocation surface is [`RegionHandle`], minted from a region owner or handed out at a
+//! `for<'b>` brand by the library's construction combinators — so a bare `&Region` has no allocation
 //! surface at all. No cycle gate: a stored value holds no
 //! owning `Rc` back to a region (a closure / future / module is a bare borrow into its defining
 //! region, kept alive by its carrier's witness set), so storing it where requested can never form an
@@ -23,10 +24,11 @@
 //! for how an escaped value's region stays alive.
 
 use std::cell::RefCell;
+use std::marker::PhantomData;
 
 use typed_arena::Arena;
 
-use super::{erase_to_static, with_branded_ref, Reattachable};
+use super::{erase_to_static, with_branded_ref, Reattachable, RegionOwner};
 
 /// One family's typed sub-arena — the library-owned storage cell a [`FamilyList`] bundle is built
 /// from. The inner arena is private to the crate: holding a `&FamilyArena` grants no allocation
@@ -166,13 +168,14 @@ impl<W: StorageProfile> Region<W> {
     /// escapes — `project`'s `R` cannot name `'b` — so the value enters circulation only as whatever
     /// carrier `project` builds (a [`Witnessed`](super::Witnessed) bundle, a
     /// [`SealedExtern`](super::SealedExtern)), wrapped by the Witnessed/Sealed abstraction from birth
-    /// rather than handed out as a bare region reference. The witnessed-allocation surface.
+    /// rather than handed out as a bare region reference. The witnessed-allocation surface, reached
+    /// through [`RegionHandle::alloc`] — `pub(crate)` here so a bare `&Region` cannot call it directly.
     ///
     /// Sound by the same `for<'b>` quantifier as [`Witnessed::with`](super::Witnessed::with): the
     /// region pins the pointee for the whole synchronous `project` call and the brand keeps the view
     /// from outliving it, so this surface carries **no `unsafe`** of its own beyond the substrate's
     /// single audited retype.
-    pub fn alloc<K: Stored<W>, R>(
+    pub(crate) fn alloc<K: Stored<W>, R>(
         &self,
         value: K::At<'_>,
         project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
@@ -188,10 +191,9 @@ impl<W: StorageProfile> Region<W> {
     /// widen past the pin. The `&'a self` borrow is what makes it sound — the region pins the pointee
     /// for the whole of `'a`, so the re-anchored reference cannot out-claim its backing.
     ///
-    /// Reachable only through an embedder's brand type (Koan's `RegionBrand`)'s `alloc_*` wrappers
-    /// (the co-located residents: a registered `&KType`, a child `&Scope`); the witnessed terminals go
-    /// through the brand-confined [`alloc`](Self::alloc). A bare `&Region` exposes neither.
-    pub fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
+    /// Reached through [`RegionHandle::alloc_resident`] — `pub(crate)` here so a bare `&Region`
+    /// exposes neither this nor the brand-confined [`alloc`](Self::alloc).
+    pub(crate) fn alloc_resident<'a, K: Stored<W>>(&'a self, value: K::At<'_>) -> &'a K::At<'a> {
         let stored: &'a K::At<'static> = self.store::<K>(value);
         // SAFETY: lifetime-only retype of a single-lifetime family (the `Reattachable` contract); a
         // reference is a thin/fat pointer whose layout is identical across the content lifetime. The
@@ -213,3 +215,98 @@ impl<W: StorageProfile> Default for Region<W> {
 // roots) at a fixed address — the bound the consumer-pull lift's frameless re-anchor relies on to
 // witness the destination lifetime.
 unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
+
+/// The at-will allocation capability for a [`Region`] — a `Copy` newtype over `&'a Region<W>` carrying
+/// the only public allocation surface. A bare `&Region` cannot allocate (the engine's alloc methods
+/// are crate-private) and safe embedder code cannot wrap one into a handle (the field and the
+/// crate-internal constructor are private): a handle enters circulation only by [`Self::from_owner`]
+/// — minting requires the region's *owner*, whose `RegionOwner` impl is an audited, `unsafe`-opt-in
+/// declaration — or handed out at a `for<'b>` brand by the library's construction combinators
+/// ([`Witnessed::yoke_handle`](super::Witnessed::yoke_handle), [`StepContext::alloc_handle`](super::StepContext::alloc_handle),
+/// [`StepContext::alloc_with_handle`](super::StepContext::alloc_with_handle)).
+///
+/// ```compile_fail
+/// // A bare `&Region` has no allocation surface: `alloc_resident` is crate-private.
+/// use workgraph::witnessed::doctest_fixture::{FixtureProfile, RefFamily};
+/// use workgraph::witnessed::Region;
+/// let region: Region<FixtureProfile> = Region::new();
+/// let _ = region.alloc_resident::<RefFamily>(&7);
+/// ```
+///
+/// ```compile_fail
+/// // Safe embedder code cannot wrap a bare `&Region` into the capability: the field and `new`
+/// // are crate-private.
+/// use workgraph::witnessed::doctest_fixture::FixtureProfile;
+/// use workgraph::witnessed::{Region, RegionHandle};
+/// let region: Region<FixtureProfile> = Region::new();
+/// let _: RegionHandle<'_, FixtureProfile> = RegionHandle::new(&region);
+/// ```
+///
+/// ```
+/// use std::rc::Rc;
+/// use workgraph::witnessed::doctest_fixture::{FixtureProfile, RefFamily, RegionCart};
+/// use workgraph::witnessed::{Region, RegionHandle};
+/// let cart = Rc::new(RegionCart(Region::new()));
+/// let handle = RegionHandle::from_owner(&*cart);
+/// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
+/// assert_eq!(*stored, 7);
+/// ```
+pub struct RegionHandle<'a, W: StorageProfile> {
+    region: &'a Region<W>,
+}
+
+// Manual impls: a derive would bound `W: Clone` / `W: Copy`, which the reference field does not need.
+impl<W: StorageProfile> Clone for RegionHandle<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: StorageProfile> Copy for RegionHandle<'_, W> {}
+
+impl<'a, W: StorageProfile> RegionHandle<'a, W> {
+    pub(crate) fn new(region: &'a Region<W>) -> Self {
+        RegionHandle { region }
+    }
+
+    /// Mint the allocation capability from a region owner. The one public minter: it requires `&F`
+    /// where `F: RegionOwner` — an owner type whose (unsafe-to-implement) contract pins the region —
+    /// so an ambient bare `&Region` holder cannot mint.
+    pub fn from_owner<F>(owner: &F) -> RegionHandle<'_, W>
+    where
+        F: RegionOwner<Region = Region<W>>,
+    {
+        RegionHandle {
+            region: owner.region(),
+        }
+    }
+
+    /// The bare region this handle authorizes — identity queries only.
+    pub fn region(self) -> &'a Region<W> {
+        self.region
+    }
+
+    /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs.
+    pub fn alloc<K: Stored<W>, R>(
+        self,
+        value: K::At<'_>,
+        project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
+    ) -> R {
+        self.region.alloc::<K, R>(value, project)
+    }
+
+    /// Co-located resident allocation — see [`Region::alloc_resident`].
+    pub fn alloc_resident<K: Stored<W>>(self, value: K::At<'_>) -> &'a K::At<'a> {
+        self.region.alloc_resident::<K>(value)
+    }
+}
+
+/// [`Reattachable`] family for a [`RegionHandle`] — a thin pointer, layout independent of `'r` — so an
+/// embedder can erase/re-anchor the capability through the witnessed substrate (the per-call
+/// construction door).
+pub struct RegionHandleFamily<W>(PhantomData<W>);
+
+// SAFETY: `RegionHandle<'r, W>` is a newtype over `&'r Region<W>`, a thin pointer whose layout is
+// identical for every choice of `'r`.
+unsafe impl<W: StorageProfile + 'static> Reattachable for RegionHandleFamily<W> {
+    type At<'r> = RegionHandle<'r, W>;
+}
