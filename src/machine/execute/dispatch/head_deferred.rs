@@ -62,9 +62,10 @@ fn park_on_head<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         // `reach` names the regions the resolved identity points into: a `SetRef` constructor threads
         // it to the construction finish (the operand names the identity's own region); a callable
-        // ignores it and rides the `adopt_sealed` below.
+        // ignores it and rides the `adopt_sealed` below. Collapsed to a plain reach set — the
+        // identity is region-resident, so its witness carries only frame reach, no owned backing.
         let head_terminal = terminals.owned(0);
-        let reach = head_terminal.carrier.witness().clone();
+        let reach = head_terminal.carrier.witness().to_reach_frameset();
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
         let head = ctx.current_scope().adopt_sealed(&head_terminal.carrier);

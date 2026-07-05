@@ -8,7 +8,7 @@ use super::{KoanRuntime, RegionRefFamily};
 use crate::builtins::default_scope;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::KExpression;
-use crate::machine::{FrameSet, KError, KErrorKind, Scope};
+use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
 use crate::witnessed::Witnessed;
 
@@ -68,7 +68,7 @@ impl<'run> KoanRuntime<'run> {
                 // cycle into the drained value's witness.
                 if let Ok(witnessed) = self.relocate_terminal(
                     id,
-                    Witnessed::<RegionRefFamily, FrameSet>::resident(root.brand()),
+                    Witnessed::<RegionRefFamily, CarrierWitness>::resident(root.brand()),
                 ) {
                     // Fold the rehomed terminal's reach onto the run root so those regions stay alive
                     // past scheduler teardown.

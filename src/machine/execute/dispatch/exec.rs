@@ -20,7 +20,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Record, SignatureElement};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::machine::{CarrierWitness, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 use crate::witnessed::Sealed;
 
@@ -182,7 +182,7 @@ pub(super) fn invoke<'step>(
 /// reach store, a value-embedding builtin's fold) takes a `&Sealed`, so nothing is copied here.
 fn carriers_from_expr<'e, 'step>(
     working_expr: &'e KExpression<'step>,
-) -> Vec<(usize, &'e Sealed<CarriedFamily, FrameSet>)> {
+) -> Vec<(usize, &'e Sealed<CarriedFamily, CarrierWitness>)> {
     working_expr
         .parts
         .iter()
@@ -199,8 +199,8 @@ fn carriers_from_expr<'e, 'step>(
 /// carrier's slot names its parameter. A region-pure arg has no entry, read as "no foreign reach".
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
-    arg_carriers: Vec<(usize, &'e Sealed<CarriedFamily, FrameSet>)>,
-) -> Record<&'e Sealed<CarriedFamily, FrameSet>> {
+    arg_carriers: Vec<(usize, &'e Sealed<CarriedFamily, CarrierWitness>)>,
+) -> Record<&'e Sealed<CarriedFamily, CarrierWitness>> {
     let mut record = Record::new();
     for (slot, carrier) in arg_carriers {
         if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
@@ -218,7 +218,7 @@ fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: Record<crate::machine::model::values::Held<'step>>,
-    arg_carriers: Record<&Sealed<CarriedFamily, FrameSet>>,
+    arg_carriers: Record<&Sealed<CarriedFamily, CarrierWitness>>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::KObject;

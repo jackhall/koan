@@ -16,7 +16,9 @@ use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
-use crate::machine::{BindingIndex, Body, FrameSet, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{
+    BindingIndex, Body, CarrierWitness, FrameSet, KError, KErrorKind, NodeId, Scope,
+};
 use crate::witnessed::Witnessed;
 
 use super::return_type::{
@@ -196,7 +198,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let is_functor = matches!(kind, FnKind::Functor);
     // FUNCTOR-only post-resolution return-type validation: fires here when the
     // return slot resolved at dep-finish time rather than synchronously.
@@ -261,7 +263,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed
 /// (it names its captured scope's frame), so success seals as [`Action::Done(Ok)`](Action::Done).
 pub(crate) fn fn_action<'a>(
-    result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
+    result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
 ) -> Action<'a> {
     match result {
         Ok(witnessed) => Action::Done(Ok(witnessed)),

@@ -17,7 +17,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 use crate::witnessed::Sealed;
 
@@ -148,7 +148,7 @@ fn finalize_val<'a>(
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
-    carrier: Option<&Sealed<CarriedFamily, FrameSet>>,
+    carrier: Option<&Sealed<CarriedFamily, CarrierWitness>>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     let reach = carrier

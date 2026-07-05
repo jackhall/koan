@@ -1,3 +1,4 @@
+use crate::machine::{CarrierPin, CarrierWitness};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
@@ -76,6 +77,13 @@ pub struct Scope<'a> {
     /// scope keeps every foreign region its bindings reach alive for its life. `RefCell` because
     /// folds accrue between scheduler steps.
     reach: RefCell<FrameSet>,
+    /// Owned backings deposited by adopted carriers: the `Object` / `Type` pins of a severed carrier
+    /// (a top node copied out of a dying frame at finalize), kept alive here so an adopted value's
+    /// re-anchored borrow stays valid for the scope's life. Only owned (region-free) backings land
+    /// here — a `Frame` pin routes through [`Self::fold_reach`]'s omission predicate into the
+    /// reach-set instead, so this list never stores an own-region `Rc<FrameStorage>` (the
+    /// `frame → region → scope → deposit → frame` cycle). Drops with the scope.
+    deposit: RefCell<Vec<CarrierPin>>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -144,6 +152,7 @@ impl<'a> Scope<'a> {
             recursive_set: None,
             closed: Cell::new(false),
             reach: RefCell::new(FrameSet::empty()),
+            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -206,12 +215,28 @@ impl<'a> Scope<'a> {
     /// scope — omitting it keeps a sibling bind of the call's result from closing a region cycle. The
     /// shared core of [`Self::fold_reach`] (target = the scope's own reach-set) and
     /// [`Self::foreign_reach_of`] (target = a fresh set): they differ only in which `target` they pass.
-    fn fold_foreign_into(&self, target: &mut FrameSet, witness: &FrameSet) {
+    fn fold_foreign_into(&self, target: &mut FrameSet, witness: &CarrierWitness) {
         let home = self.region_owner.upgrade();
-        target.fold_omitting(witness, |region| {
+        let omit_fn = |region: &KoanRegion| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
                 || self.chain_reaches_region(region)
-        });
+        };
+        let omit = &omit_fn;
+        // The exact borrow reach folds into `target` under the omission predicate.
+        target.fold_omitting(witness.reach(), omit);
+        // The witness's liveness pins split by kind: a `Frame` pin keeps a region alive, so it folds
+        // like a reach member (through the same omission); an owned (`Object` / `Type`) backing carries
+        // no region, so it is deposited whole into the scope, which holds it for the scope's life.
+        for pin in witness.pins() {
+            match pin {
+                CarrierPin::Frame(frame) => {
+                    target.fold_omitting(&FrameSet::singleton(Rc::clone(frame)), omit);
+                }
+                CarrierPin::Object(_) | CarrierPin::Type(_) => {
+                    self.deposit.borrow_mut().push(pin.clone());
+                }
+            }
+        }
     }
 
     /// Fold a value's reach into this scope's reach-set, omitting any region the home frame already
@@ -219,7 +244,7 @@ impl<'a> Scope<'a> {
     /// arg / applied-here closure) and at the run-root drain, so the foreign regions it borrows into
     /// stay alive for the scope's life. A fold past the seal ([`Self::close`]) is the same invariant
     /// violation as a bind past close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
-    pub(crate) fn fold_reach(&self, witness: &FrameSet) {
+    pub(crate) fn fold_reach(&self, witness: &CarrierWitness) {
         debug_assert!(
             !self.closed.get(),
             "fold_reach into sealed scope {:?}",
@@ -268,6 +293,7 @@ impl<'a> Scope<'a> {
             recursive_set,
             closed: Cell::new(false),
             reach: RefCell::new(FrameSet::empty()),
+            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -308,6 +334,7 @@ impl<'a> Scope<'a> {
             recursive_set: None,
             closed: Cell::new(false),
             reach: RefCell::new(FrameSet::empty()),
+            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -794,7 +821,7 @@ impl<'a> Scope<'a> {
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<Witnessed<CarriedFamily, FrameSet>>> {
+    ) -> Option<NameLookup<Witnessed<CarriedFamily, CarrierWitness>>> {
         self.walk_chain(|scope| {
             scope
                 .bindings()
@@ -814,14 +841,15 @@ impl<'a> Scope<'a> {
         &self,
         obj: &'a KObject<'a>,
         foreign: &FrameSet,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the binding scope's region owner is held while its value is read");
-        let mut witness = FrameSet::singleton(home.clone());
-        witness.fold_omitting(foreign, |region| home.pins_region(region));
-        self.brand().seal_resident(Carried::Object(obj), witness)
+        let mut reach = FrameSet::singleton(home.clone());
+        reach.fold_omitting(foreign, |region| home.pins_region(region));
+        self.brand()
+            .seal_resident(Carried::Object(obj), CarrierWitness::reach_only(reach))
     }
 
     /// Adopt a sealed dep carrier into this scope, copy-free: fold its witness into the scope's
@@ -836,7 +864,7 @@ impl<'a> Scope<'a> {
     /// into the scope's reach-set, which the scope holds until it drops, so the returned `Carried<'a>`
     /// cannot outlive its backing — `'a` is bounded by the scope, and the scope keeps its reach-set
     /// (and thus every folded region) live for all of `'a`.
-    pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> Carried<'a> {
+    pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> Carried<'a> {
         // Fold FIRST: pin every region the value reaches into this scope's reach-set before any
         // borrow of the value is fabricated (see the SAFETY note below).
         self.fold_reach(cell.witness());
@@ -858,7 +886,7 @@ impl<'a> Scope<'a> {
     /// [`Self::fold_foreign_into`]): the home frame's own `Rc` never lands in the set, so storing it
     /// inside the scope's own region opens no `frame → region → scope → bindings → frame` strong cycle.
     /// A region-pure or ancestor-resident value yields the empty set.
-    pub(crate) fn foreign_reach_of(&self, witness: &FrameSet) -> FrameSet {
+    pub(crate) fn foreign_reach_of(&self, witness: &CarrierWitness) -> FrameSet {
         let mut foreign = FrameSet::empty();
         self.fold_foreign_into(&mut foreign, witness);
         foreign
@@ -875,14 +903,15 @@ impl<'a> Scope<'a> {
         &self,
         kt: &'a crate::machine::model::types::KType<'a>,
         foreign: &FrameSet,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
             .region_owner()
             .upgrade()
             .expect("the binding scope's region owner is held while its type is read");
-        let mut witness = FrameSet::singleton(home.clone());
-        witness.fold_omitting(foreign, |region| home.pins_region(region));
-        self.brand().seal_resident(Carried::Type(kt), witness)
+        let mut reach = FrameSet::singleton(home.clone());
+        reach.fold_omitting(foreign, |region| home.pins_region(region));
+        self.brand()
+            .seal_resident(Carried::Type(kt), CarrierWitness::reach_only(reach))
     }
 
     /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope,

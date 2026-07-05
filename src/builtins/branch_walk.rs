@@ -53,7 +53,7 @@ pub(crate) enum ItSource<'a> {
     /// An owned value plus its reach — `MATCH`'s resolved argument and `TRY`'s error payload.
     Value {
         value: crate::machine::model::KObject<'a>,
-        reach: crate::machine::FrameSet,
+        reach: crate::machine::CarrierWitness,
     },
     /// The watched producer's sealed carrier — `TRY`'s success arm. Cloned once, directly into
     /// the arm frame at bind time; the carrier's witness pins the producer until then and
@@ -61,7 +61,7 @@ pub(crate) enum ItSource<'a> {
     Carrier(
         crate::witnessed::Sealed<
             crate::machine::model::values::CarriedFamily,
-            crate::machine::FrameSet,
+            crate::machine::CarrierWitness,
         >,
     ),
 }

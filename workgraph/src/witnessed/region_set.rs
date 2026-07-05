@@ -92,6 +92,13 @@ impl<F: PinsRegion> RegionSet<F> {
         }
     }
 
+    /// Whether any member's owner chain keeps `region`'s storage alive — the set-level lift of
+    /// [`PinsRegion::pins_region`]. The reach-covers query a carrier-witness type layers its finalize
+    /// gate and bind-bit derivation on: "does this reach already name the region I'm about to fold?".
+    pub fn pins_region(&self, region: &F::Region) -> bool {
+        self.members.iter().any(|m| m.pins_region(region))
+    }
+
     /// The set union of `left` and `right` under outer-chain subsumption.
     pub fn union(left: &Self, right: &Self) -> Self {
         let mut result = left.clone();

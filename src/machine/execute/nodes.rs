@@ -4,7 +4,7 @@ use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{CallFrame, FrameSet, KError, LexicalFrame, NodeId};
+use crate::machine::{CallFrame, CarrierWitness, KError, LexicalFrame, NodeId};
 use crate::witnessed::{SealedExtern, Witnessed};
 
 /// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
@@ -33,7 +33,7 @@ pub(super) enum NodeStep {
     /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal), which folds the
     /// producing frame into the witness at close. The **sole** value terminal — object and type
     /// both — so no terminal recomputes a witness beside its value. Lifetime-free.
-    DoneWitnessed(Witnessed<CarriedFamily, FrameSet>),
+    DoneWitnessed(Witnessed<CarriedFamily, CarrierWitness>),
     /// The finalized **error** terminal. An error carries no value, so it needs no witness and
     /// finalizes bare, labelled with the frame-gated contract's trace frame.
     Error(KError),
@@ -178,7 +178,7 @@ mod tests {
     use crate::builtins::default_scope;
     use crate::machine::core::FrameStorage;
     use crate::machine::model::KObject;
-    use crate::machine::BindingIndex;
+    use crate::machine::{BindingIndex, FrameSet};
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
     /// [`SealedExtern<ScopeRefFamily>`] carrier (`erase`) and opens it ([`SealedExtern::open`] at a

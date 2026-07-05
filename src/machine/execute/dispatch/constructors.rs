@@ -16,7 +16,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::{FrameSet, KError, KErrorKind, RegionTypeFamily};
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, RegionTypeFamily};
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Witnessed};
 
@@ -177,7 +177,7 @@ pub(crate) fn build_type_operand<'step>(
     dest_frame: Rc<FrameStorage>,
     identity: &'step KType<'step>,
     reach: &FrameSet,
-) -> Witnessed<RegionTypeFamily, FrameSet> {
+) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(dest_frame);
     let identity_carrier = scope.resident_type_carrier(identity, reach);
     dest_brand.merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
@@ -199,7 +199,7 @@ fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
     kind: &CtorKind<'step>,
     terminals: DepResults<'_, &DepTerminal<'step>>,
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
     // exactly the owned suffix — read them as one slice.
     let terminals = terminals.owned_slice();
@@ -240,9 +240,9 @@ fn finish_witnessed<'step>(
             // region until the field carriers fold their reach in below — so it is born under the empty
             // set via `resident` rather than `yoke`d over the dest frame; the dest frame's pin arrives
             // with the `home` operand at the closing `merge`.
-            let acc0 = Witnessed::<RecordFieldsFamily, FrameSet>::resident(Vec::with_capacity(
-                field_names.len(),
-            ));
+            let acc0 = Witnessed::<RecordFieldsFamily, CarrierWitness>::resident(
+                Vec::with_capacity(field_names.len()),
+            );
             let fields = terminals
                 .iter()
                 .zip(field_names)

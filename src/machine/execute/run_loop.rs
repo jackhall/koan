@@ -13,7 +13,7 @@ use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
+use crate::machine::{CarrierWitness, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
 use crate::witnessed::{erase_to_static, reattachable, seal_option, SealedExtern, Witnessed};
 
 use super::dispatch::SchedulerView;
@@ -42,7 +42,7 @@ reattachable!(RegionRefFamily => RegionBrand<'r>);
 /// singleton.
 pub(in crate::machine::execute) fn dest_brand(
     dest_frame: Rc<FrameStorage>,
-) -> Witnessed<RegionRefFamily, FrameSet> {
+) -> Witnessed<RegionRefFamily, CarrierWitness> {
     KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b)
 }
 
@@ -139,18 +139,18 @@ impl<'run> KoanRuntime<'run> {
         // `'b`, then unioned into `combined` — the witness the open re-anchors carriers against, keeping
         // every dep source alive past `reclaim_deps`. It is *only* a liveness pin: every value terminal
         // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
-        let pin: FrameSet = dep_sources.iter().zip(deps.all_ids()).fold(
-            FrameSet::empty(),
+        let pin: CarrierWitness = dep_sources.iter().zip(deps.all_ids()).fold(
+            CarrierWitness::empty(),
             |acc, (src, d)| match src {
-                Ok(t) => FrameSet::union(&acc, t.carrier.witness()),
-                Err(_) => FrameSet::union(&acc, &self.sched.dep_witness(d)),
+                Ok(t) => CarrierWitness::union(&acc, t.carrier.witness()),
+                Err(_) => CarrierWitness::union(&acc, &self.sched.dep_witness(d)),
             },
         );
         // The open witness: the start cart (pinning the continuation, contract, and dest region — plus
         // their ancestor backings via its `outer` chain) unioned with `pin` (every dep source). Held
         // across the open, so re-anchoring the zipped carriers to `'b` cannot dangle.
-        let combined: FrameSet = FrameSet::union(
-            &FrameSet::singleton(continuation_witness.storage_rc()),
+        let combined: CarrierWitness = CarrierWitness::union(
+            &CarrierWitness::singleton(continuation_witness.storage_rc()),
             &pin,
         );
         // Open the four externally-witnessed carriers — continuation, frame-gated contract, active
@@ -242,9 +242,9 @@ impl<'run> KoanRuntime<'run> {
                             // `resident` carries it. A ready-but-errored producer relocates to an `Err`.
                             let dest = match frame {
                                 Some(f) => dest_brand(f.storage_rc()),
-                                None => {
-                                    Witnessed::<RegionRefFamily, FrameSet>::resident(scope.brand())
-                                }
+                                None => Witnessed::<RegionRefFamily, CarrierWitness>::resident(
+                                    scope.brand(),
+                                ),
                             };
                             let result = self.relocate_terminal(producer, dest);
                             if result.is_err() {

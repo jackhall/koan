@@ -15,7 +15,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, TraceFrame};
+use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, TraceFrame};
 use crate::witnessed::{Sealed, Witnessed};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
@@ -27,8 +27,9 @@ pub(crate) type SchemaFinalize<'a> = fn(
     String,
     Vec<(String, KType<'a>)>,
     BindingIndex,
-    &[&Sealed<CarriedFamily, FrameSet>],
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
+    &[&Sealed<CarriedFamily, CarrierWitness>],
+)
+    -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it. `kind` /
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`

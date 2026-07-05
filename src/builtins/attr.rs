@@ -20,7 +20,7 @@ use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
-    FrameSet, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
+    CarrierWitness, FrameSet, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
 };
 use crate::witnessed::{Sealed, StepContext, Witnessed};
 
@@ -33,7 +33,7 @@ use super::{arg, kw, sig};
 /// identity witnessed in place from its stored reach via [`Scope::resident_type_carrier`] (or,
 /// for a projected type field, sealed under the folded dep reach).
 fn route<'a>(
-    result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
+    result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::Done(result)
 }
@@ -197,7 +197,7 @@ pub fn body_module<'a>(
 fn access_type_member<'a>(
     kt: &KType<'a>,
     field: &str,
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
@@ -235,8 +235,8 @@ fn access_field<'a>(
     step: &StepContext<FrameStorage>,
     target: &KObject<'a>,
     field: &str,
-    deps: &[&Sealed<CarriedFamily, FrameSet>],
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
         // `KObject::Record`; read the field straight off it, naming the nominal type in the
@@ -294,7 +294,7 @@ fn access_field<'a>(
 fn access_module_member<'a>(
     m: &'a Module<'a>,
     field: &str,
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let module_scope = m.child_scope();
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
         // Prefer the child scope's own binding — witness its `&KType` in place from the stored reach

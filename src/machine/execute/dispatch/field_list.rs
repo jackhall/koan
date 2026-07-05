@@ -18,7 +18,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::{KType, Record};
-use crate::machine::{FrameSet, KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::machine::{CarrierWitness, KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
 use crate::witnessed::{Sealed, Witnessed};
 
@@ -35,7 +35,7 @@ pub(crate) type FieldListFinalize<'step> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'step, 'view>,
             Vec<(String, KType<'step>)>,
-            &[&Sealed<CarriedFamily, FrameSet>],
+            &[&Sealed<CarriedFamily, CarrierWitness>],
         ) -> Outcome<'step>
         + 'step,
 >;
@@ -48,8 +48,8 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn FnOnce(
             &FinishCtx<'a>,
             Vec<(String, KType<'a>)>,
-            &[&Sealed<CarriedFamily, FrameSet>],
-        ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
+            &[&Sealed<CarriedFamily, CarrierWitness>],
+        ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>
         + 'a,
 >;
 
@@ -153,7 +153,7 @@ pub(crate) fn defer_field_list<'step>(
         // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
         // that producer's reach forward; the owned values, read live at the step brand
         // (un-relocated), feed the re-walk, which clones each type into the folded field list.
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+        let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
             terminals.all().iter().map(|t| &t.carrier).collect();
         let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
         match rewalk.run(view.current_scope(), &owned) {
@@ -211,7 +211,7 @@ pub(crate) fn defer_field_list_action<'a>(
         // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
         // that producer's reach forward; the owned values, read live at the step brand
         // (un-relocated), feed the re-walk, which clones each type into the folded field list.
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+        let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
             results.all().iter().map(|t| &t.carrier).collect();
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
@@ -236,7 +236,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     fn fold<'step>(
         view: &SchedulerView<'step, '_>,
         pairs: Vec<(String, KType<'step>)>,
-        carriers: &[&Sealed<CarriedFamily, FrameSet>],
+        carriers: &[&Sealed<CarriedFamily, CarrierWitness>],
     ) -> Outcome<'step> {
         let record = Record::from_pairs(pairs);
         Outcome::Done(Ok(view

@@ -4,7 +4,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallFrame, FrameSet, KError, KErrorKind};
+use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, Witnessed};
 
 use super::runtime::KoanRuntime;
@@ -43,19 +43,19 @@ pub(in crate::machine::execute) trait NodeFinalize {
     /// construction terminals seal unchanged; a `None` frame (frameless / run producer) seals as-is.
     fn finalize_terminal<'o>(
         &self,
-        carrier: Witnessed<CarriedFamily, FrameSet>,
+        carrier: Witnessed<CarriedFamily, CarrierWitness>,
         frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
-    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>;
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
     fn finalize_terminal<'o>(
         &self,
-        carrier: Witnessed<CarriedFamily, FrameSet>,
+        carrier: Witnessed<CarriedFamily, CarrierWitness>,
         frame: Option<&Rc<CallFrame>>,
         contract: Option<ReturnContract<'o>>,
-    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         // A frameless / run producer has no per-call return obligation (the contract is gated to
         // `None`) and no producer frame to fold: its backing already outlives the carrier. Seal as-is.
         let Some(producer) = frame else {
@@ -64,7 +64,9 @@ impl NodeFinalize for KoanRuntime<'_> {
         // Fold the producing frame in: the scope-reach seal that makes a value born under the empty set
         // (the brand-confined alloc surface) storable. Applied before the pass-through / re-stamp split
         // so both carry it; idempotent when the carrier already names its dest frame.
-        let carrier = carrier.reseal_under(FrameSet::singleton(producer.storage_rc()));
+        let carrier = carrier.reseal_under(CarrierWitness::reach_only(FrameSet::singleton(
+            producer.storage_rc(),
+        )));
         // No declared return (or a non-`Resolved` FN-def carrier): the folded witness is the exact reach.
         let Some((declared, label, per_call)) = pull_declared_return(contract) else {
             return Ok(carrier);
@@ -79,7 +81,8 @@ impl NodeFinalize for KoanRuntime<'_> {
             .home_region();
         // `home` and `declared` live in the home region the merge pins via the carrier's `outer` chain,
         // so bundle under the empty set: `merge(carrier.witness, ∅) == carrier.witness`.
-        let home_carrier = Witnessed::<ContractHomeFamily, FrameSet>::resident((home, declared));
+        let home_carrier =
+            Witnessed::<ContractHomeFamily, CarrierWitness>::resident((home, declared));
         let mut mismatch: Option<KError> = None;
         let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
             home_carrier,

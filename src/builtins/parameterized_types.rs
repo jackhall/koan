@@ -83,7 +83,7 @@ mod action_bodies {
 
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::KType;
-    use crate::machine::{FrameSet, KError, KErrorKind};
+    use crate::machine::{CarrierWitness, KError, KErrorKind};
     use crate::witnessed::Sealed;
 
     /// LIST / MAP / AS fold the carrier(s) of the arg(s) their result `KType` embeds by clone:
@@ -93,7 +93,7 @@ mod action_bodies {
     /// (`None` — a scalar-literal argument — folds nothing, matching `alloc_type`).
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+        let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
             ctx.arg_carrier("elem").into_iter().collect();
         Action::Done(Ok(ctx
             .ctx
@@ -103,7 +103,7 @@ mod action_bodies {
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+        let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
             [ctx.arg_carrier("k"), ctx.arg_carrier("v")]
                 .into_iter()
                 .flatten()
@@ -139,7 +139,7 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        let carriers: Vec<&Sealed<CarriedFamily, FrameSet>> =
+        let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
             [ctx.arg_carrier("applied"), ctx.arg_carrier("ctor")]
                 .into_iter()
                 .flatten()

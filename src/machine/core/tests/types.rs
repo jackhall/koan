@@ -7,6 +7,7 @@ use crate::machine::core::FrameSet;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
+use crate::machine::CarrierWitness;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -102,7 +103,7 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
 
     // A value in the producer frame's own region, sealed witnessed by that frame.
     let producer_frame = FrameStorage::run_root();
-    let cell: Sealed<CarriedFamily, FrameSet> = Sealed::seal(KoanRegion::alloc_witnessed(
+    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(KoanRegion::alloc_witnessed(
         Rc::clone(&producer_frame),
         |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
     ));

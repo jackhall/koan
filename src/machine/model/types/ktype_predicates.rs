@@ -2,13 +2,13 @@
 //! ordering for dispatch tie-breaking on `KType`. See
 //! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
+use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
-use crate::machine::core::FrameSet;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::witnessed::Sealed;
@@ -474,7 +474,7 @@ impl<'a> KType<'a> {
     /// brand and routes the opened value through [`accepts_resolved`](Self::accepts_resolved) (which
     /// re-anchors it to the slot's lifetime). The cell's witness pins the value across the open; the
     /// picker may reject the candidate, so this deliberately does not adopt.
-    pub(crate) fn accepts_cell(&self, cell: &Sealed<CarriedFamily, FrameSet>) -> bool {
+    pub(crate) fn accepts_cell(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> bool {
         cell.open(|c| self.accepts_resolved(c))
     }
 

@@ -20,7 +20,7 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::model::values::Carried;
 use crate::machine::model::values::CarriedFamily;
 
-use crate::machine::{FrameSet, KError, NodeId, TraceFrame};
+use crate::machine::{CarrierWitness, KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
 use crate::witnessed::{Sealed, Witnessed};
@@ -40,7 +40,7 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// (built inside its witness closure) so `finalize` seals it without an asserted-co-location
     /// bundle. The sole value terminal for both channels (object and type); the carrier is
     /// lifetime-free, so this arm carries no `'step`.
-    Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
+    Done(Result<Witnessed<CarriedFamily, CarrierWitness>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart; `contract` / `block_entry` / `body_index` carry the tail-call chain payload.
     /// A body's non-tail (leading) statements are NOT carried here — a producer with leading
@@ -176,7 +176,7 @@ impl<'step> Await<'step> {
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            Result<Sealed<CarriedFamily, FrameSet>, KError>,
+            Result<Sealed<CarriedFamily, CarrierWitness>, KError>,
         ) -> Outcome<'a>
         + 'a,
 >;
@@ -268,7 +268,7 @@ pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
             DepResults<'_, &DepTerminal<'a>>,
-        ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError>
+        ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>
         + 'a,
 >;
 

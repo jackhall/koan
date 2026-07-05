@@ -5,6 +5,7 @@ use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{KType, TypeResolution};
 use crate::machine::model::values::{Carried, CarriedFamily, Module};
 use crate::machine::BindingIndex;
+use crate::machine::CarrierWitness;
 use crate::witnessed::Sealed;
 
 /// A first-class type spliced inline via `part_walk`'s wrap-slot arm arrives with its binding's
@@ -40,7 +41,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
             TypeResolution::Done(hit) => hit,
             _ => panic!("expected TypeResolution::Done for a registered type"),
         };
-    let produced: Sealed<CarriedFamily, FrameSet> =
+    let produced: Sealed<CarriedFamily, CarrierWitness> =
         Sealed::seal(foreign_scope.resident_type_carrier(foreign_hit.kt, &foreign_hit.reach));
 
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the

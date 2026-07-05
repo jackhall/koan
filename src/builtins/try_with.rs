@@ -52,7 +52,7 @@ pub fn body<'a>(
                     tag,
                     ItSource::Value {
                         value: payload,
-                        reach: crate::machine::FrameSet::empty(),
+                        reach: crate::machine::CarrierWitness::empty(),
                     },
                     Some(e),
                 )

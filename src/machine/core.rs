@@ -4,6 +4,7 @@
 
 mod arena;
 mod bindings;
+mod carrier_witness;
 mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
@@ -23,6 +24,7 @@ pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
     PendingBinderGuard, PendingTypeEntry, TypeHit, ValueHit,
 };
+pub use carrier_witness::{CarrierPin, CarrierWitness};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};

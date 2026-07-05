@@ -28,7 +28,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::{CarriedFamily, KObject};
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 use crate::witnessed::{Sealed, Witnessed};
 
@@ -49,8 +49,8 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
-    carrier: Option<&Sealed<CarriedFamily, FrameSet>>,
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    carrier: Option<&Sealed<CarriedFamily, CarrierWitness>>,
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
@@ -92,8 +92,8 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-    carriers: &[&Sealed<CarriedFamily, FrameSet>],
-) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+    carriers: &[&Sealed<CarriedFamily, CarrierWitness>],
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),

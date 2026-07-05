@@ -1,12 +1,12 @@
 //! AST node types shared across the parse module.
 
 use crate::machine::model::types::KKind;
+use crate::machine::CarrierWitness;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::machine::core::FrameSet;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{
     Carried, Held, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
@@ -101,7 +101,7 @@ pub enum ExpressionPart<'a> {
     /// A resolved sub-result travelling as its producer's sealed carrier — value and reach as one
     /// unit. The lifetime-free cell rests on the working expression across steps; the consuming
     /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand.
-    Spliced(Sealed<CarriedFamily, FrameSet>),
+    Spliced(Sealed<CarriedFamily, CarrierWitness>),
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {

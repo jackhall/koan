@@ -5,7 +5,7 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
-    FrameSet, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome, NodeId, RegionBrand,
+    CarrierWitness, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome, NodeId, RegionBrand,
     TraceFrame,
 };
 use crate::source::Spanned;
@@ -31,7 +31,7 @@ reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
 /// [`DepResults`] indices — the [`Deps`](crate::scheduler::Deps) builder hands them back at classify
 /// time and they read straight back through the view.
 enum Slot {
-    Static(Sealed<CarriedFamily, FrameSet>),
+    Static(Sealed<CarriedFamily, CarrierWitness>),
     Park(usize),
     Owned(usize),
 }
@@ -51,7 +51,7 @@ impl Slot {
 fn cell_carrier(
     slot: Slot,
     terminals: DepResults<'_, &DepTerminal<'_>>,
-) -> Sealed<CarriedFamily, FrameSet> {
+) -> Sealed<CarriedFamily, CarrierWitness> {
     match slot {
         Slot::Static(sealed) => sealed,
         Slot::Park(i) => terminals.park(i).carrier.duplicate(),
@@ -65,9 +65,9 @@ fn cell_carrier(
 /// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's `map`.
 fn fold_cells(
     view: &SchedulerView<'_, '_>,
-    cells: impl Iterator<Item = Sealed<CarriedFamily, FrameSet>>,
+    cells: impl Iterator<Item = Sealed<CarriedFamily, CarrierWitness>>,
     capacity: usize,
-) -> Witnessed<AggBuildFamily, FrameSet> {
+) -> Witnessed<AggBuildFamily, CarrierWitness> {
     let dest_frame = view.dest_frame();
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
         (region, Vec::with_capacity(capacity))
@@ -129,7 +129,7 @@ impl<'step> KoanRuntime<'step> {
             // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
             // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
             let mut keys: Vec<KKey> = Vec::new();
-            let mut cells: Vec<Sealed<CarriedFamily, FrameSet>> = Vec::with_capacity(n);
+            let mut cells: Vec<Sealed<CarriedFamily, CarrierWitness>> = Vec::with_capacity(n);
             for row in rows {
                 if let Some(key_slot) = row.key {
                     let kkey = scalar_key(&key_slot, terminals).map_err(|msg| {

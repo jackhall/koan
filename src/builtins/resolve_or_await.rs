@@ -11,7 +11,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{FrameSet, KError, KErrorKind, NameLookup, Scope};
+use crate::machine::{CarrierWitness, KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
 use crate::witnessed::Sealed;
 
@@ -106,7 +106,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
     results: &DepResults<'_, &'d DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
-) -> Result<(KType<'a>, &'d Sealed<CarriedFamily, FrameSet>), KError> {
+) -> Result<(KType<'a>, &'d Sealed<CarriedFamily, CarrierWitness>), KError> {
     // The sub-dispatch's resolved type read live at the step brand (un-relocated); the caller
     // re-allocates it into the destination region when it constructs, folding `carrier` in.
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
@@ -122,7 +122,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &Sealed<CarriedFamily, FrameSet>) -> Action<'a>
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &Sealed<CarriedFamily, CarrierWitness>) -> Action<'a>
         + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {

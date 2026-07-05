@@ -14,7 +14,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BindingIndex, FrameSet, KError, KErrorKind, NodeId};
+use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
 use crate::witnessed::{Sealed, StepContext, Witnessed};
 
@@ -184,7 +184,7 @@ pub struct BodyCtx<'a, 'c> {
     /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
     /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
     /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
-    pub arg_carriers: &'c Record<&'c Sealed<CarriedFamily, FrameSet>>,
+    pub arg_carriers: &'c Record<&'c Sealed<CarriedFamily, CarrierWitness>>,
     /// The step construction context for this slot's own scope — the same `ctx.region()` /
     /// `ctx.alloc()` / `ctx.alloc_with()` surface a wake-time [`FinishCtx`] carries.
     pub ctx: StepContext<FrameStorage>,
@@ -203,7 +203,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 
     /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
-    pub fn arg_carrier(&self, name: &str) -> Option<&'c Sealed<CarriedFamily, FrameSet>> {
+    pub fn arg_carrier(&self, name: &str) -> Option<&'c Sealed<CarriedFamily, CarrierWitness>> {
         self.arg_carriers.get(name).copied()
     }
 
@@ -252,7 +252,7 @@ impl<'a> FinishCtx<'a> {
 /// so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
 pub struct DepTerminal<'a> {
     pub value: Carried<'a>,
-    pub carrier: Sealed<CarriedFamily, FrameSet>,
+    pub carrier: Sealed<CarriedFamily, CarrierWitness>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view
@@ -265,7 +265,8 @@ pub type AwaitContinue<'a> =
 /// A `Catch` finish: re-entered with the watched slot's sealed carrier (value and reach as one unit,
 /// adopted or opened at the finish's own step brand) or the watched `KError`.
 pub type CatchContinue<'a> = Box<
-    dyn FnOnce(&FinishCtx<'a>, Result<Sealed<CarriedFamily, FrameSet>, KError>) -> Action<'a> + 'a,
+    dyn FnOnce(&FinishCtx<'a>, Result<Sealed<CarriedFamily, CarrierWitness>, KError>) -> Action<'a>
+        + 'a,
 >;
 
 /// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
@@ -286,7 +287,7 @@ pub enum Action<'a> {
     /// wrappers) / `resident_type_carrier` sealing a constructed or read value) — so it is co-located
     /// by construction rather than paired with an asserted witness at finalize. The construction
     /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` seals it here.
-    Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
+    Done(Result<Witnessed<CarriedFamily, CarrierWitness>, KError>),
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
     /// first parks on them as owned deps and tail-replaces only once they resolve — so they run,

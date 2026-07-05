@@ -29,7 +29,7 @@ use crate::machine::core::kfunction::exec::home_return_type;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
-use crate::machine::{CallFrame, FrameSet, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 
 use super::dispatch::{BodyPlacement, DepRequest};
@@ -62,7 +62,7 @@ impl Workload for KoanWorkload {
     type Cart = CallFrame;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
-    type Witness = FrameSet;
+    type Witness = CarrierWitness;
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -127,7 +127,7 @@ impl<'run> KoanRuntime<'run> {
     /// closure's / module's reach onto a surviving scope's reach-set, mirroring the run-root drain's
     /// `fold_reach`. Production reads the witness off the relocated carrier instead.
     #[cfg(test)]
-    pub(crate) fn dep_witness(&self, id: NodeId) -> crate::machine::FrameSet {
+    pub(crate) fn dep_witness(&self, id: NodeId) -> crate::machine::CarrierWitness {
         self.sched.dep_witness(id)
     }
 
@@ -147,8 +147,8 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: Witnessed<RegionRefFamily, FrameSet>,
-    ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
+        dest: Witnessed<RegionRefFamily, CarrierWitness>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         self.sched
             .transfer_lifted(producer, dest, |value, region, _brand| {
                 copy_carried(value, region)

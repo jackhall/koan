@@ -13,6 +13,7 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
+use crate::machine::CarrierWitness;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -155,7 +156,7 @@ impl<'a> RegionBrand<'a> {
     pub(crate) fn alloc_object_witnessed(
         self,
         value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.0
             .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
     }
@@ -174,8 +175,8 @@ impl<'a> RegionBrand<'a> {
     pub(crate) fn seal_resident(
         self,
         carried: Carried<'_>,
-        witness: FrameSet,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+        witness: CarrierWitness,
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let _ = self.0;
         Witnessed::resident(carried).reseal_under(witness)
     }
@@ -283,7 +284,7 @@ pub(crate) trait KoanRegionExt {
     fn alloc_witnessed(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// `yoke` a value of **any** carrier family into `owner`'s region, handing the build closure a
     /// per-construction [`RegionBrand`] (confined to the `for<'b>` brand) so it allocates through the
@@ -295,7 +296,7 @@ pub(crate) trait KoanRegionExt {
     fn yoke_branded<T: Reattachable, F>(
         owner: Rc<FrameStorage>,
         build: F,
-    ) -> Witnessed<T, FrameSet>
+    ) -> Witnessed<T, CarrierWitness>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>;
 
@@ -310,11 +311,14 @@ impl KoanRegionExt for KoanRegion {
     fn alloc_witnessed(
         owner: Rc<FrameStorage>,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         Self::yoke_branded::<CarriedFamily, _>(owner, build)
     }
 
-    fn yoke_branded<T: Reattachable, F>(owner: Rc<FrameStorage>, build: F) -> Witnessed<T, FrameSet>
+    fn yoke_branded<T: Reattachable, F>(
+        owner: Rc<FrameStorage>,
+        build: F,
+    ) -> Witnessed<T, CarrierWitness>
     where
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
@@ -325,7 +329,7 @@ impl KoanRegionExt for KoanRegion {
         // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so it
         // sees `<_ as Reattachable>::At` and fails to match the projection.
         Witnessed::<T, Rc<FrameStorage>>::yoke_handle(owner, |handle| build(RegionBrand(handle)))
-            .into_set::<FrameSet>()
+            .into_set::<CarrierWitness>()
     }
 
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
@@ -351,20 +355,20 @@ pub(crate) trait KoanStepContextExt {
     fn alloc_carried(
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`StepContext::alloc_with`] with the closure receiving a [`RegionBrand`] and the deps'
     /// views: reach = own region unioned with every listed dep's reach, by construction.
     fn alloc_carried_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
     /// only. For a `kt` that is region-pure (carries no borrow reaching outside this frame's own
     /// region) — the common case for a bind-time or synchronously-resolved type.
-    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, FrameSet>;
+    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`Self::alloc_carried_with`] specialized to the one-`KType`-carrier shape: reach = own
     /// region unioned with every listed dep's reach. For a `kt` built from a dep terminal's value
@@ -372,9 +376,9 @@ pub(crate) trait KoanStepContextExt {
     /// into the result's witness. The dep views are unused here; the fold is what matters.
     fn alloc_type_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         kt: KType<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`Self::alloc_carried_with`] specialized to the one-`KObject`-carrier shape: reach = own
     /// region unioned with every listed dep's reach. For a `value` built from (or projected out
@@ -383,49 +387,49 @@ pub(crate) trait KoanStepContextExt {
     /// what matters.
     fn alloc_object_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet>;
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
 }
 
 impl KoanStepContextExt for StepContext<FrameStorage> {
     fn alloc_carried(
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc_handle::<KoanStorageProfile, CarriedFamily, FrameSet>(|handle| {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        self.alloc_handle::<KoanStorageProfile, CarriedFamily, CarrierWitness>(|handle| {
             build(RegionBrand(handle))
         })
     }
 
     fn alloc_carried_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily, FrameSet>(
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily, CarrierWitness>(
             deps,
             |handle, views| build(RegionBrand(handle), views),
         )
     }
 
-    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, FrameSet> {
+    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))
     }
 
     fn alloc_type_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         kt: KType<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype(kt)))
     }
 
     fn alloc_object_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_carried_with(deps, |b, _views| Carried::Object(b.alloc_object(value)))
     }
 }

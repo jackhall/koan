@@ -14,9 +14,9 @@
 //! out-claiming the caller region a resolved parameter type borrows into. `KExpression`'s invariance
 //! blocks collapsing the two.
 
+use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
-use crate::machine::core::arena::FrameSet;
 use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
@@ -115,7 +115,7 @@ pub(crate) fn home_return_type<'a>(
 pub fn run_user_fn<'ast, 'step>(
     func: &'ast KFunction<'ast>,
     args: Record<Carried<'step>>,
-    arg_carriers: &Record<&Sealed<CarriedFamily, FrameSet>>,
+    arg_carriers: &Record<&Sealed<CarriedFamily, CarrierWitness>>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
 ) -> ExecOutcome<'ast, 'step>
