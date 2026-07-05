@@ -199,8 +199,11 @@ The value channel is borrow-checked end to end. The scheduler stores a finalized
 `Sealed<W::Value, W::Witness>` ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the
 opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
 `merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
-the erased value with its producer frame's witness (a singleton `FrameSet`) and seals it (an empty set
-is a frameless / run-region terminal). A value read goes through `Sealed::open`, which copies the value
+the erased value under a [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — a `{ pins, reach }`
+pair splitting liveness pins from the exact borrow reach — and applies the Done-boundary gate: a value
+whose `reach` borrows into its producer frame keeps that frame, while a region-pure value (empty reach)
+is severed off it, its top node copied into an owned backing pin so the frame frees at Done (a frameless
+/ run-region terminal carries the empty witness). A value read goes through `Sealed::open`, which copies the value
 out inside a `for<'b>` brand — the fabricated content lifetime is un-nameable, so nothing branded
 escapes into the result (`open` delegates to the kept `Witnessed::read` for the copy, witness-pinned
 for the `&self` borrow it spans). The driver exposes two accessors over it:

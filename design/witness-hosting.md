@@ -184,6 +184,17 @@ releases only its host `Rc`. The bounds:
 This trade is deliberate: member releases batch at region teardown instead of
 scattering across carrier lifetimes.
 
+The carrier lane realizes the pins-vs-reach split today as
+[`CarrierWitness`](../src/machine/core/carrier_witness.rs): a `{ pins, reach }`
+pair where `pins` is liveness-only (residence frames, the owned backing of a
+severed top node) and `reach` is the exact set of regions the value's interior
+borrows point into. A fully-owned value's `reach` is empty, so the finalize
+Done-boundary gate severs it off its dying producer frame — copying the top
+node into an owned backing pin — instead of folding the frame in. This front-
+loads the walking-form shape (`host + set`) the `HostedWitness` packaging above
+generalizes; `reach` is still an owned `FrameSet`, not yet a hosted set
+reference.
+
 ## Library boundary
 
 Per the [scheduler-library.md](scheduler-library.md) division:
@@ -201,6 +212,3 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 - [roadmap/scheduler_library/region-hosted-witness-sets.md](../roadmap/scheduler_library/region-hosted-witness-sets.md)
   — the implementation item: hosting family, carrier forms, scope/bindings
   migration, and the library-surface consolidation.
-- [roadmap/scheduler_library/region-pure-empty-reach.md](../roadmap/scheduler_library/region-pure-empty-reach.md)
-  — the retention model's precision lever: fully-owned values mint the empty
-  set at the fold points instead of inheriting producer/dep reaches.

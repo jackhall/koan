@@ -3,25 +3,30 @@
 Move witness-set storage into region arenas and shrink carriers to set
 references, per [design/witness-hosting.md](../../design/witness-hosting.md).
 
-**Problem.** A carrier's witness is an owned
-[`RegionSet`](../../workgraph/src/witnessed/region_set.rs) — a
-`Vec<Rc<FrameStorage>>` — so the set's bytes travel with every carrier:
+**Problem.** A carrier's witness is
+[`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — an owned
+`{ pins: Vec<CarrierPin>, reach: FrameSet }` pair — so both halves' bytes
+travel with every carrier:
 
 - Every carrier clone (`Sealed::duplicate`, dep delivery, `transfer_into`)
-  clones the `Vec` — a heap allocation even in the singleton common case — and
-  bumps one refcount per member.
+  clones both vectors — heap allocations even in the singleton common case —
+  and bumps one refcount per pin and per reach member.
 - Every carrier-oriented binding read
   ([`Bindings::lookup_value_carrier` / `lookup_type_carrier` /
   `lookup_member`](../../src/machine/core/bindings.rs)) clones the entry's
   stored `FrameSet` out per hit, on the interpreter's hottest path, because
-  the entry owns its reach and the read must not hold the map borrow.
-- Member `Rc` decrements scatter across individual carrier drops instead of
-  batching at frame teardown, the level at which regions actually die.
-- The scope-level reach accumulator
-  ([`Scope.reach`](../../src/machine/core/scope.rs)) is a soundness-bearing
-  ownership slot: `adopt_sealed`'s unsafe re-anchor rests on the scope holding
-  folded `Rc`s until it drops — a scope-special pinning channel beside the
-  carrier one.
+  the entry owns its reach ([`StoredReach`](../../src/machine/core/bindings.rs))
+  and the read must not hold the map borrow; a read that materializes the
+  borrows-into-home bit adds a singleton union on top.
+- Member and pin `Rc` decrements scatter across individual carrier drops
+  instead of batching at frame teardown, the level at which regions actually
+  die.
+- The scope holds two soundness-bearing ownership slots beside the carrier
+  channel: the reach accumulator
+  ([`Scope.reach`](../../src/machine/core/scope.rs)), whose folded `Rc`s back
+  `adopt_sealed`'s unsafe re-anchor, and the deposit list (`Scope.deposit`),
+  which keeps adopted carriers' severed owned backings alive for the scope's
+  life.
 - The scheduler threads the owned-set witness through the
   [`Workload::Witness`](../../workgraph/src/scheduler/workload.rs) associated
   type plus the `SetWitness` widening lift and the `sole()` singleton-recovery
@@ -35,13 +40,16 @@ references, per [design/witness-hosting.md](../../design/witness-hosting.md).
   region's arena, and a stored set exposes no mutation surface (composition
   mints a new set into a destination arena).
 - Carrier clone and dep delivery perform no set allocation: the walking
-  witness is one host `Rc` plus an erased set reference (or the frameless
-  empty value), and duplicating a sealed terminal bumps exactly one refcount.
+  witness is one backing `Rc` — the host frame-owner, or a severed node's
+  owned backing — plus an erased set reference (or the frameless empty value),
+  and duplicating a sealed terminal bumps exactly one refcount.
 - Binding entries store a bare set reference into their own region's arena;
   the carrier-oriented lookups return without cloning a set.
-- `Scope` holds no reach accumulator: adoption-style re-anchors are pinned by
-  arena-hosted deposits, and a module's foreign reach is computed at scope
-  close as the union over the child scope's binding entries' sets.
+- `Scope` holds neither a reach accumulator nor a severed-backing deposit
+  list: adoption-style re-anchors — foreign region members and severed owned
+  backings alike — are pinned by arena-hosted deposits, and a module's foreign
+  reach is computed at scope close as the union over the child scope's binding
+  entries' sets.
 - The scheduler's terminal slots store the library's hosted witness type; the
   `Workload::Witness` associated type, the `SetWitness` lift, and the
   singleton-recovery accessor are gone from the library surface.
@@ -59,6 +67,20 @@ references, per [design/witness-hosting.md](../../design/witness-hosting.md).
   signature.
 - *Module reach — decided.* Seal-time union over the child scope's binding
   entries at `close()`, excluding deposits (transient adoptions).
+- *Severed carriers under hosting — open.* The finalize sever produces a
+  walking carrier backed by an owned node `Rc`
+  ([`CarrierPin::Object` / `Type`](../../src/machine/core/carrier_witness.rs))
+  instead of a host frame, and the sever gate keys on "reach does not cover
+  the producer" — so a severed carrier can still carry non-empty foreign
+  reach, whose hosted set would have no live home arena once the producer
+  dies. (a) `HostedWitness` gains an owned-backing arm and the sever re-mints
+  the set into a still-live region named by the reach; (b) narrow the sever
+  gate to empty-reach values, so a reach-carrying value keeps its producer
+  frame and the walking form stays exactly host + set. Recommended: (b) first
+  — it keeps the packaging binary and the sever's payoff (freeing the frame at
+  Done) already accrues to the region-pure common case; the cost is
+  foreign-reaching, home-pure values reverting to pinning their producer
+  frame.
 - *Per-region already-pinned dedup index — deferred.* Bounds deposits at
   O(distinct regions) instead of O(adoptions); pure footprint optimization,
   not soundness-bearing, so it lands only if deposit growth is observed.
@@ -71,9 +93,12 @@ references, per [design/witness-hosting.md](../../design/witness-hosting.md).
 
 ## Dependencies
 
-Soft ordering with [region-pure-empty-reach](region-pure-empty-reach.md):
-hosting extends a set's life to its region's death, so that item's mint-time
-precision should land with or before this one. Neither hard-requires the other.
+Mint-time precision has shipped as
+[`CarrierWitness`](../../src/machine/core/carrier_witness.rs) (the pins-vs-reach
+split); this item generalizes its owned-`FrameSet` `reach` into the hosted,
+home-omitted set reference, so it re-points that type at the walking-form
+packaging (`HostedWitness`) described in
+[witness-hosting.md](../../design/witness-hosting.md).
 
 **Requires:** none — the storage-bundle and allocation-capability substrate
 has shipped.

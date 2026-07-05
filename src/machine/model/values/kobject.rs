@@ -224,6 +224,18 @@ impl<'a> KObject<'a> {
     /// A stamped empty container is not flagged (its carrier carries a non-`Any`
     /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
     /// information and is legal where `:(LIST OF Any)` is declared).
+    pub fn is_unstamped_empty_container(&self) -> bool {
+        match self {
+            KObject::List(items, elem) => items.is_empty() && matches!(elem.as_ref(), KType::Any),
+            KObject::Dict(map, k, v) => {
+                map.is_empty()
+                    && matches!(k.as_ref(), KType::Any)
+                    && matches!(v.as_ref(), KType::Any)
+            }
+            _ => false,
+        }
+    }
+
     /// Whether this is a **shallow scalar** — a fully-owned leaf (`Number`, `KString`, `Bool`,
     /// `Null`) whose representation embeds no `&'a` region borrow and no [`Held`] cell. Such a value
     /// cannot reference any dep the construction fold was handed, so the dep-witness union is pure
@@ -236,18 +248,6 @@ impl<'a> KObject<'a> {
             self,
             KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null
         )
-    }
-
-    pub fn is_unstamped_empty_container(&self) -> bool {
-        match self {
-            KObject::List(items, elem) => items.is_empty() && matches!(elem.as_ref(), KType::Any),
-            KObject::Dict(map, k, v) => {
-                map.is_empty()
-                    && matches!(k.as_ref(), KType::Any)
-                    && matches!(v.as_ref(), KType::Any)
-            }
-            _ => false,
-        }
     }
 
     /// Runtime type tag.
