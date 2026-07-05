@@ -8,7 +8,10 @@
 //!   sub-Dispatches at outermost-submission time installs nested binders'
 //!   placeholders before any sibling can dispatch, closing the
 //!   `LET f = (FN NAME [x] x)` race independent of FIFO ordering.
+//! - [`ambient_bracket`] — the slot-step bracket restores ambient values on
+//!   unwind, not just on normal return.
 
+mod ambient_bracket;
 mod dep_finish;
 mod dispatch;
 mod dispatch_shapes;

@@ -45,7 +45,7 @@ call `current_scope()`; the genuine run-scope methods (`dispatch_in_scope` /
 `dispatch_in_scope_with_chain` / `enter_block`) keep their `&'a Scope` argument.
 
 The post-step loop in `Scheduler::execute` reads the just-finished step's scope through a
-`PostStep` token returned by `exit_slot_step`, derived from the slot's *returned* frame
+`PostStep` token returned by the `with_slot_step` bracket, derived from the slot's *returned* frame
 (`prev_frame`) rather than the ambient `active_frame` — an in-step invoke can swap the ambient
 frame, so the returned value is the authoritative source. A within-step frame lifetime `'step`
 (`'a: 'step`) threads `classify_dispatch` → `SchedulerView` → `BuiltinFn` → the scheduler's write

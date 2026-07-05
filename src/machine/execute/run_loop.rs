@@ -82,19 +82,20 @@ impl<'run> KoanRuntime<'run> {
         Ok(())
     }
 
-    /// The unified node handler, owning one slot step start to finish: enter the step's ambient frame
-    /// context, collect the resolved dep terminals, run the continuation against a read-only
-    /// [`SchedulerView`], reclaim the owned-dep suffix, apply the [`Outcome`] into a [`NodeStep`], exit
-    /// the guard, then realize the step. The whole bracket lives here, so the
-    /// [`SlotStepGuard`](super::ambient::SlotStepGuard) is born and consumed without escaping.
+    /// The unified node handler, owning one slot step start to finish: collect the resolved dep
+    /// terminals, then bracket the step's ambient frame context around running the continuation
+    /// against a read-only [`SchedulerView`], reclaiming the owned-dep suffix, and applying the
+    /// [`Outcome`] into a [`NodeStep`], before realizing the step. The step's ambient context is
+    /// bracketed by [`KoanRuntime::with_slot_step`] inside the `open`, so no exit path — return or
+    /// unwind — leaves it installed.
     ///
     /// The step tail runs inside one rank-2 `for<'b>` brand standing in for the step lifetime:
     /// [`SealedExtern::open`] opens the continuation, return contract, active scope, and dep slice
     /// together at `'b`, witnessed by `combined` (the held cart `Rc` unioned with the dep `pin`), which
-    /// the guard keeps live across the run. The consumer `dest` region is the opened scope's own
+    /// the bracket keeps live across the run. The consumer `dest` region is the opened scope's own
     /// region. The closure's result cannot name `'b`, so the `Outcome<'b>` and the finalized
     /// `Carried<'b>` are erased into the slot store *before* return: a value born at `'b` never has to
-    /// launder to `'run` to cross the guard exit, and nothing branded escapes. The cart clone is
+    /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The cart clone is
     /// confined to this call and dropped at return — before the next iteration's `try_reset_for_tail`
     /// resets a *different* cart — so it does not contend with the TCO `Rc::get_mut` uniqueness gate.
     fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
@@ -113,18 +114,6 @@ impl<'run> KoanRuntime<'run> {
         // contend with the TCO `Rc::get_mut` gate. The tail open re-anchors the step's carriers to the
         // brand `'b` this witness pins, and owns that reattach.
         let continuation_witness = Rc::clone(&cart);
-        let guard = self.enter_slot_step(
-            cart,
-            reserve,
-            NodePayload {
-                scope: node_scope,
-                chain: prev_chain_carrier.clone(),
-            },
-        );
-        // Expose to the dispatch step whether this slot is a tail call within an established contract
-        // chain — a deferred-return FN dispatched here skips resolving its own return type (keep-first
-        // discards it anyway).
-        self.ambient.active_in_contract_chain = prev_contract.is_some();
         // Consumer-pull: read each dep's terminal out of its producer frame so it can be re-anchored
         // in this consumer's own scope region, where the value dies with the consumer and no surviving
         // producer copy outlives its dying frame. The `dest` region is the scope's own region (right
@@ -186,17 +175,37 @@ impl<'run> KoanRuntime<'run> {
                     // `scope` is now live at `'b` and the `dest` region is its own region; deps arrive
                     // un-relocated. A `ForwardReady` relocation below builds its destination carrier
                     // from this same scope's brand.
-                    let outcome = continuation(
-                        &SchedulerView::new(&self.sched, &self.ambient, scope, scope_frame(scope)),
-                        deps.results(&dep_sources),
-                        idx,
+                    //
+                    // Bracket the step's ambient frame/reserve/payload and contract-chain flag —
+                    // whether this slot is a tail call within an established contract chain, so a
+                    // deferred-return FN dispatched here skips resolving its own return type
+                    // (keep-first discards it anyway) — restored on every exit path, including
+                    // unwinds, by `with_slot_step` itself.
+                    let (step, post) = self.with_slot_step(
+                        cart,
+                        reserve,
+                        NodePayload {
+                            scope: node_scope,
+                            chain: prev_chain_carrier.clone(),
+                        },
+                        prev_contract.is_some(),
+                        |rt| {
+                            let outcome = continuation(
+                                &SchedulerView::new(
+                                    &rt.sched,
+                                    &rt.ambient,
+                                    scope,
+                                    scope_frame(scope),
+                                ),
+                                deps.results(&dep_sources),
+                                idx,
+                            );
+                            rt.sched.reclaim_deps(idx, owned_indices);
+                            // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes
+                            // a `ForwardReady` relocated below into this same `dest`.
+                            rt.apply_outcome(outcome, idx)
+                        },
                     );
-                    self.sched.reclaim_deps(idx, owned_indices);
-                    // Realize the outcome into a `NodeStep`; a ready `Outcome::Forward` becomes a
-                    // `ForwardReady` relocated below into this same `dest`.
-                    let step = self.apply_outcome(outcome, idx);
-                    let post = self.exit_slot_step(guard);
-                    self.ambient.active_in_contract_chain = false;
                     // Drain re-entrant writes against the step scope (unchanged by the step).
                     scope.drain_pending();
                     // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame

@@ -40,30 +40,30 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
     /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
     /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
-    /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Set per
-    /// step in [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute); read via
+    /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Installed
+    /// per step by [`KoanRuntime::with_slot_step`]; read via
     /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
-    pub(in crate::machine::execute) active_in_contract_chain: bool,
+    active_in_contract_chain: bool,
     #[cfg(test)]
     tail_reuse_count: usize,
 }
 
-/// Save/restore of the per-step `active_frame`, `active_payload`, and `active_reserve`, bracketing
-/// each iteration of [`KoanRuntime::execute`](super::runtime::KoanRuntime::execute). See
-/// [per-call-region/frames.md § Ping-pong reserve frame](../../../design/per-call-region/frames.md#ping-pong-reserve-frame).
-pub(in crate::machine::execute) struct SlotStepGuard {
+/// The previous ambient values a slot step displaces — restored by
+/// [`KoanRuntime::with_slot_step`] on every exit path, normal return and unwind alike.
+struct SlotStepSave {
     prev_frame: Option<Rc<CallFrame>>,
     prev_payload: Option<NodePayload>,
     /// Saved so nested slot runs (combinator finish closures) don't inherit the
     /// outer slot's reserve frame.
     prev_reserve: Option<Rc<CallFrame>>,
+    prev_in_contract_chain: bool,
 }
 
-/// The frames of a just-finished step, returned by [`KoanRuntime::exit_slot_step`]: the slot's frame
+/// The frames of a just-finished step, returned by [`KoanRuntime::with_slot_step`]: the slot's frame
 /// *at step end* plus the post-step reserve. An in-step invoke may have swapped the ambient
 /// `active_frame`, so this returned `prev_frame`, not the ambient `active_frame`, is authoritative.
 pub(in crate::machine::execute) struct PostStep {
-    /// The slot's cart at step end. Always present: `enter_slot_step` installs the node's cart and
+    /// The slot's cart at step end. Always present: `with_slot_step` installs the node's cart and
     /// an invoke never empties `active_frame` — reuse draws from the reserve via
     /// `acquire_tail_frame`, never the live active cart — so the slot's own cart rides through. The
     /// Replace arm reinstalls / rotates with it.
@@ -82,49 +82,128 @@ impl AmbientContext {
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
         self.active_payload.as_ref()
     }
-}
 
-impl<'run> KoanRuntime<'run> {
-    /// Install the slot's frame/payload/reserve as the ambient values for one step. The caller passes
-    /// the returned guard to [`Self::exit_slot_step`] when the step returns.
-    pub(in crate::machine::execute) fn enter_slot_step(
+    /// Whether the executing slot already carries a kept return contract — set only by the
+    /// slot-step bracket. Read via
+    /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
+    pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
+        self.active_in_contract_chain
+    }
+
+    /// Install the slot's frame/payload/reserve and contract-chain flag for one step, returning the
+    /// displaced values.
+    fn install_slot_step(
         &mut self,
         node_frame: Rc<CallFrame>,
         node_reserve: Option<Rc<CallFrame>>,
         node_payload: NodePayload,
-    ) -> SlotStepGuard {
-        let prev_frame = self.ambient.active_frame.replace(node_frame);
-        let prev_reserve = std::mem::replace(&mut self.ambient.active_reserve, node_reserve);
-        let prev_payload = self.ambient.active_payload.replace(node_payload);
-        SlotStepGuard {
-            prev_frame,
-            prev_payload,
-            prev_reserve,
+        in_contract_chain: bool,
+    ) -> SlotStepSave {
+        SlotStepSave {
+            prev_frame: self.active_frame.replace(node_frame),
+            prev_reserve: std::mem::replace(&mut self.active_reserve, node_reserve),
+            prev_payload: self.active_payload.replace(node_payload),
+            prev_in_contract_chain: std::mem::replace(
+                &mut self.active_in_contract_chain,
+                in_contract_chain,
+            ),
         }
     }
 
-    /// Restore the values saved by [`Self::enter_slot_step`] and return the [`PostStep`] token.
+    /// Swap the saved values back in, returning the step-end frame and reserve — the raw material
+    /// for a [`PostStep`]. Never panics: the unwind backstop runs it mid-panic.
+    fn restore_slot_step(
+        &mut self,
+        save: SlotStepSave,
+    ) -> (Option<Rc<CallFrame>>, Option<Rc<CallFrame>>) {
+        let step_end_frame = std::mem::replace(&mut self.active_frame, save.prev_frame);
+        let step_end_reserve = std::mem::replace(&mut self.active_reserve, save.prev_reserve);
+        self.active_payload = save.prev_payload;
+        self.active_in_contract_chain = save.prev_in_contract_chain;
+        (step_end_frame, step_end_reserve)
+    }
+}
+
+/// Unwind backstop for [`KoanRuntime::with_slot_step`]: restores the saved ambient values if the
+/// step body panics. On the normal path `save` is taken out first, so the drop is a no-op.
+struct SlotStepBracket<'a, 'run> {
+    runtime: &'a mut KoanRuntime<'run>,
+    save: Option<SlotStepSave>,
+}
+
+impl Drop for SlotStepBracket<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(save) = self.save.take() {
+            let _ = self.runtime.ambient.restore_slot_step(save);
+        }
+    }
+}
+
+/// Unwind backstop for [`KoanRuntime::with_active_frame`]: puts the displaced ambient frame back on
+/// every exit path. This one restores on the normal path too — there is no data to hand back, so
+/// the drop is the single restore point.
+struct ActiveFrameBracket<'a, 'run> {
+    runtime: &'a mut KoanRuntime<'run>,
+    prev: Option<Option<Rc<CallFrame>>>,
+}
+
+impl Drop for ActiveFrameBracket<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.take() {
+            self.runtime.ambient.active_frame = prev;
+        }
+    }
+}
+
+impl<'run> KoanRuntime<'run> {
+    /// Bracket one slot step: install `node_frame` / `node_reserve` / `node_payload` and the
+    /// contract-chain flag as the ambient values, run `body`, restore the previous values, and
+    /// return `body`'s result alongside the [`PostStep`] the Replace arm consumes. Restore is a
+    /// bracket by construction — an early return restores on the way out, and an unwind restores
+    /// through the backstop's `Drop` (which discards the `PostStep` data).
     ///
     /// `post_step_reserve` carries the slot's reserve at step end, which the Replace arm reads to
     /// decide rotation: with a new frame, the post-step reserve is two iterations old and gets
     /// dropped; without one, it rides along on the reinstalled node. An invoke that reused the
     /// reserve via `acquire_tail_frame` already consumed it, so it reads back `None`.
     ///
-    /// The `expect` asserts the "every step runs against a cart" invariant: `enter_slot_step`
-    /// installs the node's non-optional cart and an invoke reuses the *reserve*, never the active
-    /// cart, so `active_frame` is `Some` for the whole step. It stays `Option` because it is
-    /// legitimately `None` *between* steps.
-    pub(in crate::machine::execute) fn exit_slot_step(&mut self, guard: SlotStepGuard) -> PostStep {
-        let post_step_frame = std::mem::replace(&mut self.ambient.active_frame, guard.prev_frame);
-        let post_step_reserve =
-            std::mem::replace(&mut self.ambient.active_reserve, guard.prev_reserve);
-        self.ambient.active_payload = guard.prev_payload;
-        PostStep {
-            prev_frame: post_step_frame.expect(
-                "a step runs against a cart; an invoke reuses the reserve, never the active",
-            ),
-            post_step_reserve,
-        }
+    /// The `expect` asserts the "every step runs against a cart" invariant: the bracket installs
+    /// the node's non-optional cart and an invoke reuses the *reserve*, never the active cart, so
+    /// `active_frame` is `Some` for the whole step. It stays `Option` because it is legitimately
+    /// `None` *between* steps.
+    pub(in crate::machine::execute) fn with_slot_step<R>(
+        &mut self,
+        node_frame: Rc<CallFrame>,
+        node_reserve: Option<Rc<CallFrame>>,
+        node_payload: NodePayload,
+        in_contract_chain: bool,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> (R, PostStep) {
+        let save = self.ambient.install_slot_step(
+            node_frame,
+            node_reserve,
+            node_payload,
+            in_contract_chain,
+        );
+        let mut bracket = SlotStepBracket {
+            runtime: self,
+            save: Some(save),
+        };
+        let result = body(&mut *bracket.runtime);
+        let save = bracket
+            .save
+            .take()
+            .expect("the save is consumed exactly once, here");
+        let (step_end_frame, step_end_reserve) = bracket.runtime.ambient.restore_slot_step(save);
+        (
+            result,
+            PostStep {
+                prev_frame: step_end_frame.expect(
+                    "a step runs against a cart; an invoke reuses the reserve, never the active",
+                ),
+                post_step_reserve: step_end_reserve,
+            },
+        )
     }
 
     /// Borrow the executing slot's opaque workload payload — the accessor the workload reads its
@@ -153,14 +232,20 @@ impl<'run> KoanRuntime<'run> {
         self.ambient.active_frame_ref()
     }
 
-    /// Install `frame` as the ambient cart and return the previous one — the transient save/restore
-    /// [`dispatch_body`](Self::dispatch_body) wraps each body sub-slot in, so the sub-slot inherits
-    /// the body frame rather than the caller's.
-    pub(in crate::machine::execute) fn swap_active_frame(
+    /// Bracket `frame` as the ambient cart for the duration of `body` — the sub-slot dispatch in
+    /// [`dispatch_body`](Self::dispatch_body) inherits it rather than the caller's — restoring the
+    /// previous cart on every exit path, unwind included.
+    pub(in crate::machine::execute) fn with_active_frame<R>(
         &mut self,
-        frame: Option<Rc<CallFrame>>,
-    ) -> Option<Rc<CallFrame>> {
-        std::mem::replace(&mut self.ambient.active_frame, frame)
+        frame: Rc<CallFrame>,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.ambient.active_frame.replace(frame);
+        let bracket = ActiveFrameBracket {
+            runtime: self,
+            prev: Some(prev),
+        };
+        body(&mut *bracket.runtime)
     }
 
     /// Take the slot's reserve cart for a TCO tail reuse, leaving none. The workload resets it under

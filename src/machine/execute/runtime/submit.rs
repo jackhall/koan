@@ -247,11 +247,11 @@ impl<'run> KoanRuntime<'run> {
         let mut ids = Vec::with_capacity(statements.len());
         for (i, statement) in statements.into_iter().enumerate() {
             let statement_chain = LexicalFrame::push(parent.clone(), body_scope_id, i + 1);
-            // Install `frame` as the ambient cart so the sub-slot inherits it (not the caller's),
-            // then restore the previous.
-            let prev = self.swap_active_frame(Some(frame.clone()));
-            let bid = self.dispatch_in_active_frame(statement, Some(statement_chain));
-            self.swap_active_frame(prev);
+            // Bracket `frame` as the ambient cart so the sub-slot inherits it (not the caller's),
+            // restoring the previous on every exit path.
+            let bid = self.with_active_frame(Rc::clone(frame), |rt| {
+                rt.dispatch_in_active_frame(statement, Some(statement_chain))
+            });
             ids.push(bid);
         }
         ids

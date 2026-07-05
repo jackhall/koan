@@ -14,18 +14,18 @@ state live on `Scheduler`:
 - **`active_frame: Option<Rc<CallFrame>>`** — frame of the slot
   currently being executed. Read through
   [`Scheduler::current_frame`](../../src/machine/execute/run_loop.rs);
-  written only by `enter_slot_step` / `exit_slot_step` (the RAII
-  bracket `run_step` wraps each slot step in) and the
-  `swap_active_frame` save/restore. An invoke never takes it (tail
+  written only by `Scheduler::with_slot_step` (the RAII bracket
+  `run_step` wraps each slot step in) and the `Scheduler::with_active_frame`
+  bracket. An invoke never takes it (tail
   reuse draws from the reserve, below), so within a step it is always
   `Some` — `Node::frame` and `PostStep::prev_frame` are non-optional.
 - **`active_reserve: Option<Rc<CallFrame>>`** — the slot's reserve
   frame, drained from `Node`'s `Frame::reserve` through
-  `enter_slot_step` and consumed by `acquire_tail_frame` (see
+  `with_slot_step` and consumed by `acquire_tail_frame` (see
   [§ Ping-pong reserve frame](#ping-pong-reserve-frame)).
-- **`Scheduler::swap_active_frame(frame) -> Option<Rc<CallFrame>>`** —
-  installs `frame` as `active_frame` and returns the previous one, for a
-  transient save/restore. Used by
+- **`Scheduler::with_active_frame(frame, body) -> R`** — brackets
+  `frame` as `active_frame` for the duration of `body`, restoring the
+  previous one on every exit path, unwind included. Used by
   [`KoanRuntime::dispatch_body`](../../src/machine/execute/runtime/submit.rs) to
   dispatch a body's non-tail statements under the body frame so each sub-slot
   inherits it as its cart (see
@@ -173,7 +173,7 @@ To supply one, the slot carries a per-iteration **reserve frame** in
   the slot's `reserve`, install the new frame as the slot's `cart`.
   First iteration's reserve stays `None`; second iteration fills it;
   iteration 3+ has a reserve to consume.
-- **Reserve-consuming `acquire_tail_frame`.** `enter_slot_step` drains
+- **Reserve-consuming `acquire_tail_frame`.** `with_slot_step` drains
   the slot's `reserve` into `Scheduler::active_reserve`; on the next
   invoke, `acquire_tail_frame` takes it and calls `try_reset_for_tail`.
   Its shell `strong_count` is 1 (only the reserve field held it), so the

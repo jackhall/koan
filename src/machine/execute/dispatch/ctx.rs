@@ -152,7 +152,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// established chain) — `invoke` reads it so a deferred-return FN skips re-resolving its
     /// keep-first-discarded return type.
     pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
-        self.ambient.active_in_contract_chain
+        self.ambient.in_contract_chain()
     }
 
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
