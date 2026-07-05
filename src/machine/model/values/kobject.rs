@@ -224,6 +224,20 @@ impl<'a> KObject<'a> {
     /// A stamped empty container is not flagged (its carrier carries a non-`Any`
     /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
     /// information and is legal where `:(LIST OF Any)` is declared).
+    /// Whether this is a **shallow scalar** — a fully-owned leaf (`Number`, `KString`, `Bool`,
+    /// `Null`) whose representation embeds no `&'a` region borrow and no [`Held`] cell. Such a value
+    /// cannot reference any dep the construction fold was handed, so the dep-witness union is pure
+    /// over-retention: the combinator gate ([`alloc_object_with`](crate::machine::core::KoanStepContextExt::alloc_object_with))
+    /// routes it to the no-fold path so it seals with an empty reach. Every other variant borrows
+    /// (`KFunction`) or holds cells / memos that transitively might (`List`/`Dict`/`Record`/`Tagged`/
+    /// `Wrapped`/`KExpression`), so it keeps the fold.
+    pub fn is_shallow_scalar(&self) -> bool {
+        matches!(
+            self,
+            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null
+        )
+    }
+
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
             KObject::List(items, elem) => items.is_empty() && matches!(elem.as_ref(), KType::Any),

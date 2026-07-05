@@ -422,6 +422,11 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        // Scalar gate: a region-free scalar type references none of `deps`, so folding their reach in
+        // would only over-retain. Route it to the no-fold path so it seals with an empty reach.
+        if kt.is_region_free_scalar() {
+            return self.alloc_type(kt);
+        }
         self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype(kt)))
     }
 
@@ -430,6 +435,13 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         deps: &[&Sealed<CarriedFamily, CarrierWitness>],
         value: KObject<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        // Scalar gate: a shallow scalar embeds no borrow into any dep, so the dep-witness union is
+        // pure over-retention. Route it to the no-fold path so an escaped scalar seals with an empty
+        // reach and stops pinning its producer arena. Aggregates keep the fold (their reaches are
+        // exact, so the residual is only a borrow the value could have embedded but did not).
+        if value.is_shallow_scalar() {
+            return self.alloc_carried(|b| Carried::Object(b.alloc_object(value)));
+        }
         self.alloc_carried_with(deps, |b, _views| Carried::Object(b.alloc_object(value)))
     }
 }

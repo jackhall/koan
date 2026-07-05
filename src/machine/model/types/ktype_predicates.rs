@@ -21,6 +21,22 @@ impl<'a> KType<'a> {
     /// `TypeConstructor`) classifies a type value but is not itself used as a binding-side
     /// slot, so it stays out (an `OfKind` is type-channel-only and never binds a runtime
     /// instance).
+    /// Whether this type is a **region-free scalar leaf** — a primitive (`Number`, `Str`, `Bool`,
+    /// `Null`, `Identifier`) that embeds neither a `&'a` region pointer (the `Module` / `Signature` /
+    /// `AbstractType` / `KFunctor { body }` variants do) nor a nested `KType` box (`List` / `Dict` /
+    /// `Record` / `KFunction` might carry one transitively). Such a type references no dep the
+    /// construction fold was handed, so [`alloc_type_with`](crate::machine::core::KoanStepContextExt::alloc_type_with)
+    /// routes it to the no-fold path and it seals with an empty reach. Conservative by design: a
+    /// composite whose parameters happen to be region-free still keeps the fold rather than risk a
+    /// deep walk (its reach is exact regardless, so the residual is only lost precision, never a
+    /// dropped pin).
+    pub fn is_region_free_scalar(&self) -> bool {
+        matches!(
+            self,
+            KType::Number | KType::Str | KType::Bool | KType::Null | KType::Identifier
+        )
+    }
+
     pub fn is_type_denoting(&self) -> bool {
         matches!(
             self,
