@@ -103,12 +103,15 @@ carrier witnessed by the defining scope's frame. The value-embedding sites that 
 [`attr`](../src/builtins/attr.rs)'s `Wrapped`, [`FROM`](../src/builtins/record_projection.rs)'s
 `Record`, and the [literal.rs](../src/machine/execute/dispatch/literal.rs) Resolved arm's bound value —
 climb off it the same way: each receives the value it embeds as a delivered
-[`Sealed`](#storage-and-access-seal-open-transfer_into) carrier (`attr` / `FROM` through
-[`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs), the Resolved arm through the binding
-scope's own [`Scope::seal_value`](../src/machine/core/scope.rs)) and `merge`s it, so the projected object
+[`Sealed`](#storage-and-access-seal-open-transfer_into) carrier and folds it into the result's own
+construction — `attr` / `FROM` through the step context's
+[`alloc_object_with`/`alloc_type_with`](../src/machine/core/arena.rs) (the dep's reach folded in at the
+same alloc site that builds the value, via [`BodyCtx::arg_carrier`](../src/machine/core/kfunction/action.rs)),
+the Resolved arm through the binding scope's own
+[`resident_value_carrier`](../src/machine/core/scope.rs) — so the projected object
 names every region it reaches by construction. No construction terminal pairs an *already-built* value
 with a separately-asserted witness: the **type** family seals the same way — a region-pure or owned `KType`
-through [`Scope::seal_value`](../src/machine/core/scope.rs), a region-referencing `KType::Module` through
+through the step context's [`alloc_type_with`](../src/machine/core/arena.rs), a region-referencing `KType::Module` through
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
 construction ([`Scope::reach_of_child`](../src/machine/core/scope.rs), from the child scope the birth
 site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
@@ -251,7 +254,8 @@ dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `F
 Resolved arm) `merge` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
 they project; and a `let` or user-fn arg bind folds the bound value's carrier into the scope reach-set
 (below). The **type** channel rides the same construction: a region-pure or owned `KType` seals via
-[`Scope::seal_value`](../src/machine/core/scope.rs) under the producer's home frame; a
+the step context's [`alloc_type_with`](../src/machine/core/arena.rs), which folds its own region (the
+producer's home frame) plus any listed dep's reach at the alloc site itself; a
 region-referencing `KType::Module` seals via [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
 under the child-scope reach folded once at construction from the child scope the birth site holds
 directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recovered by walking the built

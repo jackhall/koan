@@ -13,6 +13,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::Record;
 use crate::machine::model::{KObject, KType};
@@ -85,12 +86,12 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let carrier = ctx.scope.brand().alloc_object_witnessed(result);
+    let deps: Vec<_> = ctx.arg_carrier("record").into_iter().collect();
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
-    // `record` operand reaches. Seal it under the read-site home frame with the record carrier's
-    // foreign reach folded in, so every region the shared backing borrows into outlives the
-    // projection.
-    Action::Done(Ok(ctx.scope.seal_value(carrier, ctx.arg_carrier("record"))))
+    // `record` operand reaches. Built through the step context with the record's carrier
+    // as a dep, so the result's witness names the read-site home frame plus that reach by
+    // construction.
+    Action::Done(Ok(ctx.ctx.alloc_object_with(&deps, result)))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

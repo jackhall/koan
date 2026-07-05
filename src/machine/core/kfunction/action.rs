@@ -282,10 +282,10 @@ pub enum Action<'a> {
     /// Produce this slot's terminal (after any direct scope mutation the builtin did): a witnessed
     /// value or an error. The `Ok` carrier is built **inside the witness closure** — already bundled
     /// with the set of regions it reaches ([`yoke`](crate::witnessed::Witnessed::yoke) / `merge` at
-    /// the alloc site, or a `seal_value` / `resident_type_carrier` sealing a constructed or read
-    /// value) — so it is co-located by construction rather than paired with an asserted witness at
-    /// finalize. The construction terminal for **both** channels: a builtin that allocates a `KObject`
-    /// or a `KType` seals it here.
+    /// the alloc site, or a step-context `alloc_carried`/`alloc_carried_with` (and their typed
+    /// wrappers) / `resident_type_carrier` sealing a constructed or read value) — so it is co-located
+    /// by construction rather than paired with an asserted witness at finalize. The construction
+    /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` seals it here.
     Done(Result<Witnessed<CarriedFamily, FrameSet>, KError>),
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
@@ -317,8 +317,8 @@ impl<'a> Action<'a> {
     /// Seal a **region-pure** bare value as a `Done` terminal — the test-only constructor for a
     /// marker object that references no foreign region ([`Witnessed::resident`] fixes the empty
     /// witness). Production never mints a bare terminal: a real value is always built witnessed at its
-    /// alloc site (`seal_value` / `yoke` / `merge` / `resident_*_carrier`), so this stays behind
-    /// `cfg(test)`.
+    /// alloc site (`alloc_carried`/`alloc_carried_with` / `yoke` / `merge` / `resident_*_carrier`), so
+    /// this stays behind `cfg(test)`.
     pub(crate) fn done_resident(value: Carried<'a>) -> Self {
         Action::Done(Ok(Witnessed::resident(value)))
     }

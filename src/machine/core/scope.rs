@@ -831,39 +831,13 @@ impl<'a> Scope<'a> {
         foreign
     }
 
-    /// Fold this scope's home frame onto an already-witnessed `carrier` whose value lives **in this
-    /// scope's region** — the seal that names a constructed value's reach. The carrier arrives born
-    /// under the empty (foreign-reach-only) set from the witnessed alloc; sealing folds the home frame,
-    /// and because the scope's sealed reach-set lives in that same region, holding the home transitively
-    /// pins every foreign region the value reaches, so a single-frame fold names the full reach. An
-    /// `embedded` carrier — a computed value the sealed value was projected out of, whose reach the
-    /// read-site frame may not pin (an attr field of a delivered `Wrapped`, a FROM record's shared
-    /// backing) — folds its foreign reach on top, omitting any frame the home already pins. Folds
-    /// onto the received carrier via [`Witnessed::reseal_under`], so it carries no re-anchor of an
-    /// externally-built value.
-    pub(crate) fn seal_value(
-        &self,
-        carrier: Witnessed<CarriedFamily, FrameSet>,
-        embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        let home = self
-            .region_owner()
-            .upgrade()
-            .expect("the sealing scope's region owner is held while its value is read");
-        let mut witness = FrameSet::singleton(home.clone());
-        if let Some(embedded) = embedded {
-            witness.fold_omitting(embedded.witness(), |region| home.pins_region(region));
-        }
-        carrier.reseal_under(witness)
-    }
-
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's
     /// stored reach — the type-channel twin of [`Self::resident_value_carrier`]. Witness = this
     /// scope's home frame ∪ `foreign` (the type's home-omitted foreign reach: empty for owned data, a
     /// module's child-scope reach folded at construction). The home frame is fetched fresh (never
     /// stored) and the bundle runs on the confined arena surface ([`RegionBrand::seal_resident`]), so
-    /// a type read witnesses the existing `&'a KType` in place — no `alloc_ktype_witnessed` re-clone,
-    /// no `child_scope()` walk to rebuild the reach.
+    /// a type read witnesses the existing `&'a KType` in place — no re-clone into the region, no
+    /// `child_scope()` walk to rebuild the reach.
     pub(crate) fn resident_type_carrier(
         &self,
         kt: &'a crate::machine::model::types::KType<'a>,

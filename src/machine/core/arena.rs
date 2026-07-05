@@ -168,26 +168,6 @@ impl<'a> RegionBrand<'a> {
             .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
     }
 
-    /// The witnessed-allocation surface for an **owned, region-pure** type — the type-channel twin of
-    /// [`alloc_object_witnessed`](Self::alloc_object_witnessed). Born witnessed by the **empty**
-    /// (foreign-reach-only) set: the brand-confined [`alloc`](Region::alloc) stores `value` and hands
-    /// the freshly-stored `&'b KType<'b>` to the closure, which bundles it through
-    /// [`Witnessed::resident`]. The producing frame is folded in only at the seal/close (the
-    /// scope-reach seal), so a region-resident type never strong-owns its own frame.
-    ///
-    /// Region-pure is the precondition: a `KType` built fresh inside the brand referencing no other
-    /// region — owned data, or a borrow this region already pins. A `KType::Module` reaches its child
-    /// scope's region, so its carrier is not born on this surface: it is sealed by
-    /// [`Scope::resident_type_carrier`](crate::machine::core::Scope) under the child-scope reach folded
-    /// at construction.
-    pub(crate) fn alloc_ktype_witnessed(
-        self,
-        value: KType<'_>,
-    ) -> Witnessed<CarriedFamily, FrameSet> {
-        self.0
-            .alloc::<KType<'static>, _>(value, |live| Witnessed::resident(Carried::Type(live)))
-    }
-
     /// Bundle a value **already resident in this brand's region** under `witness` — the terminal
     /// carrier a name / ATTR read hands back and an FN-def / LET define site seals its object with.
     /// Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not stored here;
@@ -411,6 +391,17 @@ pub(crate) trait KoanStepContextExt {
         deps: &[&Sealed<CarriedFamily, FrameSet>],
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, FrameSet>;
+
+    /// [`Self::alloc_carried_with`] specialized to the one-`KObject`-carrier shape: reach = own
+    /// region unioned with every listed dep's reach. For a `value` built from (or projected out
+    /// of) a dep terminal's value — its borrows may reach into the dep's region, so the dep's
+    /// carrier must fold into the result's witness. The dep views are unused here; the fold is
+    /// what matters.
+    fn alloc_object_with(
+        &self,
+        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        value: KObject<'_>,
+    ) -> Witnessed<CarriedFamily, FrameSet>;
 }
 
 impl KoanStepContextExt for StepContext<FrameStorage> {
@@ -441,6 +432,14 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, FrameSet> {
         self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype(kt)))
+    }
+
+    fn alloc_object_with(
+        &self,
+        deps: &[&Sealed<CarriedFamily, FrameSet>],
+        value: KObject<'_>,
+    ) -> Witnessed<CarriedFamily, FrameSet> {
+        self.alloc_carried_with(deps, |b, _views| Carried::Object(b.alloc_object(value)))
     }
 }
 

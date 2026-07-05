@@ -19,16 +19,19 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{FrameSet, KError, KErrorKind, MemberResolution, NameLookup, Scope};
+use crate::machine::{
+    FrameSet, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
+};
 use crate::witnessed::{Sealed, StepContext, Witnessed};
 
 use super::{arg, kw, sig};
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`Witnessed`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
-/// [`Action::Done(Err)`]. Both channels are witnessed: an object value via [`Scope::seal_value`], a
-/// type identity witnessed in place from its stored reach via [`Scope::resident_type_carrier`] (or,
-/// for a projected type field, sealed under the embedded reach).
+/// [`Action::Done(Err)`]. Both channels are witnessed: an object value sealed by the step
+/// context's `alloc_object_with`, its dep carriers' reach folded by construction, a type
+/// identity witnessed in place from its stored reach via [`Scope::resident_type_carrier`] (or,
+/// for a projected type field, sealed under the folded dep reach).
 fn route<'a>(
     result: Result<Witnessed<CarriedFamily, FrameSet>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -79,9 +82,9 @@ pub fn body_identifier<'a>(
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     // `s` is a bound name: the target lives in its (ancestor) binding scope, transitively pinned by
-    // the read-site scope's home frame, so the field read needs no embedded lhs carrier to fold.
+    // the read-site scope's home frame, so the field read folds no dep carrier (`&[]`).
     if let Some(target) = ctx.scope.lookup(&s_name) {
-        return route(access_field(ctx.scope, target, &field_name, None));
+        return route(access_field(&ctx.ctx, target, &field_name, &[]));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         match kt {
@@ -156,14 +159,10 @@ pub fn body_newtype<'a>(
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
-    // carrier names regions the read-site frame may not pin; fold it as the field read's `embedded`
-    // reach so the projected field outlives every region the lhs reaches.
-    route(access_field(
-        ctx.scope,
-        target,
-        &field_name,
-        ctx.arg_carrier("s"),
-    ))
+    // carrier names regions the read-site frame may not pin; fold the lhs carrier as the field
+    // read's dep so the projected field outlives every region the lhs reaches.
+    let deps: Vec<_> = ctx.arg_carrier("s").into_iter().collect();
+    route(access_field(&ctx.ctx, target, &field_name, &deps))
 }
 
 /// Projects the field off a module identity riding the type channel (the lhs is the `Type` arm).
@@ -233,10 +232,10 @@ fn access_type_member<'a>(
 }
 
 fn access_field<'a>(
-    scope: &Scope<'a>,
+    step: &StepContext<FrameStorage>,
     target: &KObject<'a>,
     field: &str,
-    embedded: Option<&Sealed<CarriedFamily, FrameSet>>,
+    deps: &[&Sealed<CarriedFamily, FrameSet>],
 ) -> Result<Witnessed<CarriedFamily, FrameSet>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
@@ -245,28 +244,23 @@ fn access_field<'a>(
         // invariantly not a `Wrapped` (the construction-time collapse rule peels any
         // `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which
         // has no fields) falls to the `other` arm. The field value is deep-cloned into the
-        // read-site region and sealed under that region's home frame; `embedded` (the computed
-        // lhs carrier, when the lhs was a delivered value) folds its foreign reach so a field of
-        // a multi-region value keeps every region it borrows into alive.
+        // read-site region and sealed under that region's home frame; the `deps` slice — the
+        // computed lhs carrier, when the lhs was a delivered value — folds its reach so a field
+        // of a multi-region value keeps every region it borrows into alive.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => Ok(scope.seal_value(
-                    scope.brand().alloc_object_witnessed(value.deep_clone()),
-                    embedded,
-                )),
+                Some(Held::Object(value)) => Ok(step.alloc_object_with(deps, value.deep_clone())),
                 // A projected type field of the `Wrapped` record — born region-pure and sealed under
-                // the home frame plus the `embedded` carrier's reach (which pins a nested module's
+                // the home frame plus the `deps` slice's folded reach (which pins a nested module's
                 // region, since the `Wrapped` physically contains it), mirroring the Object arm above.
-                Some(Held::Type(kt)) => {
-                    Ok(scope.seal_value(scope.brand().alloc_ktype_witnessed(kt.clone()), embedded))
-                }
+                Some(Held::Type(kt)) => Ok(step.alloc_type_with(deps, kt.clone())),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
                     field
                 )))),
             },
-            inner => access_field(scope, inner, field, embedded),
+            inner => access_field(step, inner, field, deps),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
