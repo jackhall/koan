@@ -252,65 +252,72 @@ reach is named on the carrier and never reconstructed. Every object construction
 aggregate and region-pure inversions, the newtype / tagged-union constructors, and `catch` fold their
 dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
 Resolved arm) `merge` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
-they project; and a `let` or user-fn arg bind folds the bound value's carrier into the scope reach-set
+they project; and a `let` or user-fn arg bind mints the bound value's carrier into the scope's own arena
 (below). The **type** channel rides the same construction: a region-pure or owned `KType` seals via
 the step context's [`alloc_type_with`](../src/machine/core/arena.rs), which folds its own region (the
 producer's home frame) plus any listed dep's reach at the alloc site itself; a
 region-referencing `KType::Module` seals via [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
-under the child-scope reach folded once at construction from the child scope the birth site holds
+under the child-scope reach minted once at construction from the child scope the birth site holds
 directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recovered by walking the built
 `KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
 [`copy_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's
-carrier, and only a *bound* value deposits onto the scope reach-set (below).
+carrier, and only a *bound* value mints into the scope's own arena (below).
 
-A value *bound into a scope*, whose reach must outlive the binding node, deposits its reach on the
-scope's own **reach-set**: a `FrameSet` held on the [`Scope`](../src/machine/core/scope.rs) that folds
-each deposited value's carried reach (via `fold_reach`) and seals when the scope closes — `close` is the
-seal point, fired at the owning node's finalize and routed per scope kind (a per-call frame at its body
-slot's `Done` / tail-`Continue`; `MODULE` / `SIG` at the block finish; the run root at run end). The
-bind sites deposit by folding the bound value's full delivered carrier across both channels: a
-[`let`](../src/builtins/let_binding.rs) folds its bound value's carrier (an object RHS or a
-resolved-type RHS alike), a user-fn arg bind folds each argument carrier — object and type — into the
-*per-call* scope ([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the scope the parameters
-bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window folds the opened module's
-carrier onto the call-site scope it borrows into. A multi-region value (a list of closures, a closure
-over several closures, a module reaching a functor-result region) thus contributes *every* region it
-reaches to the scope that outlives it.
+A value *bound into a scope* has its reach **minted directly into the scope's own arena**
+([`Scope::host_reach_of`](../src/machine/core/scope.rs)), producing a resident `{ bit, ref }` binding
+entry rather than a separate scope-level accumulator: the mint is held by the arena for the scope's
+region's life — the same schedule the scope itself is held on — so discarding the returned reference
+after a liveness-only mint (the FN return-type slot, the `USING` overlay, the run-root drain) is sound,
+and a bind that produces an entry stores the reference on it. There is no scope-level reach-set and no
+deposit list to keep in sync; the mint is the one call that both pins the reach for the scope's life and
+hands back what the binding entry stores. The bind sites mint from the bound value's full delivered
+carrier across both channels: a [`let`](../src/builtins/let_binding.rs) mints its bound value's carrier
+(an object RHS or a resolved-type RHS alike), a user-fn arg bind mints each argument carrier — object
+and type — into the *per-call* scope ([`exec::invoke`](../src/machine/execute/dispatch/exec.rs), the
+scope the parameters bind on), and [`USING`](../src/builtins/using_scope.rs)'s transparent window mints
+the opened module's carrier into the call-site scope it borrows into. A multi-region value (a list of
+closures, a closure over several closures, a module reaching a functor-result region) thus pins *every*
+region it reaches for the life of the scope that outlives it.
 
-`fold_reach` **omits ancestor regions** the scope already keeps alive: its own / a storage-`outer`
-ancestor ([`FrameStorage::pins_region`]), *and* a **lexical** `outer`-chain ancestor. The lexical
-omission is load-bearing under TCO: a per-call frame carries no storage `outer` link, so the storage
-walk stops at its own region while a captured closure still pins its defining (lexical-ancestor) scope.
-Folding such an ancestor into the reach-set — paired with a sibling bind of the call's result — would
-close a `region → scope → set → frame` cycle and defeat the `Rc::get_mut` TCO frame-reuse gate; omitting
-it realizes [`fold_omitting`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors"
-intent while keeping a region-pure or ancestor-bound value depositing nothing.
+[`Scope::host_reach_of`](../src/machine/core/scope.rs)'s mint **omits ancestor regions** the scope
+already keeps alive: its own / a storage-`outer` ancestor ([`FrameStorage::pins_region`]), *and* a
+**lexical** `outer`-chain ancestor. The lexical omission is load-bearing under TCO: a per-call frame
+carries no storage `outer` link, so the storage walk stops at its own region while a captured closure
+still pins its defining (lexical-ancestor) scope. Minting such an ancestor into the arena — paired with
+a sibling bind of the call's result — would close a `region → scope → arena → frame` cycle and defeat
+the `Rc::get_mut` TCO frame-reuse gate; omitting it realizes
+[`fold_omitting`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors" intent while
+keeping a region-pure or ancestor-bound value pinning nothing (the mint returns `None`). A carrier's
+owned, frame-free backing (a severed `Object` / `Type` pin, with no host region for a mint to pin) has
+no reach for the mint to carry; it is re-homed instead — its top node copied into the scope's own arena
+at the bind ([`Scope::adopt_sealed`](../src/machine/core/scope.rs)) — so no binding entry ever
+references a frame-free backing.
 
-The same reach is also stored **per binding**, so a later read hands its carrier back structurally.
+The minted reach is stored **per binding**, so a later read hands its carrier back structurally.
 [`Bindings`](../src/machine/core/bindings.rs)' `data` and `types` entries each carry the bound value's
-home-omitted foreign [`FrameSet`](../src/machine/core/arena.rs) alongside the reference — captured at
-bind time from the delivered carrier for a value or alias
-([`Scope::foreign_reach_of`](../src/machine/core/scope.rs)), and folded from the child scope held
-directly at construction for a module ([`Scope::reach_of_child`](../src/machine/core/scope.rs)). A
-carrier-oriented lookup (`lookup_value_carrier` / `lookup_type_carrier`) or an `ATTR` member read hands
-that stored reach back, and the read builds a self-contained terminal — home frame fetched fresh, ∪ the
-stored foreign reach — through [`Scope::resident_value_carrier`](../src/machine/core/scope.rs) /
-`resident_type_carrier`, witnessing the existing `&'a KObject` / `&'a KType` **in place**. A bare type
-leaf rides the reach through the whole resolve chain (the `type_identifier_memo` and
-`resolve_type_identifier`), recomputing it at the memo miss by name
-([`Scope::resolve_type_reach`](../src/machine/core/scope.rs)). The stored reach is home-omitted for the
-same cycle-safety rule the scope reach-set obeys — the region's own home frame `Rc` never lands
-in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built FN-def
-/ LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its
+home-omitted foreign `Option<&FrameSet>` alongside the reference — minted at bind time from the
+delivered carrier for a value or alias ([`Scope::host_reach_of`](../src/machine/core/scope.rs)), and
+minted from the child scope's binding-entry reaches, held directly at construction, for a module
+([`Scope::reach_of_child`](../src/machine/core/scope.rs)). A carrier-oriented lookup
+(`lookup_value_carrier` / `lookup_type_carrier`) or an `ATTR` member read hands that stored reach back —
+copying the thin reference, never cloning the set — and the read builds a self-contained terminal —
+home frame fetched fresh, ∪ the stored foreign reach — through
+[`Scope::resident_value_carrier`](../src/machine/core/scope.rs) / `resident_type_carrier`, witnessing
+the existing `&'a KObject` / `&'a KType` **in place**. A bare type leaf rides the reach through the
+whole resolve chain (the `type_identifier_memo` and `resolve_type_identifier`), recomputing it at the
+memo miss by name ([`Scope::resolve_type_reach`](../src/machine/core/scope.rs)). The stored reach is
+home-omitted for the same cycle-safety rule every mint obeys — the region's own home frame `Rc` never
+lands in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built
+FN-def / LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its
 *terminal* carrier through the confined resident surface, so the registered reference and the returned
 carrier share one allocation.
 
-With both channels' construction carried, binds folded, and each binding's reach stored, reach lives
-entirely on the node carrier and — for bindings — on the per-scope sealed reach-set and each binding's
-stored `FrameSet`: a value's reach is read off its own carrier witness or its stored reach, never
-recovered by walking the value.
+With both channels' construction carried, binds minted, and each binding's reach stored, reach lives
+entirely on the node carrier and — for bindings — on each binding's own minted reference: a value's
+reach is read off its own carrier witness or its stored reach, never recovered by walking the value, and
+no scope-level accumulator or deposit list exists to keep consistent alongside it.
 
 ## Why reads are safe
 

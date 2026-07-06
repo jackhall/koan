@@ -8,9 +8,10 @@ deletes that arm once region lifecycle is library-owned.
 **Problem.** A walking carrier — a sealed terminal in a node slot, a dep
 crossing steps — is still the owned
 [`CarrierWitness`](../../src/machine/core/carrier_witness.rs)
-`{ pins: Vec<CarrierPin>, reach: FrameSet }` pair even once binding entries are
-hosted ([Resident hosted carriers](resident-hosted-carriers.md) migrates only
-the resident side):
+`{ pins: Vec<CarrierPin>, reach: FrameSet }` pair even though binding entries are
+now hosted (per
+[design/witness-hosting.md § Scope and bindings](../../design/witness-hosting.md#scope-and-bindings-above-the-substrate),
+which migrated only the resident side):
 
 - Every carrier clone —
   [`Sealed::duplicate`](../../workgraph/src/witnessed.rs), dep delivery,
@@ -69,7 +70,7 @@ the resident side):
   variant is transitional debt deleted with the sever gate in
   [Delivery-driven frame retention](delivery-driven-frame-retention.md). At
   bind, a severed value re-homes into the scope's arena
-  ([Resident hosted carriers](resident-hosted-carriers.md)). A narrowed sever
+  ([`Scope::adopt_sealed`](../../src/machine/core/scope.rs)). A narrowed sever
   (empty-foreign-reach values only) is rejected: values that borrow foreign
   regions but not their own frame would stop severing and instead pin their
   producer frame into the binder's scope for its whole life — an interim
@@ -86,9 +87,6 @@ the retention item removes it.
 
 **Requires:**
 
-- [Resident hosted carriers](resident-hosted-carriers.md) — the bind mint the
-  walking form converts through, and the hosted resident entries sealing reads
-  from.
 
 **Unblocks:**
 

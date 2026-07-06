@@ -50,6 +50,11 @@ its set.
   and A never drops). So "the value borrows into the region it lives in" cannot
   ride as a set member; it rides as `borrows_host`. The set names only the value's
   **foreign** reach.
+- *Empty reach is `None`, not a hosted empty set.* A region-pure value's reach set
+  is encoded as `None` — the mint verb (§ Composition) skips the store entirely
+  when the composed set is empty, so a region-pure bind allocates nothing. `None`
+  **is** the empty set; it is not a missing value, and every reader treats it as
+  "pins nothing" rather than "not yet computed."
 - *Reference-only, liveness external.* Because the carrier holds no pin, what keeps
   its `&WitnessSet` valid comes from outside it — and the source differs by where
   the carrier sits, while the representation does not:
@@ -201,8 +206,6 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 
 ## Open work
 
-- [roadmap/scheduler_library/resident-hosted-carriers.md](../roadmap/scheduler_library/resident-hosted-carriers.md)
-  — the resident `{ bit, ref }` carrier and the scope/bindings migration.
 - [roadmap/scheduler_library/host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)
   — the walking carrier's collapse onto the hosted sets.
 - [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)

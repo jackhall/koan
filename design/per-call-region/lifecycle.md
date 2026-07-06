@@ -17,7 +17,7 @@ KFunction<'a>)` reaches the per-call region that owns its captured
 scope only through that reference, and a `KType::Module { module }` reaches its child scope's region
 the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
 reaches is kept alive by the value's *carrier* — a producer slot's `FrameSet` witness while the value
-rides the scheduler, and the consumer scope's reach-set once the value is bound out of it (below) —
+rides the scheduler, and the consumer scope's own arena once the value is bound out of it (below) —
 never by an anchor embedded in the value. Because the in-region value strong-owns no frame, no
 allocation can close a region↔value cycle, so the allocation engine carries no cycle gate.
 
@@ -93,21 +93,22 @@ is *kept alive*, not rebuilt. While the value rides a scheduler slot its produce
 witness pins that region; once it is relocated out of the scheduler — bound into a persistent scope,
 spliced into a working expr and re-dispatched, or read out as a top-level result — the producer slot
 is gone, so the *consumer* takes over the pin: the relocated value's own carrier witness, and the
-consumer scope's reach-set for a bound value.
+consumer scope's own arena for a bound value.
 
 Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
 future** seals its captured-scope reach at construction; a **`KType::Module`** seals its child scope's
-home frame and reach-set the same way, via [`Scope::seal_module`](../../src/machine/core/scope.rs). The
-embedding or binding site folds that carrier — `merge` at an `attr` / `FROM` projection, `fold_reach` at
-a `let` / user-fn arg / `USING` bind — and the
-[`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain folds the rehomed terminal's
-full witness set onto the run-root scope's reach-set, so a value reaching several regions (a list of
-closures, a module over a functor-result region) keeps every one, read straight off its carrier rather
-than reconstructed from the value. `fold_reach` is guarded by `pins_region`, so a region the consumer or
-an ancestor already pins is not re-added, and the reach-set dedups by region. No cycle forms: a
-dispatched frame's `outer` is `None`, so a depositing descendant never strong-refs back into the chain
-that would close a loop.
+home frame and binding-entry reaches the same way, via
+[`Scope::reach_of_child`](../../src/machine/core/scope.rs). The embedding or binding site mints that
+carrier's reach into its own arena — `merge` at an `attr` / `FROM` projection,
+[`Scope::host_reach_of`](../../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind — and
+the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain mints the rehomed
+terminal's full witness set into the run-root scope's own arena, so a value reaching several regions (a
+list of closures, a module over a functor-result region) keeps every one, read straight off its carrier
+rather than reconstructed from the value. The mint is guarded by `pins_region`, so a region the consumer
+or an ancestor already pins is not re-added, and the minted set dedups by region. No cycle forms: a
+dispatched frame's `outer` is `None`, so a minting descendant never strong-refs back into the chain that
+would close a loop.
 
 The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to
 a region, so storing a composite that carries an escaping closure into any region — including the one

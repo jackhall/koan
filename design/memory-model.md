@@ -29,8 +29,8 @@ than ownership trees. The structural edges:
   reference's scope `region_owner`. It carries no per-value liveness anchor:
   the region an escaping closure reaches is pinned by the carrier's
   witness [`FrameSet`](../src/machine/core/arena.rs) while it rides a scheduler
-  slot, then carried on the relocated value's own witness and folded onto the
-  consumer scope's reach-set when the value is bound (see
+  slot, then carried on the relocated value's own witness and minted into the
+  consumer scope's own arena when the value is bound (see
   [§ Region lifetime erasure](#region-lifetime-erasure)).
 - `Module` and `Signature` cache their declaration scopes as a plain
   `&'a Scope<'a>` (heap-pinned by the surrounding region chain), re-anchored with
@@ -44,7 +44,7 @@ canonical case being a closure / module returned from its defining frame —
 keeps that region alive through its carrier's witness, never a per-value anchor
 on the value itself: a producer slot's `FrameSet` pins it while the value rides
 the scheduler, and the relocated value carries its reach on its own carrier
-witness, deposited onto the consumer scope's reach-set when bound (see
+witness, minted into the consumer scope's own arena when bound (see
 [§ Region lifetime erasure](#region-lifetime-erasure)).
 
 **Why graph rather than tree.** Many-to-one captures and bindings, sibling
@@ -237,13 +237,15 @@ A relocated closure / future / module survives its producer's dying frame becaus
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
 reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
 **closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
-child-scope home frame and reach-set the same way (via [`Scope::seal_module`](../src/machine/core/scope.rs)).
-The embedding or binding site folds that carrier (`merge` at an `attr` / `FROM` projection, `fold_reach`
-at a `let` / user-fn arg / `USING` bind), and the root drain folds the rehomed terminal's full witness
-set onto the run-root scope's reach-set — so a multi-region value keeps *every* region it reaches, read
-straight off its carrier rather than reconstructed from the value. No cycle forms: a dispatched frame's
-`outer` is `None`, so a depositing descendant never strong-refs back, and `fold_reach` omits a region
-the consumer or an ancestor already pins.
+child scope's home frame and binding-entry reaches the same way (via
+[`Scope::reach_of_child`](../src/machine/core/scope.rs)). The embedding or binding site mints that
+carrier's reach into its own arena (`merge` at an `attr` / `FROM` projection,
+[`Scope::host_reach_of`](../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind), and the
+root drain mints the rehomed terminal's full witness set into the run-root scope's own arena — so a
+multi-region value keeps *every* region it reaches, read straight off its carrier rather than
+reconstructed from the value. No cycle forms: a dispatched frame's `outer` is `None`, so a minting
+descendant never strong-refs back, and the mint omits a region the consumer or an ancestor already
+pins.
 
 The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, the deferred-return-type
 elaboration) open the child scope at a `for<'b>` brand through
