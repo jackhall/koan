@@ -176,7 +176,7 @@ pub(crate) fn build_type_operand<'step>(
     scope: &'step Scope<'step>,
     dest_frame: Rc<FrameStorage>,
     identity: &'step KType<'step>,
-    reach: &FrameSet,
+    reach: Option<&FrameSet>,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(dest_frame);
     // The `type_id` borrow targets the identity's declaring scope; when that is this same per-call
@@ -212,7 +212,7 @@ fn finish_witnessed<'step>(
         CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
             check_newtype_repr(identity, terminals[0].value.object())?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(terminals[0]
                 .carrier
                 .transfer_into::<RegionTypeFamily, CarriedFamily>(
@@ -260,7 +260,7 @@ fn finish_witnessed<'step>(
                             },
                         )
                 });
-            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(fields.merge::<RegionTypeFamily, CarriedFamily>(
                 home,
                 |fields, (region, identity_ty), _brand| {
@@ -301,7 +301,7 @@ fn finish_witnessed<'step>(
                 set: Rc::clone(set),
                 index: *index,
             });
-            let home = build_type_operand(scope, view.dest_frame(), identity, reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             let tag = tag.clone();
             Ok(terminals[0]
                 .carrier

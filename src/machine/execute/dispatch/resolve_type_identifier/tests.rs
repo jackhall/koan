@@ -116,8 +116,8 @@ fn ktype_user_refs_yields_nothing_for_leaf() {
 mod bare_leaf_resolution {
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::BindingIndex;
-    use crate::machine::core::FrameSet;
     use crate::machine::core::FrameStorage;
+    use crate::machine::core::StoredReach;
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::types::TypeResolution;
     use crate::machine::model::KType;
@@ -131,7 +131,7 @@ mod bare_leaf_resolution {
             "Number".into(),
             KType::Number,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         );
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None) {

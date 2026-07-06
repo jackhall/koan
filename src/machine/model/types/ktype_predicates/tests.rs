@@ -187,7 +187,7 @@ fn accepts_carried_matches_spliced_delegation() {
 #[test]
 fn spliced_cell_classifies_by_opening() {
     use crate::builtins::test_support::run_root_bare;
-    use crate::machine::core::{FrameSet, FrameStorage};
+    use crate::machine::core::FrameStorage;
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::values::KObject;
     use crate::witnessed::Sealed;
@@ -195,7 +195,7 @@ fn spliced_cell_classifies_by_opening() {
     let storage = FrameStorage::run_root();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
-    let carrier = scope.resident_value_carrier(obj, &FrameSet::empty(), false);
+    let carrier = scope.resident_value_carrier(obj, None, false);
     let cell_part = ExpressionPart::Spliced(Sealed::seal(carrier));
 
     for (ty, admits) in [

@@ -350,7 +350,7 @@ fn part_walk<'step>(
                                 TypeResolution::Done(hit) => {
                                     Sealed::seal(ctx.current_scope().resident_type_carrier(
                                         hit.kt,
-                                        &hit.reach,
+                                        hit.reach,
                                         hit.borrows_into_home,
                                     ))
                                 }

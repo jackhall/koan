@@ -8,7 +8,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
 use crate::machine::model::Parseable;
 use crate::machine::model::Record;
-use crate::machine::FrameSet;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
@@ -192,11 +191,9 @@ fn rewrite_threaded_self_refs<'a>(
                     // expression (it crosses into another node), so it travels as a cell: a
                     // region-resident type carrier reaching nothing foreign (empty reach).
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Spliced(Sealed::seal(scope.resident_type_carrier(
-                        obj,
-                        &FrameSet::empty(),
-                        false,
-                    )))
+                    ExpressionPart::Spliced(Sealed::seal(
+                        scope.resident_type_carrier(obj, None, false),
+                    ))
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

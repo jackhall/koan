@@ -17,7 +17,7 @@
 use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand, StoredReach};
+use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
@@ -133,45 +133,29 @@ where
             for (name, cell) in cells.iter() {
                 match cell {
                     Held::Object(object) => {
-                        // Store the parameter's reach from its delivered arg carrier (home-omitted) so
+                        // Mint the parameter's reach from its delivered arg carrier (home-omitted) so
                         // a later read rebuilds its carrier. A region-pure arg has no entry → empty reach.
                         // The home-borrow bit is captured alongside, since the home-omitted reach drops it.
-                        let reach = arg_carriers
+                        let stored = arg_carriers
                             .get(name)
-                            .map(|carrier| child.foreign_reach_of(carrier.witness()))
+                            .map(|carrier| child.host_reach_of(carrier.witness()))
                             .unwrap_or_default();
-                        let borrows_into_home = arg_carriers
-                            .get(name)
-                            .is_some_and(|carrier| carrier.witness().reach_covers(child.region()));
-                        let _ = child.bind_value(
-                            name.clone(),
-                            object,
-                            BindingIndex::value(0),
-                            StoredReach {
-                                foreign: reach,
-                                borrows_into_home,
-                            },
-                        );
+                        let _ =
+                            child.bind_value(name.clone(), object, BindingIndex::value(0), stored);
                     }
                     // Type-denoting params (`Er`-style) register a type, not a value binding. The arg
                     // is already a resolved type, so register it directly. A module-typed argument
                     // reaches its child scope's region, so store the carrier's home-omitted reach.
                     Held::Type(kt) => {
-                        let reach = arg_carriers
+                        let stored = arg_carriers
                             .get(name)
-                            .map(|carrier| child.foreign_reach_of(carrier.witness()))
+                            .map(|carrier| child.host_reach_of(carrier.witness()))
                             .unwrap_or_default();
-                        let borrows_into_home = arg_carriers
-                            .get(name)
-                            .is_some_and(|carrier| carrier.witness().reach_covers(child.region()));
                         child.register_type(
                             name.clone(),
                             kt.clone(),
                             BindingIndex::value(0),
-                            StoredReach {
-                                foreign: reach,
-                                borrows_into_home,
-                            },
+                            stored,
                         );
                     }
                 }

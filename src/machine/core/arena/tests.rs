@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
@@ -96,8 +97,13 @@ fn with_scope_opens_child_scope_at_brand() {
     // In-place bind + lookup, all at the brand `'b` (value allocated via the opened scope's region).
     frame.with_scope(|s| {
         let v = s.brand().alloc_object(KObject::Number(7.0));
-        s.bind_value("k".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
-            .unwrap();
+        s.bind_value(
+            "k".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            StoredReach::empty(),
+        )
+        .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
     });
 }
@@ -127,7 +133,7 @@ fn with_scope_relocates_seed_value_into_brand() {
                 "it".to_string(),
                 it_obj,
                 BindingIndex::BUILTIN,
-                FrameSet::empty(),
+                StoredReach::empty(),
             )
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
@@ -170,7 +176,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
                 "it".to_string(),
                 it_obj,
                 BindingIndex::BUILTIN,
-                FrameSet::empty(),
+                StoredReach::empty(),
             )
             .unwrap();
         assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
@@ -245,7 +251,12 @@ fn call_frame_try_reset_for_tail_round_trip() {
     frame.with_scope(|child| {
         let v = child.brand().alloc_object(KObject::Number(42.0));
         child
-            .bind_value("k".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+            .bind_value(
+                "k".to_string(),
+                v,
+                BindingIndex::BUILTIN,
+                StoredReach::empty(),
+            )
             .unwrap();
         assert!(matches!(child.lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
         assert!(child.outer().is_some());
@@ -767,7 +778,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                         "inners".to_string(),
                         list_v.object(),
                         BindingIndex::BUILTIN,
-                        FrameSet::empty(),
+                        StoredReach::empty(),
                     )
                     .expect("bind the inners list into the outer closure's scope");
             }
@@ -972,7 +983,7 @@ fn mint_composes_exact_members() {
 
     let source_a = FrameSet::singleton(Rc::clone(&a));
     let source_b = FrameSet::singleton(Rc::clone(&b));
-    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false).unwrap();
 
     assert_eq!(minted.members().len(), 2, "exact members — no coarsening");
     assert!(minted
@@ -995,7 +1006,7 @@ fn mint_home_omits_dest_region() {
     let minted = FrameSet::mint(c.brand().0, &[&source_c], &[], |_| false);
 
     assert!(
-        minted.is_empty(),
+        minted.is_none(),
         "dest's own region is never a member of its own minted set"
     );
 }
@@ -1008,7 +1019,7 @@ fn mint_materializes_foreign_host() {
     let a = FrameStorage::run_root();
     let c = FrameStorage::run_root();
 
-    let minted_into_c = FrameSet::mint(c.brand().0, &[], &[Rc::clone(&a)], |_| false);
+    let minted_into_c = FrameSet::mint(c.brand().0, &[], &[Rc::clone(&a)], |_| false).unwrap();
     assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
     assert!(std::ptr::eq(
         minted_into_c.members()[0].region(),
@@ -1017,7 +1028,7 @@ fn mint_materializes_foreign_host() {
 
     let minted_into_a = FrameSet::mint(a.brand().0, &[], &[Rc::clone(&a)], |_| false);
     assert!(
-        minted_into_a.is_empty(),
+        minted_into_a.is_none(),
         "materializing A's own host into A is home-omitted"
     );
 }
@@ -1033,7 +1044,7 @@ fn mint_subsumes_ancestor() {
 
     let source_a = FrameSet::singleton(Rc::clone(&a));
     let source_b = FrameSet::singleton(Rc::clone(&b));
-    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false).unwrap();
 
     let sole = minted.sole().expect("ancestor subsumed by descendant");
     assert!(std::ptr::eq(sole.region(), b.region()));
@@ -1047,7 +1058,7 @@ fn mint_reads_back_under_pin() {
     let c = FrameStorage::run_root();
     let source_a = FrameSet::singleton(Rc::clone(&a));
 
-    let minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false);
+    let minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false).unwrap();
 
     let regions: Vec<*const KoanRegion> = minted
         .members()
@@ -1090,7 +1101,7 @@ fn mint_teardown_releases_members() {
     {
         let source_a = FrameSet::singleton(Rc::clone(&a));
         let source_b = FrameSet::singleton(Rc::clone(&b));
-        let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+        let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false).unwrap();
         assert_eq!(minted.members().len(), 2);
     }
     assert_eq!(

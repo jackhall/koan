@@ -1,9 +1,9 @@
 //! `queue` arm of `machine::core` tests.
 
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::core::FrameStorage;
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 use crate::machine::BindingIndex;
@@ -22,7 +22,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
             "pre".to_string(),
             pre,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
 
@@ -35,7 +35,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
                 "during".to_string(),
                 new_entry,
                 BindingIndex::BUILTIN,
-                FrameSet::empty(),
+                StoredReach::empty(),
             )
             .unwrap();
         assert!(!snapshot.contains_key("during"));
@@ -82,7 +82,7 @@ fn drain_debug_asserts_on_invariant_violation() {
             "a".to_string(),
             obj1,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     drop(snapshot);
@@ -137,7 +137,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
             "v".to_string(),
             obj,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     scope.drain_pending();
@@ -190,7 +190,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
         "Foo".to_string(),
         KType::Number,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     scope.drain_pending();
     assert!(!snapshot.contains_key("Foo"));
@@ -252,14 +252,14 @@ fn drain_debug_asserts_on_type_arm_invariant_violation() {
         "Foo".to_string(),
         KType::Number,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     drop(snapshot);
     scope.register_type(
         "Foo".to_string(),
         KType::Str,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     scope.drain_pending();
 }

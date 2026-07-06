@@ -22,7 +22,7 @@ enum PendingWrite<'a> {
         index: BindingIndex,
         /// The bound value's home-omitted foreign reach, carried through the deferred write so a
         /// drained bind stores the same reach a direct bind would (see [`Bindings::try_bind_value`]).
-        reach: StoredReach,
+        reach: StoredReach<'a>,
     },
     Function {
         name: String,
@@ -36,7 +36,7 @@ enum PendingWrite<'a> {
         index: BindingIndex,
         /// The bound type's home-omitted foreign reach, carried through the deferred write so a
         /// drained type register stores the same reach a direct register would.
-        reach: StoredReach,
+        reach: StoredReach<'a>,
     },
 }
 
@@ -56,7 +56,7 @@ impl<'a> PendingQueue<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: StoredReach,
+        reach: StoredReach<'a>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Value {
             name,
@@ -86,7 +86,7 @@ impl<'a> PendingQueue<'a> {
         name: String,
         kt: &'a crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: StoredReach,
+        reach: StoredReach<'a>,
     ) {
         self.pending.borrow_mut().push(PendingWrite::Type {
             name,
@@ -121,7 +121,7 @@ impl<'a> PendingQueue<'a> {
                     index,
                     reach,
                 } => {
-                    match bindings.try_bind_value(&name, obj, index, reach.clone()) {
+                    match bindings.try_bind_value(&name, obj, index, reach) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value {
@@ -164,7 +164,7 @@ impl<'a> PendingQueue<'a> {
                     kt,
                     index,
                     reach,
-                } => match bindings.try_register_type(&name, kt, index, reach.clone()) {
+                } => match bindings.try_register_type(&name, kt, index, reach) {
                     Ok(ApplyOutcome::Applied) => {}
                     Ok(ApplyOutcome::Conflict) => {
                         still_pending.push(PendingWrite::Type {

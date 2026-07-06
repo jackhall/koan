@@ -14,9 +14,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, Scope};
+use crate::machine::core::{BindingIndex, Scope, StoredReach};
 use crate::machine::model::types::{KKind, KType, NominalMember, NominalSchema, RecursiveSet};
-use crate::machine::FrameSet;
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let scope_id = scope.id;
@@ -37,7 +36,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "Result".into(),
         identity,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
 }
 

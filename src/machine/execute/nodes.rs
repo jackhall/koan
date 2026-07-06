@@ -177,8 +177,9 @@ mod tests {
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::FrameStorage;
+    use crate::machine::core::StoredReach;
     use crate::machine::model::KObject;
-    use crate::machine::{BindingIndex, FrameSet};
+    use crate::machine::BindingIndex;
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
     /// [`SealedExtern<ScopeRefFamily>`] carrier (`erase`) and opens it ([`SealedExtern::open`] at a
@@ -191,7 +192,12 @@ mod tests {
         let scope = default_scope(&region, Box::new(std::io::sink()));
         let v = region.brand().alloc_object(KObject::Number(7.0));
         scope
-            .bind_value("k".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+            .bind_value(
+                "k".to_string(),
+                v,
+                BindingIndex::BUILTIN,
+                StoredReach::empty(),
+            )
             .unwrap();
 
         let ns = NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));

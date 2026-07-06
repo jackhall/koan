@@ -20,7 +20,7 @@ use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
-    CarrierWitness, FrameSet, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
+    CarrierWitness, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
 };
 use crate::witnessed::{Sealed, StepContext, Witnessed};
 
@@ -209,12 +209,12 @@ fn access_type_member<'a>(
                     obj,
                     reach,
                     borrows_into_home,
-                }) => Ok(decl.resident_value_carrier(obj, &reach, borrows_into_home)),
+                }) => Ok(decl.resident_value_carrier(obj, reach, borrows_into_home)),
                 Some(MemberResolution::Type {
                     kt,
                     reach,
                     borrows_into_home,
-                }) => Ok(decl.resident_type_carrier(kt, &reach, borrows_into_home)),
+                }) => Ok(decl.resident_type_carrier(kt, reach, borrows_into_home)),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     s.path, field
@@ -307,11 +307,11 @@ fn access_module_member<'a>(
         return Ok(
             match module_scope.bindings().lookup_type_carrier(field, None) {
                 Some(NameLookup::Bound(hit)) => {
-                    module_scope.resident_type_carrier(hit.kt, &hit.reach, hit.borrows_into_home)
+                    module_scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)
                 }
                 _ => module_scope.resident_type_carrier(
                     module_scope.brand().alloc_ktype(minted),
-                    &FrameSet::empty(),
+                    None,
                     false,
                 ),
             },
@@ -336,7 +336,7 @@ fn access_module_member<'a>(
                 // witness via `alloc_carried_with`.
                 let obj_carrier = Sealed::seal(module_scope.resident_value_carrier(
                     obj,
-                    &reach,
+                    reach,
                     borrows_into_home,
                 ));
                 let ctx = StepContext::new(scope_frame(module_scope));
@@ -350,13 +350,13 @@ fn access_module_member<'a>(
                     }),
                 );
             }
-            Ok(module_scope.resident_value_carrier(obj, &reach, borrows_into_home))
+            Ok(module_scope.resident_value_carrier(obj, reach, borrows_into_home))
         }
         Some(MemberResolution::Type {
             kt,
             reach,
             borrows_into_home,
-        }) => Ok(module_scope.resident_type_carrier(kt, &reach, borrows_into_home)),
+        }) => Ok(module_scope.resident_type_carrier(kt, reach, borrows_into_home)),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

@@ -138,6 +138,19 @@ impl<'a> RegionBrand<'a> {
         self.0.alloc_resident::<OperatorGroup>(g)
     }
 
+    /// Mint a frozen witness set into this brand's region arena — the Koan veneer over
+    /// [`RegionSet::mint`]. `omit` is the scope's home/lexical-ancestor policy predicate;
+    /// home-omission (self-cycle) is handled by the library. `None` when the composed reach is
+    /// empty (a region-pure value pins nothing).
+    pub(crate) fn mint(
+        self,
+        sources: &[&FrameSet],
+        materialize_hosts: &[Rc<FrameStorage>],
+        omit: impl Fn(&KoanRegion) -> bool,
+    ) -> Option<&'a FrameSet> {
+        RegionSet::mint(self.0, sources, materialize_hosts, omit)
+    }
+
     /// The witnessed-allocation surface for an **owned, region-pure** object — a value referencing no
     /// other region: born witnessed by the **empty** (foreign-reach-only) set. The brand-confined
     /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the

@@ -18,8 +18,8 @@
 //! the block guarantees every forward reference resolved.
 
 use crate::machine::core::KoanStepContextExt;
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
-use crate::machine::FrameSet;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -155,7 +155,7 @@ pub fn body<'a>(
                 name.clone(),
                 member_ref,
                 bind_index,
-                FrameSet::empty(),
+                StoredReach::empty(),
             ) {
                 return Action::Done(Err(e.with_frame(frame())));
             }
@@ -165,7 +165,7 @@ pub fn body<'a>(
             group_name.clone(),
             handle,
             bind_index,
-            FrameSet::empty(),
+            StoredReach::empty(),
         ) {
             Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),

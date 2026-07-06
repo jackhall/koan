@@ -70,9 +70,9 @@ impl<'run> KoanRuntime<'run> {
                     id,
                     Witnessed::<RegionRefFamily, CarrierWitness>::resident(root.brand()),
                 ) {
-                    // Fold the rehomed terminal's reach onto the run root so those regions stay alive
-                    // past scheduler teardown.
-                    root.fold_reach(witnessed.witness());
+                    // Mint the rehomed terminal's reach into the run root's arena so those regions stay
+                    // alive past scheduler teardown.
+                    let _ = root.host_reach_of(witnessed.witness());
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

@@ -2,9 +2,9 @@
 
 use super::super::{BindingIndex, NameLookup};
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::FrameStorage;
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -27,7 +27,7 @@ fn bind_value_errors_on_same_scope_rebind() {
             "x".to_string(),
             v1,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     let err = scope
@@ -35,7 +35,7 @@ fn bind_value_errors_on_same_scope_rebind() {
             "x".to_string(),
             v2,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap_err();
     match &err.kind {
@@ -54,7 +54,7 @@ fn bind_value_allows_shadowing_in_child_scope() {
             "x".to_string(),
             v1,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -64,7 +64,7 @@ fn bind_value_allows_shadowing_in_child_scope() {
             "x".to_string(),
             v2,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
@@ -77,7 +77,12 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+        .bind_value(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            StoredReach::empty(),
+        )
         .unwrap();
     assert!(!scope.is_closed());
     scope.close();
@@ -96,7 +101,12 @@ fn bind_after_close_panics() {
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_object(KObject::Number(1.0));
-    let _ = scope.bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty());
+    let _ = scope.bind_value(
+        "x".to_string(),
+        v,
+        BindingIndex::BUILTIN,
+        StoredReach::empty(),
+    );
 }
 
 #[test]
@@ -107,7 +117,12 @@ fn close_is_per_scope_open_child_still_binds() {
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let v = region.brand().alloc_object(KObject::Number(2.0));
     inner
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+        .bind_value(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            StoredReach::empty(),
+        )
         .unwrap();
     assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
     assert!(!inner.is_closed());
@@ -180,7 +195,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
             "OTHER_NAME".to_string(),
             obj2,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap_err();
     assert!(
@@ -211,7 +226,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
             "FIRST".to_string(),
             obj1,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     scope
@@ -219,7 +234,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
             "ALIAS".to_string(),
             obj2,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
 }
@@ -286,7 +301,7 @@ fn register_function_coexists_with_same_name_value() {
             "FOO".to_string(),
             v,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     let f = region.brand().alloc_function(KFunction::new(
@@ -324,7 +339,7 @@ fn register_function_coexists_with_same_name_type() {
         "Foo".to_string(),
         KType::Number,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -362,14 +377,14 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
             "val".to_string(),
             v,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     scope.register_type(
         "Ty".to_string(),
         KType::Number,
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     let bindings = scope.bindings();
     assert!(matches!(
@@ -410,7 +425,12 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+        .bind_value(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            StoredReach::empty(),
+        )
         .unwrap();
     let inner = region.brand().alloc_scope(outer.child_for_call());
     inner
@@ -448,7 +468,12 @@ fn bind_value_clears_own_placeholder() {
         .unwrap();
     let v = region.brand().alloc_object(KObject::Number(42.0));
     scope
-        .bind_value("x".to_string(), v, BindingIndex::BUILTIN, FrameSet::empty())
+        .bind_value(
+            "x".to_string(),
+            v,
+            BindingIndex::BUILTIN,
+            StoredReach::empty(),
+        )
         .unwrap();
     assert!(scope.bindings().placeholders().get("x").is_none());
     assert!(
@@ -472,7 +497,7 @@ fn visibility_chain_none_sees_every_entry() {
             "late".to_string(),
             v,
             BindingIndex::value(99),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     // A chain whose `index_for(scope.id) = None` treats the scope as complete:
@@ -497,7 +522,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
             "later".to_string(),
             v,
             BindingIndex::value(5),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     // Cutoff 3, producer at 5 → `5 < 3` is false → invisible.
@@ -517,7 +542,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
             "earlier".to_string(),
             v,
             BindingIndex::value(2),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     let consumer: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 5);
@@ -539,7 +564,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
             "self_idx".to_string(),
             v,
             BindingIndex::value(3),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     // Cutoff equal to producer idx (e.g. `LET x = x`): `3 < 3` is false.
@@ -582,7 +607,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
         "TyLate".to_string(),
         KType::Number,
         BindingIndex::value(5),
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(scope

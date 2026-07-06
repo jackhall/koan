@@ -49,7 +49,7 @@ pub fn body<'a>(
             {
                 return Action::Done(Ok(fctx.scope.resident_type_carrier(
                     hit.kt,
-                    &hit.reach,
+                    hit.reach,
                     hit.borrows_into_home,
                 )));
             }
@@ -79,14 +79,14 @@ pub fn body<'a>(
                 identity,
                 bind_index,
                 StoredReach {
-                    foreign: reach.clone(),
+                    foreign: reach,
                     borrows_into_home: true,
                 },
             ) {
                 Ok(kt_ref) => {
                     // Witness the registered `&KType` in place from the stored reach — no re-clone, no
                     // `child_scope()` walk.
-                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, &reach, true)))
+                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, reach, true)))
                 }
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
@@ -122,9 +122,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::core::FrameStorage;
+    use crate::machine::core::StoredReach;
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, FrameSet, KErrorKind, Scope};
+    use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
     /// `bindings.types`. Recover it for inspection.
@@ -258,7 +259,7 @@ mod tests {
             "Foo".into(),
             identity,
             BindingIndex::value(0),
-            FrameSet::empty(),
+            StoredReach::empty(),
         );
         run(scope, "MODULE Foo = (LET y = 2)");
         let foo = resolve_module(scope, "Foo");

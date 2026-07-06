@@ -68,7 +68,9 @@ pub fn body<'a>(
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let witness = carrier.witness().clone();
-        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| overlay.fold_reach(&witness));
+        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| {
+            let _ = overlay.host_reach_of(&witness);
+        });
         seed
     });
     block_tail(

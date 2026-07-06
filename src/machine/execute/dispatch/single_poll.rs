@@ -91,7 +91,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // re-home, no `child_scope()` walk.
         TypeResolution::Done(resolved) => Outcome::Done(Ok(s.resident_type_carrier(
             resolved.kt,
-            &resolved.reach,
+            resolved.reach,
             resolved.borrows_into_home,
         ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
@@ -292,7 +292,10 @@ pub(super) fn type_call<'step>(
             // lexical chain as the identity: threaded to the construction finish so its operand names
             // the identity's own region rather than relying on the dest frame's storage `outer` chain,
             // which omits lexical ancestors under TCO. Empty while `RecursiveSet` is heap-`Rc`'d.
-            let reach = scope.resolve_type_reach(head_t.as_str(), chain);
+            let reach = scope
+                .resolve_type_reach(head_t.as_str(), chain)
+                .cloned()
+                .unwrap_or_default();
             apply_callable(
                 ctx,
                 ResolvedCallable::Constructor { identity, reach },

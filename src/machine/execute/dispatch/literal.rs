@@ -319,7 +319,7 @@ impl<'step> KoanRuntime<'step> {
                     // frame's `outer` chain), never in the read scope's own home, so it borrows nothing
                     // into home: the bit is unset and `reach` names only its genuinely-foreign regions.
                     Some(Slot::Static(Sealed::seal(
-                        s.resident_type_carrier(kt, &reach, false),
+                        s.resident_type_carrier(kt, reach, false),
                     )))
                 }
                 // The value case is handled above via the reach-carrying binding-scope carrier

@@ -1,6 +1,6 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::{FrameSet, FrameStorage, Scope};
+use crate::machine::core::{FrameStorage, Scope, StoredReach};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{KType, TypeResolution};
 use crate::machine::model::values::{Carried, CarriedFamily, Module};
@@ -34,7 +34,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         "T".to_string(),
         KType::Module { module },
         BindingIndex::BUILTIN,
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     let foreign_hit =
         match foreign_scope.resolve_type_identifier(&TypeIdentifier::leaf("T".to_string()), None) {
@@ -44,18 +44,18 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     let produced: Sealed<CarriedFamily, CarrierWitness> =
         Sealed::seal(foreign_scope.resident_type_carrier(
             foreign_hit.kt,
-            &foreign_hit.reach,
+            foreign_hit.reach,
             foreign_hit.borrows_into_home,
         ));
 
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the
     // type-channel mirror of a `LET` binding a module value returned from elsewhere.
-    let reach = scope.foreign_reach_of(produced.witness());
+    let stored = scope.host_reach_of(produced.witness());
     let kt = match scope.adopt_sealed(&produced) {
         Carried::Type(kt) => kt.clone(),
         _ => panic!("expected the adopted Type"),
     };
-    scope.register_type("T".to_string(), kt, BindingIndex::BUILTIN, reach);
+    scope.register_type("T".to_string(), kt, BindingIndex::BUILTIN, stored);
 
     // Drive the exact surface the fixed splice arm uses.
     let hit = match scope.resolve_type_identifier(&TypeIdentifier::leaf("T".to_string()), None) {
@@ -63,12 +63,12 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         _ => panic!("expected TypeResolution::Done for a registered type"),
     };
     assert!(
-        !hit.reach.is_empty(),
+        hit.reach.is_some(),
         "the stored reach should round-trip a non-empty foreign reach",
     );
 
     // Build the cell as the splice now does.
-    let cell = Sealed::seal(scope.resident_type_carrier(hit.kt, &hit.reach, hit.borrows_into_home));
+    let cell = Sealed::seal(scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home));
 
     // The consumer lives in its own frame, independent of `scope`'s (`storage`) and the type's
     // original producer frame (`foreign`) — nothing but its own adopted fold may keep them alive.

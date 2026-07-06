@@ -151,12 +151,12 @@ fn finalize_val<'a>(
     carrier: Option<&Sealed<CarriedFamily, CarrierWitness>>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    let reach = carrier
-        .map(|c| fctx.scope.foreign_reach_of(c.witness()))
+    let stored = carrier
+        .map(|c| fctx.scope.host_reach_of(c.witness()))
         .unwrap_or_default();
     if let Err(e) = fctx
         .scope
-        .register_user_type(name, declared_kt.clone(), bind_index, reach)
+        .register_user_type(name, declared_kt.clone(), bind_index, stored)
     {
         return Action::Done(Err(e));
     }

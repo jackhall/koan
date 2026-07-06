@@ -81,7 +81,7 @@ pub fn body<'a>(
             set: Rc::clone(&result_set),
             index: result_index,
         });
-        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, &reach);
+        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, reach);
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.

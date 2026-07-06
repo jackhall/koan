@@ -41,7 +41,7 @@ pub(crate) fn extract_terminal<'a>(
             Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
         })
         .expect("terminal should be a value, not an error");
-    scope.fold_reach(&runtime.dep_witness(id));
+    let _ = scope.host_reach_of(&runtime.dep_witness(id));
     value
 }
 

@@ -140,13 +140,14 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
     ///
     /// The result is stored frozen in `dest`'s arena; the returned `&'a` is co-located, so
     /// holding `dest`'s region owner (or this borrow) pins it and, through its members, every
-    /// region it names.
+    /// region it names. `None` when the composed set is empty — a region-pure value mints the
+    /// empty set, encoded without an allocation.
     pub fn mint<'a, W>(
         dest: RegionHandle<'a, W>,
         sources: &[&RegionSet<F>],
         materialize_hosts: &[Rc<F>],
         omit: impl Fn(&F::Region) -> bool,
-    ) -> &'a RegionSet<F>
+    ) -> Option<&'a RegionSet<F>>
     where
         W: StorageProfile,
         // Bind `Region` on `RegionOwner`, the trait that DECLARES it — not on `PinsRegion`.
@@ -168,7 +169,11 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
                 composed.insert(Rc::clone(host)); // rule 2 + subsumption
             }
         }
-        dest.alloc_resident::<RegionSet<F>>(composed) // freeze-at-store
+        if composed.is_empty() {
+            None
+        } else {
+            Some(dest.alloc_resident::<RegionSet<F>>(composed)) // freeze-at-store
+        }
     }
 }
 

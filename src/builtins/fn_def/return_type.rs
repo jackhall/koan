@@ -243,7 +243,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             // everything its bindings reach. The parameter-type slots already fold this way via
             // `adopt_sealed` at signature elaboration; this fold gives the return-type slot the same
             // property before `finalize_fn_with_kind` runs.
-            scope.fold_reach(carrier.witness());
+            let _ = scope.host_reach_of(carrier.witness());
             Ok(ReturnType::Resolved(kt))
         }
     }

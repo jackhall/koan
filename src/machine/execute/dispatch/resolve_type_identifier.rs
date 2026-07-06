@@ -50,7 +50,11 @@ impl<'step> Scope<'step> {
                 // that binding's stored reach (empty for a builtin / owned type; the child-scope
                 // reach for a module). Cached alongside `kt` so a hit rebuilds the read carrier.
                 let reach = self.resolve_type_reach(te.as_str(), chain_for_reach.as_deref());
-                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, reach.clone());
+                let stored = crate::machine::core::StoredReach {
+                    foreign: reach,
+                    borrows_into_home: false,
+                };
+                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, stored);
                 TypeResolution::Done(TypeHit {
                     kt: kt_ref,
                     reach,

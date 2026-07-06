@@ -10,7 +10,7 @@ use super::NodeFinalize;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::{CarrierWitness, FrameSet, FrameStorage};
+use crate::machine::core::{CarrierWitness, FrameStorage};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject};
@@ -29,7 +29,7 @@ fn resident_scalar(
 ) {
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
-        child.resident_value_carrier(obj, &FrameSet::empty(), borrows_into_home)
+        child.resident_value_carrier(obj, None, borrows_into_home)
     });
     let weak = Rc::downgrade(&producer.storage_rc());
     (carrier, weak)

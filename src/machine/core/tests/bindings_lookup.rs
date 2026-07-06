@@ -4,8 +4,8 @@
 //! lookups the index-gated resolver walks.
 
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
+use crate::machine::core::StoredReach;
 use crate::machine::core::{BindingIndex, FrameStorage, NameLookup};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -24,7 +24,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
             "late".to_string(),
             value,
             BindingIndex::value(99),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("late", None) {
@@ -43,7 +43,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
             "later".to_string(),
             value,
             BindingIndex::value(5),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     assert!(scope.bindings().lookup_value("later", Some(3)).is_none());
@@ -59,7 +59,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
             "earlier".to_string(),
             value,
             BindingIndex::value(2),
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     match scope.bindings().lookup_value("earlier", Some(5)) {
@@ -98,7 +98,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
         "Tee".into(),
         KType::Number,
         BindingIndex::value(99),
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
@@ -114,7 +114,7 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
         "TyLate".into(),
         KType::Number,
         BindingIndex::value(5),
-        FrameSet::empty(),
+        StoredReach::empty(),
     );
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());

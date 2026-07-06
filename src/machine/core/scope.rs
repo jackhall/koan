@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 use crate::machine::model::types::{KType, RecursiveSet};
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
-use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup};
+use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup, StoredReach};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
@@ -69,21 +69,6 @@ pub struct Scope<'a> {
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
     closed: Cell<bool>,
-    /// The scope's **reach-set**: the foreign per-call regions its bound values still borrow into,
-    /// folded as each bind lands ([`Self::fold_reach`], which omits the scope's own home frame so a
-    /// resident value never witnesses the frame it lives in — the `region → scope → set → frame`
-    /// cycle). Frozen once [`closed`](Self::closed) flips — `close` is the seal point (folds past it
-    /// are rejected like binds). Held inside the region-resident `Scope`, so a closure capturing the
-    /// scope keeps every foreign region its bindings reach alive for its life. `RefCell` because
-    /// folds accrue between scheduler steps.
-    reach: RefCell<FrameSet>,
-    /// Owned backings deposited by adopted carriers: the `Object` / `Type` pins of a severed carrier
-    /// (a top node copied out of a dying frame at finalize), kept alive here so an adopted value's
-    /// re-anchored borrow stays valid for the scope's life. Only owned (region-free) backings land
-    /// here — a `Frame` pin routes through [`Self::fold_reach`]'s omission predicate into the
-    /// reach-set instead, so this list never stores an own-region `Rc<FrameStorage>` (the
-    /// `frame → region → scope → deposit → frame` cycle). Drops with the scope.
-    deposit: RefCell<Vec<CarrierPin>>,
 }
 
 /// A scope's binding storage. `Owned` is the default. `Borrowed` is the
@@ -151,8 +136,6 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Root,
             recursive_set: None,
             closed: Cell::new(false),
-            reach: RefCell::new(FrameSet::empty()),
-            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -208,49 +191,35 @@ impl<'a> Scope<'a> {
             .any(|scope| std::ptr::eq(scope.region(), region))
     }
 
-    /// Fold `witness`'s reach into `target`, omitting every region this scope already keeps alive: its
-    /// home frame's own / storage-`outer` ancestor region ([`FrameStorage::pins_region`]) or a lexical
-    /// `outer`-chain ancestor region ([`Self::chain_reaches_region`]). A per-call frame carries no
+    /// Mint a delivered carrier's reach into this scope's own arena and package it as the binding
+    /// entry's stored reach. The minted set is held by the arena for the region's life (the job the
+    /// old `Scope.reach` accumulator did) and its `&'a` reference is stored on the entry (the reach).
+    /// `None` when the value reaches nothing foreign. Home-omission: the scope's home frame plus
+    /// lexical-ancestor regions ([`Self::chain_reaches_region`]) — a per-call frame carries no
     /// storage `outer` under TCO, so the lexical half is what catches a closure's captured (ancestor)
-    /// scope — omitting it keeps a sibling bind of the call's result from closing a region cycle. The
-    /// shared core of [`Self::fold_reach`] (target = the scope's own reach-set) and
-    /// [`Self::foreign_reach_of`] (target = a fresh set): they differ only in which `target` they pass.
-    fn fold_foreign_into(&self, target: &mut FrameSet, witness: &CarrierWitness) {
+    /// scope, keeping a sibling bind of the call's result from closing a region cycle. A witness's
+    /// `Frame` pin materializes as a reach member under the same omission (the old
+    /// `fold_foreign_into` rule 2); its `Object` / `Type` pins carry no region and are dropped here —
+    /// they are severed backings, handled by [`Self::adopt_sealed`]'s value re-home, never as reach.
+    pub(crate) fn host_reach_of(&self, witness: &CarrierWitness) -> StoredReach<'a> {
         let home = self.region_owner.upgrade();
-        let omit_fn = |region: &KoanRegion| {
+        let borrows_into_home = witness.reach_covers(self.region());
+        let hosts: Vec<Rc<FrameStorage>> = witness
+            .pins()
+            .iter()
+            .filter_map(|pin| match pin {
+                CarrierPin::Frame(frame) => Some(Rc::clone(frame)),
+                CarrierPin::Object(_) | CarrierPin::Type(_) => None,
+            })
+            .collect();
+        let foreign = self.brand().mint(&[witness.reach()], &hosts, |region| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
                 || self.chain_reaches_region(region)
-        };
-        let omit = &omit_fn;
-        // The exact borrow reach folds into `target` under the omission predicate.
-        target.fold_omitting(witness.reach(), omit);
-        // The witness's liveness pins split by kind: a `Frame` pin keeps a region alive, so it folds
-        // like a reach member (through the same omission); an owned (`Object` / `Type`) backing carries
-        // no region, so it is deposited whole into the scope, which holds it for the scope's life.
-        for pin in witness.pins() {
-            match pin {
-                CarrierPin::Frame(frame) => {
-                    target.fold_omitting(&FrameSet::singleton(Rc::clone(frame)), omit);
-                }
-                CarrierPin::Object(_) | CarrierPin::Type(_) => {
-                    self.deposit.borrow_mut().push(pin.clone());
-                }
-            }
+        });
+        StoredReach {
+            foreign,
+            borrows_into_home,
         }
-    }
-
-    /// Fold a value's reach into this scope's reach-set, omitting any region the home frame already
-    /// pins (its own or an ancestor). Called as a value is bound under the scope (a `let` / user-fn
-    /// arg / applied-here closure) and at the run-root drain, so the foreign regions it borrows into
-    /// stay alive for the scope's life. A fold past the seal ([`Self::close`]) is the same invariant
-    /// violation as a bind past close, so it mirrors [`Self::assert_open`]'s `debug_assert`.
-    pub(crate) fn fold_reach(&self, witness: &CarrierWitness) {
-        debug_assert!(
-            !self.closed.get(),
-            "fold_reach into sealed scope {:?}",
-            self.id,
-        );
-        self.fold_foreign_into(&mut self.reach.borrow_mut(), witness);
     }
 
     pub fn child_for_call(&'a self) -> Scope<'a> {
@@ -292,8 +261,6 @@ impl<'a> Scope<'a> {
             kind,
             recursive_set,
             closed: Cell::new(false),
-            reach: RefCell::new(FrameSet::empty()),
-            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -333,8 +300,6 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Anonymous,
             recursive_set: None,
             closed: Cell::new(false),
-            reach: RefCell::new(FrameSet::empty()),
-            deposit: RefCell::new(Vec::new()),
         }
     }
 
@@ -406,10 +371,7 @@ impl<'a> Scope<'a> {
         &self,
         te: &crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<(
-        &'a crate::machine::model::types::KType<'a>,
-        crate::machine::core::StoredReach,
-    )> {
+    ) -> Option<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>)> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -417,14 +379,14 @@ impl<'a> Scope<'a> {
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
-    /// [`Self::type_identifier_memo_get`]). `reach` is the resolved type binding's home-omitted
-    /// foreign reach, cached alongside the `&KType` so a memo hit rebuilds the read carrier.
+    /// [`Self::type_identifier_memo_get`]). `reach` is the resolved type binding's stored reach,
+    /// cached alongside the `&KType` so a memo hit rebuilds the read carrier.
     pub(crate) fn type_identifier_memo_insert(
         &self,
         te: crate::machine::model::ast::TypeIdentifier,
         cutoff: Option<usize>,
         kt: &'a crate::machine::model::types::KType<'a>,
-        reach: FrameSet,
+        reach: StoredReach<'a>,
     ) {
         if self.bindings.is_borrowed() {
             return;
@@ -515,9 +477,8 @@ impl<'a> Scope<'a> {
         name: String,
         obj: &'a KObject<'a>,
         index: BindingIndex,
-        reach: impl Into<crate::machine::core::StoredReach>,
+        reach: StoredReach<'a>,
     ) -> Result<(), KError> {
-        let reach = reach.into();
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call
             // site, so a local bind whose name is already a surfaced module member
@@ -539,7 +500,7 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_bind_value(&name, obj, index, reach.clone())?
+            .try_bind_value(&name, obj, index, reach)?
         {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
@@ -598,9 +559,8 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: impl Into<crate::machine::core::StoredReach>,
+        reach: StoredReach<'a>,
     ) {
-        let reach = reach.into();
         if self.bindings.is_borrowed() {
             self.write_target().register_type(name, ktype, index, reach);
             return;
@@ -610,7 +570,7 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_register_type(&name, kt_ref, index, reach.clone())
+            .try_register_type(&name, kt_ref, index, reach)
         {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index, reach),
@@ -629,7 +589,7 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: impl Into<crate::machine::core::StoredReach>,
+        reach: StoredReach<'a>,
     ) -> Result<(), KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -653,9 +613,8 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
         index: BindingIndex,
-        reach: impl Into<crate::machine::core::StoredReach>,
+        reach: StoredReach<'a>,
     ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
-        let reach = reach.into();
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
@@ -704,7 +663,7 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_register_type(&name, kt_ref, index, FrameSet::empty())
+            .try_register_type(&name, kt_ref, index, StoredReach::empty())
         {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
@@ -836,7 +795,7 @@ impl<'a> Scope<'a> {
                     hit.map(|value| {
                         scope.resident_value_carrier(
                             value.obj,
-                            &value.reach,
+                            value.reach,
                             value.borrows_into_home,
                         )
                     })
@@ -854,7 +813,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn resident_value_carrier(
         &self,
         obj: &'a KObject<'a>,
-        foreign: &FrameSet,
+        foreign: Option<&FrameSet>,
         borrows_into_home: bool,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
@@ -869,60 +828,74 @@ impl<'a> Scope<'a> {
 
     /// Build a resident carrier's witness: the home frame as a residence pin, plus the value's exact
     /// borrow reach — its home-omitted `foreign` reach, with home materialized back in only when the
-    /// binding recorded that the value `borrows_into_home`. A fully-owned value (empty foreign, bit
+    /// binding recorded that the value `borrows_into_home`. A fully-owned value (`foreign: None`, bit
     /// unset) thus gets an empty reach, so the finalize gate severs it from a dying home frame.
     fn resident_witness(
         &self,
         home: &Rc<FrameStorage>,
-        foreign: &FrameSet,
+        foreign: Option<&FrameSet>,
         borrows_into_home: bool,
     ) -> CarrierWitness {
         let mut reach = FrameSet::empty();
-        reach.fold_omitting(foreign, |region| home.pins_region(region));
+        if let Some(foreign) = foreign {
+            reach.fold_omitting(foreign, |region| home.pins_region(region));
+        }
         if borrows_into_home {
             reach = FrameSet::union(&reach, &FrameSet::singleton(Rc::clone(home)));
         }
         CarrierWitness::residence(Rc::clone(home), reach)
     }
 
-    /// Adopt a sealed dep carrier into this scope, copy-free: fold its witness into the scope's
-    /// reach-set — so every region the value reaches stays alive for the scope's life — then
-    /// re-anchor the sealed value at the scope's own brand. Where [`resident_value_carrier`] seals a
-    /// value already living **in** this region, adoption is the consumption verb for a carrier
-    /// produced **elsewhere**: the value stays put in its producer's region and the fold is what
-    /// pins that region, so the dep survives past its resolving step as its carrier rather than as a
-    /// relocated copy (the head-deferred callable, an FN signature type slot, a spliced argument).
+    /// Adopt a sealed dep carrier into this scope, copy-free where possible: mint its witness's
+    /// reach into the scope's own arena for liveness — so every region the value reaches stays alive
+    /// for the scope's life — then re-anchor the sealed value at the scope's own brand. Where
+    /// [`resident_value_carrier`] seals a value already living **in** this region, adoption is the
+    /// consumption verb for a carrier produced **elsewhere**: a region-hosted value stays put in its
+    /// producer's region and the mint is what pins that region, so the dep survives past its
+    /// resolving step as its carrier rather than as a relocated copy (the head-deferred callable, an
+    /// FN signature type slot, a spliced argument). A **severed** carrier (an owned `Object` / `Type`
+    /// backing with no host region — the deposit list's old job) has no region for a mint to pin, so
+    /// its top node is re-homed into this scope's arena instead.
     ///
-    /// The pin is deposited **before** the re-anchor: `fold_reach` places the witness's frame `Rc`s
-    /// into the scope's reach-set, which the scope holds until it drops, so the returned `Carried<'a>`
-    /// cannot outlive its backing — `'a` is bounded by the scope, and the scope keeps its reach-set
-    /// (and thus every folded region) live for all of `'a`.
+    /// The mint runs **before** the severed check: it is the severed Type branch's liveness
+    /// obligation, not just region-hosted bookkeeping (see the SAFETY note there).
     pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> Carried<'a> {
-        // Fold FIRST: pin every region the value reaches into this scope's reach-set before any
-        // borrow of the value is fabricated (see the SAFETY note below).
-        self.fold_reach(cell.witness());
-        // Copy the carrier out as its brand-free erased storage form — the rank-2 `open` forbids a
-        // `Carried<'b>` from escaping, but the lifetime-free `Erased` may.
-        let erased: Erased<CarriedFamily> = cell.open(|live| Erased::<CarriedFamily>::erase(live));
-        // SAFETY: [`Erased::reattach`]'s contract — a held liveness witness pins the pointee for all
-        // of the fabricated `'a`. That witness is this scope's reach-set: `fold_reach` above deposited
-        // `cell`'s frame `Rc`s into it (omitting only regions the scope already pins), and the scope
-        // holds its reach-set — hence those `Rc`s — until it drops. `'a` is the scope's own content
-        // lifetime (`&'a self` on a `Scope<'a>`), so the re-anchored `Carried<'a>` cannot outlive the
-        // pin. Copy-free: the value stays in its producer's region; only the borrow is re-anchored.
-        unsafe { erased.reattach() }
-    }
+        // Mint FIRST: pin every region the value reaches into this scope's arena before any borrow of
+        // the value is fabricated (see the SAFETY notes below). The `&'a` ref is discarded — the arena
+        // owns the set for the region's life, which is the liveness `Scope.reach` used to provide.
+        let _ = self.host_reach_of(cell.witness());
 
-    /// The home-omitted foreign reach of `witness` as this scope would fold it into its reach-set — its
-    /// home frame and lexical-ancestor regions omitted — as a standalone [`FrameSet`] to **store on a
-    /// binding entry**. Cycle-safe by the same rule [`Self::fold_reach`] obeys (both route
-    /// [`Self::fold_foreign_into`]): the home frame's own `Rc` never lands in the set, so storing it
-    /// inside the scope's own region opens no `frame → region → scope → bindings → frame` strong cycle.
-    /// A region-pure or ancestor-resident value yields the empty set.
-    pub(crate) fn foreign_reach_of(&self, witness: &CarrierWitness) -> FrameSet {
-        let mut foreign = FrameSet::empty();
-        self.fold_foreign_into(&mut foreign, witness);
-        foreign
+        // A severed carrier rides an owned, frame-free backing (`Object`/`Type` pin) the deposit list
+        // used to keep alive. A resident `{ bit, ref }` scope cannot hold it, so re-home the top node
+        // into this arena and hand out an in-region `&'a` alias. The two channels are NOT symmetric:
+        let severed = cell
+            .witness()
+            .pins()
+            .iter()
+            .any(|pin| matches!(pin, CarrierPin::Object(_) | CarrierPin::Type(_)));
+        if severed {
+            return cell.open(|live| match live {
+                // Object: `deep_clone` returns a SELF-CONTAINED node (spine `Rc`s shared, no live
+                // borrows), so the re-home needs no external pin.
+                Carried::Object(obj) => {
+                    Carried::Object(self.brand().alloc_object(obj.deep_clone()))
+                }
+                // Type: `(*kt).clone()` is SHALLOW — a severed `KType` keeps interior `&` borrows into
+                // foreign regions (`KFunctor.body`, `KType::Module`); `sever_residence` only survives
+                // this via `erase_to_static` backed by the carrier's reach. So this `alloc_ktype`
+                // extends those borrows `'b -> 'a`, sound ONLY because the mint above pinned their
+                // regions into this arena first.
+                Carried::Type(kt) => Carried::Type(self.brand().alloc_ktype((*kt).clone())),
+            });
+        }
+
+        // Region-hosted: copy-free re-anchor (unchanged). The materialized host member minted above
+        // pins the producer region for all of `'a`.
+        let erased: Erased<CarriedFamily> = cell.open(|live| Erased::<CarriedFamily>::erase(live));
+        // SAFETY: the mint above stored the carrier's reach (with the producer frame materialized as
+        // a member) into this scope's arena, held for the region's life ⊇ `'a`. So the re-anchored
+        // `Carried<'a>` cannot outlive its pin. Copy-free; only the borrow is re-anchored.
+        unsafe { erased.reattach() }
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's
@@ -935,7 +908,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn resident_type_carrier(
         &self,
         kt: &'a crate::machine::model::types::KType<'a>,
-        foreign: &FrameSet,
+        foreign: Option<&FrameSet>,
         borrows_into_home: bool,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let home = self
@@ -948,25 +921,21 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope,
-    /// folded from the child scope held **directly** at construction (never recovered by walking a
-    /// built `KType::Module`): the child's `region_owner` ∪ its sealed reach-set, omitting any region
-    /// this scope's home frame already pins. A co-located module (`MODULE`, opaque `:|`) folds nothing
-    /// extra; a transparent `:!` view of a source module pins that source's (foreign) region and reach.
-    /// Stored on the module's `types` binding and passed to [`Self::resident_type_carrier`] at reads,
-    /// so a module's reach is folded once at construction and never rebuilt by walking the value.
-    pub(crate) fn reach_of_child(&self, child: &Scope<'a>) -> FrameSet {
+    /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope —
+    /// the seal-time union over the child's own **binding-entry** hosted sets (each already
+    /// home-omitted in the child's arena), plus the child's own region owner (materialized, foreign
+    /// to this parent scope). Never recovered by walking a built `KType::Module`. A co-located module
+    /// (`MODULE`, opaque `:|`) folds nothing extra; a transparent `:!` view of a source module pins
+    /// that source's (foreign) region and reach. Stored on the module's `types` binding and passed to
+    /// [`Self::resident_type_carrier`] at reads, so a module's reach is minted once at construction
+    /// and never rebuilt by walking the value.
+    pub(crate) fn reach_of_child(&self, child: &Scope<'a>) -> Option<&'a FrameSet> {
         let home = self.region_owner().upgrade();
-        let mut foreign = FrameSet::empty();
-        if let Some(child_home) = child.region_owner().upgrade() {
-            foreign.fold_omitting(&FrameSet::singleton(child_home), |region| {
-                home.as_ref().is_some_and(|h| h.pins_region(region))
-            });
-        }
-        foreign.fold_omitting(&child.reach.borrow(), |region| {
+        let entry_sets: Vec<&FrameSet> = child.bindings().entry_reaches();
+        let hosts: Vec<Rc<FrameStorage>> = child.region_owner().upgrade().into_iter().collect();
+        self.brand().mint(&entry_sets, &hosts, |region| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
-        });
-        foreign
+        })
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See
@@ -1064,17 +1033,21 @@ impl<'a> Scope<'a> {
     /// [`Bindings::lookup_type_carrier`] and projects each hit to its stored reach. A builtin, a
     /// `from_name` / `RecursiveRef` fallback that names no binding, or a placeholder reaches nothing
     /// foreign, so all yield the empty set.
-    pub(crate) fn resolve_type_reach(&self, name: &str, chain: Option<&LexicalFrame>) -> FrameSet {
+    pub(crate) fn resolve_type_reach(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<&'a FrameSet> {
         self.resolve_builtin_first(
             |root| root.has_builtin_type(name),
-            |_root| Some(FrameSet::empty()),
+            |_root| Some(None),
             |scope| {
                 scope
                     .bindings()
                     .lookup_type_carrier(name, scope.binding_cutoff(chain))
                     .map(|hit| match hit {
                         NameLookup::Bound(bound) => bound.reach,
-                        NameLookup::Parked(_) => FrameSet::empty(),
+                        NameLookup::Parked(_) => None,
                     })
             },
         )

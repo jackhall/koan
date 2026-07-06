@@ -1,11 +1,11 @@
 use crate::builtins::default_scope;
 use crate::machine::core::FrameStorage;
+use crate::machine::core::StoredReach;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::BindingIndex;
-use crate::machine::FrameSet;
 use crate::machine::NameOutcome;
 use crate::source::Spanned;
 
@@ -19,7 +19,7 @@ fn resolve_name_part_identifier_resolved() {
             "x".to_string(),
             bound,
             BindingIndex::BUILTIN,
-            FrameSet::empty(),
+            StoredReach::empty(),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());

@@ -11,10 +11,10 @@
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::core::KoanStepContextExt;
+use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
-use crate::machine::FrameSet;
 use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
@@ -58,7 +58,7 @@ pub fn body<'a>(
                 name_for_finish.clone(),
                 identity,
                 bind_index,
-                FrameSet::empty(),
+                StoredReach::empty(),
             ) {
                 Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
