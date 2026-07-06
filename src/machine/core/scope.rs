@@ -182,9 +182,9 @@ impl<'a> Scope<'a> {
     /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region` —
     /// the lexical-ancestor half of the reach-set omission predicate. Holding a scope keeps its own
     /// region alive, so a region reached here is one this chain already pins and must be omitted from a
-    /// folded reach-set (re-pinning it, paired with a sibling bind of a call's result, would close a
+    /// minted reach (re-pinning it, paired with a sibling bind of a call's result, would close a
     /// `frame → region → scope → frame` cycle). Composed with `FrameStorage::pins_region` (the storage
-    /// `outer` half) at the two reach folds via [`Self::fold_foreign_into`]; used alone at
+    /// `outer` half) inside [`Self::host_reach_of`]'s omission predicate; used alone at
     /// `runtime/submit.rs`'s cart check, which needs only the lexical half.
     pub(crate) fn chain_reaches_region(&self, region: &KoanRegion) -> bool {
         self.ancestors()
@@ -192,15 +192,15 @@ impl<'a> Scope<'a> {
     }
 
     /// Mint a delivered carrier's reach into this scope's own arena and package it as the binding
-    /// entry's stored reach. The minted set is held by the arena for the region's life (the job the
-    /// old `Scope.reach` accumulator did) and its `&'a` reference is stored on the entry (the reach).
-    /// `None` when the value reaches nothing foreign. Home-omission: the scope's home frame plus
-    /// lexical-ancestor regions ([`Self::chain_reaches_region`]) — a per-call frame carries no
+    /// entry's stored reach. The minted set is held by the arena for the region's life — the same
+    /// schedule the scope itself is held on — and its `&'a` reference is stored on the entry (the
+    /// reach). `None` when the value reaches nothing foreign. Home-omission: the scope's home frame
+    /// plus lexical-ancestor regions ([`Self::chain_reaches_region`]) — a per-call frame carries no
     /// storage `outer` under TCO, so the lexical half is what catches a closure's captured (ancestor)
     /// scope, keeping a sibling bind of the call's result from closing a region cycle. A witness's
-    /// `Frame` pin materializes as a reach member under the same omission (the old
-    /// `fold_foreign_into` rule 2); its `Object` / `Type` pins carry no region and are dropped here —
-    /// they are severed backings, handled by [`Self::adopt_sealed`]'s value re-home, never as reach.
+    /// `Frame` pin materializes as a reach member under the same omission; its `Object` / `Type`
+    /// pins carry no region and are dropped here — they are severed backings, handled by
+    /// [`Self::adopt_sealed`]'s value re-home, never as reach.
     pub(crate) fn host_reach_of(&self, witness: &CarrierWitness) -> StoredReach<'a> {
         let home = self.region_owner.upgrade();
         let borrows_into_home = witness.reach_covers(self.region());
@@ -854,20 +854,20 @@ impl<'a> Scope<'a> {
     /// producer's region and the mint is what pins that region, so the dep survives past its
     /// resolving step as its carrier rather than as a relocated copy (the head-deferred callable, an
     /// FN signature type slot, a spliced argument). A **severed** carrier (an owned `Object` / `Type`
-    /// backing with no host region — the deposit list's old job) has no region for a mint to pin, so
-    /// its top node is re-homed into this scope's arena instead.
+    /// backing with no host region) has no region for a mint to pin, so its top node is re-homed into
+    /// this scope's arena instead.
     ///
     /// The mint runs **before** the severed check: it is the severed Type branch's liveness
     /// obligation, not just region-hosted bookkeeping (see the SAFETY note there).
     pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> Carried<'a> {
         // Mint FIRST: pin every region the value reaches into this scope's arena before any borrow of
         // the value is fabricated (see the SAFETY notes below). The `&'a` ref is discarded — the arena
-        // owns the set for the region's life, which is the liveness `Scope.reach` used to provide.
+        // holds the set, hence the pin, for the region's life.
         let _ = self.host_reach_of(cell.witness());
 
-        // A severed carrier rides an owned, frame-free backing (`Object`/`Type` pin) the deposit list
-        // used to keep alive. A resident `{ bit, ref }` scope cannot hold it, so re-home the top node
-        // into this arena and hand out an in-region `&'a` alias. The two channels are NOT symmetric:
+        // A severed carrier rides an owned, frame-free backing (`Object`/`Type` pin). A resident
+        // `{ bit, ref }` scope cannot hold it, so re-home the top node into this arena and hand out an
+        // in-region `&'a` alias. The two channels are NOT symmetric:
         let severed = cell
             .witness()
             .pins()

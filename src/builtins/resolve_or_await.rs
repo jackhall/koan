@@ -100,7 +100,7 @@ pub(crate) fn resolve_or_await<'a>(
 /// terminal's own dep carrier — a non-type result is the slot's canonical shape error. The
 /// resolved `KType` can embed a borrow into the terminal's producer region (a bound `KFunctor`,
 /// a nominal `SetRef`, ...), so a caller that seals the type into a result must fold the carrier
-/// in (`StepContext::alloc_type_with`) or fold it into a scope's reach-set (`Scope::fold_reach`)
+/// in (`StepContext::alloc_type_with`) or mint it into a scope's arena (`Scope::host_reach_of`)
 /// before the type crosses into stored state.
 pub(crate) fn expect_type_terminal<'a, 'd>(
     results: &DepResults<'_, &'d DepTerminal<'a>>,

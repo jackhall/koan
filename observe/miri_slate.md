@@ -242,13 +242,38 @@ violation if the queue/drain discipline regresses.)
 
 **`Scope::adopt_sealed` reach-fold reattach** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — the consumption verb re-anchors a foreign producer's sealed carrier at the consumer scope's own
-lifetime (`Erased::reattach` to `'a`), copy-free, pinned by the reach-set `fold_reach` deposits
-**before** the reattach. This test seals a value witnessed by a producer frame, adopts it into a
-consumer scope in a *different* frame, drops every direct producer handle, then reads the adopted
-value — so the folded reach-set is the sole pin on the region the re-anchored borrow reads, and tree
-borrows catches a use-after-free if the fold-then-reanchor order or the pin regresses.
+lifetime (`Erased::reattach` to `'a`), copy-free, pinned by the reach `Scope::host_reach_of` mints
+into the consumer's own arena **before** the reattach. This test seals a value witnessed by a
+producer frame, adopts it into a consumer scope in a *different* frame, drops every direct producer
+handle, then reads the adopted value — so the minted reach is the sole pin on the region the
+re-anchored borrow reads, and tree borrows catches a use-after-free if the mint-then-reanchor order
+or the pin regresses.
 
 - `adopt_sealed_reach_fold_pins_the_producer_region_after_drop`
+
+**`Scope::adopt_sealed` severed re-home** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) —
+the two severed-carrier branches (an owned, frame-free `Object`/`Type` backing with no host region to
+mint a pin for). The Object branch's `deep_clone` is self-contained and needs no external pin; the
+Type branch's `.clone()` is shallow, so the re-homed `&'a KType` can still carry an interior borrow
+into a foreign region — sound only because `host_reach_of`'s mint (run first in `adopt_sealed`) pins
+that region into the consumer's arena before the shallow clone extends the borrow. These tests sever
+a value at the Done boundary (mirroring production), adopt the severed carrier into an independent
+consumer scope, drop every other handle on the source frame(s), then read — tree borrows catches a
+use-after-free if the mint-before-severed-clone order regresses (the Type case is the one that would
+dangle).
+
+- `adopt_sealed_severed_object_survives_producer_drop`
+- `adopt_sealed_severed_type_pins_foreign_region_after_producer_drop`
+
+**`Scope::reach_of_child` seal-time union** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+— a module's stored reach is minted once at seal time as the union of its child scope's own region
+plus every one of the child's **binding-entry** hosted reaches (not just the child's own region), via
+`Bindings::entry_reaches`. This test binds a member into a child scope whose stored reach names a
+region foreign to both the child and the parent, then mints the parent's union and drops every other
+handle on both regions — tree borrows catches a use-after-free if the union drops a member's reach or
+the mint's home-omission fires on the wrong side.
+
+- `reach_of_child_unions_member_entry_reaches_across_regions`
 
 **Type-channel splice reach** ([src/machine/execute/dispatch/keyworded.rs](../src/machine/execute/dispatch/keyworded.rs))
 — `part_walk`'s wrap-slot arm re-consults `Scope::resolve_type_identifier` and seals the hit through
@@ -457,9 +482,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-06: 159s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 180s — 35 tests, 0 leaks, 0 UB
 - 2026-07-05: 152s — 34 tests, 0 leaks, 0 UB
 - 2026-07-05: 153s — 34 tests, 0 leaks, 0 UB
 - 2026-07-05: 145s — 34 tests, 0 leaks, 0 UB
-- 2026-07-05: 153s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

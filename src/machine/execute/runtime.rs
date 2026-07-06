@@ -123,9 +123,9 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// The witness set of a slot's finalized terminal — every region the value reaches. The
-    /// test-harness [`extract_terminal`](crate::builtins::test_support) hook for depositing a returned
-    /// closure's / module's reach onto a surviving scope's reach-set, mirroring the run-root drain's
-    /// `fold_reach`. Production reads the witness off the relocated carrier instead.
+    /// test-harness [`extract_terminal`](crate::builtins::test_support) hook for minting a returned
+    /// closure's / module's reach into a surviving scope's arena, mirroring the run-root drain's
+    /// `host_reach_of` call. Production reads the witness off the relocated carrier instead.
     #[cfg(test)]
     pub(crate) fn dep_witness(&self, id: NodeId) -> crate::machine::CarrierWitness {
         self.sched.dep_witness(id)

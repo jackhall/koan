@@ -40,8 +40,8 @@ pub enum CarrierPin {
 /// A value carrier's witness: liveness pins plus the exact borrow reach.
 ///
 /// - `reach` names every region the value's interior borrows point into — the propagatable half a
-///   downstream fold ([`Scope::fold_reach`](crate::machine::core::Scope), a binding's stored reach)
-///   reads back out. Exact by construction: a region-pure value's reach is empty.
+///   downstream mint ([`Scope::host_reach_of`](crate::machine::core::Scope), a binding's stored
+///   reach) reads back out. Exact by construction: a region-pure value's reach is empty.
 /// - `pins` keeps the value's backing alive (residence frame, severed owned node) without ever being
 ///   treated as reach. Binds and scope reach-sets never propagate `pins`; a `Frame` pin does keep
 ///   its region alive when a fold walks it, but it is deposited as a pin, not folded as reach.

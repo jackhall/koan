@@ -1,6 +1,8 @@
 //! `register_type` / `resolve_type` tests: type bindings land in `types` (not `data`),
 //! `resolve_type` walks the outer chain, and inner scopes shadow outer type bindings.
 
+use std::rc::Rc;
+
 use super::super::Scope;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::FrameStorage;
@@ -8,6 +10,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
+use crate::machine::FrameSet;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -123,4 +126,65 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
         Carried::Object(KObject::Number(n)) => assert_eq!(*n, 9.0),
         _ => panic!("expected the adopted Number value"),
     }
+}
+
+/// `reach_of_child` mints the seal-time **union** of a child scope's own region plus every one of its
+/// binding entries' hosted reaches — not just the child's own region — into the parent's arena. A
+/// member whose stored reach names a region foreign to *both* the child and the parent (the shape a
+/// transparent `:!` ascription's nested member reach has) must survive that union: the parent's own
+/// minted set becomes an independent pin once the member's source frame drops.
+#[test]
+fn reach_of_child_unions_member_entry_reaches_across_regions() {
+    use crate::machine::core::arena::KoanRegion;
+    use crate::machine::model::values::KObject;
+
+    // A frame foreign to everything else here — the region a nested member's own reach names.
+    let inner_storage = FrameStorage::run_root();
+    let inner_weak = Rc::downgrade(&inner_storage);
+    let inner_region_ptr: *const KoanRegion = inner_storage.region();
+
+    let source_storage = FrameStorage::run_root();
+    let source_weak = Rc::downgrade(&source_storage);
+    let source_scope = run_root_bare(&source_storage);
+
+    // Bind a member into `source_scope` whose stored reach names `inner_storage` — mirrors a nested
+    // module member reaching into another module's own region.
+    let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
+    let inner_witness = CarrierWitness::residence(Rc::clone(&inner_storage), FrameSet::empty());
+    let stored = source_scope.host_reach_of(&inner_witness);
+    source_scope
+        .bind_value("m".to_string(), obj, BindingIndex::value(0), stored)
+        .expect("bind should succeed");
+    let source_region_ptr: *const KoanRegion = source_scope.region();
+
+    let parent_storage = FrameStorage::run_root();
+    let parent = run_root_bare(&parent_storage);
+    let reach = parent.reach_of_child(source_scope);
+
+    let members: Vec<*const KoanRegion> = reach
+        .expect("a member reach + the child's own region must yield a non-empty union")
+        .members()
+        .iter()
+        .map(|m| m.region() as *const KoanRegion)
+        .collect();
+    assert!(
+        members.contains(&source_region_ptr),
+        "the union names the child scope's own region"
+    );
+    assert!(
+        members.contains(&inner_region_ptr),
+        "the union names the member's foreign reach"
+    );
+
+    // Drop every other handle: the parent's minted union is now the sole pin on both regions.
+    drop(source_storage);
+    drop(inner_storage);
+    assert!(
+        source_weak.upgrade().is_some(),
+        "the parent's minted union still pins the child's own region"
+    );
+    assert!(
+        inner_weak.upgrade().is_some(),
+        "the parent's minted union still pins the member's foreign region"
+    );
 }

@@ -8,13 +8,15 @@ use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
 use crate::builtins::default_scope;
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_root_silent};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::{CarrierWitness, FrameStorage};
+use crate::machine::core::{CarrierWitness, FrameSet, FrameStorage, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::values::{CarriedFamily, Module};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
+use crate::witnessed::Sealed;
 
 /// Build a scalar carrier residing in `producer`'s region with the given home-omitted foreign reach
 /// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
@@ -198,5 +200,101 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
         live_frames(),
         0,
         "all 100 producer arenas released — the escaped scalars no longer pin them"
+    );
+}
+
+/// `Scope::adopt_sealed`'s severed re-home, Object channel: a region-pure scalar severed at the
+/// Done boundary (its top node copied into an owned, frame-free backing) is adopted into a
+/// consumer scope in a completely different frame, after the producer frame has already dropped —
+/// the severed backing, not a region pin, is what keeps it readable.
+#[test]
+fn adopt_sealed_severed_object_survives_producer_drop() {
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let producer = CallFrame::new_test(scope, None);
+
+    let (carrier, weak) = resident_scalar(&producer, false);
+    let runtime = KoanRuntime::new();
+    let severed = runtime
+        .finalize_terminal(carrier, Some(&producer), None)
+        .expect("no declared return, no error");
+
+    drop(producer);
+    assert!(
+        weak.upgrade().is_none(),
+        "the producer frame is already released before adoption"
+    );
+
+    let consumer_storage = FrameStorage::run_root();
+    let consumer = run_root_bare(&consumer_storage);
+    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
+    let adopted: Carried = consumer.adopt_sealed(&cell);
+
+    match adopted {
+        Carried::Object(KObject::Number(n)) => {
+            assert_eq!(*n, 7.0, "severed value survives adoption")
+        }
+        other => panic!("expected the severed Number, got {:?}", other.ktype()),
+    }
+}
+
+/// `Scope::adopt_sealed`'s severed re-home, Type channel: a severed `KType` (here a `KType::Module`
+/// whose `&'a Scope` interior points into a **foreign** frame) is the dangerous case — `.clone()` is
+/// shallow, so the re-homed `&'a KType` still borrows the foreign region. Adoption's mint must pin
+/// that foreign frame into the consumer's arena *before* the re-home, so the module's child scope
+/// reads back cleanly after every other handle on the foreign frame drops.
+#[test]
+fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
+    let foreign_storage = FrameStorage::run_root();
+    let foreign_scope = run_root_bare(&foreign_storage);
+    let foreign_child = foreign_storage
+        .brand()
+        .alloc_scope(Scope::child_under(foreign_scope));
+    let module = foreign_storage
+        .brand()
+        .alloc_module(Module::new("M".to_string(), foreign_child));
+    let foreign_weak = Rc::downgrade(&foreign_storage);
+
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let producer = CallFrame::new_test(scope, None);
+    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
+    let carrier = producer.with_scope(|child| {
+        let kt_ref = child.brand().alloc_ktype(KType::Module { module });
+        child.resident_type_carrier(kt_ref, Some(&foreign_reach), false)
+    });
+    assert!(
+        !carrier.witness().reach_covers(producer.region()),
+        "the type borrows only into the foreign module region, not the producer's own"
+    );
+
+    let runtime = KoanRuntime::new();
+    let severed = runtime
+        .finalize_terminal(carrier, Some(&producer), None)
+        .expect("no declared return, no error");
+    drop(producer);
+
+    let consumer_storage = FrameStorage::run_root();
+    let consumer = run_root_bare(&consumer_storage);
+    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
+    let adopted: Carried = consumer.adopt_sealed(&cell);
+
+    // Drop every other handle on the foreign frame: the consumer's minted arena set is now the
+    // sole pin — Miri confirms no use-after-free on the read below.
+    drop(foreign_storage);
+
+    match adopted {
+        Carried::Type(KType::Module { module }) => {
+            assert_eq!(
+                module.path, "M",
+                "the re-homed module survives the foreign frame's drop"
+            )
+        }
+        Carried::Type(other) => panic!("expected the severed Module type, got {}", other.name()),
+        Carried::Object(_) => panic!("expected the severed Module type, got an Object"),
+    }
+    assert!(
+        foreign_weak.upgrade().is_some(),
+        "the consumer's minted reach still pins the foreign frame"
     );
 }

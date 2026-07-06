@@ -41,6 +41,45 @@ fn data_binding_round_trips_stored_reach() {
     }
 }
 
+/// A carrier-oriented read copies the stored `Option<&FrameSet>` reference — no per-hit clone. Two
+/// independent reads of the same binding hand back the *same* `&FrameSet` pointer, proving the read
+/// path reuses the arena-hosted set rather than cloning a fresh one on every hit (the type-binding
+/// memo relies on the same no-clone copy).
+#[test]
+fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
+    let storage = FrameStorage::run_root();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let obj: &KObject = region.alloc_object(KObject::Number(1.0));
+    let foreign = FrameStorage::run_root();
+    let reach_set = FrameSet::singleton(foreign.clone());
+    let reach = StoredReach {
+        foreign: Some(&reach_set),
+        borrows_into_home: false,
+    };
+    bindings
+        .try_bind_value("x", obj, BindingIndex::BUILTIN, reach)
+        .expect("value bind should succeed");
+
+    let first = match bindings.lookup_value_carrier("x", None) {
+        Some(NameLookup::Bound(hit)) => hit.reach.expect("non-empty reach"),
+        _ => panic!("expected a bound value carrier hit"),
+    };
+    let second = match bindings.lookup_value_carrier("x", None) {
+        Some(NameLookup::Bound(hit)) => hit.reach.expect("non-empty reach"),
+        _ => panic!("expected a bound value carrier hit"),
+    };
+    assert!(
+        std::ptr::eq(first, second),
+        "two reads of the same binding must return the same &FrameSet — a clone would allocate a \
+         fresh Vec at a distinct address on every hit",
+    );
+    assert!(
+        std::ptr::eq(first, &reach_set),
+        "the stored reach is the exact reference bound in, not a copy of it",
+    );
+}
+
 /// The type-channel mirror: a type binding round-trips its stored foreign reach (a module's
 /// child-scope reach in production) through the carrier-oriented read.
 #[test]
