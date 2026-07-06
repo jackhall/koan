@@ -1,6 +1,6 @@
 ---
 name: miri
-description: Use this skill when running Miri against the koan repo — exercising the leak/UB audit slate, attributing process-exit leaks to allocation sites, validating an unsafe-site fix under tree borrows, or any other `cargo +nightly miri test` invocation. Sets the standard command of record, captures the run-in-background-and-wait pattern that avoids wasted compile-cache warmth and stray monitoring processes, and points at the roadmap items that own the slate.
+description: Use this skill when running Miri against the koan repo — exercising the leak/UB audit slate, attributing process-exit leaks to allocation sites, validating an unsafe-site fix under tree borrows, or any other `cargo +nightly miri test` invocation. Sets the standard command of record, the synchronous foreground run pattern, and points at the roadmap items that own the slate.
 ---
 
 # miri
@@ -56,15 +56,15 @@ When a slate test is added, removed, or renamed:
 
 A non-slate change to a test in `dispatch/`, `execute/`, or `parse/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
 
-## Scheduling: background + wait, never poll
+## Scheduling: run synchronously in the foreground
 
-Miri runs are slow. First-time compilation under Miri is several minutes; per-test runs are 1–3 min; the bulk audit slate is 15–25 min. The `Bash` tool's foreground timeout is 10 min, so any Miri invocation beyond a single per-test run will time out in the foreground.
+Miri is fast enough to run in the foreground. A warm incremental slate is ~2 min; a first-time (cold) Miri compile adds a few minutes on top. Both fit inside the `Bash` tool's foreground window, so run Miri synchronously and read the summary from the return value.
 
 **Rules:**
 
-1. **Always launch Miri with `Bash(run_in_background=true)`.** One background invocation per Miri command.
-2. **Wait for the harness's completion notification.** Do not poll with `BashOutput` in a loop, do not run `sleep N; <check>` constructs, do not spawn a separate watcher process. The harness pings when the background command finishes; do other work or wait, and pick it up then.
-3. **Read the script's one-line summary at completion.** It has already parsed leaks/UB/pass-fail from the full log and enforced the count guard — don't re-tail the raw output. Move on.
+1. **Run Miri in the foreground with a generous timeout** — `Bash(timeout=600000)` (10 min, the max) comfortably covers a cold Miri compile plus the slate. Do **not** use `run_in_background`: a detached Miri run outlives the session, and its completion notification then fires in a later, unrelated session (often more than once) — the exact failure mode this rule exists to prevent.
+2. **Read the script's one-line summary from the returned output.** It has already parsed leaks/UB/pass-fail from the full log and enforced the count guard — don't re-tail the raw output.
+3. **No polling, no watchers.** A synchronous run returns the summary when Miri exits — there is nothing to poll. Never spawn a `sleep N; <check>` loop, a `BashOutput` poll loop, or a separate watcher process.
 4. **Run Miri invocations back-to-back, not interleaved with non-Miri builds.** Miri's target dir is separate from the regular `cargo` target dir, but switching back and forth thrashes the file cache. Plan your work: bulk baseline run, then per-test triage runs in sequence, then a final bulk verification — one continuous chain.
 
 ## Triage workflow (when leaks are reported)
