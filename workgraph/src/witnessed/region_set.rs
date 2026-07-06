@@ -5,7 +5,10 @@
 
 use std::rc::Rc;
 
-use super::{RegionOwner, SetWitness, UnionWitness, Witness};
+use super::{
+    Reattachable, Region, RegionHandle, RegionOwner, SetWitness, StorageProfile, Stored,
+    UnionWitness, Witness,
+};
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
 /// outer-chain subsumption hook [`RegionSet`] folds and inserts through.
@@ -68,6 +71,12 @@ impl<F: PinsRegion> RegionSet<F> {
         }
     }
 
+    /// The set's members — the pinned read a hosted set exposes. Read-only: a stored set is
+    /// reached only by shared `&`, so this is the whole mutation-free surface over its members.
+    pub fn members(&self) -> &[Rc<F>] {
+        &self.members
+    }
+
     /// Insert `owner` under outer-chain subsumption: skip it when an existing member already pins
     /// its region (dedup + the newcomer-is-an-ancestor case), else drop every existing member the
     /// newcomer subsumes and add it. Keeps the set an antichain of the deepest owners.
@@ -106,6 +115,60 @@ impl<F: PinsRegion> RegionSet<F> {
             result.insert(Rc::clone(owner));
         }
         result
+    }
+}
+
+// SAFETY: `RegionSet<F>` has no lifetime parameter — `At<'r>` is the same type for every `'r`, so
+// it is trivially layout-invariant (the `Reattachable` contract). Mirrors the lifetime-free
+// `OperatorGroup` family.
+unsafe impl<F: PinsRegion + 'static> Reattachable for RegionSet<F> {
+    type At<'r> = RegionSet<F>;
+}
+
+impl<F: PinsRegion + 'static> RegionSet<F> {
+    /// Mint a frozen witness set into `dest`'s arena — the only way a stored set comes to exist
+    /// (design/witness-hosting.md § Composition). Composes every set in `sources` (reading their
+    /// **exact** member lists — never "everything a region reaches") plus any `materialize_hosts`
+    /// (a source's old host, materialized when foreign to `dest`), applying:
+    ///
+    /// 1. **Home-omission** — `dest`'s own region is never a member (the self-cycle rule),
+    ///    enforced here unconditionally, *plus* whatever `omit` reports already-pinned.
+    /// 2. **Borrows-host materialization** — each `Rc<F>` in `materialize_hosts` becomes a
+    ///    member iff its region is foreign to `dest` (and not otherwise omitted).
+    /// 3. **Outer-chain subsumption** — via `PinsRegion`, already built into `insert` /
+    ///    `fold_omitting`: a member kept alive by another member's owner chain is dropped.
+    ///
+    /// The result is stored frozen in `dest`'s arena; the returned `&'a` is co-located, so
+    /// holding `dest`'s region owner (or this borrow) pins it and, through its members, every
+    /// region it names.
+    pub fn mint<'a, W>(
+        dest: RegionHandle<'a, W>,
+        sources: &[&RegionSet<F>],
+        materialize_hosts: &[Rc<F>],
+        omit: impl Fn(&F::Region) -> bool,
+    ) -> &'a RegionSet<F>
+    where
+        W: StorageProfile,
+        // Bind `Region` on `RegionOwner`, the trait that DECLARES it — not on `PinsRegion`.
+        // `F: PinsRegion<Region = Region<W>>` is E0220 ("associated type `Region` not found for
+        // `PinsRegion`"): a supertrait's associated type is not bindable through the subtrait.
+        F: RegionOwner<Region = Region<W>>,
+        RegionSet<F>: Stored<W> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+    {
+        let dest_region: *const Region<W> = dest.region();
+        // Rule 1 (self-cycle) folded together with the caller's policy predicate.
+        let omit_all = |r: &Region<W>| std::ptr::eq(r as *const _, dest_region) || omit(r);
+
+        let mut composed = RegionSet::empty();
+        for source in sources {
+            composed.fold_omitting(source, omit_all); // exact members + subsumption + omission
+        }
+        for host in materialize_hosts {
+            if !omit_all(host.region()) {
+                composed.insert(Rc::clone(host)); // rule 2 + subsumption
+            }
+        }
+        dest.alloc_resident::<RegionSet<F>>(composed) // freeze-at-store
     }
 }
 

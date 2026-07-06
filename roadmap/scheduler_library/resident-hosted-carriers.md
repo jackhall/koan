@@ -30,9 +30,10 @@ around that:
   arena). Binding reads copy the thin reference — no per-hit set clone, and the
   type-binding memo no longer caches a cloned set.
 - The `Scope` struct has no `reach` field and no `deposit` field. A bind mints
-  the delivered value's reach into the scope's home arena through the
-  [hosting substrate's](witness-set-hosting.md) verbs; the delivered carrier's
-  owned backing is released once the mint has folded it — the deposit list's
+  the delivered value's reach into the scope's home arena through the hosting
+  substrate's [`RegionSet::mint`](../../workgraph/src/witnessed/region_set.rs)
+  verb; the delivered carrier's owned backing is released once the mint has
+  folded it — the deposit list's
   old job for `Frame` pins. A severed owned backing is re-homed at bind
   (copied into the scope's home arena), so no binding entry references a
   frame-free backing.
@@ -82,8 +83,6 @@ scheduler, and finalize are out of scope.
 
 **Requires:**
 
-- [Witness-set hosting substrate](witness-set-hosting.md) — binds mint into the
-  scope's arena through its verbs.
 
 **Unblocks:**
 

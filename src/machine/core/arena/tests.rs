@@ -957,3 +957,154 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
         "functor field's captured scope read back after producer frame freed"
     );
 }
+
+// `RegionSet::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
+// Each test below pins one rule of the mint's composition (home-omission, borrows-host
+// materialization, outer-chain subsumption, precise reads, teardown release).
+
+/// The mint reads its sources' **exact** member lists — two unrelated frames named through
+/// disjoint singleton sources both survive, with no coarsening. (AC: precise members.)
+#[test]
+fn mint_composes_exact_members() {
+    let a = FrameStorage::run_root();
+    let b = FrameStorage::run_root();
+    let c = FrameStorage::run_root();
+
+    let source_a = FrameSet::singleton(Rc::clone(&a));
+    let source_b = FrameSet::singleton(Rc::clone(&b));
+    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+
+    assert_eq!(minted.members().len(), 2, "exact members — no coarsening");
+    assert!(minted
+        .members()
+        .iter()
+        .any(|m| std::ptr::eq(m.region(), a.region())));
+    assert!(minted
+        .members()
+        .iter()
+        .any(|m| std::ptr::eq(m.region(), b.region())));
+}
+
+/// Home-omission (rule 1, the self-cycle rule): a source naming the destination's own region never
+/// lands as a member of the set minted into it. (AC: home-omission.)
+#[test]
+fn mint_home_omits_dest_region() {
+    let c = FrameStorage::run_root();
+    let source_c = FrameSet::singleton(Rc::clone(&c));
+
+    let minted = FrameSet::mint(c.brand().0, &[&source_c], &[], |_| false);
+
+    assert!(
+        minted.is_empty(),
+        "dest's own region is never a member of its own minted set"
+    );
+}
+
+/// Borrows-host materialization (rule 2): a `materialize_hosts` entry becomes a member iff its
+/// region is foreign to `dest` — materializing into its own home is home-omitted instead. (AC:
+/// rule 2.)
+#[test]
+fn mint_materializes_foreign_host() {
+    let a = FrameStorage::run_root();
+    let c = FrameStorage::run_root();
+
+    let minted_into_c = FrameSet::mint(c.brand().0, &[], &[Rc::clone(&a)], |_| false);
+    assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
+    assert!(std::ptr::eq(
+        minted_into_c.members()[0].region(),
+        a.region()
+    ));
+
+    let minted_into_a = FrameSet::mint(a.brand().0, &[], &[Rc::clone(&a)], |_| false);
+    assert!(
+        minted_into_a.is_empty(),
+        "materializing A's own host into A is home-omitted"
+    );
+}
+
+/// Outer-chain subsumption (rule 3): composing a descendant and its ancestor collapses to the
+/// descendant alone — the ancestor's region is already pinned by the descendant's `outer` chain.
+/// (AC: rule 3.)
+#[test]
+fn mint_subsumes_ancestor() {
+    let a = FrameStorage::run_root();
+    let b = child_storage(&a);
+    let c = FrameStorage::run_root();
+
+    let source_a = FrameSet::singleton(Rc::clone(&a));
+    let source_b = FrameSet::singleton(Rc::clone(&b));
+    let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+
+    let sole = minted.sole().expect("ancestor subsumed by descendant");
+    assert!(std::ptr::eq(sole.region(), b.region()));
+}
+
+/// A minted set's members are a pinned read: held through `c`'s own storage, iterating
+/// `members()` reads back the exact regions minted in. (AC: frozen read.)
+#[test]
+fn mint_reads_back_under_pin() {
+    let a = FrameStorage::run_root();
+    let c = FrameStorage::run_root();
+    let source_a = FrameSet::singleton(Rc::clone(&a));
+
+    let minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false);
+
+    let regions: Vec<*const KoanRegion> = minted
+        .members()
+        .iter()
+        .map(|m| m.region() as *const _)
+        .collect();
+    assert_eq!(regions, vec![a.region() as *const _]);
+}
+
+/// A mint lands in the destination's `FrameSet` sub-arena — exactly one allocation regardless of
+/// how many sources/hosts compose into it.
+#[test]
+fn mint_bumps_alloc_count() {
+    let a = FrameStorage::run_root();
+    let c = FrameStorage::run_root();
+    let source_a = FrameSet::singleton(Rc::clone(&a));
+
+    let before = c.region().alloc_count();
+    let _minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false);
+    assert_eq!(
+        c.region().alloc_count(),
+        before + 1,
+        "mint stores exactly one set in dest's arena"
+    );
+}
+
+/// Teardown releases a minted set's members: dropping `C`'s storage drops the stored `FrameSet`,
+/// decrementing each member's refcount. No self-cycle (home-omission forbids `C` from holding its
+/// own `Rc`), so the extra refs mint added fall away at `C`'s death — the shape the Miri leak audit
+/// exercises. (AC: teardown releasing members at region death.)
+#[test]
+fn mint_teardown_releases_members() {
+    let a = FrameStorage::run_root();
+    let b = FrameStorage::run_root();
+    let c = FrameStorage::run_root();
+
+    let count_before_a = Rc::strong_count(&a);
+    let count_before_b = Rc::strong_count(&b);
+
+    {
+        let source_a = FrameSet::singleton(Rc::clone(&a));
+        let source_b = FrameSet::singleton(Rc::clone(&b));
+        let minted = FrameSet::mint(c.brand().0, &[&source_a, &source_b], &[], |_| false);
+        assert_eq!(minted.members().len(), 2);
+    }
+    assert_eq!(
+        Rc::strong_count(&a),
+        count_before_a + 1,
+        "C's arena holds the sole remaining extra ref to A"
+    );
+    assert_eq!(
+        Rc::strong_count(&b),
+        count_before_b + 1,
+        "C's arena holds the sole remaining extra ref to B"
+    );
+
+    drop(c);
+    assert_eq!(Rc::strong_count(&a), count_before_a, "C's death releases A");
+    assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
+}

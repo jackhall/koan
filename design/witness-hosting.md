@@ -201,8 +201,6 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 
 ## Open work
 
-- [roadmap/scheduler_library/witness-set-hosting.md](../roadmap/scheduler_library/witness-set-hosting.md)
-  — the hosting family and the mint verbs.
 - [roadmap/scheduler_library/resident-hosted-carriers.md](../roadmap/scheduler_library/resident-hosted-carriers.md)
   — the resident `{ bit, ref }` carrier and the scope/bindings migration.
 - [roadmap/scheduler_library/host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)

@@ -48,7 +48,7 @@ impl StorageProfile for KoanStorageProfile {
                     Module<'static>,
                     (
                         ModuleSignature<'static>,
-                        (KType<'static>, (OperatorGroup, ())),
+                        (KType<'static>, (OperatorGroup, (FrameSet, ()))),
                     ),
                 ),
             ),
@@ -258,6 +258,12 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
     }
 }
 
+impl Stored<KoanStorageProfile> for FrameSet {
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .1 .1 .0
+    }
+}
+
 /// Koan's at-will allocation entry and identity queries over the generic [`Region`] — an extension
 /// trait because `Region` lives in the `workgraph` crate and a foreign type takes no inherent impls.
 /// Every co-located `alloc_*` lives on [`RegionBrand`] (minted via [`FrameStorage::brand`]); a bare
@@ -450,7 +456,7 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
 pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored across all seven sub-arenas. Each `alloc_*` writes to
+    /// Total number of values stored across all eight sub-arenas. Each `alloc_*` writes to
     /// exactly one sub-arena, so this is the precise allocation count without double-counting.
     fn alloc_count(&self) -> usize;
 }
@@ -465,6 +471,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<ModuleSignature<'static>>()
             + self.family_len::<KType<'static>>()
             + self.family_len::<OperatorGroup>()
+            + self.family_len::<FrameSet>()
     }
 }
 

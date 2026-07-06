@@ -87,7 +87,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-34 tests, grouped by the unsafe site each pins down. Names below are the exact
+35 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -156,6 +156,20 @@ assert only their region-pin contracts.
 - `multi_region_list_of_closures_survives_frame_free`
 - `multi_region_closure_capturing_closures_survives_frame_free`
 - `multi_region_record_of_closures_survives_frame_free`
+
+**Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— `RegionSet::mint` (mechanism in
+[workgraph/src/witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs), exercised here
+over Koan's own `FrameStorage`) stores a frozen `FrameSet` into a destination arena through the
+same `alloc_resident` engine the `Region alloc engine` group already pins — its own body has no
+`unsafe` — but it introduces the one **cycle shape storage-side reasoning can't rule out**: a set
+hosted in region A holding `Rc<A>` would be a strong self-cycle A never drops. Home-omission is
+the discipline that forbids it (design/witness-hosting.md § The shape); the drop-order test is the
+leak-audit gate that catches a home-omission regression — under plain `cargo test` the refcount
+assertions alone would only ever *fail loud*, but it is the Miri run over this exact test that
+signs off "0 leaks" for this shape specifically.
+
+- `mint_teardown_releases_members`
 
 **`CarrierWitness` pin/reach split** ([src/machine/core/carrier_witness.rs](../src/machine/core/carrier_witness.rs))
 — the value-carrier witness's three `unsafe impl`s (`Witness`, `SetWitness<Rc<FrameStorage>>`,
@@ -443,9 +457,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-06: 180s — 35 tests, 0 leaks, 0 UB
 - 2026-07-05: 152s — 34 tests, 0 leaks, 0 UB
 - 2026-07-05: 153s — 34 tests, 0 leaks, 0 UB
 - 2026-07-05: 145s — 34 tests, 0 leaks, 0 UB
 - 2026-07-05: 153s — 34 tests, 0 leaks, 0 UB
-- 2026-07-04: 154s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
