@@ -48,6 +48,13 @@ Root concerns:
   lift-time anchor decision, the `alloc_object` cycle gate, active-frame
   propagation, the `outer_frame` chain for builtin-built frames, TCO
   frame reuse, and the ping-pong reserve rotation.
+- [tail-call-optimization.md](tail-call-optimization.md) — the TCO
+  design as a whole: constant space through a single node operation
+  (reinstall the slot; the library turns over the region) with region
+  lifetime owned by the library's node lifecycle, the lazy per-node
+  region mint, the space/efficiency accounting, and the three-lemma
+  soundness argument. The reasoning layer over the
+  [witness-hosting.md](witness-hosting.md) carrier and retention model.
 - [expressions-and-parsing.md](expressions-and-parsing.md) — the
   parse pipeline (quotes → whitespace → expression tree → tokens →
   operators), the `KExpression` shape it produces, the

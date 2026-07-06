@@ -177,12 +177,14 @@ every destination of its terminals has pulled. Two consequences:
   members for the program. The lever that keeps this small is precision at the mint
   — a region-pure value mints the **empty** set and pins nothing.
 
-The **TCO edge is unresolved**: a tail loop reuses one frame in constant space,
-resetting its arena, but a value hosted in that frame references a set in that
-arena — and the frame's `Rc` is held by retention, not by Koan. Reconciling
-frame-reuse with reference-only carriers and library-owned regions is the open
-question tracked in
-[the roadmap item](../roadmap/scheduler_library/region-hosted-witness-sets.md).
+**TCO** consumes retention directly. A tail call reinstalls the slot's work,
+keeping its node identity; the retiring incarnation's region — hosting the
+arguments it sealed as carriers — is held by retention until the reinstalled
+incarnation adopts them (release at pull-count zero), so the region free is ordered
+after the adoption copy. Koan issues only the reinstall and never touches a region.
+The full design is [tail-call-optimization.md](tail-call-optimization.md); retention
+itself lands with
+[its roadmap item](../roadmap/scheduler_library/delivery-driven-frame-retention.md).
 
 ## Library boundary
 
@@ -199,7 +201,12 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 
 ## Open work
 
-- [roadmap/scheduler_library/region-hosted-witness-sets.md](../roadmap/scheduler_library/region-hosted-witness-sets.md)
-  — the implementation item: hosting family, the single reference-only carrier,
-  scope/bindings migration, frame-retention, and the open
-  TCO-under-library-owned-region question.
+- [roadmap/scheduler_library/witness-set-hosting.md](../roadmap/scheduler_library/witness-set-hosting.md)
+  — the hosting family and the mint verbs.
+- [roadmap/scheduler_library/resident-hosted-carriers.md](../roadmap/scheduler_library/resident-hosted-carriers.md)
+  — the resident `{ bit, ref }` carrier and the scope/bindings migration.
+- [roadmap/scheduler_library/host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)
+  — the walking carrier's collapse onto the hosted sets.
+- [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)
+  — the scheduler's frame-retention and the final reference-only walking
+  carrier.
