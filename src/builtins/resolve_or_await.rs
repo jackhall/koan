@@ -111,7 +111,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
     // re-allocates it into the destination region when it constructs, folding `carrier` in.
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
     match terminal.value {
-        Carried::Type(kt) => Ok((kt.clone(), &terminal.carrier)),
+        Carried::Type(kt) => Ok((kt.clone(), terminal.delivered.cell())),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
     }
 }

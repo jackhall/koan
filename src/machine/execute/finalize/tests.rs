@@ -17,10 +17,10 @@ use crate::machine::core::{
 };
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::values::{CarriedFamily, Module};
+use crate::machine::model::values::Module;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
-use crate::witnessed::Sealed;
+use crate::witnessed::{Delivered, Sealed};
 
 /// Build a scalar carrier residing in `producer`'s region with the given home-omitted foreign reach
 /// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
@@ -231,7 +231,7 @@ fn adopt_sealed_severed_object_survives_producer_drop() {
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
+    let cell = Delivered::hosted(Sealed::seal(severed), None);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 
     match adopted {
@@ -280,7 +280,7 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
+    let cell = Delivered::hosted(Sealed::seal(severed), None);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 
     // Drop every other handle on the foreign frame: the consumer's minted arena set is now the

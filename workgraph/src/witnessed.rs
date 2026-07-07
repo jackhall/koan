@@ -44,6 +44,9 @@ pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
 mod carrier;
 pub use carrier::{Carrier, HasRegionHandle, HostedSetRef};
 
+mod delivered;
+pub use delivered::Delivered;
+
 mod step_ctx;
 pub use step_ctx::StepContext;
 

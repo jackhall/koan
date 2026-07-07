@@ -161,7 +161,7 @@ pub fn body_newtype<'a>(
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; fold the lhs carrier as the field
     // read's dep so the projected field outlives every region the lhs reaches.
-    let deps: Vec<_> = ctx.arg_carrier("s").into_iter().collect();
+    let deps: Vec<_> = ctx.arg_carrier("s").map(|d| d.cell()).into_iter().collect();
     route(access_field(&ctx.ctx, target, &field_name, &deps))
 }
 

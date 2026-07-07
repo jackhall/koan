@@ -54,8 +54,8 @@ fn cell_carrier(
 ) -> Sealed<CarriedFamily, CarrierWitness> {
     match slot {
         Slot::Static(sealed) => sealed,
-        Slot::Park(i) => terminals.park(i).carrier.duplicate(),
-        Slot::Owned(j) => terminals.owned(j).carrier.duplicate(),
+        Slot::Park(i) => terminals.park(i).delivered.cell().duplicate(),
+        Slot::Owned(j) => terminals.owned(j).delivered.cell().duplicate(),
     }
 }
 

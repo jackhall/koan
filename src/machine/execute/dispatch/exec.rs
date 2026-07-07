@@ -18,11 +18,9 @@ use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome,
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Record, SignatureElement};
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Parseable};
-use crate::machine::{CarrierWitness, KError, KErrorKind};
+use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
-use crate::witnessed::Sealed;
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
@@ -183,13 +181,13 @@ pub(super) fn invoke<'step>(
 /// reach store, a value-embedding builtin's fold) takes a `&Sealed`, so nothing is copied here.
 fn carriers_from_expr<'e, 'step>(
     working_expr: &'e KExpression<'step>,
-) -> Vec<(usize, &'e Sealed<CarriedFamily, CarrierWitness>)> {
+) -> Vec<(usize, &'e DeliveredCarried)> {
     working_expr
         .parts
         .iter()
         .enumerate()
         .filter_map(|(i, part)| match &part.value {
-            ExpressionPart::Spliced { cell, .. } => Some((i, cell)),
+            ExpressionPart::Spliced { cell } => Some((i, cell)),
             _ => None,
         })
         .collect()
@@ -200,8 +198,8 @@ fn carriers_from_expr<'e, 'step>(
 /// carrier's slot names its parameter. A region-pure arg has no entry, read as "no foreign reach".
 fn map_arg_carriers<'e, 'step>(
     picked: &KFunction<'step>,
-    arg_carriers: Vec<(usize, &'e Sealed<CarriedFamily, CarrierWitness>)>,
-) -> Record<&'e Sealed<CarriedFamily, CarrierWitness>> {
+    arg_carriers: Vec<(usize, &'e DeliveredCarried)>,
+) -> Record<&'e DeliveredCarried> {
     let mut record = Record::new();
     for (slot, carrier) in arg_carriers {
         if let Some(SignatureElement::Argument(arg)) = picked.signature.elements.get(slot) {
@@ -219,7 +217,7 @@ fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::kfunction::ActionFn,
     args: Record<crate::machine::model::values::Held<'step>>,
-    arg_carriers: Record<&Sealed<CarriedFamily, CarrierWitness>>,
+    arg_carriers: Record<&DeliveredCarried>,
 ) -> Outcome<'step> {
     use crate::machine::core::kfunction::action::BodyCtx;
     use crate::machine::model::KObject;
@@ -264,10 +262,9 @@ fn extract_carried_args<'step>(
             // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
-            ExpressionPart::Spliced { cell, pin } => args.push(
-                view.current_scope()
-                    .adopt_sealed_copied(cell, pin.as_ref()),
-            ),
+            ExpressionPart::Spliced { cell } => {
+                args.push(view.current_scope().adopt_sealed_copied(cell))
+            }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {

@@ -293,7 +293,7 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
         let result = match &results.all()[0] {
             // The watched producer's own sealed carrier, duplicated (the producer keeps its
             // terminal); the finish adopts or opens it at its own step brand.
-            Ok(t) => Ok(t.carrier.duplicate()),
+            Ok(t) => Ok(t.delivered.cell().duplicate()),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

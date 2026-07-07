@@ -219,7 +219,8 @@ fn finish_witnessed<'step>(
             check_newtype_repr(identity, terminals[0].value.object())?;
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(terminals[0]
-                .carrier
+                .delivered
+                .cell()
                 .transfer_into::<RegionTypeFamily, CarriedFamily>(
                     home,
                     |value, (region, identity_ty), _brand| {
@@ -256,7 +257,8 @@ fn finish_witnessed<'step>(
                 .zip(field_names)
                 .fold(acc0, |acc, (term, name)| {
                     let name = name.clone();
-                    term.carrier
+                    term.delivered
+                        .cell()
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
                             acc,
                             move |value, (region, mut fields), _brand| {
@@ -309,7 +311,8 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             let tag = tag.clone();
             Ok(terminals[0]
-                .carrier
+                .delivered
+                .cell()
                 .transfer_into::<RegionTypeFamily, CarriedFamily>(
                     home,
                     move |value, (region, identity_ty), _brand| {

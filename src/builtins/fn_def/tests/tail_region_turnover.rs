@@ -29,7 +29,10 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
 
-    const DEPTH: usize = 1000;
+    // Enough hops to distinguish O(1) from O(depth) — a non-TCO recursion would leave DEPTH slots
+    // and DEPTH live regions — while staying tractable under Miri's interpreter (the whole audit
+    // slate re-runs this fixture; a large depth makes it the slate's bottleneck).
+    const DEPTH: usize = 20;
     let mut source = String::from(
         "UNION Nat = (Zero :Null Succ :Nat)\n\
          FN (COUNTDOWN n :Nat) -> Str = (MATCH (n) -> :Str WITH (\
@@ -49,7 +52,7 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
-    runtime.execute().expect("depth-1000 countdown should run");
+    runtime.execute().expect("the countdown should run to completion");
     assert!(
         runtime.result_error(id).is_ok(),
         "countdown should complete without error: {:?}",

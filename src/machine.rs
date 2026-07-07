@@ -12,8 +12,9 @@ pub mod model;
 
 pub use core::kfunction::{Body, KFunction, NodeId};
 pub use core::{
-    run_root_storage, BindKind, BindingIndex, Bindings, CallFrame, CarrierWitness, FrameSet,
-    FrameStorage, FunctionLookup, KError, KErrorKind, KoanRegion, LexicalFrame, MemberResolution,
+    run_root_storage, BindKind, BindingIndex, Bindings, CallFrame, CarrierWitness, DeliveredCarried,
+    FrameSet, FrameStorage, FunctionLookup, KError, KErrorKind, KoanRegion, LexicalFrame,
+    MemberResolution,
     NameLookup, RegionBrand, RegionTypeFamily, Scope, ScopeId, ScopeKind, TraceFrame, TypeHit,
     ValueHit,
 };

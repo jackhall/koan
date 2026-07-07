@@ -8,7 +8,6 @@ use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
     BindingIndex, DispatchOutcome, KError, KErrorKind, NameLookup, NameOutcome, NodeId, TraceFrame,
 };
-use crate::witnessed::Sealed;
 
 use super::super::ignore_results;
 use super::super::nodes::NodeWork;
@@ -334,7 +333,9 @@ fn part_walk<'step>(
                                 .current_scope()
                                 .resolve_value_carrier(&name, ctx.chain_deref())
                             {
-                                Some(NameLookup::Bound(carrier)) => Sealed::seal(carrier),
+                                Some(NameLookup::Bound(carrier)) => {
+                                    ctx.current_scope().seal_resident_delivered(carrier)
+                                }
                                 _ => {
                                     return Err(KError::new(KErrorKind::ShapeError(format!(
                                         "resolved value `{name}` names no binding carrier"
@@ -348,7 +349,8 @@ fn part_walk<'step>(
                                 .resolve_type_identifier(t, ctx.active_chain())
                             {
                                 TypeResolution::Done(hit) => {
-                                    Sealed::seal(ctx.current_scope().resident_type_carrier(
+                                    let scope = ctx.current_scope();
+                                    scope.seal_resident_delivered(scope.resident_type_carrier(
                                         hit.kt,
                                         hit.reach,
                                         hit.borrows_into_home,
@@ -369,9 +371,10 @@ fn part_walk<'step>(
                         }
                     };
                     new_parts.push(Spanned {
-                        // A resident read: the value lives in this scope's region, pinned by the scope
-                        // owner (not a separate producer frame), so the cell carries no frame pin.
-                        value: ExpressionPart::Spliced { cell, pin: None },
+                        // A resident read: the value lives in this scope's region, so the delivery
+                        // envelope's pin is the scope's own region owner (the seal-resident veneer) —
+                        // self-covering, identical in shape to a delivered dep.
+                        value: ExpressionPart::Spliced { cell },
                         span,
                     });
                 }

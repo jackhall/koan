@@ -190,15 +190,14 @@ fn spliced_cell_classifies_by_opening() {
     use crate::machine::core::run_root_storage;
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::values::KObject;
-    use crate::witnessed::Sealed;
+    use crate::witnessed::{Delivered, Sealed};
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
     let carrier = scope.resident_value_carrier(obj, None, false);
     let cell_part = ExpressionPart::Spliced {
-        cell: Sealed::seal(carrier),
-        pin: None,
+        cell: Delivered::hosted(Sealed::seal(carrier), None),
     };
 
     for (ty, admits) in [

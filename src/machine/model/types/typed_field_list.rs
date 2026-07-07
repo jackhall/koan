@@ -12,7 +12,6 @@ use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
-use crate::witnessed::Sealed;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
@@ -191,11 +190,11 @@ fn rewrite_threaded_self_refs<'a>(
                     // expression (it crosses into another node), so it travels as a cell: a
                     // region-resident type carrier reaching nothing foreign (empty reach).
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    // A region-resident carrier pinned by this scope's owner, not a producer frame,
-                    // so the cell carries no frame pin.
+                    // A region-resident carrier: the delivery envelope's pin is this scope's own
+                    // region owner (the seal-resident veneer), not a separate producer frame.
                     ExpressionPart::Spliced {
-                        cell: Sealed::seal(scope.resident_type_carrier(obj, None, false)),
-                        pin: None,
+                        cell: scope
+                            .seal_resident_delivered(scope.resident_type_carrier(obj, None, false)),
                     }
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(

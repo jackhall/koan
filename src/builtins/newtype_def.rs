@@ -172,7 +172,7 @@ pub fn body<'a>(
                 name,
                 other.clone(),
                 bind_index,
-                ctx.arg_carrier("repr"),
+                ctx.arg_carrier("repr").map(|d| d.cell()),
             )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {

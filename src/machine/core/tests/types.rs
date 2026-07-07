@@ -76,13 +76,17 @@ fn resolve_type_inner_scope_shadows_outer() {
 #[test]
 fn adopt_sealed_reanchors_the_same_value_copy_free() {
     use crate::machine::model::values::{Carried, KObject};
-    use crate::witnessed::Sealed;
+    use crate::witnessed::{Delivered, Sealed};
 
     let storage = run_root_storage();
     let producer = run_root_bare(&storage);
-    // A value resident in the producer scope's region, sealed as its own carrier.
+    // A value resident in the producer scope's region, sealed as its own delivery envelope. `None`
+    // host: the carrier's own resident witness pins the region, so the envelope's open reads under it.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
-    let cell = Sealed::seal(producer.resident_value_carrier(obj, None, false));
+    let cell = Delivered::hosted(
+        Sealed::seal(producer.resident_value_carrier(obj, None, false)),
+        None,
+    );
 
     // A separate (open) consumer scope adopts the carrier.
     let consumer = producer.brand().alloc_scope(Scope::child_under(producer));
@@ -100,16 +104,20 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
 fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     use crate::machine::core::arena::KoanRegionExt;
     use crate::machine::core::KoanRegion;
-    use crate::machine::model::values::{Carried, CarriedFamily, KObject};
-    use crate::witnessed::Sealed;
+    use crate::machine::model::values::{Carried, KObject};
+    use crate::machine::DeliveredCarried;
+    use crate::witnessed::{Delivered, Sealed};
     use std::rc::Rc;
 
-    // A value in the producer frame's own region, sealed witnessed by that frame.
+    // A value in the producer frame's own region, sealed witnessed by that frame, wrapped as a
+    // delivery envelope (`None` host — its own witness pins the producer frame until adoption).
     let producer_frame = run_root_storage();
-    let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(KoanRegion::alloc_witnessed(
-        Rc::clone(&producer_frame),
-        |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
-    ));
+    let cell: DeliveredCarried = Delivered::hosted(
+        Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&producer_frame), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(9.0)))
+        })),
+        None,
+    );
 
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
     let consumer_frame = run_root_storage();

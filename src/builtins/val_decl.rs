@@ -116,7 +116,7 @@ pub fn body<'a>(
                 name,
                 kt,
                 bind_index,
-                ctx.arg_carrier("ty"),
+                ctx.arg_carrier("ty").map(|d| d.cell()),
             );
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local

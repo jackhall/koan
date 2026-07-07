@@ -1,18 +1,16 @@
 //! AST node types shared across the parse module.
 
 use crate::machine::model::types::KKind;
-use crate::machine::{CarrierWitness, FrameStorage};
+use crate::machine::DeliveredCarried;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use crate::source::{FileId, Span, Spanned};
 
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{
     Carried, Held, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
 };
-use crate::witnessed::{reattachable, Sealed};
+use crate::witnessed::reattachable;
 
 #[cfg(test)]
 mod tests;
@@ -99,17 +97,14 @@ pub enum ExpressionPart<'a> {
     /// `DictLiteral`. Field names are syntactic identifiers (never name-resolved).
     RecordLiteral(Vec<(String, ExpressionPart<'a>)>),
     Literal(KLiteral),
-    /// A resolved sub-result travelling as its producer's sealed carrier — value and reach as one
-    /// unit. The lifetime-free `cell` rests on the working expression across steps; the consuming
-    /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand. `pin` is
-    /// the producer's retained frame owner (the working-copy splice sources it from the resolved dep
-    /// terminal; `None` for a resident read — pinned by the reading scope's own owner — or a frameless
-    /// / run producer), held so the value's backing stays retained to the adopting step's
-    /// [`open_with`](crate::witnessed::Sealed::open_with).
-    Spliced {
-        cell: Sealed<CarriedFamily, CarrierWitness>,
-        pin: Option<Rc<FrameStorage>>,
-    },
+    /// A resolved sub-result travelling as its producer's [`DeliveredCarried`] envelope — the sealed
+    /// carrier (value and reach as one unit) bundled with the retained frame owner that pins its
+    /// backing in transit. The lifetime-free `cell` rests on the working expression across steps; the
+    /// consuming decide or bind opens it (to classify) or adopts it (to consume) at its own step
+    /// brand, reading the value under the envelope's own pin — the producer's retention hold for a
+    /// working-copy splice, or the reading scope's own owner for a resident splice, or `None` for a
+    /// frameless / run producer whose backing already outlives it.
+    Spliced { cell: DeliveredCarried },
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
@@ -334,11 +329,10 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            // `duplicate` copies the erased value and clones the witness (`Sealed` is not `Copy`); the
-            // frame pin is a plain `Rc` clone.
-            ExpressionPart::Spliced { cell, pin } => ExpressionPart::Spliced {
+            // `duplicate` copies the erased carrier value and clones the witness (the envelope is not
+            // `Copy`); the retained frame owner is a plain `Rc` clone.
+            ExpressionPart::Spliced { cell } => ExpressionPart::Spliced {
                 cell: cell.duplicate(),
-                pin: pin.clone(),
             },
         }
     }

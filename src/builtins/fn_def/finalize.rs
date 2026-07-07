@@ -328,15 +328,14 @@ pub(crate) fn defer<'a>(
                     terminal.value.ktype().name(),
                 )))));
             }
-            // The resolved type slot travels as its producer's own sealed carrier — value and reach
-            // as one unit — opened where the signature is assembled (`parse_fn_param_list` adopts it
-            // through the elaborator's scope). The early-error check above reads `terminal.value`,
-            // still delivered at the step brand; the carrier is the survival, not a relocated copy. The
-            // retained producer-frame owner rides the cell's pin so the type's backing stays retained
-            // to the adopting elaboration.
+            // The resolved type slot travels as its producer's own delivery envelope — carrier and
+            // retained producer-frame owner as one unit — opened where the signature is assembled
+            // (`parse_fn_param_list` adopts it through the elaborator's scope). The early-error check
+            // above reads `terminal.value`, still delivered at the step brand; the envelope is the
+            // survival, not a relocated copy, its host keeping the type's backing retained to the
+            // adopting elaboration.
             spliced_parts[slot_idx].value = ExpressionPart::Spliced {
-                cell: terminal.carrier.duplicate(),
-                pin: terminal.host.clone(),
+                cell: terminal.delivered.duplicate(),
             };
         }
         let spliced_signature = KExpression::new(spliced_parts);

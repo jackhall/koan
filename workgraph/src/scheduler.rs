@@ -38,7 +38,9 @@ mod workload;
 
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
-pub use crate::witnessed::{ComposeWitness, Erased, Reattachable, Sealed, UnionWitness, Witnessed};
+pub use crate::witnessed::{
+    ComposeWitness, Delivered, Erased, Reattachable, Sealed, UnionWitness, Witnessed,
+};
 pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
@@ -178,6 +180,22 @@ impl<W: Workload> Scheduler<W> {
     /// bare-name-forward alias to the real producer (which holds the sole copy).
     pub fn dep_carrier(&self, id: NodeId) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
         self.store.dep_carrier(self.resolve_alias(id))
+    }
+
+    /// A finalized dep as a **delivery envelope**: its duplicated sealed carrier
+    /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner
+    /// ([`dep_host`](Self::dep_host)), so a consumer reads the value under a pin sourced from the
+    /// retention hold rather than threaded per call site. Sound because the retention hold is active
+    /// while any consumer edge is undischarged (the pinning invariant). `None` host for a frameless /
+    /// run-region producer. Follows a bare-name-forward alias to the real producer.
+    // The three-parameter envelope over a witnessed `Result` reads clearer inline than split apart.
+    #[allow(clippy::type_complexity)]
+    pub fn dep_delivered(
+        &self,
+        id: NodeId,
+    ) -> Result<Delivered<W::Value, W::Witness, W::Frame>, &W::Error> {
+        let cell = self.dep_carrier(id)?;
+        Ok(Delivered::hosted(cell, self.dep_host(id)))
     }
 
     /// Relocate a finalized terminal into a destination region (the `Forward`-ready pull / drain

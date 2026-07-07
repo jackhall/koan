@@ -13,7 +13,8 @@ use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
-use crate::witnessed::{Erased, Sealed, Witnessed};
+use crate::machine::DeliveredCarried;
+use crate::witnessed::{Delivered, Erased, Witnessed};
 
 /// Lexical environment. Only the root scope holds a writer in `out`; child scopes
 /// have `None` and `write_out` walks `outer` to find one.
@@ -879,6 +880,24 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Seal a resident carrier — a value already living in this scope's own region — into a
+    /// [`DeliveredCarried`] envelope pinned by this scope's own region owner. The resident twin of
+    /// the scheduler's [`dep_delivered`](crate::scheduler::Scheduler::dep_delivered): the pin is the
+    /// home frame the caller reads the value under (`region_owner().upgrade()`, the same owner
+    /// [`resident_value_carrier`](Self::resident_value_carrier) folds into the witness), so a spliced
+    /// resident cell travels self-covering by its own witness *and* pinned by its home, identical in
+    /// shape to a delivered dep — there is no `pin: None` resident special case at the splice sites.
+    pub(crate) fn seal_resident_delivered(
+        &self,
+        witnessed: Witnessed<CarriedFamily, CarrierWitness>,
+    ) -> DeliveredCarried {
+        let home = self
+            .region_owner()
+            .upgrade()
+            .expect("the resident scope's region owner is held while its value is sealed");
+        Delivered::seal(witnessed, Some(home))
+    }
+
     /// Adopt a sealed dep carrier into this scope, copy-free where possible: mint its witness's
     /// reach into the scope's own arena for liveness — so every region the value reaches stays alive
     /// for the scope's life — then re-anchor the sealed value at the scope's own brand. Where
@@ -892,7 +911,7 @@ impl<'a> Scope<'a> {
     ///
     /// The mint runs **before** the severed check: it is the severed Type branch's liveness
     /// obligation, not just region-hosted bookkeeping (see the SAFETY note there).
-    pub(crate) fn adopt_sealed(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> Carried<'a> {
+    pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
         // Mint FIRST: pin every region the value reaches into this scope's arena before any borrow of
         // the value is fabricated (see the SAFETY notes below). The `&'a` ref is discarded — the arena
         // holds the set, hence the pin, for the region's life.
@@ -940,15 +959,11 @@ impl<'a> Scope<'a> {
     /// borrows into the host region survive it), so a type adoption genuinely needs the host
     /// materialized as reach.
     ///
-    /// `pin` is the producer's retained frame owner (the working-copy-spliced cell's frame pin), held
-    /// across the value copy so the source backing stays live for the read; `None` (a resident read,
-    /// or a frameless / run producer whose backing already outlives the read) reads under the carrier's
-    /// bundled witness instead.
-    pub(crate) fn adopt_sealed_copied(
-        &self,
-        cell: &Sealed<CarriedFamily, CarrierWitness>,
-        pin: Option<&Rc<FrameStorage>>,
-    ) -> Carried<'a> {
+    /// The value copy reads the producer under the envelope's own pin — the retained frame owner
+    /// ([`Delivered::open`]) — so the source backing stays live for the read; a resident-sealed
+    /// envelope, or a frameless / run producer whose backing already outlives the read, reads under
+    /// the carrier's bundled witness instead (the `None`-host arm of the envelope's open).
+    pub(crate) fn adopt_sealed_copied(&self, cell: &DeliveredCarried) -> Carried<'a> {
         let is_object = cell.open(|live| matches!(live, Carried::Object(_)));
         if !is_object {
             return self.adopt_sealed(cell);
@@ -956,16 +971,7 @@ impl<'a> Scope<'a> {
         // Mint FIRST: pin every region the copy still reaches (interior borrows survive
         // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated.
         let _ = self.adopted_reach_of(cell.witness());
-        // The copy reads the producer value under the frame pin (its backing kept live by the retained
-        // owner) when one is present, else under the carrier's own bundled witness.
-        match pin {
-            Some(host) => cell.open_with(host, |live| {
-                Carried::Object(self.brand().alloc_object(live.object().deep_clone()))
-            }),
-            None => {
-                cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
-            }
-        }
+        cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's

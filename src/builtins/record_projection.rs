@@ -86,7 +86,7 @@ pub fn body<'a>(
 
     let narrowed = Record::from_pairs(narrowed_pairs);
     let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let deps: Vec<_> = ctx.arg_carrier("record").into_iter().collect();
+    let deps: Vec<_> = ctx.arg_carrier("record").map(|d| d.cell()).into_iter().collect();
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
     // `record` operand reaches. Built through the step context with the record's carrier
     // as a dep, so the result's witness names the read-site home frame plus that reach by

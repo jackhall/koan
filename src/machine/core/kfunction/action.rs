@@ -14,7 +14,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, NodeId};
+use crate::machine::{BindingIndex, CarrierWitness, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
 use crate::witnessed::{Sealed, StepContext, Witnessed};
 
@@ -184,7 +184,7 @@ pub struct BodyCtx<'a, 'c> {
     /// so the result names that reach by construction. A scalar-literal argument is region-pure and has
     /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
     /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
-    pub arg_carriers: &'c Record<&'c Sealed<CarriedFamily, CarrierWitness>>,
+    pub arg_carriers: &'c Record<&'c DeliveredCarried>,
     /// The step construction context for this slot's own scope — the same `ctx.region()` /
     /// `ctx.alloc()` / `ctx.alloc_with()` surface a wake-time [`FinishCtx`] carries.
     pub ctx: StepContext<FrameStorage>,
@@ -203,7 +203,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 
     /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
-    pub fn arg_carrier(&self, name: &str) -> Option<&'c Sealed<CarriedFamily, CarrierWitness>> {
+    pub fn arg_carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
         self.arg_carriers.get(name).copied()
     }
 
@@ -244,21 +244,22 @@ impl<'a> FinishCtx<'a> {
 
 /// A resolved dep terminal as a continuation receives it. `value` is the terminal re-anchored
 /// **live at the step brand** (pinned by the step open) for a value-reading finish that reads it
-/// directly (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal); `carrier`
-/// is the producer's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) —
-/// the producer keeps its terminal for other consumers) for a **construction finish** that folds the
-/// dep *witnessed* via [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach
-/// named on the result by construction. `host` is the dep's retained producer-frame owner, read from
-/// the scheduler's retention hold (`None` for a frameless / run-region producer whose backing already
-/// outlives the terminal); a finish that parks the carrier on the working expression across steps (the
-/// working-copy splice) clones it into the
-/// [`Spliced`](crate::machine::model::ast::ExpressionPart::Spliced) cell's pin, keeping the value's
-/// backing retained through the `Replace` to the step that adopts it. Defined here in core (not the
-/// execute layer that resolves it) so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
+/// directly (`resolve_or_await`, `fn_def`/`return_type`, dispatch constructors / literal);
+/// `delivered` is the producer's own carrier bundled with its retained producer-frame owner as one
+/// [`DeliveredCarried`] envelope — a [`duplicate`](crate::witnessed::Delivered::duplicate), so the
+/// producer keeps its terminal for other consumers. A **construction finish** folds the dep
+/// *witnessed* via the envelope's cell
+/// ([`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into)), its reach named on the
+/// result by construction; a finish that parks the carrier on the working expression across steps
+/// (the working-copy splice) duplicates the whole envelope into the
+/// [`Spliced`](crate::machine::model::ast::ExpressionPart::Spliced) cell, keeping the value's backing
+/// retained (its host = the scheduler's retention hold, `None` for a frameless / run-region producer
+/// whose backing already outlives the terminal) through the `Replace` to the step that adopts it.
+/// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —
+/// [`AwaitContinue`] — can name it.
 pub struct DepTerminal<'a> {
     pub value: Carried<'a>,
-    pub carrier: Sealed<CarriedFamily, CarrierWitness>,
-    pub host: Option<Rc<FrameStorage>>,
+    pub delivered: DeliveredCarried,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view

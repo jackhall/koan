@@ -65,10 +65,10 @@ fn park_on_head<'step>(
         // ignores it and rides the `adopt_sealed` below. Collapsed to a plain reach set — the
         // identity is region-resident, so its witness carries only frame reach, no owned backing.
         let head_terminal = terminals.owned(0);
-        let reach = head_terminal.carrier.witness().to_liveness_frameset();
+        let reach = head_terminal.delivered.witness().to_liveness_frameset();
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
-        let head = ctx.current_scope().adopt_sealed(&head_terminal.carrier);
+        let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
         let callable = match classify_head(head, type_only, reach) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),

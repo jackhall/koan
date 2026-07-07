@@ -154,7 +154,7 @@ pub(crate) fn defer_field_list<'step>(
         // that producer's reach forward; the owned values, read live at the step brand
         // (un-relocated), feed the re-walk, which clones each type into the folded field list.
         let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
-            terminals.all().iter().map(|t| &t.carrier).collect();
+            terminals.all().iter().map(|t| t.delivered.cell()).collect();
         let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
         match rewalk.run(view.current_scope(), &owned) {
             Ok(fields) => finalize(view, fields, &carriers),
@@ -212,7 +212,7 @@ pub(crate) fn defer_field_list_action<'a>(
         // that producer's reach forward; the owned values, read live at the step brand
         // (un-relocated), feed the re-walk, which clones each type into the folded field list.
         let carriers: Vec<&Sealed<CarriedFamily, CarrierWitness>> =
-            results.all().iter().map(|t| &t.carrier).collect();
+            results.all().iter().map(|t| t.delivered.cell()).collect();
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
             rewalk

@@ -127,7 +127,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
-                    Some(ExpressionPart::Spliced { cell, .. }) => {
+                    Some(ExpressionPart::Spliced { cell }) => {
                         // The resolved type slot arrives as a carrier cell; adopt it into the
                         // elaborating scope (folding its reach) and read it at that brand where the
                         // signature is assembled, then route it through type/non-type handling.

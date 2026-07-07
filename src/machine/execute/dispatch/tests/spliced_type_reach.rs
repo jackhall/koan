@@ -6,7 +6,7 @@ use crate::machine::model::types::{KType, TypeResolution};
 use crate::machine::model::values::{Carried, CarriedFamily, Module};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
-use crate::witnessed::Sealed;
+use crate::witnessed::{Delivered, Sealed};
 
 /// A first-class type spliced inline via `part_walk`'s wrap-slot arm arrives with its binding's
 /// stored reach, and adopting the cell pins the type's producer region: `T`'s registered `KType`
@@ -51,7 +51,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the
     // type-channel mirror of a `LET` binding a module value returned from elsewhere.
     let stored = scope.host_reach_of(produced.witness());
-    let kt = match scope.adopt_sealed(&produced) {
+    let kt = match scope.adopt_sealed(&Delivered::hosted(produced.duplicate(), None)) {
         Carried::Type(kt) => kt.clone(),
         _ => panic!("expected the adopted Type"),
     };
@@ -67,8 +67,12 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         "the stored reach should round-trip a non-empty foreign reach",
     );
 
-    // Build the cell as the splice now does.
-    let cell = Sealed::seal(scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home));
+    // Build the cell as the splice now does — the resident carrier as a delivery envelope (`None`
+    // host: its own resident witness pins the region until adoption).
+    let cell = Delivered::hosted(
+        Sealed::seal(scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)),
+        None,
+    );
 
     // The consumer lives in its own frame, independent of `scope`'s (`storage`) and the type's
     // original producer frame (`foreign`) — nothing but its own adopted fold may keep them alive.

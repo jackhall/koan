@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::types::KType;
-use crate::machine::model::values::KObject;
+use crate::machine::model::values::{CarriedFamily, KObject};
 
 use super::arena::FrameStorage;
 
@@ -27,3 +27,10 @@ pub enum SeveredBacking {
 /// witness parameter of `Witnessed<T, W>` / `Sealed<T, W>` is unaffected by this alias; a site that
 /// constructs or inspects a carrier routes the library's `Carrier` surface directly.
 pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage, SeveredBacking>;
+
+/// Koan's **delivery envelope**: the library [`Delivered`](crate::witnessed::Delivered) carrying a
+/// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
+/// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
+/// adoption — replacing the per-call-site `(Sealed, Option<Rc<FrameStorage>>)` pairing threaded at
+/// consumer sites.
+pub type DeliveredCarried = crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;

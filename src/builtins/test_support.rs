@@ -17,7 +17,7 @@ use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Delivered, Sealed, Witnessed};
 
 use super::default_scope;
 
@@ -187,8 +187,7 @@ pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<
 /// caller-held test data, not a foreign region.
 pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
     ExpressionPart::Spliced {
-        cell: Sealed::seal(Witnessed::resident(c)),
-        pin: None,
+        cell: Delivered::hosted(Sealed::seal(Witnessed::resident(c)), None),
     }
 }
 
