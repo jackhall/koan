@@ -87,15 +87,27 @@ impl<W: Workload> Scheduler<W> {
     /// the TCO handoff installs a retention hold on the reinstalled slot so the retiring region is
     /// released only after the reinstalled incarnation adopts the carried arguments.
     pub fn replace(&mut self, id: NodeId, node: Node<W>, retiring: Option<Rc<W::Frame>>) {
-        // The retention hold on the reinstalled slot is wired by the TCO handoff; until then the
-        // retiring frame drops here as it did before retention existed.
-        let _ = retiring;
+        // Park the retiring incarnation's frame owner as the reinstalled slot's TCO handoff hold; the
+        // run loop holds it across the reinstalled incarnation's first step, so the retiring region is
+        // released only after the carried arguments are adopted (`None` for a frameless `Inherit`
+        // replace, which turns over no region). Redundant while the loop-carried carriers still hold
+        // their own `Rc`s into the retiring region; load-bearing once the carrier collapses.
+        self.deps.set_handoff(id.index(), retiring);
         self.store.reinstall(id, node);
         // Replace return sites install their own edges (or clear the slot's dep edges for tail
         // rewrites), so the pending count is authoritative here.
         if self.deps.pending_count(id.index()) == 0 {
             self.queues.push_after_replace(id.index());
         }
+    }
+
+    /// Take a slot's pending TCO handoff hold — the retiring incarnation frame owner a framed tail
+    /// [`replace`](Self::replace) parked on it. The run loop calls this just before running the
+    /// reinstalled incarnation's step and holds the returned `Rc` across it, so the retiring region
+    /// outlives the adoption of the carried arguments and frees only after. `None` for any slot with
+    /// no pending handoff (the common case — a first run, or a frameless replace).
+    pub fn take_handoff(&mut self, id: NodeId) -> Option<Rc<W::Frame>> {
+        self.deps.take_handoff(id.index())
     }
 
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no

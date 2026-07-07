@@ -72,6 +72,13 @@ struct DepRow<F> {
     /// which installs no `notify` edge). Each entry is a retained producer whose `pulls` this
     /// consumer bumped on wiring and must discharge once — after its read, or at its death.
     owed: Vec<usize>,
+    /// The **TCO handoff hold**: a framed tail replace's *retiring* incarnation frame owner, parked
+    /// here by [`Scheduler::replace`](crate::scheduler::Scheduler::replace) so the retiring region
+    /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried arguments.
+    /// The run loop takes it just before running that step and drops it after, ordering the retiring
+    /// region's free after the adoption. Distinct from `retain`: `retain` holds *this slot's own* Done
+    /// producer frame; `handoff` holds the *previous* incarnation's frame across the reinstall.
+    handoff: Option<Rc<F>>,
 }
 
 impl<F> Default for DepRow<F> {
@@ -82,6 +89,7 @@ impl<F> Default for DepRow<F> {
             edges: Vec::new(),
             retain: None,
             owed: Vec::new(),
+            handoff: None,
         }
     }
 }
@@ -116,6 +124,7 @@ impl<W: Workload> DepGraph<W> {
             row.edges = owned_edges;
             row.retain = None;
             row.owed.clear();
+            row.handoff = None;
         } else {
             self.rows.push(DepRow {
                 notify: Vec::new(),
@@ -123,6 +132,7 @@ impl<W: Workload> DepGraph<W> {
                 edges: owned_edges,
                 retain: None,
                 owed: Vec::new(),
+                handoff: None,
             });
         }
         for p in pending_producers {
@@ -220,6 +230,26 @@ impl<W: Workload> DepGraph<W> {
     /// regardless of the remaining pull count.
     pub(super) fn drop_retain(&mut self, producer: usize) {
         self.rows[producer].retain = None;
+    }
+
+    /// Park a framed tail replace's retiring incarnation frame owner on the reinstalled `slot` as its
+    /// TCO handoff hold (`None` clears it — a frameless `Inherit` replace turns over no region). The
+    /// run loop [`take_handoff`](Self::take_handoff)s it just before the reinstalled incarnation's
+    /// first step and holds it across that step, so the retiring region outlives the adoption of the
+    /// carried arguments.
+    pub(super) fn set_handoff(&mut self, slot: usize, retiring: Option<Rc<W::Frame>>) {
+        self.rows[slot].handoff = retiring;
+    }
+
+    /// Take the reinstalled `slot`'s pending TCO handoff hold (draining it, so a slot that replaces
+    /// again on this step re-parks a fresh one). The caller holds the returned `Rc` live across the
+    /// step and drops it after, ordering the retiring region's free after the adoption.
+    pub(super) fn take_handoff(&mut self, slot: usize) -> Option<Rc<W::Frame>> {
+        if slot < self.rows.len() {
+            self.rows[slot].handoff.take()
+        } else {
+            None
+        }
     }
 
     /// True iff `producer` is forward-reachable from `consumer` — i.e.

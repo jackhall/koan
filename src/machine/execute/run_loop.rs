@@ -71,6 +71,13 @@ impl<'run> KoanRuntime<'run> {
         while let Some(idx) = self.sched.pop_next() {
             let id = NodeId(idx);
             let node = self.sched.take_for_run(id);
+            // Hold a framed tail replace's retiring incarnation frame across this step: the reinstalled
+            // incarnation adopts the carried arguments here (`extract_carried_args`), reading them out
+            // of the retiring region, which must stay live until it does. Dropping `_handoff` after the
+            // step orders the retiring region's free after the adoption (`None` for any non-reinstalled
+            // step, or a frameless replace). Redundant while the loop-carried carriers still pin the
+            // region; load-bearing once the carrier collapses.
+            let _handoff = self.sched.take_handoff(id);
             self.run_step(id, node);
         }
         // Slots still parked after drain are on a dependency that can never fire —
