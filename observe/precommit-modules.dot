@@ -274,6 +274,7 @@ digraph {
     "koan::builtins::eval" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::fn_def" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::fn_def" -> "koan::machine::core" [label="uses", style="dashed"];

@@ -3,6 +3,7 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::machine::core::{run_root_storage, KoanRegionTestExt};
 use crate::machine::execute::KoanRuntime;
+use crate::witnessed::region_metrics;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
@@ -42,20 +43,21 @@ fn chained_tail_calls_reuse_frames() {
     );
 
     let mut runtime = KoanRuntime::new();
+    let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(parse_one("AA"), scope);
     runtime.execute().expect("AA should run");
 
     assert_eq!(captured.borrow().as_slice(), b"ok\n");
     assert_eq!(runtime.len(), 1, "tail chain should collapse to one slot");
-    // Reuse draws from the per-slot reserve, which is seeded by the *previous* per-call frame.
-    // The top-level→first-FN transition parks the non-dying run frame, which is never reusable,
-    // so the first FN frame allocates fresh and reuse kicks in from the third call onward —
-    // two reuses across AA -> BB -> CC -> DD. Steady-state tail recursion still ping-pongs two
-    // frames with no further allocation.
-    assert!(
-        runtime.tail_reuse_count() >= 2,
-        "expected at least 2 reuses across AA -> BB -> CC -> DD, got {}",
-        runtime.tail_reuse_count(),
+    // A `FreshTail` mints a fresh region at every hop (the cart is never reused in place), so the
+    // chain mints exactly one region per user-fn call: AA, BB, CC, DD. `minted_total` is
+    // monotonic (never decremented by a drop), so a before/after diff is safe to read without
+    // resetting the counters — a reset here would zero the live count out from under the
+    // already-minted, still-alive run-root region and underflow at its eventual drop.
+    let minted = region_metrics().minted_total - minted_before;
+    assert_eq!(
+        minted, 4,
+        "expected exactly one region mint per user-fn call across AA -> BB -> CC -> DD, got {minted}",
     );
 }
 
@@ -89,12 +91,11 @@ fn leading_statements_run_before_tail_across_chain() {
 }
 
 /// Tail chain whose bodies each carry a value-discarded leading `PRINT` stays TCO-flat: the
-/// leading statements are owned deps that cascade-free as each call resolves, so the per-call
-/// frame stays uniquely owned and `try_reset_for_tail` keeps reusing it. The chain peaks at two
-/// slots — the tail-replaced main slot plus a single leading-PRINT slot recycled through the
-/// free-list across all four calls — and frame reuse still kicks in. Fire-and-forget leading
-/// would instead leave one orphan PRINT slot per call aliasing its frame (`runtime.len()` would
-/// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
+/// leading statements are owned deps that cascade-free as each call resolves, so they never
+/// accumulate their own slots. The chain peaks at two slots — the tail-replaced main slot plus a
+/// single leading-PRINT slot recycled through the free-list across all four calls. Fire-and-forget
+/// leading would instead leave one orphan PRINT slot per call aliasing its frame (`runtime.len()`
+/// would climb to 5).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
     let region = run_root_storage();
@@ -109,6 +110,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
     );
 
     let mut runtime = KoanRuntime::new();
+    let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(parse_one("AA"), scope);
     runtime.execute().expect("AA should run");
 
@@ -120,11 +122,12 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
          leading slot (a leak would climb to 5), got {}",
         runtime.len(),
     );
-    assert!(
-        runtime.tail_reuse_count() >= 2,
-        "leading statements cascade-free before each tail continues, so the frame stays unique \
-         and reuse still kicks in across AA -> BB -> CC -> DD, got {}",
-        runtime.tail_reuse_count(),
+    // Each of AA, BB, CC, DD is its own user-fn call, so a `FreshTail` mints one region per call
+    // regardless of the leading statement fanned into that call's already-installed frame.
+    let minted = region_metrics().minted_total - minted_before;
+    assert_eq!(
+        minted, 4,
+        "expected exactly one region mint per user-fn call across AA -> BB -> CC -> DD, got {minted}",
     );
 }
 

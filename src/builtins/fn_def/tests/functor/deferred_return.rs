@@ -5,6 +5,7 @@ use crate::builtins::test_support::{
 };
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType};
+use crate::witnessed::region_metrics;
 
 /// Bare parameter-name return type: `-> Er` resolves per-call to the carried type via
 /// `Scope::resolve_type`. The parameter is `:Signature`-kind, so `Er` resolves to a *signature* — a
@@ -217,11 +218,11 @@ fn deferred_return_tail_call_stays_tco_flat() {
 
 /// A chain of deferred-`Expression` functors (`-> Er.Carrier`) stays TCO-flat. The first call
 /// resolves `Er.Carrier` once and tail-replaces into the body; each subsequent tail call skips
-/// resolution (keep-first discards its contract) and tail-replaces, so the chain reuses frames
-/// instead of accumulating a dep-finish per call. (The pre-`DeferredExprTail` lowering ran the body as
-/// dep-finish dependencies, making each onward call a dep — O(n).)
+/// resolution (keep-first discards its contract) and tail-replaces, so the chain mints one region
+/// per call instead of accumulating a dep-finish per call. (The pre-`DeferredExprTail` lowering ran
+/// the body as dep-finish dependencies, making each onward call a dep — O(n).)
 #[test]
-fn deferred_expression_return_tail_chain_reuses_frames() {
+fn deferred_expression_return_tail_chain_stays_flat() {
     use crate::machine::execute::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
@@ -239,6 +240,7 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
          FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
     );
     let mut runtime = KoanRuntime::new();
+    let minted_before = region_metrics().minted_total;
     let id = runtime.dispatch_in_scope(parse_one("AA View"), scope);
     runtime
         .execute()
@@ -248,11 +250,14 @@ fn deferred_expression_return_tail_chain_reuses_frames() {
         "AA should succeed: {:?}",
         runtime.result_error(id).err(),
     );
-    // Subsequent calls tail-replace and reuse per-call frames rather than each spawning a dep-finish.
-    assert!(
-        runtime.tail_reuse_count() >= 1,
-        "deferred-Expression tail chain must reuse a frame (tail-replace), got {}",
-        runtime.tail_reuse_count(),
+    // Subsequent calls tail-replace rather than each spawning a dep-finish: a `FreshTail` mints
+    // exactly one region per user-fn call (AA, BB, CC, DD), not a dep-finish's unbounded fanout.
+    // `minted_total` is monotonic, so a before/after diff reads safely with no reset needed.
+    let minted = region_metrics().minted_total - minted_before;
+    assert_eq!(
+        minted, 4,
+        "deferred-Expression tail chain must tail-replace one region per call \
+         (AA -> BB -> CC -> DD), got {minted}",
     );
 }
 

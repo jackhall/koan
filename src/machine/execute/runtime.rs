@@ -29,7 +29,7 @@ use crate::machine::core::kfunction::exec::home_return_type;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
-use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
 use crate::witnessed::{Erased, Sealed, SealedExtern, SetWitness};
 
 use super::dispatch::{BodyPlacement, DepRequest};
@@ -166,8 +166,8 @@ impl<'run> KoanRuntime<'run> {
 }
 
 /// Test-only forwarders: an immutable `&Scheduler` view (`resolve_name_part` fixtures) plus the
-/// AST-free poke surface (`free`, the reserve-reuse counter, a slot's stored chain). No `&mut
-/// Scheduler` escapes — the accessor hands out `&Scheduler`, keeping the harness the sole writer.
+/// AST-free poke surface (`free`, a slot's stored chain). No `&mut Scheduler` escapes — the
+/// accessor hands out `&Scheduler`, keeping the harness the sole writer.
 #[cfg(test)]
 impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn scheduler(&self) -> &Scheduler<KoanWorkload> {
@@ -187,10 +187,6 @@ impl<'run> KoanRuntime<'run> {
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
         self.sched.payload_of(id).map(|p| p.chain.clone())
-    }
-
-    pub fn tail_reuse_count(&self) -> usize {
-        self.ambient_tail_reuse_count()
     }
 }
 
@@ -246,10 +242,10 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 BlockEntry::Overlay(overlay) => BodyPlacement::Overlay(overlay),
                 BlockEntry::None => unreachable!("a leading-carrying tail enters a block"),
             };
-            // `ReuseReserve` mints its cart only at apply time — after the leading statements would
+            // `FreshTail` mints its cart only at apply time — after the leading statements would
             // already have fanned out — so a leading-carrying tail cannot ride it.
             debug_assert!(
-                !matches!(frame_placement, FramePlacement::ReuseReserve { .. }),
+                !matches!(frame_placement, FramePlacement::FreshTail { .. }),
                 "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
             );
             let finish: TerminalDepFinish<'step> = Box::new(move |_view, terminals| {
@@ -389,35 +385,20 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
-    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: reuse
-    /// the slot's ping-pong reserve (the TCO tail-call cart), take a builtin-minted fresh cart, or
-    /// keep the current cart (`None`). The one place the placement → cart mapping lives — shared by
-    /// the `Continue` body re-run and the folded invoke / re-resolve paths (which reach it through
-    /// their own `Continue`).
+    /// Resolve a [`FramePlacement`] to the cart a [`Continue`](Outcome::Continue) installs: mint a
+    /// fresh TCO tail-call cart, take a builtin-minted fresh cart, or keep the current cart
+    /// (`None`). The one place the placement → cart mapping lives — shared by the `Continue` body
+    /// re-run and the folded invoke / re-resolve paths (which reach it through their own
+    /// `Continue`).
     fn resolve_frame_placement<'x>(
         &mut self,
         placement: FramePlacement<'x>,
     ) -> Option<Rc<CallFrame>> {
         match placement {
-            FramePlacement::ReuseReserve { outer } => Some(self.acquire_tail_frame(outer)),
+            FramePlacement::FreshTail { outer } => Some(CallFrame::new(outer, None)),
             FramePlacement::FreshChild { frame } => Some(frame),
             FramePlacement::Inherit => None,
         }
-    }
-
-    /// Reuse the slot's reserve cart (reset in place) when uniquely owned, else mint fresh under
-    /// `outer` — the scope-dependent per-call frame construction the scheduler delegates to the
-    /// workload. The scheduler owns the reserve *slot* (rotation, lifecycle); this owns the
-    /// `CallFrame` minting/reset, which names the run-lived `Scope`. `try_reset_for_tail`'s
-    /// `Rc::get_mut` gate is the "no escape" uniqueness check (a cloned `Rc` forecloses reuse).
-    fn acquire_tail_frame<'a>(&mut self, outer: &'a Scope<'a>) -> Rc<CallFrame> {
-        if let Some(mut reserve) = self.take_active_reserve() {
-            if reserve.try_reset_for_tail(outer) {
-                self.note_tail_reuse();
-                return reserve;
-            }
-        }
-        CallFrame::new(outer, None)
     }
 
     /// Close the active frame's scope iff this slot owns it: the per-call frame's body has finished
@@ -458,9 +439,9 @@ impl<'run> KoanRuntime<'run> {
                 // The body's leading statements are never dispatched here — a producer with leading
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
                 // from the resolving finish (see `dispatch/exec.rs` and `run_action`).
-                // A tail iteration (`ReuseReserve`) retires this scope before the cart is reused for
-                // the next; other placements keep the current scope live.
-                if matches!(frame, FramePlacement::ReuseReserve { .. }) {
+                // A tail iteration (`FreshTail`) retires this scope before the fresh cart is
+                // installed for the next; other placements keep the current scope live.
+                if matches!(frame, FramePlacement::FreshTail { .. }) {
                     self.close_owned_scope(idx);
                 }
                 let frame = self.resolve_frame_placement(frame);

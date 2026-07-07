@@ -233,100 +233,6 @@ fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
     assert_eq!(a.region().alloc_count(), baseline + 1);
 }
 
-/// Pins the reset transmute pair (`&Scope<'_> → &Scope<'static>` outer cast plus the
-/// raw-region-ptr re-anchor) under tree borrows: after reset, a fresh alloc via
-/// `region()` and a `bind_value` on `scope()` must coexist.
-#[test]
-fn call_frame_try_reset_for_tail_round_trip() {
-    let outer_region = run_root_storage();
-    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
-    let _pre = frame.brand().alloc_object(KObject::Number(1.0));
-    assert!(frame.region().alloc_count() >= 1);
-
-    let did_reset = frame.try_reset_for_tail_test(outer_scope);
-    assert!(did_reset, "Rc was unique, reset must succeed");
-
-    // Fresh region: only the new child scope remains.
-    assert_eq!(frame.region().alloc_count(), 1);
-
-    // After reset, a fresh alloc via the opened scope's region and a bind on that scope coexist.
-    frame.with_scope(|child| {
-        let v = child.brand().alloc_object(KObject::Number(42.0));
-        child
-            .bind_value(
-                "k".to_string(),
-                v,
-                BindingIndex::BUILTIN,
-                StoredReach::empty(),
-            )
-            .unwrap();
-        assert!(matches!(child.lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
-        assert!(child.outer().is_some());
-    });
-}
-
-/// `try_reset_for_tail` refuses when another `Rc<CallFrame>` *shell* clone exists — a
-/// transient holder still naming the frame, for which in-place reset would mutate the shell
-/// under a live alias. (An escaped value pins `FrameStorage`, not the shell — see
-/// [`call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`].)
-#[test]
-fn call_frame_try_reset_for_tail_refuses_when_aliased() {
-    let outer_region = run_root_storage();
-    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
-    let pre_region_addr = frame.region() as *const KoanRegion as usize;
-
-    // A second shell holder (not an escape): clone the `Rc<CallFrame>` so strong_count > 1.
-    let _alias = Rc::clone(&frame);
-
-    let did_reset = frame.try_reset_for_tail_test(outer_scope);
-    assert!(!did_reset, "aliased frame must refuse reset");
-
-    assert_eq!(
-        frame.region() as *const KoanRegion as usize,
-        pre_region_addr,
-        "refused reset must leave region pointer unchanged",
-    );
-}
-
-/// An escaped value pins the frame's `FrameStorage`, not its shell, so the shell stays uniquely
-/// owned and `try_reset_for_tail` *succeeds*: the escapee's snapshot rides the `FrameStorage` it
-/// still holds while the shell installs fresh storage. A gate keyed on the shell's `Rc` count
-/// could not distinguish this from a live shell alias and would refuse it.
-#[test]
-fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
-    let outer_region = run_root_storage();
-    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
-    let _escaped = frame.brand().alloc_object(KObject::Number(7.0));
-    let pre_alloc_count = frame.region().alloc_count();
-    let pre_storage_addr = frame.region() as *const KoanRegion as usize;
-
-    // Simulate a closure escape: hold the frame's storage Rc (what an anchored value carries).
-    let escaped_storage = frame.storage_rc();
-
-    let did_reset = frame.try_reset_for_tail_test(outer_scope);
-    assert!(
-        did_reset,
-        "an escaped *storage* hold must not foreclose reuse"
-    );
-
-    // The shell reset to a fresh region, distinct from the snapshot the escapee still holds.
-    assert_ne!(
-        frame.region() as *const KoanRegion as usize,
-        pre_storage_addr,
-        "reuse installed fresh storage",
-    );
-    // The escaped snapshot is still alive (its retained storage Rc still owns the pre-reset
-    // region, allocations intact) — the reset dropped only the shell's reference to it.
-    assert!(std::ptr::eq(
-        escaped_storage.region() as *const KoanRegion,
-        pre_storage_addr as *const KoanRegion
-    ));
-    assert_eq!(escaped_storage.region().alloc_count(), pre_alloc_count);
-}
-
 /// A per-call frame whose parent is the run root holds **no** strong ref back to the run-root
 /// `FrameStorage`: a dispatched frame's `outer` is `None`, so no child→run-root back-edge exists. An
 /// escaped value (here, the frame's storage `Rc`) therefore cannot keep the run root alive past its
@@ -618,16 +524,17 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
 /// The empty-witness transient — the crux of the foreign-reach-only alloc. A region-pure carrier born
 /// under [`FrameSet::empty`] (the brand-confined [`alloc_object_witnessed`](super::Region::alloc_object_witnessed))
 /// pins **nothing**, sound only because the producer is folded into its witness **before** the carrier
-/// is stored on a node. This pins that fold-before-store across a frame reset: fold the producer, seal,
-/// then TCO-reset the producer *shell* — the folded producer-storage pin keeps the pre-reset region
-/// (where the value lives) alive, so opening the sealed carrier after the reset reads a live pointee,
-/// not a freed one. Without the fold the empty witness would pin nothing and the reset would free the
-/// region under the stored carrier.
+/// is stored on a node. This pins that fold-before-store across the producer shell's drop: fold the
+/// producer, seal, then drop the producer shell outright (a `FreshTail` tail hop never resets a shell
+/// in place — it mints a fresh cart and drops the retiring one) — the folded producer-storage pin
+/// keeps the region (where the value lives) alive, so opening the sealed carrier after the drop reads
+/// a live pointee, not a freed one. Without the fold the empty witness would pin nothing and the drop
+/// would free the region under the stored carrier.
 #[test]
-fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
+fn empty_witness_carrier_survives_producer_shell_drop_after_fold() {
     let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
 
     // Born foreign-reach-only (empty): the active frame is excluded at the alloc site.
     let carrier: Witnessed<CarriedFamily, CarrierWitness> =
@@ -648,13 +555,12 @@ fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
     );
     let sealed: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(folded);
 
-    // TCO-reset the producer *shell* — succeeds (the sealed carrier holds the *storage* Rc, not the
-    // shell), installing fresh storage while the folded witness keeps the pre-reset region alive.
-    let did_reset = frame.try_reset_for_tail_test(outer_scope);
-    assert!(did_reset, "the shell is uniquely owned, so reset succeeds");
+    // Drop the producer shell outright — the sealed carrier holds the *storage* Rc, not the shell,
+    // so the region stays alive under the drop.
+    drop(frame);
 
-    // The pointee is still live: the folded producer-storage pin held the pre-reset region across the
-    // shell reset, so opening the stored carrier reads a valid value rather than a freed one.
+    // The pointee is still live: the folded producer-storage pin held the region across the shell's
+    // drop, so opening the stored carrier reads a valid value rather than a freed one.
     let got = sealed.open(|c| match c {
         Carried::Object(KObject::Number(n)) => *n,
         _ => panic!("expected a Number object"),

@@ -104,7 +104,7 @@ impl ChainOp {
     }
 
     /// Assemble the new chain in the run loop. `body_frame` is the cart the body runs in — the
-    /// freshly installed frame for a `FreshChild`/`ReuseReserve` tail, or the slot's already-installed
+    /// freshly installed frame for a `FreshChild`/`FreshTail` tail, or the slot's already-installed
     /// current cart for an `Inherit` FN-body re-entry (the folded `invoke`) — read only by the
     /// `AssembleBody` arm.
     pub(super) fn apply(
@@ -132,8 +132,7 @@ impl ChainOp {
 /// - `Yoked` — no pointer at all: the slot's scope *is* its own per-call cart's scope, re-projected
 ///   from the [`Node::frame`](crate::scheduler::nodes::Node) cart through
 ///   [`CallFrame::with_scope`](crate::machine::CallFrame). Single-cart: the frame `Rc` already on the
-///   slot is the sole liveness witness, so there is no second `Rc` clone and no contention with
-///   `try_reset_for_tail`'s uniqueness check.
+///   slot is the sole liveness witness, so there is no second `Rc` clone aliasing the shell.
 /// - `YokedChild` — a [`SealedExtern<ScopeRefFamily>`] carrier (a `&'static Scope`) to a block scope a
 ///   builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY).
 ///   Opened at read against the slot's frame `Rc` ([`SealedExtern::open`] at a `for<'b>` brand), sound
@@ -141,8 +140,8 @@ impl ChainOp {
 ///   holds the cart. Distinct from `Yoked` only in that the child differs from the cart's own scope,
 ///   so it needs a stored carrier.
 ///
-/// Storing an erased, frame-witnessed carrier keeps the borrow honest across a TCO `try_reset_for_tail`
-/// (nothing persisted points into the reset region; the live frame is re-read each step) and keeps the
+/// Storing an erased, frame-witnessed carrier keeps the borrow honest across a tail-call cart swap
+/// (nothing persisted points into a stale region; the live frame is re-read each step) and keeps the
 /// slot from naming `'run` in its node-stored scope state.
 ///
 /// `Copy` because both arms are trivially copyable ([`SealedExtern<ScopeRefFamily>`] is `Copy` — a

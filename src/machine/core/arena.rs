@@ -561,14 +561,6 @@ impl CallFrame {
     ) -> Rc<CallFrame> {
         CallFrame::new(outer, outer_frame)
     }
-
-    /// Test alias for [`CallFrame::try_reset_for_tail`].
-    pub(crate) fn try_reset_for_tail_test<'a>(
-        self: &mut Rc<Self>,
-        new_outer: &'a Scope<'a>,
-    ) -> bool {
-        self.try_reset_for_tail(new_outer)
-    }
 }
 
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
@@ -745,8 +737,8 @@ impl CallFrame {
     }
 
     /// The child scope's externally-witnessed [`SealedExtern`] carrier, which is `Some` for the whole
-    /// life of a constructed frame (`None` only transiently inside `new` / `try_reset_for_tail`
-    /// before the child scope is allocated).
+    /// life of a constructed frame (`None` only transiently inside `new`, before the child scope is
+    /// allocated).
     fn scope_carrier_set(&self) -> &SealedExtern<ScopeRefFamily> {
         self.scope_carrier
             .as_ref()
@@ -792,36 +784,11 @@ impl CallFrame {
     }
 
     /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a
-    /// module frame) pins to keep its captured environment alive *without* pinning the shell, so
-    /// tail reuse stays free to reset the shell.
+    /// module frame) pins to keep its captured environment alive independently of the shell: a
+    /// `FreshTail` tail hop drops this frame's shell outright rather than resetting it in place, and
+    /// the escaped storage clone keeps the region it names alive regardless.
     pub fn storage_rc(&self) -> Rc<FrameStorage> {
         Rc::clone(&self.storage)
-    }
-
-    /// Reset this frame for a tail-call iteration: install a fresh `FrameStorage` (a new
-    /// `KoanRegion` escaping into `new_outer.region`, no `outer` link) and re-allocate the child
-    /// `Scope` under `new_outer`. The old `FrameStorage` is dropped here — and its region with it —
-    /// *unless* an escaped value still holds it, in which case that snapshot lives on independently
-    /// while the shell reuses. Returns `false` (untouched) only when `Rc::get_mut` fails — another
-    /// live `Rc<CallFrame>` (a shell clone, never an escape) foreclosing in-place reuse. See
-    /// [per-call-region/frames.md § TCO frame reuse](../../../design/per-call-region/frames.md#tco-frame-reuse).
-    pub fn try_reset_for_tail<'p>(self: &mut Rc<Self>, new_outer: &'p Scope<'p>) -> bool {
-        if Rc::get_mut(self).is_none() {
-            return false;
-        }
-        // Build the fresh storage and its child scope before touching the shell, so the storage is
-        // heap-pinned by the new storage Rc when it lands in the shell.
-        let storage = RegionHost::fresh(None);
-        // Born externally-witnessed through the construction door: it brands the fresh region and
-        // `new_outer` at one `for<'b>`, builds the invariant `Scope<'b>` coupling them, and erases the
-        // freshly-stored child scope into a `SealedExtern` with no transient `&'a` minted.
-        let scope_carrier = build_frame_child_witnessed(new_outer, &storage);
-        // The local borrow of `storage` ends above, so it can move into the shell.
-        let this = Rc::get_mut(self).expect("just-verified unique above");
-        // Drops the old storage (and its region) unless an escapee still holds it.
-        this.storage = storage;
-        this.scope_carrier = Some(scope_carrier);
-        true
     }
 }
 

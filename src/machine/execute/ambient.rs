@@ -44,8 +44,6 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// per step by [`KoanRuntime::with_slot_step`]; read via
     /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
     active_in_contract_chain: bool,
-    #[cfg(test)]
-    tail_reuse_count: usize,
 }
 
 /// The previous ambient values a slot step displaces — restored by
@@ -64,9 +62,9 @@ struct SlotStepSave {
 /// `active_frame`, so this returned `prev_frame`, not the ambient `active_frame`, is authoritative.
 pub(in crate::machine::execute) struct PostStep {
     /// The slot's cart at step end. Always present: `with_slot_step` installs the node's cart and
-    /// an invoke never empties `active_frame` — reuse draws from the reserve via
-    /// `acquire_tail_frame`, never the live active cart — so the slot's own cart rides through. The
-    /// Replace arm reinstalls / rotates with it.
+    /// an invoke never empties `active_frame` — a `FreshTail` placement mints its own cart via
+    /// `CallFrame::new`, never touching the live active cart — so the slot's own cart rides
+    /// through. The Replace arm reinstalls / rotates with it.
     pub(in crate::machine::execute) prev_frame: Rc<CallFrame>,
     /// The slot's reserve frame at step end (see ping-pong reserve rotation).
     pub(in crate::machine::execute) post_step_reserve: Option<Rc<CallFrame>>,
@@ -164,13 +162,13 @@ impl<'run> KoanRuntime<'run> {
     ///
     /// `post_step_reserve` carries the slot's reserve at step end, which the Replace arm reads to
     /// decide rotation: with a new frame, the post-step reserve is two iterations old and gets
-    /// dropped; without one, it rides along on the reinstalled node. An invoke that reused the
-    /// reserve via `acquire_tail_frame` already consumed it, so it reads back `None`.
+    /// dropped; without one, it rides along on the reinstalled node. A `FreshTail` invoke never
+    /// draws on the reserve, so it always reads back exactly what was installed.
     ///
     /// The `expect` asserts the "every step runs against a cart" invariant: the bracket installs
-    /// the node's non-optional cart and an invoke reuses the *reserve*, never the active cart, so
-    /// `active_frame` is `Some` for the whole step. It stays `Option` because it is legitimately
-    /// `None` *between* steps.
+    /// the node's non-optional cart and an invoke never touches the reserve, only ever mints its
+    /// own fresh cart, so `active_frame` is `Some` for the whole step. It stays `Option` because it
+    /// is legitimately `None` *between* steps.
     pub(in crate::machine::execute) fn with_slot_step<R>(
         &mut self,
         node_frame: Rc<CallFrame>,
@@ -248,26 +246,13 @@ impl<'run> KoanRuntime<'run> {
         body(&mut *bracket.runtime)
     }
 
-    /// Take the slot's reserve cart for a TCO tail reuse, leaving none. The workload resets it under
-    /// the body's outer scope (or, on a uniqueness-gate miss, drops it and mints fresh) — the
-    /// scope-dependent frame construction the scheduler does not own. The just-finished cart is
-    /// rotated back in as the next reserve by `execute`'s Replace arm. Reuse draws from the
-    /// *reserve*, never the live `active_frame`, so the slot's own cart is never emptied by an invoke.
+    /// Take the slot's reserve cart, leaving none. Unconsumed by production this phase — a
+    /// `FreshTail` invoke mints its own cart via `CallFrame::new` and never draws on the reserve —
+    /// so this is test-only, exercised by the ambient-bracket tests that assert the reserve is
+    /// empty around a step.
+    #[cfg(test)]
     pub(in crate::machine::execute) fn take_active_reserve(&mut self) -> Option<Rc<CallFrame>> {
         self.ambient.active_reserve.take()
-    }
-
-    /// Record a TCO reserve reuse (test-only counter). A no-op outside tests.
-    pub(in crate::machine::execute) fn note_tail_reuse(&mut self) {
-        #[cfg(test)]
-        {
-            self.ambient.tail_reuse_count += 1;
-        }
-    }
-
-    #[cfg(test)]
-    pub(in crate::machine::execute) fn ambient_tail_reuse_count(&self) -> usize {
-        self.ambient.tail_reuse_count
     }
 
     /// Resolve the cart a submission's slot carries, plus whether a frame was active. Top-level

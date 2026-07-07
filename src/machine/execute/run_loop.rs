@@ -99,8 +99,9 @@ impl<'run> KoanRuntime<'run> {
     /// region. The closure's result cannot name `'b`, so the `Outcome<'b>` and the finalized
     /// `Carried<'b>` are erased into the slot store *before* return: a value born at `'b` never has to
     /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The cart clone is
-    /// confined to this call and dropped at return — before the next iteration's `try_reset_for_tail`
-    /// resets a *different* cart — so it does not contend with the TCO `Rc::get_mut` uniqueness gate.
+    /// confined to this call and dropped at return; a `FreshTail` placement for the next iteration
+    /// mints an entirely fresh cart rather than reusing this one, so nothing aliases across the
+    /// boundary.
     fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
         let idx = id.index();
         // Read the scope as a value up front: nothing holds a scope borrow across the step's

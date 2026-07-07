@@ -404,10 +404,12 @@ pub enum BlockEntry<'a> {
 
 /// The cart a `Tail` runs in.
 pub enum FramePlacement<'a> {
-    /// Reuse the slot's ping-pong reserve cart (`acquire_tail_frame(outer)`). The TCO tail-call
-    /// frame — FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart; the
-    /// minted frame strong-owns no ancestor, so it carries no back-edge.
-    ReuseReserve { outer: &'a Scope<'a> },
+    /// Mint a fresh cart at apply (`CallFrame::new(outer, None)`). The TCO tail-call frame —
+    /// FN-body invoke, deferred `PerCall` tails. The only harness-constructed cart; the retiring
+    /// cart drops at the reinstall, and the library retires its region once the sealed argument
+    /// carriers that pin it release their hold. The minted frame strong-owns no ancestor, so it
+    /// carries no back-edge.
+    FreshTail { outer: &'a Scope<'a> },
     /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `CallFrame::with_scope`; EVAL builds it

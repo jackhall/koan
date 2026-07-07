@@ -98,7 +98,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-41 tests, grouped by the unsafe site each pins down. Names below are the exact
+38 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -140,14 +140,15 @@ escape — the closure-surface twin pins the store → record → brand-read →
 `FrameSet::empty()` (its *foreign* reach — the active frame excluded), so its witness pins **nothing**.
 Sound only as a within-step transient: the active frame pins the region externally for the construction
 step, and `finalize` folds the producer into the carrier's witness (`Witnessed::reseal_under`) **before**
-the carrier is stored on a node. The test pins that fold-before-store across a TCO reset — fold the
-producer, seal, then `try_reset_for_tail` the producer *shell*; the folded producer-storage pin keeps
-the pre-reset region (where the value lives) alive, so opening the sealed carrier after the reset reads
-a live pointee. Without the fold the empty witness would pin nothing and the reset would free the region
+the carrier is stored on a node. The test pins that fold-before-store across the producer shell's drop
+— fold the producer, seal, then drop the producer shell outright (a `FreshTail` tail hop mints a fresh
+cart and drops the retiring one rather than resetting it in place); the folded producer-storage pin
+keeps the region (where the value lives) alive, so opening the sealed carrier after the drop reads
+a live pointee. Without the fold the empty witness would pin nothing and the drop would free the region
 under the stored carrier. The only `unsafe` it routes is the shared `retype` in `witnessed.rs` (through
 `Sealed::open` and `reseal_under`'s `merge`).
 
-- `empty_witness_carrier_survives_producer_shell_reset_after_fold`
+- `empty_witness_carrier_survives_producer_shell_drop_after_fold`
 
 **Honest single-region witness — multi-region union** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — the single-region `yoke` seam is `WitnessRegion for Rc<FrameStorage>` (a held owner pins exactly its
@@ -220,24 +221,6 @@ if the fold is skipped (as `alloc_type`, its unfolded sibling, would leave it). 
 routed is the shared `retype` in `witnessed.rs` (through `alloc_with`'s `yoke`/`merge`).
 
 - `functor_field_reach_fold_survives_producer_frame_free`
-
-**`CallFrame::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
-frame reuse installs a fresh refcounted `FrameStorage` (a new `KoanRegion`) and
-re-allocates the child `Scope` through the externally-witnessed construction door
-(`build_frame_child_witnessed`): the new outer link and root are brand-shortened to the fresh region's
-lifetime *by the door's generative brand*, so the child is built at real lifetimes and erased once via
-`SealedExtern::erase` with no construction-time transmute of its own. The read these tests pin is `CallFrame::with_scope`
-(`SealedExtern::open`) on the re-installed child plus the swap's drop
-discipline: the `Rc::get_mut` gate refuses only when another `Rc<CallFrame>`
-*shell* holder still exists; an escaped value pins the `FrameStorage`, not the
-shell, so it does not foreclose reuse — the swap drops the shell's reference to the
-old storage while the escapee's clone keeps that snapshot alive and aliased. The
-carrier bundles no `Rc` clone (it holds a `&'static Scope`), so it does not peg the
-`Rc::get_mut` uniqueness check the reset depends on.
-
-- `call_frame_try_reset_for_tail_round_trip`
-- `call_frame_try_reset_for_tail_refuses_when_aliased`
-- `call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
@@ -527,9 +510,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-07: 199s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 260s — 41 tests, 0 leaks, 0 UB
 - 2026-07-06: 201s — 40 tests, 0 leaks, 0 UB
 - 2026-07-06: 248s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 159s — 38 tests, 0 leaks, 0 UB
-- 2026-07-06: 180s — 35 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

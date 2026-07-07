@@ -26,16 +26,16 @@ use crate::witnessed::Sealed;
 
 /// Fold a resolved call into a [`Outcome::Continue`]: the producer installs the per-call cart and
 /// `invoke` runs against it on the next pop. A user fn's `Continue` carries
-/// [`FramePlacement::ReuseReserve`] (the harness mints the TCO cart); a builtin's carries
-/// [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns `picked`, so
-/// the builtin-vs-user-fn frame decision is made here, not in the harness.
+/// [`FramePlacement::FreshTail`] (the harness mints the TCO cart fresh at apply); a builtin's
+/// carries [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns
+/// `picked`, so the builtin-vs-user-fn frame decision is made here, not in the harness.
 pub(super) fn invoke_continue<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
 ) -> Outcome<'step> {
     let frame = match &picked.body {
         Body::Builtin(_) => FramePlacement::Inherit,
-        _ => FramePlacement::ReuseReserve {
+        _ => FramePlacement::FreshTail {
             outer: picked.captured_scope(),
         },
     };
@@ -111,7 +111,7 @@ pub(super) fn invoke<'step>(
         Err(e) => return Outcome::Done(Err(e)),
     };
 
-    // The per-call frame the producer's `Continue` (`ReuseReserve`) already acquired and installed
+    // The per-call frame the producer's `Continue` (`FreshTail`) already minted and installed
     // as the slot's cart — `invoke` runs against it, so read it from the view rather than a param.
     let frame = view
         .current_frame()
@@ -141,8 +141,9 @@ pub(super) fn invoke<'step>(
                 },
             };
             // The frame is already the slot's installed cart, so the tail re-enters it with
-            // `Inherit` — re-installing would clobber the ping-pong reserve — and the block entry
-            // carries it so the lowering fans any leading statements into it.
+            // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
+            // holding the bound params — and the block entry carries it so the lowering fans any
+            // leading statements into it.
             super::super::runtime::run_action(Action::Tail {
                 leading: leading.into_iter().map(|e| (*e).clone()).collect(),
                 tail: tail.clone(),
