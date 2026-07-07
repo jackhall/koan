@@ -36,6 +36,11 @@ pub use region::{
 mod region_set;
 pub use region_set::{PinsRegion, RegionSet};
 
+mod host;
+pub use host::RegionHost;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
+
 mod carrier;
 pub use carrier::{Carrier, HasRegionHandle, HostedSetRef};
 
