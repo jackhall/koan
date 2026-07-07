@@ -20,6 +20,21 @@ witness-hosting trio completes with
 [delivery-driven-frame-retention](delivery-driven-frame-retention.md), which
 reshapes the construction surface they live on.
 
+- **`CallFrame` still strong-owns its region storage.** The scheduler already
+  pins every per-node cart opaquely (`NodeFrame.cart: Rc<W::Cart>`) and, with
+  frame retention, holds frame owners on its own rows (`retain`, `handoff` in
+  [dep_graph.rs](../../workgraph/src/scheduler/dep_graph.rs)) — yet
+  [`CallFrame`](../../src/machine/core/arena.rs) keeps its own strong
+  `Rc<FrameStorage>`, the one Koan-side strong region owner in the per-call
+  lifecycle. Moving the frame owner into scheduler-held per-slot state (an
+  `Rc<W::Frame>` beside the cart) would leave `CallFrame` a pure semantics
+  shell: scope carrier, return contract, close-owner slot. A solution here may
+  also dissolve the construction-time ancestor-ownership policy —
+  `CallFrame::new`'s `outer_frame` parameter, by which Koan decides which
+  frames strong-own which ancestor storage: with the scheduler owning frames
+  and already knowing the caller graph, the ancestor link could become
+  graph-derived rather than Koan-asserted.
+
 - **Region-purity is caller-asserted at the move-in alloc surfaces.** The
   substrate's `resident` construction path seals a value under the empty
   (pins-nothing) witness, which is sound only if the value reaches no foreign
