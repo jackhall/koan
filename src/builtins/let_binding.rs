@@ -143,13 +143,17 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        // The bound value's stored reach: minting the delivered carrier's reach into this scope's
-        // arena both computes the home-omitted foreign reach (stored on the binding so a later read
-        // rebuilds the value's carrier from it) AND pins it for the scope's life — no separate fold. A
-        // region-pure RHS (no delivered carrier) reaches nothing foreign, so the reach is empty.
+        // The bound value's stored reach. The RHS was `deep_clone`d into this scope's own region
+        // above, so it does *not* reside in the delivered carrier's producer region: residence there
+        // pins nothing, and the producer host materializes as a reach member only when the copy
+        // genuinely borrows back into it (the copied-adoption rule — `adopted_reach_of`, the same
+        // split the parameter and MATCH `it` binds already apply). Minting still both computes the
+        // home-omitted foreign reach (stored on the binding so a later read rebuilds the value's
+        // carrier from it) AND pins it for the scope's life — no separate fold. A region-pure RHS (no
+        // delivered carrier) reaches nothing foreign, so the reach is empty.
         let stored = ctx
             .arg_carrier("value")
-            .map(|carrier| ctx.scope.host_reach_of(carrier.witness()))
+            .map(|carrier| ctx.scope.adopted_reach_of(carrier.witness()))
             .unwrap_or_default();
         if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index, stored) {
             return done_err(e);
