@@ -249,8 +249,15 @@ impl<'run> KoanRuntime<'run> {
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
                     // The producer frame's owner `Rc`, handed to the scheduler as the retention host
                     // for a finalized value: the frame stays retained until every destination pulls.
-                    // `None` for a frameless / run producer, whose backing already outlives the terminal.
-                    let host = frame.map(|f| f.storage_rc());
+                    // Seeded **unconditionally**, decoupled from the `frame` (dying-ness) gate: even the
+                    // run frame's storage owns a real region (the run region, via `CallFrame::adopting`),
+                    // so `storage_rc()` is well-defined at every step. A hold on run-region storage is
+                    // sound over-retention — an `Rc` clone that outlives the run anyway, released at
+                    // pull-zero / node free. Retention is now a pure delivery fact; `non_dying` no longer
+                    // makes any memory decision (its sole reader, the `frame` gate above, keeps only the
+                    // per-call return-obligation semantics: the contract label, the finalize fold, and
+                    // the sever gate until Phase 8 deletes it).
+                    let host = Some(post.prev_frame.storage_rc());
                     match step {
                         NodeStep::DoneWitnessed(carrier) => {
                             // The value terminal arrives already witnessed, naming its reach. The

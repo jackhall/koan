@@ -27,9 +27,9 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Erased, FamilyArena, HasRegionHandle, Reattachable, Region, RegionHandle, RegionHandleFamily,
-    RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile, Stored, WitnessRegion,
-    Witnessed,
+    Delivered, Erased, FamilyArena, HasRegionHandle, Reattachable, Region, RegionHandle,
+    RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
+    Stored, WitnessRegion, Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -624,7 +624,7 @@ pub type FrameSet = RegionSet<FrameStorage>;
 pub(crate) fn build_frame_child_witnessed<'p>(
     outer: &'p Scope<'p>,
     storage: &Rc<FrameStorage>,
-) -> SealedExtern<ScopeRefFamily> {
+) -> Sealed<ScopeRefFamily, CarrierWitness> {
     let handle = SealedExtern::<RegionHandleFamily<KoanStorageProfile>>::erase(
         RegionHandle::from_owner(&**storage),
     );
@@ -633,30 +633,35 @@ pub(crate) fn build_frame_child_witnessed<'p>(
     handle.zip(parent).open(storage, |(handle_b, outer_b)| {
         // `handle_b: RegionHandle<'b, KoanStorageProfile>`, `outer_b: &'b Scope<'b>` — the region
         // handle and parent unified at the one brand. The child stores both by plain coercion (no
-        // retype of its own).
+        // retype of its own). The child scope lives in `storage`'s own region, so it seals under the
+        // empty (`resident`) carrier witness — its liveness is the frame storage, paired with it as the
+        // envelope host by the `CallFrame` constructor.
         let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
-        handle_b
-            .alloc::<Scope<'static>, _>(child, |live| SealedExtern::<ScopeRefFamily>::erase(live))
+        handle_b.alloc::<Scope<'static>, _>(child, |live| {
+            Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(live))
+        })
     })
 }
 
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
 /// so the scheduler manages the frame by `Rc<CallFrame>`; an escaping closure extends only the
 /// *storage* (via [`Self::storage_rc`]), not the shell, so a `FreshTail` tail hop can drop this
-/// frame's shell outright without foreclosing on the escapee. Field order is load-bearing:
-/// `storage` drops before `scope_carrier`, so the region tears down before the now-dangling child
-/// reference.
+/// frame's shell outright without foreclosing on the escapee.
 ///
 /// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
 /// carrier set, escaping-value retention, ancestor chain, and TCO
 /// frame reuse; [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 /// for the heap-pinning / drop-order invariants.
 pub struct CallFrame {
-    storage: Rc<FrameStorage>,
-    /// The per-call child scope on the substrate's externally-witnessed [`SealedExtern`] carrier
-    /// (a `&'static Scope`); read back through [`Self::with_scope`] / [`Self::scope_sealed`]
-    /// ([`SealedExtern::open`]) against `storage` as the pin.
-    scope_carrier: Option<SealedExtern<ScopeRefFamily>>,
+    /// The per-call child scope paired with the frame storage that owns its region, as one delivery
+    /// [`Delivered`] envelope: the storage is the envelope's retained host, the scope its
+    /// empty-witness ([`resident`](Witnessed::resident)) carrier, read back through
+    /// [`Self::with_scope`] / [`Self::scope_sealed`] under that host pin. Co-ownership by one value
+    /// replaces the former hand-maintained `(storage, scope_carrier)` field pair: the
+    /// storage-pins-the-scope co-location the pair kept by field-order convention is now a
+    /// construction invariant of the envelope, and dropping the sealed carrier never dereferences the
+    /// child pointer, so no drop-order rule is left to hand-maintain.
+    envelope: Delivered<ScopeRefFamily, CarrierWitness, FrameStorage>,
     /// True only for the scheduler-owned run frame, which carries the top-level run scope and
     /// never drops mid-run. Its `region` is empty (top-level values live in the externally-owned
     /// run region, reached via `scope.region`), so there is nothing to lift out of it: the Done
@@ -688,8 +693,7 @@ impl CallFrame {
         // address behind the Rc, keeping the erased reference valid.
         let scope_carrier = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
-            storage,
-            scope_carrier: Some(scope_carrier),
+            envelope: Delivered::hosted(scope_carrier, Some(storage)),
             non_dying: false,
             owner: Cell::new(None),
         })
@@ -712,9 +716,9 @@ impl CallFrame {
             std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
         );
+        let scope_carrier = Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
         Rc::new(CallFrame {
-            storage: run_storage,
-            scope_carrier: Some(SealedExtern::erase(scope)),
+            envelope: Delivered::hosted(scope_carrier, Some(run_storage)),
             non_dying: true,
             owner: Cell::new(None),
         })
@@ -737,20 +741,22 @@ impl CallFrame {
         self.owner.get()
     }
 
-    /// The child scope's externally-witnessed [`SealedExtern`] carrier, which is `Some` for the whole
-    /// life of a constructed frame (`None` only transiently inside `new`, before the child scope is
-    /// allocated).
-    fn scope_carrier_set(&self) -> &SealedExtern<ScopeRefFamily> {
-        self.scope_carrier
-            .as_ref()
-            .expect("scope_carrier is set after construction")
+    /// This frame's own `FrameStorage` — the envelope's retained host, which a constructed
+    /// `CallFrame` always carries (every constructor pairs the child scope with `Some(storage)`).
+    fn storage(&self) -> &Rc<FrameStorage> {
+        self.envelope
+            .host()
+            .expect("a constructed CallFrame's envelope always carries its frame storage as host")
     }
 
     /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is
     /// `Copy`) — the run-loop step's source for a `Yoked` slot, opened at the step brand alongside the
     /// continuation / contract / deps instead of re-anchored through the borrow-bounded `attach`.
+    /// Reconstructed from the envelope's sealed carrier: the same erased `&Scope`, exposed witness-less
+    /// so it [`zip`](SealedExtern::zip)s with the step's other externally-witnessed carriers under one
+    /// brand (the envelope host is folded into that step witness separately).
     pub(crate) fn scope_sealed(&self) -> SealedExtern<ScopeRefFamily> {
-        *self.scope_carrier_set()
+        SealedExtern::seal(*self.envelope.cell().erased())
     }
 
     /// Run `f` with this frame's child scope opened at a `for<'b>` brand — the sole scope read, folded
@@ -760,10 +766,10 @@ impl CallFrame {
     /// the opened scope's own region through the substrate (a witnessed shortening) before binding it,
     /// so nothing fabricates a free `&'a`. The carrier opens against this frame's own storage `Rc`
     /// (the pin), and the rank-2 brand keeps the `&Scope<'b>` from escaping the call, so no scope
-    /// borrow rides up a `&mut self` path. Carries **no `unsafe`** — `SealedExtern::open` routes the
-    /// substrate's single audited reattach.
+    /// borrow rides up a `&mut self` path. Carries **no `unsafe`** — [`Delivered::open`] routes the
+    /// substrate's single audited reattach, pinned by the envelope's own retained host.
     pub fn with_scope<R>(&self, f: impl for<'b> FnOnce(&'b Scope<'b>) -> R) -> R {
-        self.scope_sealed().open(&self.storage, f)
+        self.envelope.open(f)
     }
 
     /// This frame's child scope id, copied out through [`Self::with_scope`] — the scalar read for the
@@ -773,7 +779,7 @@ impl CallFrame {
     }
 
     pub fn region(&self) -> &KoanRegion {
-        self.storage.region()
+        self.storage().region()
     }
 
     /// This frame's region [`RegionBrand`] allocation capability, minted from its owning storage.
@@ -781,7 +787,7 @@ impl CallFrame {
     /// a convenience for the arena / lift Miri tests that alloc against a bare frame.
     #[cfg(test)]
     pub(crate) fn brand(&self) -> RegionBrand<'_> {
-        self.storage.brand()
+        self.storage().brand()
     }
 
     /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a
@@ -789,7 +795,7 @@ impl CallFrame {
     /// `FreshTail` tail hop drops this frame's shell outright, and the escaped storage clone keeps
     /// the region it names alive regardless.
     pub fn storage_rc(&self) -> Rc<FrameStorage> {
-        Rc::clone(&self.storage)
+        Rc::clone(self.storage())
     }
 }
 
