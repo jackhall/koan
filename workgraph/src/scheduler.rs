@@ -36,7 +36,7 @@ mod workload;
 
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
-pub use crate::witnessed::{Erased, Reattachable, Sealed, UnionWitness, Witnessed};
+pub use crate::witnessed::{ComposeWitness, Erased, Reattachable, Sealed, UnionWitness, Witnessed};
 pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
@@ -169,7 +169,7 @@ impl<W: Workload> Scheduler<W> {
         ) -> <W::Value as Reattachable>::At<'b>,
     ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
     where
-        W::Witness: UnionWitness,
+        W::Witness: ComposeWitness<B>,
     {
         self.store
             .transfer_lifted(self.resolve_alias(id), dest, relocate)

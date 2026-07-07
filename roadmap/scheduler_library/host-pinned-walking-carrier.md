@@ -55,6 +55,30 @@ which migrated only the resident side):
 
 **Directions.**
 
+- *The carrier is a `workgraph` type — decided.* Defined in the library, generic
+  over the frame-owner `F` and the severed backing `S`, per
+  [witness-hosting.md § Library boundary](../../design/witness-hosting.md#library-boundary)
+  (the carrier and mint verbs are library-owned). Koan supplies the severed
+  backing and keeps its name via a `CarrierWitness` alias, so sites that only
+  thread the type don't change; the pinned reach reader lives beside the
+  crate-private branded reader, so no branded reader is exported.
+- *Witness composition mints, riding the existing `merge`/`transfer_into`
+  channel — decided.* The `UnionWitness` bound on those verbs becomes a compose
+  verb that runs inside the brand and receives the destination allocation
+  capability, per
+  [witness-hosting.md § Composition](../../design/witness-hosting.md#composition-minting-a-set).
+  `RegionSet` composes by plain union; the collapsed carrier composes by
+  minting into the destination and re-homing. `UnionWitness` survives for
+  owned sets only.
+- *The run-loop step-open witness is a plain frame set — decided.* `run_step`'s
+  dep-union pin becomes a `RegionSet<FrameStorage>` folded from each dep
+  carrier's liveness frames. A severed dep's node `Rc` is not a frame and is
+  pinned instead by the dep's duplicated `Sealed` held across the step open —
+  an invariant a Miri fixture (severed dep held across producer drop) verifies.
+  A dedicated step-liveness type is rejected:
+  [delivery-driven frame retention](delivery-driven-frame-retention.md)
+  replaces step liveness with pull-count retention, so it would be machinery
+  that item deletes.
 - *Walking form keeps one owned host arm — decided.* The host pin is the
   transitional liveness source; nothing external retains a producer frame yet,
   so the carrier must. [Delivery-driven frame retention](delivery-driven-frame-retention.md)

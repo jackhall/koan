@@ -2,7 +2,7 @@
 
 <!-- slate-fingerprint
 src/machine/core/arena.rs: 2
-src/machine/core/carrier_witness.rs: 3
+src/machine/core/carrier_witness.rs: 4
 src/machine/core/scope.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
 -->
@@ -172,16 +172,20 @@ signs off "0 leaks" for this shape specifically.
 - `mint_teardown_releases_members`
 
 **`CarrierWitness` pin/reach split** ([src/machine/core/carrier_witness.rs](../src/machine/core/carrier_witness.rs))
-— the value-carrier witness's three `unsafe impl`s (`Witness`, `SetWitness<Rc<FrameStorage>>`,
-`UnionWitness`) assert the same region-pin contracts as `RegionSet`'s: holding the witness keeps every
-`Frame` pin and every reach member's region live and fixed-address, and `union` keeps both operands'
-pins and reaches. The multi-region-union tests above route entirely through this type — every carrier
-they build is born a `Frame`-pin singleton (`yoke_branded` → `into_set` → `singleton`) whose reach the
-`reseal_under` / `merge` / `transfer_into` verbs union — so they pin the `Frame`-pin and reach-union
-paths here; the owned (`Object` / `Type`) pin variants are exercised by the finalize-sever tests. No
-`unsafe` beyond these impls' contracts: the erase/reattach routes the shared `retype` in `witnessed.rs`.
-The pinning tests are the three multi-region-union tests listed above; no separate bullets, since a
-carrier cannot reach several regions without routing every one of these impls.
+— the value-carrier witness's four `unsafe impl`s (`Witness`, `SetWitness<Rc<FrameStorage>>`,
+`UnionWitness`, `ComposeWitness<B>`) assert the same region-pin contracts as `RegionSet`'s: holding
+the witness keeps every `Frame` pin and every reach member's region live and fixed-address, and
+`union`/`compose` (transitionally identical — `compose` ignores its destination and delegates to
+`union`, pending the host-pinned-walking-carrier item's collapse to the library `Carrier`) keeps both
+operands' pins and reaches. The multi-region-union tests above route entirely through this type —
+every carrier they build is born a `Frame`-pin singleton (`yoke_branded` → `into_set` → `singleton`)
+whose reach the `reseal_under` / `merge` / `transfer_into` verbs union (`merge`/`transfer_into` via
+`compose` since `ComposeWitness` generalized their bound) — so they pin the `Frame`-pin and
+reach-union paths here; the owned (`Object` / `Type`) pin variants are exercised by the
+finalize-sever tests. No `unsafe` beyond these impls' contracts: the erase/reattach routes the
+shared `retype` in `witnessed.rs`. The pinning tests are the three multi-region-union tests listed
+above; no separate bullets, since a carrier cannot reach several regions without routing every one
+of these impls.
 
 **`alloc_type_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `KoanStepContextExt::alloc_carried_with`/`alloc_type_with` route a finish's result through the

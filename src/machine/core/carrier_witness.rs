@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
-use crate::witnessed::{SetWitness, UnionWitness, Witness};
+use crate::witnessed::{ComposeWitness, Reattachable, SetWitness, UnionWitness, Witness};
 
 use super::arena::{FrameSet, FrameStorage, KoanRegion};
 
@@ -207,6 +207,15 @@ unsafe impl SetWitness<Rc<FrameStorage>> for CarrierWitness {
 // both reaches, so holding the result keeps every region either input pinned alive.
 unsafe impl UnionWitness for CarrierWitness {
     fn union(left: &Self, right: &Self) -> Self {
+        Self::union(left, right)
+    }
+}
+
+// SAFETY: identical to the `UnionWitness` impl above — plain union already keeps every region either
+// input pinned alive, regardless of `dest`. Transitional: `CarrierWitness` collapses to the library
+// `Carrier` (whose `ComposeWitness` impl genuinely mints) in the next phase of this item.
+unsafe impl<B: Reattachable> ComposeWitness<B> for CarrierWitness {
+    fn compose<'b>(left: &Self, right: &Self, _dest: &B::At<'b>) -> Self {
         Self::union(left, right)
     }
 }

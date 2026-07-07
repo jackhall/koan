@@ -10,8 +10,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Reattachable, Region, RegionHandle, RegionOwner, Sealed, SetWitness, StorageProfile,
-    UnionWitness, Witnessed,
+    ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, Sealed, SetWitness,
+    StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -131,7 +131,7 @@ impl<F: RegionOwner> StepContext<F> {
         T: Reattachable,
         V: Reattachable,
         V::At<'static>: Copy,
-        W: UnionWitness + SetWitness<Rc<F>> + Clone,
+        W: ComposeWitness<AllocViews<V, F::Region>> + SetWitness<Rc<F>> + Clone,
         F::Region: 'static,
     {
         let acc0: Witnessed<AllocViews<V, F::Region>, W> =
@@ -176,7 +176,7 @@ impl<F: RegionOwner> StepContext<F> {
         T: Reattachable,
         V: Reattachable,
         V::At<'static>: Copy,
-        W: UnionWitness + SetWitness<Rc<F>> + Clone,
+        W: ComposeWitness<AllocViews<V, F::Region>> + SetWitness<Rc<F>> + Clone,
     {
         self.alloc_with::<T, V, W>(deps, |region, views| {
             build(RegionHandle::new(region), views)
@@ -220,7 +220,7 @@ fn finalize_alloc_with<F: RegionOwner, T: Reattachable, V: Reattachable>(
 /// folded in so far, re-anchored as one carrier. Layout-invariant in `'r`: a reference and a `Vec` of
 /// a layout-invariant family are each layout-invariant, so the pair is too — the [`Reattachable`]
 /// contract, discharged componentwise, the same justification as [`super::And`].
-struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
+pub struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
 
 // SAFETY: `(&'r R, Vec<V::At<'r>>)` is one type up to `'r` when `V` is — see the type's doc comment.
 // `R: 'static` is required for the GAT to type-check for every `'r` (a bound the concrete `Region`

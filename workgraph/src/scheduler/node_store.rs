@@ -16,7 +16,7 @@ use std::ops::{Index, IndexMut};
 
 use super::nodes::{Node, NodeWork};
 use super::{Live, NodeId, Workload};
-use crate::witnessed::{Reattachable, Sealed, UnionWitness, Witnessed};
+use crate::witnessed::{ComposeWitness, Reattachable, Sealed, Witnessed};
 // `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
 // pre-built `Witnessed`, so the import is test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
@@ -204,7 +204,7 @@ impl<W: Workload> NodeStore<W> {
         ) -> <W::Value as Reattachable>::At<'b>,
     ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
     where
-        W::Witness: UnionWitness,
+        W::Witness: ComposeWitness<B>,
     {
         match &self.slots[id] {
             SlotState::Done(Ok(sealed), ..) => Ok(sealed.transfer_into(dest, relocate)),

@@ -36,6 +36,9 @@ pub use region::{
 mod region_set;
 pub use region_set::{PinsRegion, RegionSet};
 
+mod carrier;
+pub use carrier::{Carrier, HasRegionHandle};
+
 mod step_ctx;
 pub use step_ctx::StepContext;
 
@@ -170,6 +173,14 @@ impl<T: Reattachable> Erased<T> {
         // SAFETY: see the method contract; lifetime-only retype of a single-lifetime family.
         unsafe { retype::<T::At<'static>, T::At<'r>>(self.inner) }
     }
+
+    /// The `'static`-erased inner value, for a crate-internal re-anchor via [`with_branded_ref`] —
+    /// the route for a carrier that stores an erased reference *alongside* (not inside) its own
+    /// witness, so it re-anchors under a pin other than the one bundled with it. The sole caller is
+    /// [`Carrier`](carrier::Carrier)'s pinned reach reader.
+    pub(crate) fn as_static(&self) -> &T::At<'static> {
+        &self.inner
+    }
 }
 
 impl<T: Reattachable> Clone for Erased<T>
@@ -267,6 +278,28 @@ pub unsafe trait UnionWitness: Witness + Sized {
     /// The witness pinning both `left`'s and `right`'s regions (set union with `outer`-chain
     /// subsumption).
     fn union(left: &Self, right: &Self) -> Self;
+}
+
+/// Witness composition for [`Witnessed::merge`] / [`Sealed::transfer_into`], run **inside** the
+/// `for<'b>` brand while both source witnesses are still held (they pin the backings) and the
+/// destination's live form `B::At<'b>` is in scope — so an impl can *mint* into the destination
+/// rather than only computing a pure union. Total, like [`UnionWitness`]: every pair of witnesses is
+/// composable against any destination, so there is no failure verdict.
+///
+/// [`RegionSet`] composes by plain union, ignoring `dest` (an owned set already represents any
+/// union). [`Carrier`] composes by minting `left`'s reach into `dest`'s own arena and re-homing onto
+/// `right`'s host — the collapsed carrier cannot represent an arbitrary union, only "the value now
+/// lives here, reaching what it reached before."
+///
+/// # Safety
+///
+/// Holding the value [`compose`](Self::compose) returns must keep every region `left`, `right`, and
+/// `dest` reach live for as long as it is held — the same obligation as [`UnionWitness::union`], but
+/// discharged with the destination's allocation capability available to satisfy it.
+pub unsafe trait ComposeWitness<B: Reattachable>: Witness + Sized {
+    /// Compose `left` and `right`'s witnesses into one pinning both — and, for an impl that mints,
+    /// `dest`'s own region too — with `dest`'s live form available as a mint target.
+    fn compose<'b>(left: &Self, right: &Self, dest: &B::At<'b>) -> Self;
 }
 
 /// A set witness a single-region [`WitnessRegion`] widens into: it holds the single witness as a
@@ -549,9 +582,8 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
     ) -> Witnessed<P, W>
     where
-        W: UnionWitness,
+        W: ComposeWitness<B>,
     {
-        let witness = W::union(&self.witness, &other.witness);
         let Witnessed {
             value: left,
             witness: left_witness,
@@ -562,13 +594,15 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         } = other;
         // SAFETY: both source witnesses are held across `f`, each pinning its own carrier's backing;
         // the two carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak,
-        // and the projection is immediately re-erased to `'static` for storage. The combined `witness`
-        // (set union with subsumption) pins both regions thereafter — `reattach`'s contract, discharged
-        // for both carriers.
+        // and the projection is immediately re-erased to `'static` for storage. `compose` runs before
+        // `f` consumes `live_right`, so the destination's live form is still available to mint into;
+        // the composed `witness` pins both regions (and, for a minting impl, `dest`'s) thereafter —
+        // `reattach`'s contract, discharged for both carriers.
         let live_left: T::At<'_> = unsafe { left.reattach() };
         let live_right: B::At<'_> = unsafe { right.reattach() };
+        let witness = W::compose(&left_witness, &right_witness, &live_right);
         let projected = f(live_left, live_right, PhantomData);
-        // The source witnesses pinned both backings across `f`; drop them now — the combined `witness`
+        // The source witnesses pinned both backings across `f`; drop them now — the composed `witness`
         // computed above carries both pins forward.
         drop(left_witness);
         drop(right_witness);
@@ -816,7 +850,7 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
     ) -> Witnessed<P, W>
     where
-        W: UnionWitness + Clone,
+        W: ComposeWitness<B> + Clone,
         T::At<'static>: Copy,
     {
         self.inner.duplicate().merge::<B, P>(dest, relocate)
