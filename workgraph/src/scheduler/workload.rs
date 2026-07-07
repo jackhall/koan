@@ -1,4 +1,5 @@
 use super::Reattachable;
+use crate::witnessed::PinsRegion;
 
 /// The live (caller-lifetime) form of the inter-node value for a workload `W`, re-anchored from the
 /// scheduler's `Witnessed<W::Value, _>` slot at the borrow under which the producer frame stays
@@ -20,6 +21,12 @@ pub trait Workload {
     type Error;
     /// The per-node memory frame the scheduler manages by `Rc` (minted by the workload; never calls a method on it).
     type Cart;
+    /// The producer-frame owner the scheduler retains for delivery-driven frame retention: it holds
+    /// an `Rc<Self::Frame>` for a finalized producer until every destination has pulled the terminal,
+    /// releasing at pull-count zero (design/witness-hosting.md § Retention model). [`PinsRegion`] is
+    /// the reach-set member contract; the scheduler retains and drops the `Rc` but calls no method on
+    /// it. The Koan instantiation is `FrameStorage`.
+    type Frame: PinsRegion + 'static;
     /// The finalized-value witness: the set of region owners pinning a stored terminal's backing
     /// (empty for a frameless / run-region value, which is already in a surviving region). The result
     /// slot stores `Sealed<Self::Value, Self::Witness>`; a `Default` empty value re-homes a drained

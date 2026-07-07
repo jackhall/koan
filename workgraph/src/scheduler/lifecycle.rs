@@ -2,6 +2,8 @@
 //! workload's driver calls at a step's Done boundary. See
 //! [design/execution/scheduler.md § Dependency graph invariants](../../../design/execution/scheduler.md#dependency-graph-invariants).
 
+use std::rc::Rc;
+
 use super::{NodeId, Scheduler, Witnessed, Workload};
 
 impl<W: Workload> Scheduler<W> {
@@ -12,14 +14,25 @@ impl<W: Workload> Scheduler<W> {
     /// Wakes must all land before any queue push: a later wake re-reading the
     /// slot must observe the prior transition. The terminal arrives already bundled with its witness
     /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
+    ///
+    /// `host` is the producer's per-call frame owner when it carries one (`None` for a frameless /
+    /// run-region producer, whose backing already outlives the terminal). It seeds the slot's
+    /// **frame-retention hold**: the frame stays retained until every destination — the consumers
+    /// parked here at finalize, plus any late parker — has pulled, released at pull-count zero.
     pub fn finalize(
         &mut self,
         idx: usize,
         output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
+        host: Option<Rc<W::Frame>>,
     ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
         let drained = self.deps.drain_notify(idx);
+        // The consumers parked on this producer at finalize are its known destinations; a late parker
+        // (wiring after this point) bumps the count through the ready-branch increment.
+        if let Some(owner) = host {
+            self.deps.seed_retain(idx, owner, drained.len());
+        }
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
             if hit_zero {
@@ -46,6 +59,13 @@ impl<W: Workload> Scheduler<W> {
             if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id.index()) {
                 continue;
             }
+            // This slot is dying: its last possible pull on every producer it still depends on is
+            // now, so discharge each (its backward edges plus any late-park debt). Then release its
+            // own retention hold — an owned producer's owner is done with it, so its frame dies here
+            // regardless of the remaining count. Both run before `owned_children` drains the edges.
+            self.deps.discharge_edges(id.index());
+            self.deps.discharge_owed(id.index());
+            self.deps.drop_retain(id.index());
             for child in self.deps.owned_children(id.index()) {
                 stack.push(child);
             }
@@ -58,6 +78,12 @@ impl<W: Workload> Scheduler<W> {
     /// here — see
     /// [design/execution/scheduler.md § Dependency graph invariants](../../../design/execution/scheduler.md#dependency-graph-invariants).
     pub fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
+        // The finalizing consumer has read its deps and won't read them again: discharge any
+        // late-park debt it owes (its edges' pulls on shared/persistent producers ride until those
+        // producers are themselves freed or the run tears down; its owned deps are released by the
+        // cascade `free` below). `clear_dep_edges` then drops the edges, so a later free of this slot
+        // finds none and cannot double-discharge.
+        self.deps.discharge_owed(idx);
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
             self.free(d);

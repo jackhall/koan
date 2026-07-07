@@ -18,6 +18,8 @@
 //!
 //! See design/execution/README.md and design/memory-model.md.
 
+use std::rc::Rc;
+
 use dep_graph::DepGraph;
 use node_store::NodeStore;
 use nodes::Node;
@@ -54,7 +56,7 @@ pub use dep_graph::DepEdge;
 /// cycle-detection contract.
 pub struct Scheduler<W: Workload> {
     pub(in crate::scheduler) queues: WorkQueues,
-    pub(in crate::scheduler) deps: DepGraph,
+    pub(in crate::scheduler) deps: DepGraph<W>,
     pub(in crate::scheduler) store: NodeStore<W>,
 }
 
@@ -80,8 +82,14 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// Reinstall a tail-replaced slot's node and re-enqueue it if its deps are already satisfied —
-    /// the whole `Replace` apply in one step.
-    pub fn replace(&mut self, id: NodeId, node: Node<W>) {
+    /// the whole `Replace` apply in one step. `retiring` is the retiring incarnation's frame owner at
+    /// a framed tail replace (`None` for a frameless `Inherit` replace, which turns over no region);
+    /// the TCO handoff installs a retention hold on the reinstalled slot so the retiring region is
+    /// released only after the reinstalled incarnation adopts the carried arguments.
+    pub fn replace(&mut self, id: NodeId, node: Node<W>, retiring: Option<Rc<W::Frame>>) {
+        // The retention hold on the reinstalled slot is wired by the TCO handoff; until then the
+        // retiring frame drops here as it did before retention existed.
+        let _ = retiring;
         self.store.reinstall(id, node);
         // Replace return sites install their own edges (or clear the slot's dep edges for tail
         // rewrites), so the pending count is authoritative here.
@@ -185,6 +193,10 @@ impl<W: Workload> Scheduler<W> {
         output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
     ) {
         let target = self.resolve_alias(id);
+        // The re-homed terminal has no per-call producer frame to retain — its value moved into a
+        // surviving region — so any hold seeded at its finalize is released here (its count is zero
+        // by construction: a consumer-less root has no parked destination).
+        self.deps.drop_retain(target.index());
         self.store.rehome_terminal(target, output);
     }
 

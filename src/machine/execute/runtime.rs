@@ -60,6 +60,7 @@ impl Workload for KoanWorkload {
     type Value = CarriedFamily;
     type Error = KError;
     type Cart = CallFrame;
+    type Frame = crate::machine::FrameStorage;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
     type Witness = CarrierWitness;

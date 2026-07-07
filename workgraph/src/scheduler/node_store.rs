@@ -412,6 +412,9 @@ mod tests {
         type Value = U32Value;
         type Error = ();
         type Cart = ();
+        // A trivial `PinsRegion` frame owner — the retention hold's `Rc<Frame>` type, which these
+        // white-box tests never construct.
+        type Frame = crate::witnessed::doctest_fixture::Cart;
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
         // A trivial finalized-value witness: `Rc<()>` is a `Witness` (the blanket `Rc<F>` impl),

@@ -229,6 +229,10 @@ impl<'run> KoanRuntime<'run> {
                     // producer folds in nothing): folded into a value terminal's witness and the
                     // destination pin for a `ForwardReady` relocation.
                     let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
+                    // The producer frame's owner `Rc`, handed to the scheduler as the retention host
+                    // for a finalized value: the frame stays retained until every destination pulls.
+                    // `None` for a frameless / run producer, whose backing already outlives the terminal.
+                    let host = frame.map(|f| f.storage_rc());
                     match step {
                         NodeStep::DoneWitnessed(carrier) => {
                             // The value terminal arrives already witnessed, naming its reach. The
@@ -241,7 +245,7 @@ impl<'run> KoanRuntime<'run> {
                             if result.is_err() {
                                 scope.clear_placeholders_for_producer(id);
                             }
-                            self.sched.finalize(idx, result);
+                            self.sched.finalize(idx, result, host);
                         }
                         NodeStep::Error(error) => {
                             // An error finalizes bare (no value, no witness); the frame-gated contract
@@ -249,7 +253,9 @@ impl<'run> KoanRuntime<'run> {
                             let live_contract = frame.and(live_contract);
                             let error = finalize_error(error, frame, live_contract);
                             scope.clear_placeholders_for_producer(id);
-                            self.sched.finalize(idx, Err(error));
+                            // A terminal error carries no value and no witness, but the producer frame
+                            // still retains until its (short-circuiting) destinations pull.
+                            self.sched.finalize(idx, Err(error), host);
                         }
                         NodeStep::ForwardReady(producer) => {
                             // Relocate `producer`'s terminal into this slot's region via merge-transfer;
@@ -267,7 +273,7 @@ impl<'run> KoanRuntime<'run> {
                             if result.is_err() {
                                 scope.clear_placeholders_for_producer(id);
                             }
-                            self.sched.finalize(idx, result);
+                            self.sched.finalize(idx, result, host);
                         }
                         NodeStep::Replace {
                             work: new_work,
@@ -305,6 +311,11 @@ impl<'run> KoanRuntime<'run> {
                                     // (the retiring cart) drops here, at the end of this arm: its storage
                                     // stays pinned by `combined` until the step open above exits, and by
                                     // the loop-carried argument carriers beyond that.
+                                    // A framed tail turns over the region: the retiring cart's
+                                    // storage is handed to the scheduler as the reinstalled slot's
+                                    // retention host, so the retiring region outlives the adoption of
+                                    // the carried arguments (wired by the TCO handoff).
+                                    let retiring = Some(prev_frame.storage_rc());
                                     self.sched.replace(
                                         id,
                                         Node {
@@ -318,6 +329,7 @@ impl<'run> KoanRuntime<'run> {
                                                 contract: next_contract,
                                             },
                                         },
+                                        retiring,
                                     );
                                 }
                                 None => {
@@ -327,6 +339,8 @@ impl<'run> KoanRuntime<'run> {
                                     // cart-ancestor region — otherwise the slot keeps its scope.
                                     let scope =
                                         overlay_scope.map_or(node_scope, NodeScope::YokedChild);
+                                    // A frameless `Inherit` replace reuses the prior cart — no region
+                                    // turnover, so no retiring host to retain.
                                     self.sched.replace(
                                         id,
                                         Node {
@@ -340,6 +354,7 @@ impl<'run> KoanRuntime<'run> {
                                                 contract: next_contract,
                                             },
                                         },
+                                        None,
                                     );
                                 }
                             }

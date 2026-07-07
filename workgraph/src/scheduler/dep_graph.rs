@@ -1,8 +1,13 @@
 //! Per-slot dependency-graph state. Each slot's [`DepRow`] holds the three coordinated fields
 //! (`notify`, `pending`, `edges`) that share the slot index — keeping them in one row makes Inv-A
-//! (wake-pending coherence) structural rather than enforced. See
+//! (wake-pending coherence) structural rather than enforced — plus the slot's
+//! **delivery-driven frame-retention** bookkeeping (`retain`, `owed`). See
 //! [design/execution/scheduler.md § Dependency graph invariants](../../../design/execution/scheduler.md#dependency-graph-invariants)
-//! for the Inv-A / Inv-B / Inv-C contract.
+//! for the Inv-A / Inv-B / Inv-C contract and
+//! [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model)
+//! for the pull-count release rule.
+
+use std::rc::Rc;
 
 use super::nodes::NodeWork;
 use super::{NodeId, Workload};
@@ -35,11 +40,25 @@ pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> 
         .collect()
 }
 
-/// The three coordinated per-slot fields. Mutations go through the row, so
-/// `notify` / `pending` / `edges` cannot desync at the row level — Inv-A
-/// holds by construction.
-#[derive(Default)]
-pub(super) struct DepRow {
+/// The scheduler's frame-retention hold on one finalized producer slot: the producer frame's owner
+/// `Rc`, kept alive until every destination has pulled the terminal. `pulls` counts the outstanding
+/// destinations; the owner is dropped (releasing the frame) when a discharge brings `pulls` to zero.
+/// A seed of zero pulls does **not** release — it means "no current destination; wait for a late
+/// parker or an explicit free" — so only a decrement-to-zero triggers release. See
+/// [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model).
+struct RetentionHold<F> {
+    // Held for its retention effect: dropping the hold drops this `Rc`, releasing the frame. The
+    // pinned read of a retained terminal re-anchors under it; the walking carrier holds its own host
+    // `Rc` in parallel until the carrier collapses, so the read still borrows through the carrier and
+    // this owner is not yet the re-anchor pin.
+    #[allow(dead_code)]
+    owner: Rc<F>,
+    pulls: usize,
+}
+
+/// The three coordinated per-slot fields plus the slot's retention bookkeeping. Mutations go through
+/// the row, so `notify` / `pending` / `edges` cannot desync — Inv-A holds by construction.
+struct DepRow<F> {
     /// Forward wake edges from this producer to its consumers.
     notify: Vec<usize>,
     /// Not-yet-observed deps for this consumer; zero routes via
@@ -48,13 +67,33 @@ pub(super) struct DepRow {
     /// Backward edges from this consumer to its producers; `free` recurses
     /// only into `Owned`.
     edges: Vec<DepEdge>,
+    /// The frame-retention hold while this slot is a Done producer whose frame is retained; `None`
+    /// for a live/frameless/released slot. Its owner `Rc` keeps the producer frame alive until every
+    /// destination pulls.
+    retain: Option<RetentionHold<F>>,
+    /// Producers this consumer wired to **after** they had already finalized (the late-park path,
+    /// which installs no `notify` edge). Each entry is a retained producer whose `pulls` this
+    /// consumer bumped on wiring and must discharge once — after its read, or at its death.
+    owed: Vec<usize>,
 }
 
-pub(in crate::scheduler) struct DepGraph {
-    rows: Vec<DepRow>,
+impl<F> Default for DepRow<F> {
+    fn default() -> Self {
+        DepRow {
+            notify: Vec::new(),
+            pending: 0,
+            edges: Vec::new(),
+            retain: None,
+            owed: Vec::new(),
+        }
+    }
 }
 
-impl DepGraph {
+pub(in crate::scheduler) struct DepGraph<W: Workload> {
+    rows: Vec<DepRow<W::Frame>>,
+}
+
+impl<W: Workload> DepGraph<W> {
     pub(super) fn new() -> Self {
         Self { rows: Vec::new() }
     }
@@ -63,7 +102,9 @@ impl DepGraph {
     /// per-producer notify backlinks. `pending_producers` is the
     /// caller-filtered subset of `owned_edges` whose producers are not yet
     /// terminal, so `DepGraph` stays oblivious to results storage. Returns
-    /// the installed pending count.
+    /// the installed pending count. A recycled row's stale retention state
+    /// (`retain` / `owed`) is cleared — a slot is only recycled after `free`
+    /// dropped its hold, so this is belt-and-suspenders.
     pub(super) fn install_for_slot(
         &mut self,
         consumer: NodeId,
@@ -76,11 +117,15 @@ impl DepGraph {
             row.notify.clear();
             row.pending = pending;
             row.edges = owned_edges;
+            row.retain = None;
+            row.owed.clear();
         } else {
             self.rows.push(DepRow {
                 notify: Vec::new(),
                 pending,
                 edges: owned_edges,
+                retain: None,
+                owed: Vec::new(),
             });
         }
         for p in pending_producers {
@@ -108,6 +153,66 @@ impl DepGraph {
         let row = &mut self.rows[consumer.index()];
         row.pending += 1;
         row.edges.push(DepEdge::Notify(producer));
+    }
+
+    /// Seed a finalized producer's retention hold with the frame owner and its current
+    /// destination count (the consumers parked on it at finalize). Called once per Done producer that
+    /// carries a per-call frame; a frameless / run-region producer installs no hold.
+    pub(super) fn seed_retain(&mut self, producer: usize, owner: Rc<W::Frame>, pulls: usize) {
+        self.rows[producer].retain = Some(RetentionHold { owner, pulls });
+    }
+
+    /// Record that `consumer` wired to an already-finalized retained `producer`: bump the producer's
+    /// outstanding pull count and remember the debt on the consumer, to be discharged once (after the
+    /// consumer's read, or at its death). No-op when `producer` carries no hold.
+    pub(super) fn owe_late_pull(&mut self, producer: usize, consumer: usize) {
+        if let Some(hold) = self.rows[producer].retain.as_mut() {
+            hold.pulls += 1;
+            self.rows[consumer].owed.push(producer);
+        }
+    }
+
+    /// Discharge one destination pull on `producer`, releasing its frame (dropping the owner `Rc`)
+    /// when the count reaches zero. A `None` hold (frameless, or already released) is a no-op.
+    fn decrement_pull(&mut self, producer: usize) {
+        if let Some(hold) = self.rows[producer].retain.as_mut() {
+            debug_assert!(hold.pulls > 0, "retention over-discharge on slot {producer}");
+            hold.pulls = hold.pulls.saturating_sub(1);
+            if hold.pulls == 0 {
+                self.rows[producer].retain = None;
+            }
+        }
+    }
+
+    /// Discharge every late-pull `consumer` owes (draining the debt so it discharges exactly once) —
+    /// the after-read / at-death discharge of the late-park increments.
+    pub(super) fn discharge_owed(&mut self, consumer: usize) {
+        let owed = std::mem::take(&mut self.rows[consumer].owed);
+        for producer in owed {
+            self.decrement_pull(producer);
+        }
+    }
+
+    /// Discharge one pull on each producer `consumer` still holds a backward edge to — the dying
+    /// consumer's last-possible-pull discharge (`free`). Reads the edge list without draining it;
+    /// the caller drains it separately (`owned_children`) for the reclaim recursion, and `free`
+    /// processes each slot once, so this fires exactly once per edge.
+    pub(super) fn discharge_edges(&mut self, consumer: usize) {
+        let producers: Vec<usize> = self.rows[consumer]
+            .edges
+            .iter()
+            .map(|e| e.node_id().index())
+            .collect();
+        for producer in producers {
+            self.decrement_pull(producer);
+        }
+    }
+
+    /// Drop `producer`'s retention hold outright — the owned-producer prompt release (its owning
+    /// consumer is done with it) and the re-home drain's explicit clear. Releases the frame
+    /// regardless of the remaining pull count.
+    pub(super) fn drop_retain(&mut self, producer: usize) {
+        self.rows[producer].retain = None;
     }
 
     /// True iff `producer` is forward-reachable from `consumer` — i.e.

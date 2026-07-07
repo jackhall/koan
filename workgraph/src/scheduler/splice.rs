@@ -46,19 +46,25 @@ impl<W: Workload> Scheduler<W> {
 
     /// Install an `Owned` read-edge from `producer` to `consumer`, following any alias on
     /// `producer`. An already-finalized resolved producer adds no edge — the consumer reads its
-    /// value directly, so it never parks on a slot that will not fire.
+    /// value directly, so it never parks on a slot that will not fire — but it **is** a late
+    /// destination of the producer's retained frame, so its pull is counted here (the late-park
+    /// increment) to be discharged after the consumer's read.
     pub fn add_owned_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
-        if !self.store.is_result_ready(producer) {
+        if self.store.is_result_ready(producer) {
+            self.deps.owe_late_pull(producer.index(), consumer.index());
+        } else {
             self.deps.add_owned_edge(producer, consumer);
         }
     }
 
     /// Park (`Notify`) sibling of [`Self::add_owned_edge`]: the consumer reads `producer` but does
-    /// not own it. Same alias-resolve and already-finalized short-circuit.
+    /// not own it. Same alias-resolve and already-finalized late-park increment.
     pub fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
-        if !self.store.is_result_ready(producer) {
+        if self.store.is_result_ready(producer) {
+            self.deps.owe_late_pull(producer.index(), consumer.index());
+        } else {
             self.deps.add_park_edge(producer, consumer);
         }
     }
