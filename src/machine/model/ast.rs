@@ -1,9 +1,10 @@
 //! AST node types shared across the parse module.
 
 use crate::machine::model::types::KKind;
-use crate::machine::CarrierWitness;
+use crate::machine::{CarrierWitness, FrameStorage};
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::source::{FileId, Span, Spanned};
 
@@ -99,9 +100,16 @@ pub enum ExpressionPart<'a> {
     RecordLiteral(Vec<(String, ExpressionPart<'a>)>),
     Literal(KLiteral),
     /// A resolved sub-result travelling as its producer's sealed carrier — value and reach as one
-    /// unit. The lifetime-free cell rests on the working expression across steps; the consuming
-    /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand.
-    Spliced(Sealed<CarriedFamily, CarrierWitness>),
+    /// unit. The lifetime-free `cell` rests on the working expression across steps; the consuming
+    /// decide or bind opens it (to classify) or adopts it (to consume) at its own step brand. `pin` is
+    /// the producer's retained frame owner (the working-copy splice sources it from the resolved dep
+    /// terminal; `None` for a resident read — pinned by the reading scope's own owner — or a frameless
+    /// / run producer), held so the value's backing stays retained to the adopting step's
+    /// [`open_with`](crate::witnessed::Sealed::open_with).
+    Spliced {
+        cell: Sealed<CarriedFamily, CarrierWitness>,
+        pin: Option<Rc<FrameStorage>>,
+    },
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
@@ -125,7 +133,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("RecordLiteral").field(pairs).finish()
             }
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
-            ExpressionPart::Spliced(cell) => {
+            ExpressionPart::Spliced { cell, .. } => {
                 write!(f, "Spliced({})", cell.open(|c| c.summarize()))
             }
         }
@@ -144,7 +152,7 @@ impl<'a> ExpressionPart<'a> {
     fn is_splice_free(&self) -> bool {
         match self {
             // A spliced cell is a scheduler-introduced carrier, not raw syntactic AST.
-            ExpressionPart::Spliced(_) => false,
+            ExpressionPart::Spliced { .. } => false,
             ExpressionPart::Expression(e)
             | ExpressionPart::SigiledTypeExpr(e)
             | ExpressionPart::RecordType(e) => e.is_splice_free(),
@@ -193,7 +201,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Boolean(b) => b.to_string(),
                 KLiteral::Null => "null".to_string(),
             },
-            ExpressionPart::Spliced(cell) => cell.open(|c| c.summarize()),
+            ExpressionPart::Spliced { cell, .. } => cell.open(|c| c.summarize()),
         }
     }
 
@@ -213,7 +221,7 @@ impl<'a> ExpressionPart<'a> {
         scope: &'a crate::machine::core::Scope<'a>,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
-        if let ExpressionPart::Spliced(cell) = self {
+        if let ExpressionPart::Spliced { cell, .. } = self {
             return match scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Held::Type(kt.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),
@@ -279,7 +287,7 @@ impl<'a> ExpressionPart<'a> {
             // A spliced cell is opened / adopted at the consuming scope's brand before resolution, so
             // its value never reaches the region-less `resolve()`. The container arms above recurse
             // safely: a splice is only written at a top-level part slot, never into a literal's elements.
-            ExpressionPart::Spliced(_) => unreachable!(
+            ExpressionPart::Spliced { .. } => unreachable!(
                 "a spliced cell is adopted at the binding scope before resolve(); \
                  resolve() runs only on region-pure parts"
             ),
@@ -304,7 +312,7 @@ impl<'a> ExpressionPart<'a> {
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_)
-            | ExpressionPart::Spliced(_) => unreachable!(
+            | ExpressionPart::Spliced { .. } => unreachable!(
                 "resolve_region_pure is only called on a region-pure static-cell part \
                  (keyword / bare identifier / type name / literal); borrow-bearing parts and \
                  spliced cells are classified to owned sub-dispatches before any static cell"
@@ -326,8 +334,12 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            // `duplicate` copies the erased value and clones the witness (`Sealed` is not `Copy`).
-            ExpressionPart::Spliced(cell) => ExpressionPart::Spliced(cell.duplicate()),
+            // `duplicate` copies the erased value and clones the witness (`Sealed` is not `Copy`); the
+            // frame pin is a plain `Rc` clone.
+            ExpressionPart::Spliced { cell, pin } => ExpressionPart::Spliced {
+                cell: cell.duplicate(),
+                pin: pin.clone(),
+            },
         }
     }
 }
@@ -418,7 +430,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
             ExpressionPart::RecordType(_) => DispatchShape::RecordType,
             ExpressionPart::Literal(_)
-            | ExpressionPart::Spliced(_)
+            | ExpressionPart::Spliced { .. }
             | ExpressionPart::Expression(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
@@ -443,7 +455,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         // callable, so a non-callable head surfaces a loud `DispatchFailed`. A record
         // *type* is a value, not a callable, so a `:{…}` head joins them here.
         ExpressionPart::Literal(_)
-        | ExpressionPart::Spliced(_)
+        | ExpressionPart::Spliced { .. }
         | ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_)

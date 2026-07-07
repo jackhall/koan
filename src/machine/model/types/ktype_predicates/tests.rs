@@ -196,7 +196,10 @@ fn spliced_cell_classifies_by_opening() {
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
     let carrier = scope.resident_value_carrier(obj, None, false);
-    let cell_part = ExpressionPart::Spliced(Sealed::seal(carrier));
+    let cell_part = ExpressionPart::Spliced {
+        cell: Sealed::seal(carrier),
+        pin: None,
+    };
 
     for (ty, admits) in [
         (KType::Number, true),

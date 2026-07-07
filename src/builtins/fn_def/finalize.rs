@@ -331,8 +331,13 @@ pub(crate) fn defer<'a>(
             // The resolved type slot travels as its producer's own sealed carrier — value and reach
             // as one unit — opened where the signature is assembled (`parse_fn_param_list` adopts it
             // through the elaborator's scope). The early-error check above reads `terminal.value`,
-            // still delivered at the step brand; the carrier is the survival, not a relocated copy.
-            spliced_parts[slot_idx].value = ExpressionPart::Spliced(terminal.carrier.duplicate());
+            // still delivered at the step brand; the carrier is the survival, not a relocated copy. The
+            // retained producer-frame owner rides the cell's pin so the type's backing stays retained
+            // to the adopting elaboration.
+            spliced_parts[slot_idx].value = ExpressionPart::Spliced {
+                cell: terminal.carrier.duplicate(),
+                pin: terminal.host.clone(),
+            };
         }
         let spliced_signature = KExpression::new(spliced_parts);
         let return_type: ReturnType<'a> =

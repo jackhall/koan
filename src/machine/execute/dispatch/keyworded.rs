@@ -369,7 +369,9 @@ fn part_walk<'step>(
                         }
                     };
                     new_parts.push(Spanned {
-                        value: ExpressionPart::Spliced(cell),
+                        // A resident read: the value lives in this scope's region, pinned by the scope
+                        // owner (not a separate producer frame), so the cell carries no frame pin.
+                        value: ExpressionPart::Spliced { cell, pin: None },
                         span,
                     });
                 }

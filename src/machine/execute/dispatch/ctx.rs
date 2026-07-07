@@ -241,8 +241,14 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             // brand; `invoke` reads each cell back for the body-facing reach. Owned deps land in the
             // owned suffix in staging order — 1:1 with `part_indices`.
             for (slot, terminal) in part_indices.iter().zip(terminals.owned_slice()) {
-                working_expr.parts[*slot].value =
-                    ExpressionPart::Spliced(terminal.carrier.duplicate());
+                // Clone the dep's retained producer-frame owner into the cell's pin, so the value's
+                // backing stays retained across the `Replace` to the re-dispatch step where
+                // `extract_carried_args` adopts it. `None` for a frameless / run producer, whose
+                // backing already outlives it.
+                working_expr.parts[*slot].value = ExpressionPart::Spliced {
+                    cell: terminal.carrier.duplicate(),
+                    pin: terminal.host.clone(),
+                };
             }
             finish_eager_subs(working_expr, picked)
         });

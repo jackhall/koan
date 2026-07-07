@@ -139,7 +139,7 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             }
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
-            ExpressionPart::Spliced(cell) => match elaborator.scope.adopt_sealed(cell) {
+            ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Ok(kt.clone()),
                 Carried::Object(other) => Err(format!(
                     "{context} type for `{}` resolved to non-type value `{}`",
@@ -191,9 +191,12 @@ fn rewrite_threaded_self_refs<'a>(
                     // expression (it crosses into another node), so it travels as a cell: a
                     // region-resident type carrier reaching nothing foreign (empty reach).
                     let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    ExpressionPart::Spliced(Sealed::seal(
-                        scope.resident_type_carrier(obj, None, false),
-                    ))
+                    // A region-resident carrier pinned by this scope's owner, not a producer frame,
+                    // so the cell carries no frame pin.
+                    ExpressionPart::Spliced {
+                        cell: Sealed::seal(scope.resident_type_carrier(obj, None, false)),
+                        pin: None,
+                    }
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
                     rewrite_threaded_self_refs(b, threaded, scope),

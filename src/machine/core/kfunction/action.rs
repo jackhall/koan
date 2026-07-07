@@ -248,11 +248,17 @@ impl<'a> FinishCtx<'a> {
 /// is the producer's own [`Sealed`] carrier (a [`duplicate`](crate::witnessed::Sealed::duplicate) —
 /// the producer keeps its terminal for other consumers) for a **construction finish** that folds the
 /// dep *witnessed* via [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), its reach
-/// named on the result by construction. Defined here in core (not the execute layer that resolves it)
-/// so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
+/// named on the result by construction. `host` is the dep's retained producer-frame owner, read from
+/// the scheduler's retention hold (`None` for a frameless / run-region producer whose backing already
+/// outlives the terminal); a finish that parks the carrier on the working expression across steps (the
+/// working-copy splice) clones it into the
+/// [`Spliced`](crate::machine::model::ast::ExpressionPart::Spliced) cell's pin, keeping the value's
+/// backing retained through the `Replace` to the step that adopts it. Defined here in core (not the
+/// execute layer that resolves it) so the builtin-`Action` currency — [`AwaitContinue`] — can name it.
 pub struct DepTerminal<'a> {
     pub value: Carried<'a>,
     pub carrier: Sealed<CarriedFamily, CarrierWitness>,
+    pub host: Option<Rc<FrameStorage>>,
 }
 
 /// A `AwaitDeps` finish: re-entered at wake with the resolved dep terminals as a [`DepResults`] view

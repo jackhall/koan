@@ -186,7 +186,10 @@ pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<
 /// on the working expression. `Witnessed::resident` asserts the empty reach: the value borrows only
 /// caller-held test data, not a foreign region.
 pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
-    ExpressionPart::Spliced(Sealed::seal(Witnessed::resident(c)))
+    ExpressionPart::Spliced {
+        cell: Sealed::seal(Witnessed::resident(c)),
+        pin: None,
+    }
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

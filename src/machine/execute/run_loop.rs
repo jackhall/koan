@@ -145,7 +145,11 @@ impl<'run> KoanRuntime<'run> {
                     Some(h) => carrier.open_with(h, |live| erase_to_static::<CarriedFamily>(live)),
                     None => carrier.open(|live| erase_to_static::<CarriedFamily>(live)),
                 };
-                Ok(DepTerminal { value, carrier })
+                Ok(DepTerminal {
+                    value,
+                    carrier,
+                    host,
+                })
             })
             .collect();
         // The consumer-step **pin**: the union of every region this step's deps reach (an errored dep

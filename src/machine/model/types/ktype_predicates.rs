@@ -503,7 +503,7 @@ impl<'a> KType<'a> {
         // A spliced cell opens at its own brand through `accepts_cell` (the one confined lifetime
         // cast lives inside `accepts_resolved`, which it routes). Every remaining arm is a
         // lifetime-agnostic shape check on the parser part, so no coercion of `part` is needed.
-        if let ExpressionPart::Spliced(cell) = part {
+        if let ExpressionPart::Spliced { cell, .. } = part {
             return self.accepts_cell(cell);
         }
         match self {

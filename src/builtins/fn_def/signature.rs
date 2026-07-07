@@ -27,7 +27,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                     | Some(ExpressionPart::Expression(_))
                     | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::RecordType(_))
-                    | Some(ExpressionPart::Spliced(_))
+                    | Some(ExpressionPart::Spliced { .. })
             );
             if next_is_type_slot {
                 names.push(name);
@@ -127,7 +127,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
-                    Some(ExpressionPart::Spliced(cell)) => {
+                    Some(ExpressionPart::Spliced { cell, .. }) => {
                         // The resolved type slot arrives as a carrier cell; adopt it into the
                         // elaborating scope (folding its reach) and read it at that brand where the
                         // signature is assembled, then route it through type/non-type handling.
@@ -213,7 +213,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
-                            | ExpressionPart::Spliced(_)
+                            | ExpressionPart::Spliced { .. }
                     )
                 });
                 if next_is_type_slot {
@@ -231,7 +231,7 @@ pub(crate) fn binder_bucket(
                             | ExpressionPart::Expression(_)
                             | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::RecordType(_)
-                            | ExpressionPart::Spliced(_)
+                            | ExpressionPart::Spliced { .. }
                     )
                 });
                 if next_is_type_slot {

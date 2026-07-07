@@ -189,7 +189,7 @@ fn carriers_from_expr<'e, 'step>(
         .iter()
         .enumerate()
         .filter_map(|(i, part)| match &part.value {
-            ExpressionPart::Spliced(cell) => Some((i, cell)),
+            ExpressionPart::Spliced { cell, .. } => Some((i, cell)),
             _ => None,
         })
         .collect()
@@ -264,9 +264,10 @@ fn extract_carried_args<'step>(
             // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
-            ExpressionPart::Spliced(cell) => {
-                args.push(view.current_scope().adopt_sealed_copied(cell))
-            }
+            ExpressionPart::Spliced { cell, pin } => args.push(
+                view.current_scope()
+                    .adopt_sealed_copied(cell, pin.as_ref()),
+            ),
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {

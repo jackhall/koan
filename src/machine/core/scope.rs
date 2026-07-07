@@ -939,9 +939,15 @@ impl<'a> Scope<'a> {
     /// The **type** channel stays on [`Self::adopt_sealed`]: a `KType` clone is shallow (interior
     /// borrows into the host region survive it), so a type adoption genuinely needs the host
     /// materialized as reach.
+    ///
+    /// `pin` is the producer's retained frame owner (the working-copy-spliced cell's frame pin), held
+    /// across the value copy so the source backing stays live for the read; `None` (a resident read,
+    /// or a frameless / run producer whose backing already outlives the read) reads under the carrier's
+    /// bundled witness instead.
     pub(crate) fn adopt_sealed_copied(
         &self,
         cell: &Sealed<CarriedFamily, CarrierWitness>,
+        pin: Option<&Rc<FrameStorage>>,
     ) -> Carried<'a> {
         let is_object = cell.open(|live| matches!(live, Carried::Object(_)));
         if !is_object {
@@ -950,7 +956,16 @@ impl<'a> Scope<'a> {
         // Mint FIRST: pin every region the copy still reaches (interior borrows survive
         // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated.
         let _ = self.adopted_reach_of(cell.witness());
-        cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
+        // The copy reads the producer value under the frame pin (its backing kept live by the retained
+        // owner) when one is present, else under the carrier's own bundled witness.
+        match pin {
+            Some(host) => cell.open_with(host, |live| {
+                Carried::Object(self.brand().alloc_object(live.object().deep_clone()))
+            }),
+            None => {
+                cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
+            }
+        }
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's

@@ -191,7 +191,7 @@ pub(super) fn literal_pass_through<'step>(
         // A spliced cell already *is* the producer's own carrier — recover it directly with `unseal`
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
-        ExpressionPart::Spliced(cell) => Outcome::Done(Ok(cell.unseal())),
+        ExpressionPart::Spliced { cell, .. } => Outcome::Done(Ok(cell.unseal())),
         ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
