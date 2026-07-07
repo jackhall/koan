@@ -3,7 +3,7 @@
 //! function params — a wider record value is more specific (fills a narrower slot).
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::core::KErrorKind;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::KType;
@@ -71,7 +71,7 @@ fn fn_returning_record_accepts_matching_value() {
 /// A record value (`ktype()` carries the field-type record) reports a `KType::Record`.
 #[test]
 fn record_value_reports_record_ktype() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let result = run_one(scope, parse_one("{x = 1, y = \"a\"}"));
     assert_eq!(
@@ -89,7 +89,7 @@ fn record_value_reports_record_ktype() {
 /// rather than the shape-only literal path).
 #[test]
 fn record_field_type_mismatch_is_dispatch_failure() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "LET r = {x = \"s\"}");
     run(scope, "FN (USE r :{x :Number}) -> Str = (\"ok\")");
@@ -111,7 +111,7 @@ fn record_field_type_mismatch_is_dispatch_failure() {
 /// lacks (`:{x :Number, q :Bool}`) — the value can't satisfy the wider promise.
 #[test]
 fn record_missing_field_is_dispatch_failure() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "LET r = {x = 1}");
     run(scope, "FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
@@ -135,7 +135,7 @@ fn record_missing_field_is_dispatch_failure() {
 /// `AmbiguousDispatch`.
 #[test]
 fn record_incomparable_overloads_are_ambiguous() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
     run(scope, "FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");

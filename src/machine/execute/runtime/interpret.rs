@@ -6,7 +6,7 @@
 
 use super::{KoanRuntime, RegionRefFamily};
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::model::ast::KExpression;
 use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
@@ -39,7 +39,7 @@ pub fn interpret_with_writer_path(
     // handle: top-level-defined FNs resolve their captured-region owner to it (`Scope::region_owner`),
     // and an escaping value bound at top level retains its per-call region on this run-root frame (the
     // drain below).
-    let run_storage = FrameStorage::run_root();
+    let run_storage = run_root_storage();
     let root = default_scope(&run_storage, out);
     let mut runtime = KoanRuntime::new();
     runtime.run_program(root, exprs)

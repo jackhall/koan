@@ -447,13 +447,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::machine::model::KObject;
     use crate::machine::KErrorKind;
 
     #[test]
     fn attr_reads_field_from_named_struct() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn attr_reads_each_field_independently() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn attr_chained_through_nested_struct() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn attr_unbound_name_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("ghost.x"));
         assert!(
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn attr_on_non_struct_value_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "LET n = 5");
         let err = run_one_err(scope, parse_one("n.x"));
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn attr_unknown_field_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn attr_chained_unknown_field_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -557,7 +557,7 @@ mod tests {
     /// `b.x` on a NEWTYPE-wrapped record-newtype reads through to the underlying field.
     #[test]
     fn access_field_falls_through_wrapped_record_newtype() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -573,7 +573,7 @@ mod tests {
     /// Wrapping a scalar doesn't grow fields: `d.x` on a NEWTYPE-over-Number errors.
     #[test]
     fn access_field_rejects_wrapped_non_struct() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -596,7 +596,7 @@ mod tests {
     /// underlying `Number`, so a deferred return `Er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -617,7 +617,7 @@ mod tests {
     /// concrete: `IntOrdView.zero` reads as the underlying `Number`, not the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -638,7 +638,7 @@ mod tests {
     /// `b = Boxed(p)` wraps the bare record tagged `Boxed`; the diagnostic names `Boxed`.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,

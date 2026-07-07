@@ -3,12 +3,12 @@
 //! `FUNCTOR return-type slot`.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::KErrorKind;
 
 #[test]
 fn functor_return_slot_number_rejects() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
@@ -25,7 +25,7 @@ fn functor_return_slot_number_rejects() {
 
 #[test]
 fn functor_return_slot_function_type_rejects() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
@@ -48,7 +48,7 @@ fn functor_return_slot_function_type_rejects() {
 /// diagnostic without waiting for per-call elaboration.
 #[test]
 fn functor_return_slot_dotted_type_member_rejects() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,

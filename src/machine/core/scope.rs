@@ -5,7 +5,7 @@ use std::rc::{Rc, Weak};
 
 use crate::machine::model::types::{KType, RecursiveSet};
 
-use super::arena::{FrameSet, FrameStorage, KoanRegion, RegionBrand};
+use super::arena::{FrameSet, FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
 use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup, StoredReach};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;

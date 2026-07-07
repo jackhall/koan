@@ -15,7 +15,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, run_root_storage};
 use crate::machine::Scope;
 
 pub(super) struct SharedBuf(Rc<RefCell<Vec<u8>>>);

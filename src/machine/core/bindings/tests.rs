@@ -3,7 +3,7 @@
 //! makes the `data`/`types` partition structural (no name in both).
 
 use super::*;
-use crate::machine::core::arena::FrameStorage;
+use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::{KKind, KType};
 use crate::machine::model::values::KObject;
@@ -13,12 +13,12 @@ use crate::machine::model::values::KObject;
 /// value's reach without reconstructing it from the value.
 #[test]
 fn data_binding_round_trips_stored_reach() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
     // A synthetic foreign frame the value "reaches" — stored on the binding as its reach.
-    let foreign = FrameStorage::run_root();
+    let foreign = run_root_storage();
     let reach_set = FrameSet::singleton(foreign.clone());
     let reach = StoredReach {
         foreign: Some(&reach_set),
@@ -47,11 +47,11 @@ fn data_binding_round_trips_stored_reach() {
 /// memo relies on the same no-clone copy).
 #[test]
 fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let obj: &KObject = region.alloc_object(KObject::Number(1.0));
-    let foreign = FrameStorage::run_root();
+    let foreign = run_root_storage();
     let reach_set = FrameSet::singleton(foreign.clone());
     let reach = StoredReach {
         foreign: Some(&reach_set),
@@ -84,11 +84,11 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
 /// child-scope reach in production) through the carrier-oriented read.
 #[test]
 fn type_binding_round_trips_stored_reach() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
-    let foreign = FrameStorage::run_root();
+    let foreign = run_root_storage();
     let reach_set = FrameSet::singleton(foreign.clone());
     let reach = StoredReach {
         foreign: Some(&reach_set),
@@ -113,7 +113,7 @@ fn type_binding_round_trips_stored_reach() {
 
 #[test]
 fn try_register_type_inserts_into_types_map() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -132,7 +132,7 @@ fn try_register_type_inserts_into_types_map() {
 
 #[test]
 fn try_register_type_rejects_collision_with_rebind() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt1: &KType = region.alloc_ktype(KType::Number);
@@ -156,7 +156,7 @@ fn try_register_type_rejects_collision_with_rebind() {
 
 #[test]
 fn try_register_type_yields_conflict_on_live_types_borrow() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -170,7 +170,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 
 #[test]
 fn try_register_type_clears_matching_placeholder() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -191,7 +191,7 @@ fn try_register_type_clears_matching_placeholder() {
 
 #[test]
 fn try_register_type_does_not_touch_data_or_functions() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -213,7 +213,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
 
 #[test]
 fn value_bind_then_type_register_is_rebind() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
@@ -234,7 +234,7 @@ fn value_bind_then_type_register_is_rebind() {
 
 #[test]
 fn value_bind_then_type_upsert_is_rebind() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
@@ -257,7 +257,7 @@ fn value_bind_then_type_upsert_is_rebind() {
 
 #[test]
 fn type_register_then_value_bind_is_rebind() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -276,7 +276,7 @@ fn type_register_then_value_bind_is_rebind() {
 
 #[test]
 fn type_upsert_then_value_bind_is_rebind() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
@@ -294,7 +294,7 @@ fn type_upsert_then_value_bind_is_rebind() {
 
 #[test]
 fn bulk_install_rejects_value_colliding_with_committed_type() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let region = storage.brand();
     // `dst` already holds `Foo` as a type; replaying a source whose `data` binds
     // `Foo` as a value must be rejected — `try_bulk_install_from` routes through

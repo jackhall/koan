@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtins::test_support::{marker, run_root_bare};
 use crate::builtins::{default_scope, register_builtin};
-use crate::machine::core::{FrameStorage, Scope};
+use crate::machine::core::{run_root_storage, FrameStorageExt, Scope};
 use crate::machine::model::ast::{KLiteral, TypeIdentifier};
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
@@ -38,7 +38,7 @@ fn find_match<'a>(scope: &'a Scope<'a>, expr: &KExpression<'a>) -> Option<&'a KF
 /// resolved through the `BareIdentifier` fast lane.
 #[test]
 fn classify_returns_wrap_indices_for_value_slot_identifiers() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -68,7 +68,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
 /// resolves to a placeholder.
 #[test]
 fn classify_returns_ref_name_indices_for_non_binder_function() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -104,7 +104,7 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),
@@ -128,7 +128,7 @@ fn classify_skips_ref_name_indices_for_binder_function() {
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -157,7 +157,7 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
 #[test]
 fn function_value_ktype_projects_kfunctor_when_flagged() {
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let make_sig = || ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
@@ -201,7 +201,7 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
 fn functor_ktype_identity_ignores_body() {
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use std::hash::{Hash, Hasher};
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let make_sig = || ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
@@ -259,7 +259,7 @@ fn functor_ktype_identity_ignores_body() {
 /// lane.
 #[test]
 fn classify_type_token_in_any_slot_returns_wrap_indices() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),

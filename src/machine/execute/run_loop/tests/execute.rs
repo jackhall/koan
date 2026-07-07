@@ -1,7 +1,7 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
@@ -11,7 +11,7 @@ use super::let_expr;
 
 #[test]
 fn dispatches_independent_expressions_in_order() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let ids = runtime.enter_block(root.id, vec![let_expr("x", 1.0), let_expr("y", 2.0)], root);
@@ -41,7 +41,7 @@ fn dispatches_independent_expressions_in_order() {
 fn later_expression_sees_earlier_binding_via_lookup() {
     // The second top-level expression spawns a sub-Dispatch for `(x)`; the earlier
     // LET runs first because its NodeId is smaller. Guards in-order processing.
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
 

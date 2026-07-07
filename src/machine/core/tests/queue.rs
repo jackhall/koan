@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
@@ -14,7 +14,7 @@ use super::{body_no_op, unit_signature};
 /// iteration sees the pre-write state and the write surfaces only after `drain_pending`.
 #[test]
 fn add_during_active_data_borrow_queues_and_drains() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let pre = region.brand().alloc_object(KObject::Number(1.0));
     scope
@@ -55,7 +55,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_invariant_violation() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -97,7 +97,7 @@ fn drain_debug_asserts_on_invariant_violation() {
 /// `Function` arm, landing in `functions` only (no `data` mirror).
 #[test]
 fn register_function_defers_and_drains_through_function_arm() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -127,7 +127,7 @@ fn register_function_defers_and_drains_through_function_arm() {
 /// extends back onto `still_pending`; once the borrow drops the next drain applies.
 #[test]
 fn drain_requeues_value_on_persistent_borrow_conflict() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let obj = region.brand().alloc_object(KObject::Number(7.0));
 
@@ -153,7 +153,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 /// deferred write is a `register_function`, contending on `functions` rather than `data`.
 #[test]
 fn drain_requeues_function_on_persistent_borrow_conflict() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -182,7 +182,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
 /// read borrow; `try_register_type` only contends on `types`.
 #[test]
 fn drain_requeues_type_on_persistent_borrow_conflict() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
 
     let snapshot = scope.bindings().types();
@@ -206,7 +206,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_function_arm_invariant_violation() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -245,7 +245,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_type_arm_invariant_violation() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let snapshot = scope.bindings().types();
     scope.register_type(

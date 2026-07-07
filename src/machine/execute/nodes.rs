@@ -176,7 +176,7 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::{FrameStorageExt, run_root_storage};
     use crate::machine::core::StoredReach;
     use crate::machine::model::KObject;
     use crate::machine::BindingIndex;
@@ -188,7 +188,7 @@ mod tests {
     /// a sibling pointer while the opened scope is live; fails on UB, not values.
     #[test]
     fn node_scope_yoked_child_erase_open_roundtrip() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = default_scope(&region, Box::new(std::io::sink()));
         let v = region.brand().alloc_object(KObject::Number(7.0));
         scope

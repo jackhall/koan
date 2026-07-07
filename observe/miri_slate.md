@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 7
+src/machine/core/arena.rs: 5
 src/machine/core/scope.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
 -->

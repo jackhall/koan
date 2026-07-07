@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
@@ -11,7 +11,7 @@ use crate::source::Spanned;
 
 #[test]
 fn resolve_name_part_identifier_resolved() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let bound = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -32,7 +32,7 @@ fn resolve_name_part_identifier_resolved() {
 
 #[test]
 fn resolve_name_part_type_resolved() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
     let runtime = KoanRuntime::new();
@@ -53,7 +53,7 @@ fn resolve_name_part_type_resolved() {
 
 #[test]
 fn resolve_name_part_parked() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let producer = runtime.dispatch_in_scope(
@@ -77,7 +77,7 @@ fn resolve_name_part_parked() {
 
 #[test]
 fn resolve_name_part_unbound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
     let runtime = KoanRuntime::new();
@@ -90,7 +90,7 @@ fn resolve_name_part_unbound() {
 /// A `consumer` argument that matches its own producer returns `Cycle`, not `Parked`.
 #[test]
 fn resolve_name_part_self_park_is_cycle() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let slot = runtime.dispatch_in_scope(

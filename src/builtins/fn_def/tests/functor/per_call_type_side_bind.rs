@@ -1,7 +1,7 @@
 //! Per-call type-side bind — functor bodies see the right `KType` for module-typed params at dispatch time.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType};
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
@@ -9,7 +9,7 @@ use crate::machine::model::{KObject, KType};
 /// [`crate::machine::model::values::module::tests::functor_per_call_module_lifts_correctly`].
 #[test]
 fn functor_body_module_dispatch_does_not_dangle() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -51,7 +51,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
 /// carries an abstract `Carrier` member for the dotted `Er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -81,7 +81,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 /// pins the type-side entry alongside it.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -115,7 +115,7 @@ fn functor_closure_escape_pins_type_class_bind() {
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,

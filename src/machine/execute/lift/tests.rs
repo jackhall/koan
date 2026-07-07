@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::{FrameStorage, KoanRegionExt};
+use crate::machine::core::{run_root_storage, KoanRegionExt};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
@@ -46,7 +46,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
 /// source — that relocation (so the copy outlives the producer's dying frame) is the whole point.
 #[test]
 fn object_top_node_relocates_into_dest() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
@@ -73,7 +73,7 @@ fn object_top_node_relocates_into_dest() {
 /// node, so the relocated list points at the same items allocation.
 #[test]
 fn list_relocation_shares_inner_rc() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
@@ -115,7 +115,7 @@ fn dict_relocation_shares_inner_rc() {
     use crate::machine::model::types::Serializable;
     use crate::machine::model::values::KKey;
     use std::collections::HashMap;
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
@@ -155,7 +155,7 @@ fn dict_relocation_shares_inner_rc() {
 fn tagged_relocation_shares_value_and_set_rc() {
     use crate::machine::model::types::{NominalSchema, RecursiveSet};
     use crate::machine::ScopeId;
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
@@ -202,7 +202,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
 /// back into the source region; the carrier's witness set keeps that region alive.
 #[test]
 fn kfunction_borrow_preserved_verbatim() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new_test(scope, None);
     let dest = CallFrame::new_test(scope, None);
@@ -235,7 +235,7 @@ fn kfunction_borrow_preserved_verbatim() {
 fn type_recursive_setref_relocates_and_navigates() {
     use crate::machine::model::types::{KKind, NominalMember, NominalSchema, Record, RecursiveSet};
     use crate::machine::ScopeId;
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let dest = CallFrame::new_test(scope, None);
 

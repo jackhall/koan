@@ -195,12 +195,12 @@ impl<'a> Default for PendingQueue<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::arena::FrameStorage;
+    use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
     use crate::machine::model::types::KType;
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let storage = FrameStorage::run_root();
+        let storage = run_root_storage();
         let region = storage.brand();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();

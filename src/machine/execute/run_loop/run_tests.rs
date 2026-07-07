@@ -2,7 +2,7 @@
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 use crate::machine::KErrorKind;
@@ -20,7 +20,7 @@ fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::ast::KExpression<'ru
 
 #[test]
 fn single_identifier_short_circuit_returns_value_when_bound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all("LET x = 42") {
@@ -41,7 +41,7 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
 /// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let ids = runtime.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
@@ -59,7 +59,7 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
 
 #[test]
 fn single_identifier_short_circuit_falls_through_when_unbound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("(missing)"), scope);
@@ -76,7 +76,7 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
 
 #[test]
 fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all("LET z = 7\nLET y = z") {
@@ -90,7 +90,7 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
 /// surface `UnboundName` under the gate, not park on the later-sibling binding.
 #[test]
 fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let ids = runtime.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
@@ -110,7 +110,7 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
 /// them, and the multi-producer wrap-slot replay-park wakes once both finalize.
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
@@ -129,7 +129,7 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 /// name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let ids = runtime.enter_block(
@@ -157,7 +157,7 @@ fn forward_keyword_function_reference_is_unbound() {
 
 #[test]
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
@@ -177,7 +177,7 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 /// contract](../../../../design/execution/name-placeholders.md#miri-forward-splice-and-replay-park-lifetime-contract).
 #[test]
 fn lift_park_minimal_program_for_miri() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all("LET z = 11\nLET y = z") {
@@ -191,7 +191,7 @@ fn lift_park_minimal_program_for_miri() {
 /// slot's scope must stay valid across the wake and the re-dispatch.
 #[test]
 fn replay_park_minimal_program_for_miri() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
@@ -210,7 +210,7 @@ fn replay_park_minimal_program_for_miri() {
 /// `execute` aborting.
 #[test]
 fn replay_park_propagates_producer_error() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = parse_all(
@@ -242,7 +242,7 @@ fn replay_park_propagates_producer_error() {
 /// [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders).
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
@@ -270,7 +270,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 /// as Type names.)
 #[test]
 fn let_type_to_value_name_rejected() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("LET ty = Number"), scope);

@@ -12,7 +12,7 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::kfunction::body::{Body, ReturnContract};
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{CarrierWitness, FrameSet, FrameStorage, Scope};
+use crate::machine::core::{run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::values::{CarriedFamily, Module};
@@ -45,7 +45,7 @@ fn resident_scalar(
 /// value stays readable through the severed carrier's owned backing.
 #[test]
 fn region_pure_scalar_releases_producer_frame() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
@@ -83,7 +83,7 @@ fn region_pure_scalar_releases_producer_frame() {
 /// borrow must never be released early.
 #[test]
 fn home_borrowing_value_keeps_producer_frame() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
@@ -156,7 +156,7 @@ fn live_frames() -> usize {
 #[test]
 fn user_fn_call_releases_callee_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     register_probe(scope);
     run(scope, "FN (GETONE) -> Number = (PROBE)");
@@ -181,7 +181,7 @@ fn user_fn_call_releases_callee_frame() {
 #[test]
 fn aggregate_of_call_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     register_probe(scope);
     run(scope, "FN (GETONE) -> Number = (PROBE)");
@@ -211,7 +211,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 /// the severed backing, not a region pin, is what keeps it readable.
 #[test]
 fn adopt_sealed_severed_object_survives_producer_drop() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
@@ -227,7 +227,7 @@ fn adopt_sealed_severed_object_survives_producer_drop() {
         "the producer frame is already released before adoption"
     );
 
-    let consumer_storage = FrameStorage::run_root();
+    let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
     let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
     let adopted: Carried = consumer.adopt_sealed(&cell);
@@ -247,7 +247,7 @@ fn adopt_sealed_severed_object_survives_producer_drop() {
 /// reads back cleanly after every other handle on the foreign frame drops.
 #[test]
 fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
-    let foreign_storage = FrameStorage::run_root();
+    let foreign_storage = run_root_storage();
     let foreign_scope = run_root_bare(&foreign_storage);
     let foreign_child = foreign_storage
         .brand()
@@ -257,7 +257,7 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
         .alloc_module(Module::new("M".to_string(), foreign_child));
     let foreign_weak = Rc::downgrade(&foreign_storage);
 
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
@@ -276,7 +276,7 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
         .expect("no declared return, no error");
     drop(producer);
 
-    let consumer_storage = FrameStorage::run_root();
+    let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
     let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(severed);
     let adopted: Carried = consumer.adopt_sealed(&cell);
@@ -309,7 +309,7 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
 /// the home region's whole life even though the type-channel result discarded that composed witness.
 #[test]
 fn type_passthrough_declared_return_mints_nothing_into_home() {
-    let foreign_storage = FrameStorage::run_root();
+    let foreign_storage = run_root_storage();
     let foreign_scope = run_root_bare(&foreign_storage);
     let foreign_child = foreign_storage
         .brand()
@@ -318,7 +318,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
         .brand()
         .alloc_module(Module::new("M".to_string(), foreign_child));
 
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
@@ -333,7 +333,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
 
     // A declared return of `Any` matches any carried type, so the merge takes the no-mismatch path;
     // the home owner (`home_storage`) resolves via the FN's captured scope, so `home_owner.is_some()`.
-    let home_storage = FrameStorage::run_root();
+    let home_storage = run_root_storage();
     let home_scope = run_root_bare(&home_storage);
     let signature = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),

@@ -4,13 +4,13 @@
 //! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::types::{AbstractSource, KType};
 use std::io::sink;
 use std::ptr;
 #[test]
 fn module_child_scope_transmute_does_not_dangle() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(sink()));
     let module = region
         .brand()
@@ -31,7 +31,7 @@ fn module_child_scope_transmute_does_not_dangle() {
 /// surface without the module path masking it.
 #[test]
 fn signature_decl_scope_transmute_does_not_dangle() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(sink()));
     let sig = region
         .brand()
@@ -50,7 +50,7 @@ fn signature_decl_scope_transmute_does_not_dangle() {
 /// borrows is strict about interior mutation under a live shared borrow.
 #[test]
 fn module_type_members_refcell_mutation_with_held_module_ref() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(sink()));
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
@@ -78,7 +78,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
 /// borrow. Pinned independently so a regression attributes to this map's site.
 #[test]
 fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(sink()));
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();

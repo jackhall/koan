@@ -2,12 +2,12 @@
 //! FUNCTOR whose return slot denotes another functor.
 
 use crate::builtins::test_support::{lookup_fn, run, run_root_silent};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::model::KType;
 
 #[test]
 fn functor_return_slot_curried_functor_admits() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,

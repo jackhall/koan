@@ -1,5 +1,5 @@
 use crate::machine::core::kfunction::{BinderNameFn, Body, KFunction};
-use crate::machine::core::{BindingIndex, Scope, StoredReach};
+use crate::machine::core::{BindingIndex, FrameStorageExt, Scope, StoredReach};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,

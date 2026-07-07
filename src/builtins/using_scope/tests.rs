@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::builtins::test_support::{
     parse_one, run, run_one, run_one_err, run_root_bare, run_root_silent,
 };
-use crate::machine::core::{BindingIndex, CarrierWitness, FrameStorage, Scope};
+use crate::machine::core::{run_root_storage, BindingIndex, CarrierWitness, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
@@ -17,7 +17,7 @@ use crate::witnessed::SetWitness;
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET val = 42)");
     let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
@@ -26,7 +26,7 @@ fn using_surfaces_module_value_as_bare_name() {
 
 #[test]
 fn using_surfaces_module_function_for_bare_dispatch() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -38,7 +38,7 @@ fn using_surfaces_module_function_for_bare_dispatch() {
 
 #[test]
 fn using_block_bind_persists_at_call_site() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET val = 1)");
     run(scope, "USING Mod SCOPE (LET local = 5)");
@@ -50,7 +50,7 @@ fn using_block_bind_persists_at_call_site() {
 /// member would silently shadow the bind.
 #[test]
 fn using_block_bind_colliding_with_member_errors() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET x = 1)");
     let err = run_one_err(scope, parse_one("USING Mod SCOPE (LET x = 2)"));
@@ -65,7 +65,7 @@ fn using_block_bind_colliding_with_member_errors() {
 /// scope, not the call site — opening the module must not change that.
 #[test]
 fn using_module_function_resolves_its_own_internals() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -81,7 +81,7 @@ fn using_module_function_resolves_its_own_internals() {
 /// (not the first statement's). Pins block semantics through the transparent window.
 #[test]
 fn using_multi_statement_body_sequences_and_returns_last() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "MODULE Mod = (LET base = 7)");
     let result = run_one(
@@ -99,7 +99,7 @@ fn using_multi_statement_body_sequences_and_returns_last() {
 /// call-site binding inside the block.
 #[test]
 fn using_window_shadows_call_site_binding() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "LET val = 1");
     run(scope, "MODULE Mod = (LET val = 7)");
@@ -116,7 +116,7 @@ fn using_window_shadows_call_site_binding() {
 /// against use-after-free.
 #[test]
 fn using_functor_result_closure_escapes_soundly() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -145,7 +145,7 @@ fn using_functor_result_closure_escapes_soundly() {
 /// immediate use-after-free; under Miri this pins the rooting path.
 #[test]
 fn using_temporary_functor_result_is_sound() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "FN (MAKE) -> Module = (MODULE Res = (LET val = 9))");
     run(scope, "USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
@@ -165,7 +165,7 @@ fn using_temporary_functor_result_is_sound() {
 /// surfaces `DispatchFailed`.
 #[test]
 fn using_on_non_module_fails_dispatch() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "LET n = 5");
     let mut runtime = KoanRuntime::new();
@@ -191,10 +191,10 @@ fn using_on_non_module_fails_dispatch() {
 /// carrier's reach back; under Miri this is a use-after-free the moment that rooting is missing.
 #[test]
 fn using_window_value_read_reach_survives_under_module_root() {
-    let foreign_storage = FrameStorage::run_root();
+    let foreign_storage = run_root_storage();
     let foreign_weak = Rc::downgrade(&foreign_storage);
 
-    let module_storage = FrameStorage::run_root();
+    let module_storage = run_root_storage();
     let module_weak = Rc::downgrade(&module_storage);
     let module_scope = run_root_bare(&module_storage);
 
@@ -213,7 +213,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
         )
         .expect("fresh binding name in an unborrowed scope");
 
-    let call_site_storage = FrameStorage::run_root();
+    let call_site_storage = run_root_storage();
     let call_site_scope = run_root_bare(&call_site_storage);
     let window = call_site_scope
         .brand()

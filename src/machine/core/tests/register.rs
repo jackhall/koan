@@ -3,7 +3,7 @@
 use super::super::{BindingIndex, NameLookup};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -18,7 +18,7 @@ use super::{body_no_op, unit_signature};
 
 #[test]
 fn bind_value_errors_on_same_scope_rebind() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     let v2 = region.brand().alloc_object(KObject::Number(2.0));
@@ -46,7 +46,7 @@ fn bind_value_errors_on_same_scope_rebind() {
 
 #[test]
 fn bind_value_allows_shadowing_in_child_scope() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let outer = run_root_bare(&region);
     let v1 = region.brand().alloc_object(KObject::Number(1.0));
     outer
@@ -73,7 +73,7 @@ fn bind_value_allows_shadowing_in_child_scope() {
 
 #[test]
 fn close_marks_scope_and_is_idempotent_reads_still_work() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
@@ -97,7 +97,7 @@ fn close_marks_scope_and_is_idempotent_reads_still_work() {
 #[test]
 #[should_panic(expected = "closed scope")]
 fn bind_after_close_panics() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.close();
     let v = region.brand().alloc_object(KObject::Number(1.0));
@@ -111,7 +111,7 @@ fn bind_after_close_panics() {
 
 #[test]
 fn close_is_per_scope_open_child_still_binds() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let outer = run_root_bare(&region);
     outer.close();
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -130,7 +130,7 @@ fn close_is_per_scope_open_child_still_binds() {
 
 #[test]
 fn register_function_dedupes_exact_signature() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -167,7 +167,7 @@ fn register_function_dedupes_exact_signature() {
 /// the unified `try_apply` shares the FN dedupe rule.
 #[test]
 fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f1 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -209,7 +209,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
 /// structural-rejection only on pointer-distinct ones.
 #[test]
 fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -241,7 +241,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
 
 #[test]
 fn register_function_allows_overload_with_different_arg_types() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig_num = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
@@ -293,7 +293,7 @@ fn register_function_allows_overload_with_different_arg_types() {
 /// coexist with a same-name value binding. The two namespaces stay independent.
 #[test]
 fn register_function_coexists_with_same_name_value() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
@@ -333,7 +333,7 @@ fn register_function_coexists_with_same_name_value() {
 /// so it is exempt: a same-name type and a bare FN coexist.
 #[test]
 fn register_function_coexists_with_same_name_type() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type(
         "Foo".to_string(),
@@ -369,7 +369,7 @@ fn register_function_coexists_with_same_name_type() {
 #[test]
 fn lookup_member_classifies_value_and_type_unambiguously() {
     use crate::machine::core::MemberResolution;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     scope
@@ -403,7 +403,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
 
 #[test]
 fn resolve_returns_placeholder_when_only_placeholder_exists() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
@@ -421,7 +421,7 @@ fn resolve_returns_placeholder_when_only_placeholder_exists() {
 
 #[test]
 fn resolve_stops_at_first_hit_does_not_descend_outer() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let outer = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
     outer
@@ -456,7 +456,7 @@ fn resolve_stops_at_first_hit_does_not_descend_outer() {
 
 #[test]
 fn bind_value_clears_own_placeholder() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
@@ -489,7 +489,7 @@ fn bind_value_clears_own_placeholder() {
 fn visibility_chain_none_sees_every_entry() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -514,7 +514,7 @@ fn visibility_chain_none_sees_every_entry() {
 fn visibility_strict_less_than_hides_later_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -534,7 +534,7 @@ fn visibility_strict_less_than_hides_later_sibling() {
 fn visibility_strict_less_than_admits_earlier_sibling() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -556,7 +556,7 @@ fn visibility_strict_less_than_admits_earlier_sibling() {
 fn visibility_self_index_hidden_under_strict_less_than() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -578,7 +578,7 @@ fn visibility_self_index_hidden_under_strict_less_than() {
 fn visibility_placeholder_filtered_same_as_value() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
@@ -601,7 +601,7 @@ fn visibility_placeholder_filtered_same_as_value() {
 fn visibility_type_side_gate_mirrors_value_side() {
     use crate::machine::core::LexicalFrame;
     use std::rc::Rc;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type(
         "TyLate".to_string(),

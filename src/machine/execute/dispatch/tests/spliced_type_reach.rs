@@ -1,6 +1,6 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::{FrameStorage, Scope, StoredReach};
+use crate::machine::core::{run_root_storage, FrameStorageExt, Scope, StoredReach};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::types::{KType, TypeResolution};
 use crate::machine::model::values::{Carried, CarriedFamily, Module};
@@ -17,12 +17,12 @@ use crate::witnessed::Sealed;
 /// this dangling.
 #[test]
 fn spliced_type_carrier_pins_the_producer_region_after_drop() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let scope = default_scope(&storage, Box::new(std::io::sink()));
 
     // Build and seal a `Module`-carrying type entirely within a foreign frame's own scope — the
     // erasure at `resident_type_carrier` decouples the sealed cell from `foreign`'s borrow.
-    let foreign = FrameStorage::run_root();
+    let foreign = run_root_storage();
     let foreign_scope = run_root_bare(&foreign);
     let child = foreign
         .brand()
@@ -72,7 +72,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
 
     // The consumer lives in its own frame, independent of `scope`'s (`storage`) and the type's
     // original producer frame (`foreign`) — nothing but its own adopted fold may keep them alive.
-    let consumer_storage = FrameStorage::run_root();
+    let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 

@@ -6,7 +6,7 @@
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
-use crate::machine::core::{BindingIndex, FrameStorage, NameLookup};
+use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
@@ -16,7 +16,7 @@ use super::{body_no_op, unit_signature};
 
 #[test]
 fn lookup_value_chain_cutoff_none_admits_every_index() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -35,7 +35,7 @@ fn lookup_value_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_value_strict_less_than_hides_later_sibling() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -51,7 +51,7 @@ fn lookup_value_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_value_strict_less_than_admits_earlier_sibling() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let value = region.brand().alloc_object(KObject::Number(7.0));
     scope
@@ -70,7 +70,7 @@ fn lookup_value_strict_less_than_admits_earlier_sibling() {
 
 #[test]
 fn lookup_value_placeholder_filtered_same_as_value() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope
         .install_placeholder(
@@ -92,7 +92,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 
 #[test]
 fn lookup_type_chain_cutoff_none_admits_every_index() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type(
         "Tee".into(),
@@ -108,7 +108,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 
 #[test]
 fn lookup_type_strict_less_than_hides_later_sibling() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type(
         "TyLate".into(),
@@ -122,7 +122,7 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -145,7 +145,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
     // argument shape so they coexist in `functions[key]`.
@@ -213,7 +213,7 @@ fn lookup_function_filters_per_overload_visibility() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     // No bucket for this key, but a pending-overload entry stands in for an
     // in-flight FN/FUNCTOR producer.
@@ -233,7 +233,7 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -260,7 +260,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),

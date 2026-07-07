@@ -4,14 +4,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::LexicalFrame;
 
 #[test]
 fn slot_step_bracket_restores_ambient_on_unwind() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     runtime.ensure_run_frame(root);
@@ -36,7 +36,7 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
 
 #[test]
 fn slot_step_bracket_restores_ambient_on_normal_return() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     runtime.ensure_run_frame(root);

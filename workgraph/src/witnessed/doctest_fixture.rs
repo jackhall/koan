@@ -72,6 +72,13 @@ impl Stored<FixtureProfile> for RefFamily {
     }
 }
 
+/// A fresh [`Region`] for the fixture profile. `Region::new` is `pub(crate)` to `workgraph`, so a
+/// doctest — which compiles as an external crate — has no direct route to one; this wraps the
+/// crate-internal constructor for that one purpose.
+pub fn fresh_region() -> Region<FixtureProfile> {
+    Region::new()
+}
+
 /// A region owner for the fixture profile.
 pub struct RegionCart(pub Region<FixtureProfile>);
 // SAFETY: the owned `Region`'s arena pages stay fixed-address while the `RegionCart` is held

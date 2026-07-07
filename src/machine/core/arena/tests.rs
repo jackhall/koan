@@ -22,17 +22,14 @@ crate::witnessed::reattachable!(BrandFamily => RegionBrand<'r>);
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
 fn child_storage(parent: &Rc<FrameStorage>) -> Rc<FrameStorage> {
-    Rc::new(FrameStorage {
-        region: KoanRegion::new(),
-        outer: Some(Rc::clone(parent)),
-    })
+    RegionHost::fresh(Some(Rc::clone(parent)))
 }
 
 /// `FrameStorage::pins_region` walks `self` + its `outer` chain: a descendant pins every ancestor's
 /// region, never the reverse.
 #[test]
 fn pins_region_walks_outer_chain() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let child = child_storage(&root);
     assert!(
         child.pins_region(child.region()),
@@ -52,7 +49,7 @@ fn pins_region_walks_outer_chain() {
 /// is already pinned by the descendant's `outer` chain), regardless of operand order.
 #[test]
 fn frameset_merge_subsumes_ancestor() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let child = child_storage(&root);
     let descendant = FrameSet::singleton(Rc::clone(&child));
     let ancestor = FrameSet::singleton(Rc::clone(&root));
@@ -70,8 +67,8 @@ fn frameset_merge_subsumes_ancestor() {
 /// `FrameSet::union` over unrelated carts keeps both — neither `outer` chain pins the other.
 #[test]
 fn frameset_merge_keeps_unrelated() {
-    let a = FrameStorage::run_root();
-    let b = FrameStorage::run_root();
+    let a = run_root_storage();
+    let b = run_root_storage();
     let merged = FrameSet::union(&FrameSet::singleton(a), &FrameSet::singleton(b));
     assert!(merged.sole().is_none(), "unrelated regions both kept");
 }
@@ -80,7 +77,7 @@ fn frameset_merge_keeps_unrelated() {
 /// singleton `FrameSet` exposes its sole frame; the empty set exposes none.
 #[test]
 fn single_owner_exposes_region_and_frameset_sole() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     // The `yoke` seam is `WitnessRegion for Rc<FrameStorage>`: a held owner pins exactly one region.
     assert!(std::ptr::eq(WitnessRegion::region(&root), root.region()));
     let set = FrameSet::singleton(Rc::clone(&root));
@@ -94,7 +91,7 @@ fn single_owner_exposes_region_and_frameset_sole() {
 /// scope's own region), so nothing branded escapes.
 #[test]
 fn with_scope_opens_child_scope_at_brand() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     // Scalar copy-out: matches `scope_id`.
@@ -122,12 +119,12 @@ fn with_scope_opens_child_scope_at_brand() {
 fn with_scope_relocates_seed_value_into_brand() {
     // The caller value is a deep clone of a value resident in its own, longer-lived region —
     // mirroring the matched `it` / a bound arg.
-    let caller_storage = FrameStorage::run_root();
+    let caller_storage = run_root_storage();
     let caller_region = caller_storage.brand();
     let it_value: KObject<'_> = caller_region
         .alloc_object(KObject::Number(99.0))
         .deep_clone();
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     frame.with_scope(|child| {
@@ -151,7 +148,7 @@ fn with_scope_relocates_seed_value_into_brand() {
 /// tree borrows.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame = CallFrame::new_test(scope, None);
     frame.with_scope(|s| {
@@ -165,7 +162,7 @@ fn call_frame_scope_survives_subsequent_alloc() {
 /// reconstructed region reference stays live.
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     frame.with_scope(|child| {
@@ -193,7 +190,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 /// keeping the outer region alive while we read through `inner`'s child scope's `outer`.
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
     let outer = CallFrame::new_test(run_scope, None);
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
@@ -217,7 +214,7 @@ fn call_frame_chained_outer_frame_walkable() {
 /// Pins that tree-borrows shape.
 #[test]
 fn region_alloc_while_prior_ref_live() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let a = storage.brand();
     let r1 = a.alloc_object(KObject::Number(1.0));
     let r2 = a.alloc_object(KObject::Number(2.0));
@@ -228,7 +225,7 @@ fn region_alloc_while_prior_ref_live() {
 /// `alloc_ktype` returns a region-lifetime `&KType` and bumps `alloc_count` by one.
 #[test]
 fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let a = storage.brand();
     let baseline = a.region().alloc_count();
     let t: &KType = a.alloc_ktype(KType::Number);
@@ -241,7 +238,7 @@ fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
 /// `region()` and a `bind_value` on `scope()` must coexist.
 #[test]
 fn call_frame_try_reset_for_tail_round_trip() {
-    let outer_region = FrameStorage::run_root();
+    let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let _pre = frame.brand().alloc_object(KObject::Number(1.0));
@@ -275,7 +272,7 @@ fn call_frame_try_reset_for_tail_round_trip() {
 /// [`call_frame_try_reset_for_tail_allows_reset_under_escaped_storage`].)
 #[test]
 fn call_frame_try_reset_for_tail_refuses_when_aliased() {
-    let outer_region = FrameStorage::run_root();
+    let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let pre_region_addr = frame.region() as *const KoanRegion as usize;
@@ -299,7 +296,7 @@ fn call_frame_try_reset_for_tail_refuses_when_aliased() {
 /// could not distinguish this from a live shell alias and would refuse it.
 #[test]
 fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
-    let outer_region = FrameStorage::run_root();
+    let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
     let _escaped = frame.brand().alloc_object(KObject::Number(7.0));
@@ -337,7 +334,7 @@ fn call_frame_try_reset_for_tail_allows_reset_under_escaped_storage() {
 /// consumer frame retain an escapee's region without forming a cycle.
 #[test]
 fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
-    let run_root = FrameStorage::run_root();
+    let run_root = run_root_storage();
     let run_root_weak = Rc::downgrade(&run_root);
     // Build a per-call frame under the run root, then keep only its storage `Rc` — the shape an
     // escaped closure pins. The frame shell and the borrowing scope drop at the block boundary.
@@ -367,7 +364,7 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
 /// shape the object and type families' common case takes.
 #[test]
 fn alloc_witnessed_yokes_a_co_located_value() {
-    let frame = FrameStorage::run_root();
+    let frame = run_root_storage();
     let w: Witnessed<CarriedFamily, CarrierWitness> =
         KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
             Carried::Object(region.alloc_object(KObject::Number(7.0)))
@@ -389,8 +386,8 @@ fn alloc_witnessed_yokes_a_co_located_value() {
 /// into.
 #[test]
 fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
-    let here_frame = FrameStorage::run_root();
-    let foreign_frame = FrameStorage::run_root(); // unrelated — a sibling producer's frame.
+    let here_frame = run_root_storage();
+    let foreign_frame = run_root_storage(); // unrelated — a sibling producer's frame.
     let foreign: Witnessed<CarriedFamily, CarrierWitness> =
         KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
@@ -421,8 +418,8 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
 /// values.
 #[test]
 fn pass_through_duplicate_keeps_host_and_reach_pointers_and_mints_nothing() {
-    let foreign_frame = FrameStorage::run_root();
-    let here_frame = FrameStorage::run_root();
+    let foreign_frame = run_root_storage();
+    let here_frame = run_root_storage();
     let foreign: Witnessed<CarriedFamily, CarrierWitness> =
         KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
@@ -487,8 +484,8 @@ crate::witnessed::reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>
 fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // Two unrelated producer frames, each holding one element — sibling producers whose terminals
     // this consumer aggregates.
-    let frame_a = FrameStorage::run_root();
-    let frame_b = FrameStorage::run_root();
+    let frame_a = run_root_storage();
+    let frame_b = run_root_storage();
     let dep_a: Sealed<CarriedFamily, CarrierWitness> =
         Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&frame_a), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
@@ -498,7 +495,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
             Carried::Object(r.alloc_object(KObject::Number(2.0)))
         }));
     // The consumer's own frame: the region the finished list node lands in.
-    let dest_frame = FrameStorage::run_root();
+    let dest_frame = run_root_storage();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
@@ -552,8 +549,8 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
 /// keeps everything.
 #[test]
 fn fold_omitting_skips_the_home_frame_and_keeps_foreign_reach() {
-    let home = FrameStorage::run_root();
-    let foreign = FrameStorage::run_root();
+    let home = run_root_storage();
+    let foreign = run_root_storage();
 
     // A same-region value's witness names the home frame itself — folding it contributes no foreign
     // reach (the self-bind / home-frame omission).
@@ -600,7 +597,7 @@ fn fold_omitting_skips_the_home_frame_and_keeps_foreign_reach() {
 /// its region backing is live.
 #[test]
 fn alloc_engine_brand_coexists_with_sibling_alloc() {
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
     // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
     // names no `'b`.
@@ -628,7 +625,7 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
 /// region under the stored carrier.
 #[test]
 fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
-    let outer_region = FrameStorage::run_root();
+    let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
     let mut frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
 
@@ -725,7 +722,7 @@ crate::witnessed::reattachable!(RecordCellFamily => (RegionBrand<'r>, Vec<(Strin
 /// Fails on UB, not values.
 #[test]
 fn multi_region_list_of_closures_survives_frame_free() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     // Three independent per-call frames — distinct regions, no shared ancestry, each dying on its own.
     let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
@@ -789,7 +786,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
 /// use-after-free the moment an inner region is dropped from the union. Fails on UB, not values.
 #[test]
 fn multi_region_closure_capturing_closures_survives_frame_free() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     // A capturing frame and two capture-target frames — three distinct regions forming a reach tree.
     let frame_outer: Rc<CallFrame> = CallFrame::new_test(scope, None);
@@ -874,7 +871,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
 /// use-after-free if either field's region is dropped from the union. Fails on UB, not values.
 #[test]
 fn multi_region_record_of_closures_survives_frame_free() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     // Two independent frames whose closures the record's fields reach, plus the dest it lands in.
     let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
@@ -972,7 +969,7 @@ fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run>
 /// not values — the closing case for the reach hole `alloc_type` (no fold) leaves open.
 #[test]
 fn functor_field_reach_fold_survives_producer_frame_free() {
-    let root = FrameStorage::run_root();
+    let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     // Producer: a KFunctor type (wrapping a KFunction) resident in its own frame's region — the
@@ -1032,9 +1029,9 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
 /// disjoint singleton sources both survive, with no coarsening. (AC: precise members.)
 #[test]
 fn mint_composes_exact_members() {
-    let a = FrameStorage::run_root();
-    let b = FrameStorage::run_root();
-    let c = FrameStorage::run_root();
+    let a = run_root_storage();
+    let b = run_root_storage();
+    let c = run_root_storage();
 
     let source_a = FrameSet::singleton(Rc::clone(&a));
     let source_b = FrameSet::singleton(Rc::clone(&b));
@@ -1055,7 +1052,7 @@ fn mint_composes_exact_members() {
 /// lands as a member of the set minted into it. (AC: home-omission.)
 #[test]
 fn mint_home_omits_dest_region() {
-    let c = FrameStorage::run_root();
+    let c = run_root_storage();
     let source_c = FrameSet::singleton(Rc::clone(&c));
 
     let minted = FrameSet::mint(c.brand().0, &[&source_c], &[], |_| false);
@@ -1071,8 +1068,8 @@ fn mint_home_omits_dest_region() {
 /// rule 2.)
 #[test]
 fn mint_materializes_foreign_host() {
-    let a = FrameStorage::run_root();
-    let c = FrameStorage::run_root();
+    let a = run_root_storage();
+    let c = run_root_storage();
 
     let minted_into_c = FrameSet::mint(c.brand().0, &[], &[Rc::clone(&a)], |_| false).unwrap();
     assert_eq!(minted_into_c.members().len(), 1, "A is foreign to C");
@@ -1093,9 +1090,9 @@ fn mint_materializes_foreign_host() {
 /// (AC: rule 3.)
 #[test]
 fn mint_subsumes_ancestor() {
-    let a = FrameStorage::run_root();
+    let a = run_root_storage();
     let b = child_storage(&a);
-    let c = FrameStorage::run_root();
+    let c = run_root_storage();
 
     let source_a = FrameSet::singleton(Rc::clone(&a));
     let source_b = FrameSet::singleton(Rc::clone(&b));
@@ -1109,8 +1106,8 @@ fn mint_subsumes_ancestor() {
 /// `members()` reads back the exact regions minted in. (AC: frozen read.)
 #[test]
 fn mint_reads_back_under_pin() {
-    let a = FrameStorage::run_root();
-    let c = FrameStorage::run_root();
+    let a = run_root_storage();
+    let c = run_root_storage();
     let source_a = FrameSet::singleton(Rc::clone(&a));
 
     let minted = FrameSet::mint(c.brand().0, &[&source_a], &[], |_| false).unwrap();
@@ -1127,8 +1124,8 @@ fn mint_reads_back_under_pin() {
 /// how many sources/hosts compose into it.
 #[test]
 fn mint_bumps_alloc_count() {
-    let a = FrameStorage::run_root();
-    let c = FrameStorage::run_root();
+    let a = run_root_storage();
+    let c = run_root_storage();
     let source_a = FrameSet::singleton(Rc::clone(&a));
 
     let before = c.region().alloc_count();
@@ -1146,9 +1143,9 @@ fn mint_bumps_alloc_count() {
 /// exercises. (AC: teardown releasing members at region death.)
 #[test]
 fn mint_teardown_releases_members() {
-    let a = FrameStorage::run_root();
-    let b = FrameStorage::run_root();
-    let c = FrameStorage::run_root();
+    let a = run_root_storage();
+    let b = run_root_storage();
+    let c = run_root_storage();
 
     let count_before_a = Rc::strong_count(&a);
     let count_before_b = Rc::strong_count(&b);

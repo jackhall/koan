@@ -1,12 +1,12 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::core::{FrameStorage, KoanRegionTestExt};
+use crate::machine::core::{run_root_storage, KoanRegionTestExt};
 use crate::machine::execute::KoanRuntime;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -30,7 +30,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 
 #[test]
 fn chained_tail_calls_reuse_frames() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -66,7 +66,7 @@ fn chained_tail_calls_reuse_frames() {
 /// the terminal first (`ok, a, b, c, d`).
 #[test]
 fn leading_statements_run_before_tail_across_chain() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -97,7 +97,7 @@ fn leading_statements_run_before_tail_across_chain() {
 /// climb to 5) and block reuse (`tail_reuse_count` would stay 0).
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
 
     run(
@@ -133,7 +133,7 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 /// [per-call-region/frames.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-region/frames.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -159,7 +159,7 @@ fn match_driven_tail_recursion_completes() {
 /// the recursion continues, giving `hop` (the One arm) then `done` (the Zero arm) in order.
 #[test]
 fn match_arm_leading_statement_runs_before_tail_recursion() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -189,7 +189,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 fn tail_call_enforces_first_callers_return_contract() {
     use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -218,7 +218,7 @@ fn tail_call_enforces_first_callers_return_contract() {
 #[test]
 fn tail_call_stamps_result_against_first_callers_return_contract() {
     use crate::machine::model::{KObject, KType};
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -238,7 +238,7 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
 
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "FN (ECHO v :Number) -> Number = (v)");
     let baseline = region.region().alloc_count();
@@ -263,7 +263,7 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
 /// body's transient fanout (~5+ slots/call) behind.
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let (scope, captured) = run_root_with_buf(&region);
 
     run(
@@ -322,7 +322,7 @@ fn body_subexpression_slots_recycle_across_calls() {
 #[test]
 fn captured_per_call_value_survives_let_bind_and_call() {
     use crate::machine::model::KObject;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -345,7 +345,7 @@ fn captured_per_call_value_survives_let_bind_and_call() {
 #[test]
 fn closure_argument_stays_live_through_user_fn_call() {
     use crate::machine::model::KObject;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -370,7 +370,7 @@ fn closure_argument_stays_live_through_user_fn_call() {
 #[test]
 fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
     use crate::machine::model::{Held, KObject};
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,

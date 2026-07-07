@@ -1,7 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, spliced_part};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::model::Carried;
 
 /// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned
@@ -11,7 +11,7 @@ use crate::machine::model::Carried;
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::values::{Module, ModuleSignature};
     use crate::machine::model::KType;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
     let sig_scope = region
@@ -108,7 +108,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::KType;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -145,7 +145,7 @@ fn functor_with_two_pinned_slots_round_trips() {
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::KType;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -180,7 +180,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
     use crate::machine::execute::KoanRuntime;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,

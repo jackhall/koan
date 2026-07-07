@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
@@ -14,7 +14,7 @@ use crate::witnessed::SetWitness;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type(
         "Foo".into(),
@@ -31,7 +31,7 @@ fn register_type_inserts_into_types_map_not_data() {
 
 #[test]
 fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = run_root_bare(&region);
     root.register_type(
         "Foo".into(),
@@ -49,7 +49,7 @@ fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
 
 #[test]
 fn resolve_type_inner_scope_shadows_outer() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let root = run_root_bare(&region);
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
@@ -78,7 +78,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     use crate::machine::model::values::{Carried, KObject};
     use crate::witnessed::Sealed;
 
-    let storage = FrameStorage::run_root();
+    let storage = run_root_storage();
     let producer = run_root_bare(&storage);
     // A value resident in the producer scope's region, sealed as its own carrier.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
@@ -105,14 +105,14 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     use std::rc::Rc;
 
     // A value in the producer frame's own region, sealed witnessed by that frame.
-    let producer_frame = FrameStorage::run_root();
+    let producer_frame = run_root_storage();
     let cell: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(KoanRegion::alloc_witnessed(
         Rc::clone(&producer_frame),
         |r| Carried::Object(r.alloc_object(KObject::Number(9.0))),
     ));
 
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
-    let consumer_frame = FrameStorage::run_root();
+    let consumer_frame = run_root_storage();
     let consumer = run_root_bare(&consumer_frame);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 
@@ -139,11 +139,11 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
     use crate::machine::model::values::KObject;
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
-    let inner_storage = FrameStorage::run_root();
+    let inner_storage = run_root_storage();
     let inner_weak = Rc::downgrade(&inner_storage);
     let inner_region_ptr: *const KoanRegion = inner_storage.region();
 
-    let source_storage = FrameStorage::run_root();
+    let source_storage = run_root_storage();
     let source_weak = Rc::downgrade(&source_storage);
     let source_scope = run_root_bare(&source_storage);
 
@@ -157,7 +157,7 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
         .expect("bind should succeed");
     let source_region_ptr: *const KoanRegion = source_scope.region();
 
-    let parent_storage = FrameStorage::run_root();
+    let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
     let reach = parent.reach_of_child(source_scope);
 

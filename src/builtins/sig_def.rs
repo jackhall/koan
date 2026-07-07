@@ -94,7 +94,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::parse::parse;
 
     #[test]
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn sig_binds_under_name_in_scope() {
         use crate::machine::model::types::KType;
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn sig_path_records_name() {
         use crate::machine::model::types::KType;
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let sig = match scope.resolve_type("OrderedSig") {
@@ -136,7 +136,7 @@ mod tests {
     /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::types::KType;
@@ -160,7 +160,7 @@ mod tests {
     /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG Foo = (VAL x :NonexistentType)");
         assert!(

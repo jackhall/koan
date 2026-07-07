@@ -41,10 +41,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{run, run_root_with_buf};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();

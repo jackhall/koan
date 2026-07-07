@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::UntypedElement;
 use crate::parse::parse;
@@ -25,7 +25,7 @@ impl Write for Sink {
 
 #[test]
 fn nested_binder_installs_inner_placeholder_at_outer_submission() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(Sink));
     let mut exprs =
         parse("LET f = (FN (HELPER x :Number) -> Number = (x))").expect("parse should succeed");

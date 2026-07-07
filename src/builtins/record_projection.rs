@@ -114,12 +114,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::machine::model::{KObject, KType};
 
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
@@ -140,7 +140,7 @@ mod tests {
     /// admits it and no second overload is needed.
     #[test]
     fn from_single_field_projection() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn from_empty_field_list_yields_empty_record() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one(scope, parse_one("() FROM {x = 1}"));
         match result {
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn from_unknown_field_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn from_duplicate_field_errors() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
@@ -202,7 +202,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let mut runtime = KoanRuntime::new();
         let root = runtime.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
@@ -226,7 +226,7 @@ mod tests {
         use crate::machine::core::KErrorKind;
         use crate::machine::execute::KoanRuntime;
 
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,

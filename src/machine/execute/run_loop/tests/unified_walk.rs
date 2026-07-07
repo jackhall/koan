@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::KErrorKind;
 use crate::parse::parse;
@@ -42,7 +42,7 @@ impl Write for SharedBuf {
 /// separate path.
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = default_scope(&region, Box::new(Sink));
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
     let mut runtime = KoanRuntime::new();
@@ -65,7 +65,7 @@ fn self_referential_let_surfaces_unbound_name() {
 /// combined park, and on wake the rebuilt cache resolves and dispatch commits.
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let buf: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = default_scope(&region, Box::new(SharedBuf(Rc::clone(&buf))));
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible

@@ -1,6 +1,6 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::BindingIndex;
@@ -15,7 +15,7 @@ fn leaf(n: &str) -> TypeIdentifier {
 #[test]
 fn value_language_leaf_names_layering() {
     use crate::machine::model::values::KObject;
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     scope
         .bind_value(
@@ -37,7 +37,7 @@ fn value_language_leaf_names_layering() {
 
 #[test]
 fn unbound_leaf_names_unknown_type() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType")) {
@@ -54,7 +54,7 @@ fn unbound_leaf_names_unknown_type() {
 /// A non-member falls through to ordinary resolution.
 #[test]
 fn recursive_group_member_lowers_to_recursive_ref() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let parent = run_root_silent(&region);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
         NominalMember::pending("A".into(), parent.id, KKind::NewType),

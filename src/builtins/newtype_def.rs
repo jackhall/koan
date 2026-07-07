@@ -307,7 +307,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
@@ -343,7 +343,7 @@ mod tests {
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
@@ -373,7 +373,7 @@ mod tests {
     /// `inner` is the bare `Number`.
     #[test]
     fn construct_wraps_repr_matching_value() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let result = run_one(scope, parse_one("Distance (3.0)"));
@@ -395,7 +395,7 @@ mod tests {
     /// `Distance("hi")` (Number repr, Str value) surfaces as `TypeMismatch`.
     #[test]
     fn construct_rejects_non_matching_repr() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
@@ -413,7 +413,7 @@ mod tests {
     /// leaked a stale value-side placeholder that panicked the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -439,7 +439,7 @@ mod tests {
     /// name fails cleanly (unbound) rather than tripping over a leaked producer `NodeId`.
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Boxed = Nope");
         assert!(
@@ -460,7 +460,7 @@ mod tests {
     /// this pins the seal shape, not construction.)
     #[test]
     fn record_repr_self_recursion_seals_set_local() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
         let (set, fields) = record_fields(scope, "Node");
@@ -484,7 +484,7 @@ mod tests {
     /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
     #[test]
     fn record_repr_list_of_self_field_seals_set_local() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
@@ -509,7 +509,7 @@ mod tests {
     /// with an empty threaded set.
     #[test]
     fn nested_record_field_threads_self_reference() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Outer = :{inner :{owner :Outer}}");
         let (set, fields) = record_fields(scope, "Outer");
@@ -536,7 +536,7 @@ mod tests {
     /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Nums = :(LIST OF Number)");
         let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
@@ -562,7 +562,7 @@ mod tests {
     /// inner: Number(3.0) }` — pins the collapse invariant.
     #[test]
     fn newtype_over_newtype_collapses() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
         let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
@@ -591,7 +591,7 @@ mod tests {
     /// per-slot Err result.
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
@@ -639,7 +639,7 @@ mod tests {
     /// dep before the finish closure runs — pins the non-trivial-dispatch path.
     #[test]
     fn construct_with_identifier_value() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
         let result = run_one(scope, parse_one("Distance (x)"));
@@ -660,7 +660,7 @@ mod tests {
     /// Pins the pre-dispatch arity guard: `Distance ()` rejects with `ArityMismatch`.
     #[test]
     fn construct_arity_zero_rejects() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance ()"));
@@ -681,7 +681,7 @@ mod tests {
     /// language yet"), so a user-fn call stands in for non-trivial dispatch.
     #[test]
     fn construct_with_operator_value() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,

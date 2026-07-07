@@ -285,14 +285,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::machine::core::StoredReach;
     use crate::machine::model::{KKind, KType, Record};
     use crate::machine::Scope;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
         assert_eq!(*result, KType::List(Box::new(KType::Number)));
@@ -304,7 +304,7 @@ mod tests {
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let wrap_set = RecursiveSet::singleton(
             "Wrap".into(),
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn map_str_number_lowers_to_dict() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
         assert_eq!(
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn fn_lowers_to_kfunction() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         assert_eq!(
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
         assert_eq!(
@@ -383,7 +383,7 @@ mod tests {
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
     #[test]
     fn functor_lowers_to_kfunctor() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
         assert_eq!(
@@ -400,7 +400,7 @@ mod tests {
     /// shared field-list parser and lands in the parameter record.
     #[test]
     fn fn_with_nested_list_param_lowers_to_kfunction() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         assert_eq!(
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn fn_multi_param_round_trips() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn fn_nullary_round_trips() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn fn_nested_param_round_trips() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn functor_capitalized_param_round_trips_and_preserves_name() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         let expected = KType::KFunctor {
             params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),

@@ -3,7 +3,7 @@
 //! name binds the set handle. Exiting the block guarantees every forward reference resolved.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-use crate::machine::core::FrameStorage;
+use crate::machine::core::run_root_storage;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{KErrorKind, Scope};
@@ -38,7 +38,7 @@ fn struct_set_and_fields<'a>(
 /// scope.
 #[test]
 fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -61,7 +61,7 @@ fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
 /// The group name binds a `RecursiveGroup` handle over the members' shared set.
 #[test]
 fn block_group_name_binds_the_set_handle() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -80,7 +80,7 @@ fn block_group_name_binds_the_set_handle() {
 /// Three-way mutual recursion: one shared set of 3; each field is a `SetLocal` to the next.
 #[test]
 fn block_three_way_seals_one_set() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
@@ -102,7 +102,7 @@ fn block_three_way_seals_one_set() {
 /// A non-declaration statement in the block body is a shape error, and nothing binds.
 #[test]
 fn block_body_rejects_non_declaration() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,
@@ -123,7 +123,7 @@ fn block_body_rejects_non_declaration() {
 /// the group handle binds (the block guarantees resolution at its boundary).
 #[test]
 fn block_member_referencing_non_member_does_not_bind() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "RECURSIVE TYPES Grp = (NEWTYPE Aa = :{b :Nope})");
     assert!(
@@ -139,7 +139,7 @@ fn block_member_referencing_non_member_does_not_bind() {
 /// A duplicate member name in the body is a shape error.
 #[test]
 fn block_rejects_duplicate_member() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_silent(&region);
     let err = run_one_err(
         scope,

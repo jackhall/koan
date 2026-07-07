@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, SignatureElement};
-use koan::machine::{FrameStorage, KFunction, KoanRuntime, Scope};
+use koan::machine::{run_root_storage, FrameStorage, KFunction, KoanRuntime, Scope};
 use koan::parse::parse;
 
 /// Shared `Write` adapter — every test here drops PRINT output (the smoke
@@ -87,7 +87,7 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 ///   and the produced `IntSet` module.
 #[test]
 fn functor_binder_e2e_makeset_produces_module() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     // The natural FUNCTOR application form: `(MAKESET IntOrd)` works directly
     // when `IntOrd`'s carrier carries the declared signature in its
     // `compatible_sigs` set. The LET partition guard
@@ -161,7 +161,7 @@ fn functor_binder_e2e_makeset_produces_module() {
 /// pinned by `functor_signature_param_satisfied_via_named_sigil` below.
 #[test]
 fn let_bound_functor_applied_via_sigil_yields_module() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run(
         &region,
         "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = \
@@ -222,7 +222,7 @@ fn run_expect_err(src: &str) -> String {
 /// `(LET tag = 0)` then runs, producing the module bound as `Got`.
 #[test]
 fn functor_signature_param_satisfied_via_named_sigil() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run(
         &region,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -283,7 +283,7 @@ fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
 /// focused on the disjoint-surface check rather than scheduling.
 #[test]
 fn functor_binder_and_sigil_coexist() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run(
         &region,
         "SIG OrderedSig = (VAL compare :Number)\n\

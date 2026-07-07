@@ -121,7 +121,10 @@ pub struct Region<W: StorageProfile> {
 }
 
 impl<W: StorageProfile> Region<W> {
-    pub fn new() -> Self {
+    /// The library's sole raw-region constructor — `pub(crate)` so an embedder can never mint a
+    /// bare `Region` directly. The only mint point reachable from outside `workgraph` is
+    /// [`RegionHost::region`](super::RegionHost::region), which calls this lazily on first access.
+    pub(crate) fn new() -> Self {
         Self {
             storage: StorageOf::<W>::default(),
             membership: RefCell::new(Vec::new()),
@@ -204,11 +207,9 @@ impl<W: StorageProfile> Region<W> {
     }
 }
 
-impl<W: StorageProfile> Default for Region<W> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// No `Default` impl: `Default` is a public trait, so implementing it here would hand every
+// embedder back a public mint route (`Region::<W>::default()`) even with `new` sealed above —
+// the raw-region constructor stays reachable only through `RegionHost::region`.
 
 // SAFETY: a `Region`'s values live in a `typed_arena`, whose backing pages never move while the
 // region is borrowed, so a held `&Region` keeps any pointee alloc'd in it (or a strict ancestor it
@@ -227,26 +228,25 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 ///
 /// ```compile_fail
 /// // A bare `&Region` has no allocation surface: `alloc_resident` is crate-private.
-/// use workgraph::witnessed::doctest_fixture::{FixtureProfile, RefFamily};
-/// use workgraph::witnessed::Region;
-/// let region: Region<FixtureProfile> = Region::new();
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily};
+/// let region = fresh_region();
 /// let _ = region.alloc_resident::<RefFamily>(&7);
 /// ```
 ///
 /// ```compile_fail
-/// // Safe embedder code cannot wrap a bare `&Region` into the capability: the field and `new`
-/// // are crate-private.
-/// use workgraph::witnessed::doctest_fixture::FixtureProfile;
-/// use workgraph::witnessed::{Region, RegionHandle};
-/// let region: Region<FixtureProfile> = Region::new();
+/// // Safe embedder code cannot wrap a bare `&Region` into the capability: the field and the raw
+/// // constructor are crate-private.
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile};
+/// use workgraph::witnessed::RegionHandle;
+/// let region = fresh_region();
 /// let _: RegionHandle<'_, FixtureProfile> = RegionHandle::new(&region);
 /// ```
 ///
 /// ```
 /// use std::rc::Rc;
-/// use workgraph::witnessed::doctest_fixture::{FixtureProfile, RefFamily, RegionCart};
-/// use workgraph::witnessed::{Region, RegionHandle};
-/// let cart = Rc::new(RegionCart(Region::new()));
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, RefFamily, RegionCart};
+/// use workgraph::witnessed::RegionHandle;
+/// let cart = Rc::new(RegionCart(fresh_region()));
 /// let handle = RegionHandle::from_owner(&*cart);
 /// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
 /// assert_eq!(*stored, 7);

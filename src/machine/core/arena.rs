@@ -27,9 +27,9 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Erased, FamilyArena, HasRegionHandle, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionHandleFamily, RegionOwner, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
-    Stored, WitnessRegion, Witnessed,
+    Erased, FamilyArena, HasRegionHandle, Reattachable, Region, RegionHandle, RegionHandleFamily,
+    RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile, Stored, WitnessRegion,
+    Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -73,14 +73,10 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// (the witnessed surface, where [`Region::alloc`] hands a `for<'b>` brand and returns a `Witnessed`
 /// carrier); this handle is for the co-located plumbing.
 ///
-/// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this veneer, so
-/// nothing can mint a region resident from an ambient region reference:
-///
-/// ```compile_fail
-/// // `alloc_object` lives on `RegionBrand`, not the bare region: no such method on `&KoanRegion`.
-/// let region = koan::machine::KoanRegion::new();
-/// let _ = region.alloc_object(todo!());
-/// ```
+/// A bare `&KoanRegion` exposes **no** `alloc_*` — allocation is reachable only through this veneer.
+/// Minting a `KoanRegion` at all is unreachable from Koan too: the library's bare-region constructor
+/// is sealed to `workgraph`, so the only route to a region is a library-provisioned [`FrameStorage`],
+/// never an ambient region reference Koan mints itself.
 #[derive(Clone, Copy)]
 pub struct RegionBrand<'a>(RegionHandle<'a, KoanStorageProfile>);
 
@@ -575,91 +571,50 @@ impl CallFrame {
     }
 }
 
-/// A frame's refcounted storage: the per-call `KoanRegion` plus the `outer` link that keeps
-/// the lexical-ancestor frames' storage alive. An escaping value (a returned closure, a module
-/// frame) pins *this* — not the [`CallFrame`] shell — so the shell stays uniquely owned and the
-/// scheduler can reuse it for the next tail iteration while the escapee's captured environment
-/// rides the old `FrameStorage` it still holds. Field order is load-bearing: `region` drops
-/// before `outer`, so inner pointers die before the outer storage they may reference.
-pub struct FrameStorage {
-    region: KoanRegion,
-    /// The parent per-call frame's storage: both a liveness pin — held so the ancestor frames'
-    /// storage outlives this child's `outer` scope pointer — and the link [`FrameStorage::pins_region`]
-    /// walks for [`FrameSet`] subsumption. Drop tears down the chain in order.
-    outer: Option<Rc<FrameStorage>>,
+/// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
+/// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
+/// [`CallFrame::new`] builds immediately, so a constructed frame's region is minted by the time
+/// anything reads it — and the `outer` link chains the lexical-ancestor frames' storage alive. An
+/// escaping value (a returned closure, a module frame) pins *this* — not the [`CallFrame`] shell —
+/// so the shell stays uniquely owned and the scheduler can reuse it for the next tail iteration
+/// while the escapee's captured environment rides the old `FrameStorage` it still holds.
+/// The library's raw-region constructor is sealed to `workgraph`, so nothing outside the library
+/// can mint a `KoanRegion` directly; the Koan-typed [`RegionBrand`] mint over a `FrameStorage` lives
+/// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
+pub type FrameStorage = RegionHost<KoanStorageProfile>;
+
+/// The run-root storage: a fresh run region with no `outer` link. Held by `run_program` (and the
+/// test harness) so the run-root scope's region has an owning Rc; [`CallFrame::adopting`] reuses
+/// it as the run frame's storage and the run-root scope records a `Weak` to it as its
+/// `region_owner`. Public: it is the one Koan-side entry point a caller (production or an
+/// integration test) uses to obtain run-root storage — it mints nothing itself, only building the
+/// library's `RegionHost` shell whose region lazily mints on first allocation.
+pub fn run_root_storage() -> Rc<FrameStorage> {
+    RegionHost::fresh(None)
 }
 
-impl FrameStorage {
-    /// The run-root storage: a fresh run region with no `outer` link. Held by `run_program` (and the
-    /// test harness) so the run-root scope's region has an owning Rc; [`CallFrame::adopting`] reuses
-    /// it as the run frame's storage and the run-root scope records a `Weak` to it as its
-    /// `region_owner`.
-    pub fn run_root() -> Rc<FrameStorage> {
-        Rc::new(FrameStorage {
-            region: KoanRegion::new(),
-            outer: None,
-        })
-    }
-
-    /// The backing `KoanRegion`. Used for region-identity comparisons (e.g. [`FrameSet`]
-    /// subsumption) by holders that pin storage but never name a `CallFrame`.
-    pub(crate) fn region(&self) -> &KoanRegion {
-        &self.region
-    }
-
-    /// Mint the region's [`RegionBrand`] — the **sole** allocation capability for this storage's
-    /// region. Minting is the library's [`RegionHandle::from_owner`] rule (it requires `&FrameStorage`,
-    /// the storage that *owns* the region, via its `RegionOwner` impl); this method pairs it with the
+/// Koan's [`RegionBrand`] mint over a [`FrameStorage`] — an extension trait because `FrameStorage`
+/// is a `workgraph` type alias, so Koan cannot add an inherent method to it directly.
+pub(crate) trait FrameStorageExt {
+    /// Mint this storage's region's [`RegionBrand`] — the **sole** allocation capability for this
+    /// storage's region. Minting is the library's [`RegionHandle::from_owner`] rule (it requires the
+    /// storage that *owns* the region, via its `RegionOwner` impl); this method pairs it with the
     /// Koan veneer. Allocation is reachable only by riding this brand (it is stored on the [`Scope`]
     /// built at region-open, and threaded from there).
-    pub(crate) fn brand(&self) -> RegionBrand<'_> {
-        RegionBrand(RegionHandle::from_owner(self))
-    }
+    fn brand(&self) -> RegionBrand<'_>;
+}
 
-    /// True iff holding `self`'s `Rc` keeps the region at `region_ptr` alive — `self`'s own region or
-    /// any of its `outer` ancestors (each pinned by the chain). The subsumption test [`FrameSet`]'s
-    /// union uses: a member whose region another member already pins is redundant.
-    pub(crate) fn pins_region(&self, region_ptr: *const KoanRegion) -> bool {
-        let mut node = self;
-        loop {
-            // `node.region()` coerces `&KoanRegion → *const` for the address compare (as `rc_targets`).
-            if std::ptr::eq(node.region(), region_ptr) {
-                return true;
-            }
-            match &node.outer {
-                Some(outer) => node = outer,
-                None => return false,
-            }
-        }
+impl FrameStorageExt for FrameStorage {
+    fn brand(&self) -> RegionBrand<'_> {
+        RegionBrand(RegionHandle::from_owner(self))
     }
 }
 
 /// The reach set backing carrier witnesses: the set of `Rc<FrameStorage>` whose regions a
 /// carrier's value reaches. See [`RegionSet`] for the shared mechanism (subsumption, folding,
-/// union); Koan's member semantics are the [`PinsRegion`] impl below.
+/// union); Koan's member semantics are the library's [`PinsRegion`](crate::witnessed::PinsRegion)
+/// impl for [`RegionHost`].
 pub type FrameSet = RegionSet<FrameStorage>;
-
-// SAFETY: a held `Rc<FrameStorage>` keeps its owned `FrameStorage` — and the `KoanRegion` field within
-// it, along with the arena pages a value lives in — at a fixed heap address for the whole life of the
-// `Rc` (`Rc` is `StableDeref`), so `region()` returns a reference into storage the `RegionOwner` blanket
-// impl's `Rc<F>: WitnessRegion` pins: a value built solely from that region is pinned by holding the
-// `Rc`. A single held `Rc<FrameStorage>` pins exactly one region — its own — which *is* the
-// single-region `yoke` precondition.
-unsafe impl RegionOwner for FrameStorage {
-    type Region = KoanRegion;
-    fn region(&self) -> &KoanRegion {
-        FrameStorage::region(self)
-    }
-}
-
-// SAFETY: `pins_region` walks self's own region and its `outer` ancestor chain; holding self's `Rc`
-// holds each ancestor `Rc` in turn, so every region the walk reports pinned stays live and
-// fixed-address while self is held.
-unsafe impl PinsRegion for FrameStorage {
-    fn pins_region(&self, region: &KoanRegion) -> bool {
-        FrameStorage::pins_region(self, region)
-    }
-}
 
 /// Build a per-call frame's child scope **witnessed**, sealing it to the externally-witnessed
 /// [`SealedExtern<ScopeRefFamily>`] the [`CallFrame`] holds — the construction door that re-anchors the
@@ -727,12 +682,10 @@ impl CallFrame {
     /// `None` when the parent is run-root — a dispatched frame strong-owns no ancestor, so an
     /// escaping value kept alive by a consumer scope's reach-set forms no back-edge.
     pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
-        // The region is born inside its own `Rc<FrameStorage>`, heap-pinned from this point on, so
-        // the erased child-scope pointer below stays valid as the storage Rc moves into the shell.
-        let storage = Rc::new(FrameStorage {
-            region: KoanRegion::new(),
-            outer: outer_frame,
-        });
+        // The storage is heap-pinned behind its own `Rc` from this point on (its region minted
+        // lazily, on the child scope's allocation below), so the erased child-scope pointer stays
+        // valid as the storage Rc moves into the shell.
+        let storage = RegionHost::fresh(outer_frame);
         // The child scope is born externally-witnessed through the construction door: it brands the
         // fresh region and the longer-lived lexical parent at one `for<'b>`, builds the real invariant
         // `Scope<'b>` coupling them, allocs it through the brand, and erases it straight into a
@@ -827,7 +780,7 @@ impl CallFrame {
     }
 
     pub fn region(&self) -> &KoanRegion {
-        &self.storage.region
+        self.storage.region()
     }
 
     /// This frame's region [`RegionBrand`] allocation capability, minted from its owning storage.
@@ -856,12 +809,9 @@ impl CallFrame {
         if Rc::get_mut(self).is_none() {
             return false;
         }
-        // Build the fresh storage and its child scope before touching the shell, so the region is
+        // Build the fresh storage and its child scope before touching the shell, so the storage is
         // heap-pinned by the new storage Rc when it lands in the shell.
-        let storage = Rc::new(FrameStorage {
-            region: KoanRegion::new(),
-            outer: None,
-        });
+        let storage = RegionHost::fresh(None);
         // Born externally-witnessed through the construction door: it brands the fresh region and
         // `new_outer` at one `for<'b>`, builds the invariant `Scope<'b>` coupling them, and erases the
         // freshly-stored child scope into a `SealedExtern` with no transient `&'a` minted.

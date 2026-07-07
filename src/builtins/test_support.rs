@@ -7,7 +7,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{

@@ -54,11 +54,11 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::core::FrameStorage;
+    use crate::machine::core::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let (scope, captured) = run_root_with_buf(&region);
         run(scope, source);
         let bytes = captured.borrow().clone();
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn eval_of_non_kexpression_errors_with_type_mismatch() {
-        let region = FrameStorage::run_root();
+        let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "LET x = 3");
         let err = run_one_err(scope, parse_one("$(x)"));

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::{BindingIndex, FrameStorage};
+use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt};
 use crate::machine::model::operators::{Associativity, OperatorEntry, OperatorGroup};
 
 /// Arithmetic-shaped group: `+` and `-` both left-associative at one tier.
@@ -32,7 +32,7 @@ fn arithmetic_group() -> OperatorGroup {
 
 #[test]
 fn register_then_resolve_group_by_probe() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = region.brand().alloc_operator_group(arithmetic_group());
     // A module registers the powerset; "- +" is the sorted-joined probe for a chain
@@ -50,7 +50,7 @@ fn register_then_resolve_group_by_probe() {
 
 #[test]
 fn undeclared_probe_misses() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = region.brand().alloc_operator_group(arithmetic_group());
     scope
@@ -62,7 +62,7 @@ fn undeclared_probe_misses() {
 
 #[test]
 fn cross_group_probe_misses() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = region.brand().alloc_operator_group(arithmetic_group());
     // Only the within-group subsets are registered.
@@ -84,7 +84,7 @@ fn cross_group_probe_misses() {
 
 #[test]
 fn innermost_scope_shadows_outer() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let outer = run_root_bare(&region);
     let inner = region.brand().alloc_scope(outer.child_for_call());
 
@@ -127,7 +127,7 @@ fn innermost_scope_shadows_outer() {
 
 #[test]
 fn visibility_cutoff_hides_later_sibling_registration() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = region.brand().alloc_operator_group(arithmetic_group());
     scope

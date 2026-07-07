@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType};
-use koan::machine::{FrameStorage, KError, KErrorKind, KoanRuntime, Scope};
+use koan::machine::{run_root_storage, FrameStorage, KError, KErrorKind, KoanRuntime, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -46,7 +46,7 @@ fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(
 /// duplicate is rejected per the decided rule).
 #[test]
 fn same_scope_let_rebind_errors() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = build_scope(&region);
     let results = run_collecting_errors(scope, "LET x = 1\nLET x = 2");
     assert!(results[0].is_ok(), "first LET should succeed");
@@ -65,7 +65,7 @@ fn same_scope_let_rebind_errors() {
 /// any subsequent `LET x = ...` (function or otherwise) collides.
 #[test]
 fn let_function_collides_with_let_value() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
@@ -89,7 +89,7 @@ fn let_function_collides_with_let_value() {
 /// from a same-shape overload with different KTypes.
 #[test]
 fn exact_signature_duplicate_errors() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
@@ -111,7 +111,7 @@ fn exact_signature_duplicate_errors() {
 /// doesn't collide with the outer LET.
 #[test]
 fn cross_scope_shadowing_succeeds() {
-    let region = FrameStorage::run_root();
+    let region = run_root_storage();
     let scope = build_scope(&region);
     let results = run_collecting_errors(
         scope,
