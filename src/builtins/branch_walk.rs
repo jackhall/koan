@@ -44,7 +44,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     Ok(ReturnContract::Arm {
         ret: ctx.scope.brand().alloc_ktype(ret_kt),
         kind,
-        region: ctx.scope.brand(),
+        scope: ctx.scope,
     })
 }
 

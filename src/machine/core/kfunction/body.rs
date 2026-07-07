@@ -2,12 +2,15 @@
 //! body-statement splitters, and the `Body` enum (an action `fn` pointer vs a captured
 //! user-defined `KExpression`).
 
+use std::rc::Rc;
+
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::{FrameStorage, RegionBrand, Scope};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
-use crate::scheduler::Erased;
+use crate::machine::CarrierWitness;
+use crate::scheduler::Sealed;
 use crate::witnessed::reattachable;
 
 use super::KFunction;
@@ -18,21 +21,23 @@ use super::KFunction;
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
 /// `Arm`'s / `PerCall`'s `ret` is region-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Stored erased as [`ErasedContract`] on the node's `TraceFrame`. A tail
-/// chain keeps the **first** contract (the `next_contract` rule in `execute::run_loop`),
-/// so the check fires against the original caller's declared return, not the tail-most callee's.
+/// `&KFunction` it sits beside. Stored sealed as [`SealedContract`] on the node's `NodeFrame`, pinned
+/// by its own carried witness. A tail chain keeps the **first** contract (the `next_contract` rule in
+/// `execute::run_loop`), so the check fires against the original caller's declared return, not the
+/// tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
     Function(&'a KFunction<'a>),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
-    /// `region` is the arm's home region — the call-site (outer) region `ret` is allocated in, a
+    /// `scope` is the arm's declaring scope — the call-site (outer) scope `ret` is allocated in, a
     /// strict ancestor of the arm frame — so a coarsened re-tag re-homes there with no step-scope
-    /// walk. [`RegionBrand`] is `Copy`, so the contract stays `Copy`; the cart `Rc` witnesses it.
+    /// walk. `scope` is `&'a`, so the contract stays `Copy`; [`Self::home_owner`] resolves the owning
+    /// `Rc<FrameStorage>` off it for the contract's carried witness.
     Arm {
         ret: &'a KType<'a>,
         kind: &'static str,
-        region: RegionBrand<'a>,
+        scope: &'a Scope<'a>,
     },
     /// A deferred-return FN whose per-call return type resolved to `ret`. Rides the FN-body
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
@@ -48,14 +53,26 @@ pub enum ReturnContract<'a> {
 impl<'a> ReturnContract<'a> {
     /// The contract's home region — where a coarsened re-tag is re-homed so it outlives the
     /// producer frame. A `Function`/`PerCall` reads it off the callee's captured-scope region; an
-    /// `Arm` carries it directly. All three are the cart's *outer* (ancestor) region, witnessed by
-    /// the cart `Rc`, so the Done boundary derives it from the contract with no scope walk.
+    /// `Arm` reads it off its declaring scope. All three are a strict ancestor region of the
+    /// producing frame, so a re-tag there outlives it.
     pub fn home_region(self) -> RegionBrand<'a> {
         match self {
             ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
                 f.captured_scope().brand()
             }
-            ReturnContract::Arm { region, .. } => region,
+            ReturnContract::Arm { scope, .. } => scope.brand(),
+        }
+    }
+
+    /// The `Rc<FrameStorage>` owning the contract's home region — resolved uniformly across every
+    /// variant so the contract's own carried witness (not the cart's `outer` chain) pins it across a
+    /// tail chain. `None` only when the owner's `Weak` has already released.
+    pub fn home_owner(self) -> Option<Rc<FrameStorage>> {
+        match self {
+            ReturnContract::Function(f) | ReturnContract::PerCall { func: f, .. } => {
+                f.captured_scope().region_owner().upgrade()
+            }
+            ReturnContract::Arm { scope, .. } => scope.region_owner().upgrade(),
         }
     }
 }
@@ -69,15 +86,14 @@ pub struct ContractFamily;
 // for all `'r`; the shared `reattachable!` macro discharges that obligation once.
 reattachable!(ContractFamily => ReturnContract<'r>);
 
-/// A [`ReturnContract`] with its lifetime erased to `'static` for storage on a lifetime-free node
-/// `NodeFrame`, and re-anchored at the Done read boundary. The contract's `&KFunction` / `&KType`
-/// point into the cart's frame *outer* region (a strict ancestor — see
-/// `branch_walk::resolve_arm_contract` and `invoke`'s `Outcome::Continue` tail
-/// construction), which the co-stored `cart: Rc<CallFrame>` keeps live via its `FrameStorage.outer`
-/// / escape chain; the cart is the liveness witness the caller holds across `reattach`. The
-/// `Function` / `Arm` discriminant is readable without a re-anchor for the chain-shape decision
-/// that needs the tag but not the pointee. See [`Erased`].
-pub type ErasedContract = Erased<ContractFamily>;
+/// A [`ReturnContract`] sealed into its dormant, `'static`-storage form for a node's lifetime-free
+/// `NodeFrame`. Pinned by its own carried witness — [`ReturnContract::home_owner`]'s
+/// `Rc<FrameStorage>`, folded into a [`CarrierWitness`] singleton at seal time — not by the cart's
+/// `outer` chain, so the contract's home region stays live across every hop of a tail chain
+/// independent of which cart the slot currently carries. Re-anchored at the Done read boundary
+/// through [`Sealed::open`]; the `Function` / `Arm` discriminant is readable there without
+/// re-anchoring the pointee, for the chain-shape decision that needs the tag but not the pointee.
+pub type SealedContract = Sealed<ContractFamily, CarrierWitness>;
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or

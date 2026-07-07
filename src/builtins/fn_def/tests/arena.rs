@@ -236,6 +236,76 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
     }
 }
 
+/// A MATCH arm's `-> :T` contract, checked across a tail chain **longer than two hops** through
+/// plain user-defined functions (`AA -> BB -> CC`) — long enough that every transient cart from the
+/// arm's own era has long since been reused/dropped by the time the chain resolves. The MATCH is
+/// dispatched directly (not nested inside an enclosing FN call, whose own declared-return contract
+/// would win keep-first and mask the arm's), so the arm's own contract is genuinely the chain's
+/// first. The arm's home region can only still be checked against because the contract's own
+/// carried witness (its home scope's region owner, folded into a `CarrierWitness` singleton at seal
+/// time) pins it directly, independent of any surviving cart's `outer` chain.
+#[test]
+fn deep_tail_chain_satisfies_arm_return_contract() {
+    use crate::machine::model::KObject;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "UNION Bit = (One :Null Zero :Null)\n\
+         FN (CC) -> Any = (\"ok\")\n\
+         FN (BB) -> Any = (CC)\n\
+         FN (AA) -> Any = (BB)\n\
+         LET b = (Bit (One null))",
+    );
+    let result = run_one(
+        scope,
+        parse_one(
+            "MATCH (b) -> :Str WITH (\
+                 One -> (AA)\
+                 Zero -> \"unused\"\
+             )",
+        ),
+    );
+    assert!(
+        matches!(result, KObject::KString(s) if s == "ok"),
+        "expected the MATCH arm's :Str contract to pass the 3-hop tail chain's Str result, got {}",
+        result.ktype().name(),
+    );
+}
+
+/// The violating twin of [`deep_tail_chain_satisfies_arm_return_contract`]: the same 3-hop chain
+/// resolves to a `Number`, which the MATCH arm's `:Str` contract must still reject — proving the
+/// check itself (not just a passing value) survives the chain, since a dangling home region would
+/// either panic/UB under Miri or silently skip the check rather than raise this error.
+#[test]
+fn deep_tail_chain_violates_arm_return_contract() {
+    use crate::builtins::test_support::run_one_err;
+    use crate::machine::KErrorKind;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "UNION Bit = (One :Null Zero :Null)\n\
+         FN (CC) -> Any = (42)\n\
+         FN (BB) -> Any = (CC)\n\
+         FN (AA) -> Any = (BB)\n\
+         LET b = (Bit (One null))",
+    );
+    let err = run_one_err(
+        scope,
+        parse_one(
+            "MATCH (b) -> :Str WITH (\
+                 One -> (AA)\
+                 Zero -> \"unused\"\
+             )",
+        ),
+    );
+    assert!(
+        matches!(err.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "<return>"),
+        "expected a <return> TypeMismatch against the MATCH arm's :Str contract, got {err}",
+    );
+}
+
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let region = run_root_storage();

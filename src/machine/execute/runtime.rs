@@ -23,14 +23,14 @@ use crate::machine::core::kfunction::action::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
 use crate::machine::core::kfunction::body::{
-    split_body_statements, ContractFamily, ErasedContract, ReturnContract,
+    split_body_statements, ContractFamily, ReturnContract,
 };
 use crate::machine::core::kfunction::exec::home_return_type;
 use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId, Scope};
-use crate::witnessed::SealedExtern;
+use crate::witnessed::{Erased, Sealed, SealedExtern, SetWitness};
 
 use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::copy_carried;
@@ -485,10 +485,20 @@ impl<'run> KoanRuntime<'run> {
                     ),
                 };
                 let chain = ChainOp::decide(block_scope_id, contract.as_ref(), body_index);
+                // Seal against the contract's own carried witness — its home owner's `Rc`, folded
+                // into a `CarrierWitness` singleton — rather than the cart's `outer` chain, so the
+                // kept-first contract's home region stays pinned across every hop of a tail chain
+                // independent of which cart the slot currently carries.
+                let sealed_contract = contract.map(|c| {
+                    Sealed::seal(Witnessed::from_erased(
+                        Erased::erase(c),
+                        c.home_owner().map_or(CarrierWitness::Empty, CarrierWitness::singleton),
+                    ))
+                });
                 NodeStep::Replace {
                     work,
                     frame,
-                    contract: contract.map(ErasedContract::erase),
+                    contract: sealed_contract,
                     chain,
                     overlay_scope,
                 }

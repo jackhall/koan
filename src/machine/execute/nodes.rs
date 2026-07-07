@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
-use crate::machine::core::kfunction::body::{ErasedContract, ReturnContract};
+use crate::machine::core::kfunction::body::{ReturnContract, SealedContract};
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{CallFrame, CarrierWitness, KError, LexicalFrame, NodeId};
@@ -16,7 +16,7 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
 /// slot's scope and its `region()` owns per-call allocations; `None` keeps the existing
-/// frame and scope. `contract`, when set, is the erased return contract the replacement is
+/// frame and scope. `contract`, when set, is the sealed return contract the replacement is
 /// entering — kept-first against the slot's prior contract by the reinstall site; any error
 /// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
 /// (see [`ChainOp`]).
@@ -44,7 +44,7 @@ pub(super) enum NodeStep {
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
-        contract: Option<ErasedContract>,
+        contract: Option<SealedContract>,
         chain: ChainOp,
         /// A block overlay the tail slot runs in, erased to a cart-witnessed carrier (lifetime-free,
         /// so `Replace` stays `'run`-free). `Some` only for a frameless tail entering a

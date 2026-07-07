@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::scope_frame;
-use crate::machine::core::kfunction::body::ErasedContract;
+use crate::machine::core::kfunction::body::SealedContract;
 use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{
@@ -93,8 +93,9 @@ impl<'run> KoanRuntime<'run> {
     ///
     /// The step tail runs inside one rank-2 `for<'b>` brand standing in for the step lifetime:
     /// [`SealedExtern::open`] opens the continuation, return contract, active scope, and dep slice
-    /// together at `'b`, witnessed by `combined` (the held cart `Rc` unioned with the dep `pin`), which
-    /// the bracket keeps live across the run. The consumer `dest` region is the opened scope's own
+    /// together at `'b`, witnessed by `combined` (the held cart `Rc` unioned with the dep `pin` and the
+    /// kept-first contract's own carried witness), which the bracket keeps live across the run. The
+    /// consumer `dest` region is the opened scope's own
     /// region. The closure's result cannot name `'b`, so the `Outcome<'b>` and the finalized
     /// `Carried<'b>` are erased into the slot store *before* return: a value born at `'b` never has to
     /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The cart clone is
@@ -148,21 +149,32 @@ impl<'run> KoanRuntime<'run> {
                 Err(_) => FrameSet::union(&acc, &self.sched.dep_witness(d).to_liveness_frameset()),
             },
         );
-        // The open witness: the start cart (pinning the continuation, contract, and dest region — plus
-        // their ancestor backings via its `outer` chain) unioned with `pin` (every dep source). Held
-        // across the open, so re-anchoring the zipped carriers to `'b` cannot dangle. A plain `FrameSet`
+        // The kept-first contract's own carried witness — its home region owner, from
+        // `ReturnContract::home_owner` at seal time — unioned in alongside the cart and the dep `pin`
+        // so the contract's home region stays live across the open independent of which cart the slot
+        // currently carries.
+        let contract_pin: FrameSet = prev_contract
+            .as_ref()
+            .map_or_else(FrameSet::empty, |c| c.witness().to_liveness_frameset());
+        // The open witness: the start cart (pinning the continuation and dest region — plus their
+        // ancestor backings via its `outer` chain) unioned with `pin` (every dep source) and
+        // `contract_pin` (the kept-first contract's own witness). Held across the open, so
+        // re-anchoring the zipped carriers to `'b` cannot dangle. A plain `FrameSet`
         // (§ the run-loop step-open witness is a plain frame set): a severed dep's owned node isn't a
         // frame and doesn't ride it — it is pinned instead by the dep's duplicated `Sealed` carrier held
         // across the whole open in `dep_sources` (see the struct doc above), never by this set.
         let combined: FrameSet = FrameSet::union(
-            &FrameSet::singleton(continuation_witness.storage_rc()),
-            &pin,
+            &FrameSet::union(&FrameSet::singleton(continuation_witness.storage_rc()), &pin),
+            &contract_pin,
         );
         // Open the four externally-witnessed carriers — continuation, frame-gated contract, active
         // scope, dep slice — together at one rank-2 `for<'b>` brand witnessed by `combined` (see the
         // doc comment for why nothing branded escapes).
         let continuation = SealedExtern::seal(erased_continuation);
-        let contract = seal_option(prev_contract);
+        // Read the sealed contract's erased inner without consuming the seal: `prev_contract` is
+        // needed again below (`.is_some()` for the ambient contract-chain flag, then `.or(new_contract)`
+        // for the keep-first rule), and `Sealed` is not `Copy`.
+        let contract = seal_option(prev_contract.as_ref().map(|c| *c.erased()));
         // The active scope as a carrier, per node-scope shape: `Yoked` takes the start cart's own
         // child-scope carrier; `YokedChild` reuses the carrier it already holds. `combined` pins both.
         let scope_carrier = match node_scope {
@@ -268,9 +280,11 @@ impl<'run> KoanRuntime<'run> {
                             let post_step_reserve = post.post_step_reserve;
                             // Keep the **first** contract of a tail chain: a nested tail call does not
                             // overwrite an established contract, so the chain checks the original caller's
-                            // declared return, not the tail-most callee's. (`prev_contract` is `Copy`, so
-                            // opening it into `live_contract` above left the erased original intact.)
-                            let next_contract: Option<ErasedContract> =
+                            // declared return, not the tail-most callee's. `prev_contract` was only
+                            // borrowed above (`.as_ref()`/`.erased()` for the step-open witness and the
+                            // opened carrier, `.is_some()` for the ambient flag), so it is still owned
+                            // here to feed `or`.
+                            let next_contract: Option<SealedContract> =
                                 prev_contract.or(new_contract);
                             // The frame the body runs in: a freshly installed cart, else the slot's
                             // current one (a `FramePlacement::Inherit` FN-body re-enters the cart a prior

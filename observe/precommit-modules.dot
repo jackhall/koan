@@ -548,6 +548,7 @@ digraph {
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::bind_by_name" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::core::kfunction::body" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::kfunction::body" -> "koan::machine::model" [label="uses", style="dashed"];

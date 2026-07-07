@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use super::{Erased, Reattachable, ResolvedDeps, Workload};
+use super::{Erased, Reattachable, ResolvedDeps, Sealed, Workload};
 
 /// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals.
 /// `deps` is a [`ResolvedDeps`] — a `[park_producers..., owned_subs...]` layout the scheduler owns
@@ -60,12 +60,11 @@ pub struct NodeFrame<W: Workload> {
     /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
     /// across iterations.
     pub reserve: Option<Rc<W::Cart>>,
-    /// Return contract enforced at the Done boundary, stored erased to `'static`
-    /// (`Erased<W::Contract>`). The workload re-anchors it against `cart` at the step brand — opened
-    /// alongside the continuation by the consuming externally-witnessed
-    /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open). `None` for slots with no
-    /// declared-return obligation.
-    pub contract: Option<Erased<W::Contract>>,
+    /// Return contract enforced at the Done boundary, dormant between steps as a [`Sealed`] carrier
+    /// — pinned by its own carried witness (the contract's home region owner), independent of
+    /// `cart`. The workload re-anchors it at the step brand via [`Sealed::open`]. `None` for slots
+    /// with no declared-return obligation.
+    pub contract: Option<Sealed<W::Contract, W::Witness>>,
 }
 
 pub struct Node<W: Workload> {

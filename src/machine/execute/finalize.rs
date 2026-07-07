@@ -81,10 +81,10 @@ impl NodeFinalize for KoanRuntime<'_> {
         // owned backing), so the merge below re-homes from that backing with the producer free. A value
         // that genuinely borrows into the producer (its reach names it) keeps it — its interior borrows
         // survive the re-stamp verbatim (folded as reach onto the merged result). When the home owner
-        // can't be resolved (a MATCH/TRY arm, or a released capture) the producer stays pinned (sound
-        // over-retention) instead — a region-pure carrier is rehosted onto it directly (nothing else
-        // proves the producer's region alive otherwise); an already-hosted carrier needs no change,
-        // since a downstream fold materializes its host as reach the same way regardless.
+        // can't be resolved (a released capture — the `Weak` has already dropped) the producer stays
+        // pinned (sound over-retention) instead — a region-pure carrier is rehosted onto it directly
+        // (nothing else proves the producer's region alive otherwise); an already-hosted carrier needs
+        // no change, since a downstream fold materializes its host as reach the same way regardless.
         let home_owner = declared_return_home_owner(contract);
         let carrier = if home_owner.is_some() && !carrier.witness().reach_covers(producer.region())
         {
@@ -172,17 +172,13 @@ impl NodeFinalize for KoanRuntime<'_> {
 }
 
 /// The `Rc<FrameStorage>` owning a declared-return contract's home region — the region a re-stamp
-/// re-homes its checked value into. Resolvable for a `Function` / `PerCall` (the callee's captured-scope
-/// region owner, live under the open's witness for the whole call); a MATCH / TRY `Arm` carries only a
-/// [`RegionBrand`] with no owner handle, so it returns `None` and the caller keeps the producer frame
-/// pinned (sound over-retention).
+/// re-homes its checked value into. A `Function` / `PerCall` resolves it off the callee's
+/// captured-scope region owner; a MATCH / TRY `Arm` resolves it off its declaring scope's region
+/// owner (see [`ReturnContract::home_owner`]). `None` only for a `None` contract, or a released
+/// capture whose owner `Weak` has already dropped — the caller keeps the producer frame pinned
+/// (sound over-retention) in that case.
 fn declared_return_home_owner(contract: Option<ReturnContract<'_>>) -> Option<Rc<FrameStorage>> {
-    match contract {
-        Some(ReturnContract::Function(f)) | Some(ReturnContract::PerCall { func: f, .. }) => {
-            f.captured_scope().region_owner().upgrade()
-        }
-        _ => None,
-    }
+    contract.and_then(ReturnContract::home_owner)
 }
 
 /// Label a `Done`-step **error** with its return contract's trace frame and return it for a bare

@@ -915,6 +915,14 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
     pub fn witness(&self) -> &W {
         self.inner.witness()
     }
+
+    /// The bundled `Erased<T>`, read without consuming the seal — for a caller that must feed the
+    /// erased inner into a further carrier (e.g. a `SealedExtern` zip) while keeping the original
+    /// seal around for a later keep-first decision. Adds no `unsafe`: the value stays erased (no
+    /// reattach), so this weakens opacity no further than [`Self::witness`] does for the witness half.
+    pub fn erased(&self) -> &Erased<T> {
+        &self.inner.value
+    }
 }
 
 /// The **externally-witnessed** dormant form: an erased carrier that bundles *no* witness, opened by
