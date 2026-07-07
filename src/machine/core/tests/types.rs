@@ -10,7 +10,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
-use crate::machine::FrameSet;
+use crate::witnessed::SetWitness;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -150,7 +150,7 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
     // Bind a member into `source_scope` whose stored reach names `inner_storage` — mirrors a nested
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
-    let inner_witness = CarrierWitness::residence(Rc::clone(&inner_storage), FrameSet::empty());
+    let inner_witness = CarrierWitness::singleton(Rc::clone(&inner_storage));
     let stored = source_scope.host_reach_of(&inner_witness);
     source_scope
         .bind_value("m".to_string(), obj, BindingIndex::value(0), stored)

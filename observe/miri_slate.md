@@ -1,8 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 2
-src/machine/core/carrier_witness.rs: 4
+src/machine/core/arena.rs: 7
 src/machine/core/scope.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
 -->
@@ -83,11 +82,23 @@ group just to silence the stale-anchor check.
   `unsafe` was deleted with the per-value anchor; the copy now allocs at the step brand). The group
   pins the escaping-value **retention** discipline — a surviving closure / module borrow kept alive by
   the consumer frame's `retained` `FrameSet` — which tree borrows catches if it regresses.
+- `src/machine/core/carrier_witness.rs` — the host-pinned-walking-carrier collapse moved every
+  `unsafe impl` off this file onto the library `Carrier<F, S>` in
+  `workgraph/src/witnessed/carrier.rs` (a separate crate the koan-scoped fingerprint doesn't track);
+  `carrier_witness.rs` is now a plain type alias plus the `SeveredBacking` enum. The group's tests
+  still pin real memory-safety shapes — `Hosted`/`Severed` region-pin contracts and the `compose`
+  mint — just via that library type, not this file's own code.
+- `src/machine/execute/run_loop.rs` — `run_step`'s dep-union `pin` is built entirely through safe
+  `Carrier`/`RegionSet` verbs (`to_liveness_frameset`, `FrameSet::union`/`singleton`); the file
+  carries no `unsafe` of its own. The group pins the severed-dep redundancy claim (§3.2 of
+  [host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)) —
+  the real `unsafe` it exercises is the shared `retype` in `witnessed.rs`, routed through the
+  `Sealed`/`SealedExtern` opens `run_step` and `dep_carrier` perform.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
 
-35 tests, grouped by the unsafe site each pins down. Names below are the exact
+40 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -157,6 +168,17 @@ assert only their region-pin contracts.
 - `multi_region_closure_capturing_closures_survives_frame_free`
 - `multi_region_record_of_closures_survives_frame_free`
 
+**Collapsed carrier — cross-region `ComposeWitness` merge** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— the single-host `Carrier::Hosted` merge/relocation seam
+([workgraph/src/witnessed/carrier.rs](../workgraph/src/witnessed/carrier.rs)): composing two
+*independently-dying* `Hosted` carriers demotes the non-destination side's own `host` from a residence
+arm to an ordinary minted reach *member* rather than dropping it — the direct unit-level twin of the
+`multi_region_*` shapes above, minus the aggregate-fold machinery. A use-after-free under tree borrows
+the instant `compose` drops the foreign host instead of materializing it. The only `unsafe` routed is
+the shared `retype` in `witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor.
+
+- `alloc_witnessed_merge_folds_an_independent_foreign_value`
+
 **Witness-set hosting — mint self-cycle / teardown** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `RegionSet::mint` (mechanism in
 [workgraph/src/witnessed/region_set.rs](../workgraph/src/witnessed/region_set.rs), exercised here
@@ -171,21 +193,20 @@ signs off "0 leaks" for this shape specifically.
 
 - `mint_teardown_releases_members`
 
-**`CarrierWitness` pin/reach split** ([src/machine/core/carrier_witness.rs](../src/machine/core/carrier_witness.rs))
-— the value-carrier witness's four `unsafe impl`s (`Witness`, `SetWitness<Rc<FrameStorage>>`,
-`UnionWitness`, `ComposeWitness<B>`) assert the same region-pin contracts as `RegionSet`'s: holding
-the witness keeps every `Frame` pin and every reach member's region live and fixed-address, and
-`union`/`compose` (transitionally identical — `compose` ignores its destination and delegates to
-`union`, pending the host-pinned-walking-carrier item's collapse to the library `Carrier`) keeps both
-operands' pins and reaches. The multi-region-union tests above route entirely through this type —
-every carrier they build is born a `Frame`-pin singleton (`yoke_branded` → `into_set` → `singleton`)
-whose reach the `reseal_under` / `merge` / `transfer_into` verbs union (`merge`/`transfer_into` via
-`compose` since `ComposeWitness` generalized their bound) — so they pin the `Frame`-pin and
-reach-union paths here; the owned (`Object` / `Type`) pin variants are exercised by the
-finalize-sever tests. No `unsafe` beyond these impls' contracts: the erase/reattach routes the
-shared `retype` in `witnessed.rs`. The pinning tests are the three multi-region-union tests listed
-above; no separate bullets, since a carrier cannot reach several regions without routing every one
-of these impls.
+**`CarrierWitness` = the collapsed `Carrier<FrameStorage, SeveredBacking>`** ([src/machine/core/carrier_witness.rs](../src/machine/core/carrier_witness.rs),
+mechanism in [workgraph/src/witnessed/carrier.rs](../workgraph/src/witnessed/carrier.rs)) — the
+library carrier's `unsafe impl`s (`Witness`, `SetWitness<Rc<F>>`, `ComposeWitness<B>`) assert: holding
+`Hosted.host` keeps that arena — hence `Hosted.reach`'s pointee, which lives only inside `host`'s own
+arena — alive; holding `Severed.node` keeps the value's own owned backing alive. `compose` mints
+`left`'s exact reach (plus `left`'s own `host`, demoted to a reach member rather than dropped, when
+`left` is `Hosted`) into `right`'s (the destination's) arena via `RegionSet::mint` — never a
+hand-assembled union. The multi-region-union tests above and the direct `ComposeWitness` merge test
+route entirely through this type — every carrier they build is born a `host`-pin singleton
+(`yoke_branded` → `into_set` → `singleton`) whose reach the `merge` / `transfer_into` verbs mint
+forward — so they pin the `Hosted` path here; the `Severed` arm is exercised by the finalize-sever
+tests and the aggregate-of-severed-deps test below. No `unsafe` beyond these impls' contracts and the
+pinned `with_reach` re-anchor: the erase/reattach otherwise routes the shared `retype` in
+`witnessed.rs`.
 
 **`alloc_type_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `KoanStepContextExt::alloc_carried_with`/`alloc_type_with` route a finish's result through the
@@ -268,6 +289,20 @@ dangle).
 
 - `adopt_sealed_severed_object_survives_producer_drop`
 - `adopt_sealed_severed_type_pins_foreign_region_after_producer_drop`
+
+**Severed deps held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
+— `run_step`'s consumer-step `pin` is a plain `FrameSet` folded from each dep's
+[`to_liveness_frameset`](../workgraph/src/witnessed/carrier.rs); a `Severed` dep's owned node is not a
+frame and does not ride it. The redundancy claim this is sound on: `dep_sources`' own
+`DepTerminal`s each hold the dep's *duplicated* `Sealed` carrier (owning the severed node's `Rc`
+directly) across the whole step brand, so the node's liveness was never actually load-bearing on
+`pin`. This end-to-end test drives 100 real scheduler steps each producing a severed scalar result
+(the callee frame dies with nothing borrowed back into it), aggregates all 100 into one list literal
+— a single consumer step opening 100 severed deps at once — and confirms every producer arena is
+gone while the aggregate still reads correctly: a use-after-free under tree borrows the moment the
+redundancy claim is wrong. The only `unsafe` routed is the shared `retype` in `witnessed.rs`.
+
+- `aggregate_of_call_results_releases_every_producer_frame`
 
 **`Scope::reach_of_child` seal-time union** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — a module's stored reach is minted once at seal time as the union of its child scope's own region
@@ -486,9 +521,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-06: 201s — 40 tests, 0 leaks, 0 UB
+- 2026-07-06: 248s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 159s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 180s — 35 tests, 0 leaks, 0 UB
 - 2026-07-05: 152s — 34 tests, 0 leaks, 0 UB
-- 2026-07-05: 153s — 34 tests, 0 leaks, 0 UB
-- 2026-07-05: 145s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

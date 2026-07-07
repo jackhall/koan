@@ -10,8 +10,14 @@ use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::{Erased, Sealed, SetWitness, Witnessed};
 use std::marker::PhantomData;
+
+/// Test-only destination-region operand: a bare [`RegionBrand`], the `HasRegionHandle` mint target
+/// a `merge`/`transfer_into` composition needs. Mirrors `execute::run_loop::RegionRefFamily`, which
+/// this file (under `core`, not `execute`) cannot reach.
+struct BrandFamily;
+crate::witnessed::reattachable!(BrandFamily => RegionBrand<'r>);
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -389,18 +395,18 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
         KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
         });
-    let here: Witnessed<CarriedFamily, CarrierWitness> =
-        KoanRegion::alloc_witnessed(Rc::clone(&here_frame), |r| {
-            Carried::Object(r.alloc_object(KObject::Number(2.0)))
+    // `here_frame`'s own brand is the destination operand: the `HasRegionHandle` mint target the
+    // merge composes against. `foreign`'s value is untouched (still living in `foreign_frame`'s own
+    // arena) — only its witness re-homes onto `here_frame`, minting `foreign_frame` into its arena
+    // as a reach member (the single-host carrier's take on "union of two unrelated regions").
+    let here_dest: Witnessed<BrandFamily, CarrierWitness> =
+        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b);
+    let merged: Witnessed<CarriedFamily, CarrierWitness> = foreign
+        .merge::<BrandFamily, CarriedFamily>(here_dest, |foreign, _brand, _b: PhantomData<&_>| {
+            foreign
         });
-    // Fold the foreign element in at the shared brand; re-seal under the union of both regions.
-    let merged: Witnessed<CarriedFamily, CarrierWitness> = here
-        .merge::<CarriedFamily, CarriedFamily>(
-            foreign,
-            |_here, foreign, _brand: PhantomData<&_>| foreign,
-        );
     drop(here_frame);
-    drop(foreign_frame); // `merged` holds its own clones of both frames.
+    drop(foreign_frame); // `merged` holds its own clones of both frames (host + minted reach member).
     let got = merged.with(|c| match *c {
         Carried::Object(KObject::Number(n)) => *n,
         _ => panic!("expected a Number object"),
@@ -584,10 +590,10 @@ fn empty_witness_carrier_survives_producer_shell_reset_after_fold() {
     );
 
     // The scope-reach seal at close: fold the producer in before storage (the `finalize` shape), then
-    // seal for node storage. The fold is what gives the otherwise-unpinned carrier its pin.
-    let folded = carrier.reseal_under(CarrierWitness::reach_only(FrameSet::singleton(
-        frame.storage_rc(),
-    )));
+    // seal for node storage. The fold is what gives the otherwise-unpinned carrier its pin. The old
+    // witness (`Empty`) contributes nothing, so `rehost` — not a `ComposeWitness` union — is the
+    // right replacement.
+    let folded = carrier.rehost(CarrierWitness::singleton(frame.storage_rc()));
     assert!(
         !folded.witness().is_empty(),
         "folding the producer pins the carrier",
@@ -647,10 +653,10 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
 /// witness-only `merge`). A closure can't be `yoke`d — yoke's `for<'b>` build closure can't capture the
 /// frame's existing scope, and minting a fresh one needs the frame's storage `Rc` a `for<'b>` forbids.
 fn witnessed_closure(home: &Rc<CallFrame>) -> Witnessed<CarriedFamily, CarrierWitness> {
-    Witnessed::<CarriedFamily, CarrierWitness>::resident(Carried::Object(alloc_home_closure(home)))
-        .reseal_under(CarrierWitness::reach_only(FrameSet::singleton(
-            home.storage_rc(),
-        )))
+    Witnessed::from_erased(
+        Erased::erase(Carried::Object(alloc_home_closure(home))),
+        CarrierWitness::singleton(home.storage_rc()),
+    )
 }
 
 /// Record-fold accumulator family: the dest region plus the named field cells built so far — the record
@@ -760,31 +766,27 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                 (region, cells)
             },
         );
-    let inners: Witnessed<CarriedFamily, CarrierWitness> = acc2.map(|(region, cells), _brand| {
-        Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
-    });
-
-    // The outer closure (born region-pure in frame_outer) `merge`s the inners list, binding it into the
-    // outer closure's captured scope at the shared brand — the design's "a closure folds the
-    // captured-scope operand" merge. The merged witness unions the outer frame with the list's reach, so
-    // the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
+    // The outer closure (born region-pure in frame_outer) `merge`s the still-`AggBuildFamily`-typed
+    // accumulator directly — so the destination region (needed to allocate the list) and the
+    // accumulated reach (frame_1 ∪ frame_2, needed for the composed witness) arrive together, rather
+    // than collapsing to a bare `CarriedFamily` value first (which would carry no `HasRegionHandle`
+    // mint target). The merged witness re-homes onto the outer frame with the list's reach folded
+    // in, so the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
     let captured: Witnessed<CarriedFamily, CarrierWitness> = witnessed_closure(&frame_outer)
-        .merge::<CarriedFamily, CarriedFamily>(
-        inners,
-        |outer_v, list_v, _brand| {
+        .merge::<AggBuildFamily, CarriedFamily>(acc2, |outer_v, (region, cells), _brand| {
             if let KObject::KFunction(kf) = outer_v.object() {
+                let list_obj = region.alloc_object(KObject::list_of_held(cells));
                 kf.captured_scope()
                     .bind_value(
                         "inners".to_string(),
-                        list_v.object(),
+                        list_obj,
                         BindingIndex::BUILTIN,
                         StoredReach::empty(),
                     )
                     .expect("bind the inners list into the outer closure's scope");
             }
             outer_v
-        },
-    );
+        });
 
     drop(frame_outer);
     drop(frame_1);
@@ -927,11 +929,10 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
         KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
         other => panic!("expected a KFunctor with a body, got {}", other.name()),
     };
-    let dep: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(
-        Witnessed::<CarriedFamily, CarrierWitness>::resident(Carried::Type(kt)).reseal_under(
-            CarrierWitness::reach_only(FrameSet::singleton(producer_frame.storage_rc())),
-        ),
-    );
+    let dep: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(Witnessed::from_erased(
+        Erased::erase(Carried::Type(kt)),
+        CarrierWitness::singleton(producer_frame.storage_rc()),
+    ));
 
     // Consumer: a StepContext over a *different* frame — the finish surface's own region. The fold
     // clones `kt` in exactly as the field-list re-walk clones a sub-dispatch terminal's `t.value`.

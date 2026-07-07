@@ -13,7 +13,7 @@ use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{CarrierWitness, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
 use crate::witnessed::{erase_to_static, reattachable, seal_option, SealedExtern, Witnessed};
 
 use super::dispatch::SchedulerView;
@@ -139,18 +139,23 @@ impl<'run> KoanRuntime<'run> {
         // `'b`, then unioned into `combined` — the witness the open re-anchors carriers against, keeping
         // every dep source alive past `reclaim_deps`. It is *only* a liveness pin: every value terminal
         // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
-        let pin: CarrierWitness = dep_sources.iter().zip(deps.all_ids()).fold(
-            CarrierWitness::empty(),
+        let pin: FrameSet = dep_sources.iter().zip(deps.all_ids()).fold(
+            FrameSet::empty(),
             |acc, (src, d)| match src {
-                Ok(t) => CarrierWitness::union(&acc, t.carrier.witness()),
-                Err(_) => CarrierWitness::union(&acc, &self.sched.dep_witness(d)),
+                Ok(t) => FrameSet::union(&acc, &t.carrier.witness().to_liveness_frameset()),
+                Err(_) => {
+                    FrameSet::union(&acc, &self.sched.dep_witness(d).to_liveness_frameset())
+                }
             },
         );
         // The open witness: the start cart (pinning the continuation, contract, and dest region — plus
         // their ancestor backings via its `outer` chain) unioned with `pin` (every dep source). Held
-        // across the open, so re-anchoring the zipped carriers to `'b` cannot dangle.
-        let combined: CarrierWitness = CarrierWitness::union(
-            &CarrierWitness::singleton(continuation_witness.storage_rc()),
+        // across the open, so re-anchoring the zipped carriers to `'b` cannot dangle. A plain `FrameSet`
+        // (§ the run-loop step-open witness is a plain frame set): a severed dep's owned node isn't a
+        // frame and doesn't ride it — it is pinned instead by the dep's duplicated `Sealed` carrier held
+        // across the whole open in `dep_sources` (see the struct doc above), never by this set.
+        let combined: FrameSet = FrameSet::union(
+            &FrameSet::singleton(continuation_witness.storage_rc()),
             &pin,
         );
         // Open the four externally-witnessed carriers — continuation, frame-gated contract, active

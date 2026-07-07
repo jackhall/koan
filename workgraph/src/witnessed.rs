@@ -37,7 +37,7 @@ mod region_set;
 pub use region_set::{PinsRegion, RegionSet};
 
 mod carrier;
-pub use carrier::{Carrier, HasRegionHandle};
+pub use carrier::{Carrier, HasRegionHandle, HostedSetRef};
 
 mod step_ctx;
 pub use step_ctx::StepContext;
@@ -727,6 +727,21 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// the consumer's frame.
     pub fn witness(&self) -> &W {
         &self.witness
+    }
+
+    /// Replace the bundled witness outright, discarding the old one — the primitive a
+    /// fold-the-producer-in seal routes when the new witness alone must cover the value (the old
+    /// witness contributed nothing verifiable, e.g. the `Empty` a region-pure value is born under),
+    /// so a [`ComposeWitness`]-bounded union would be the wrong shape. Sound for the same reason
+    /// [`Self::from_erased`] is: the value stays erased throughout (no reattach), so co-location is
+    /// carried forward as the caller's obligation, not re-asserted here — a caller rebuilds a witness
+    /// that provably covers everything the old one did (a residence pin folded in at seal time, or a
+    /// home re-host that mirrors a mint the value's binding already performed).
+    pub fn rehost<W2: Witness>(self, witness: W2) -> Witnessed<T, W2> {
+        Witnessed {
+            value: self.value,
+            witness,
+        }
     }
 }
 

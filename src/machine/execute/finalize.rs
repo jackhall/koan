@@ -4,8 +4,8 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallFrame, CarrierWitness, FrameSet, FrameStorage, KError, KErrorKind};
-use crate::witnessed::{reattachable, Witnessed};
+use crate::machine::{CallFrame, CarrierWitness, FrameStorage, KError, KErrorKind};
+use crate::witnessed::{reattachable, Erased, SetWitness, Witnessed};
 
 use super::lift::sever_residence;
 use super::runtime::KoanRuntime;
@@ -76,20 +76,23 @@ impl NodeFinalize for KoanRuntime<'_> {
         };
         // Declared-return re-stamp path: the re-stamp deep-clones the value into the contract's home
         // region below, so the checked value comes to reside there — pinned by the home region's owner,
-        // which the output reseal adds. The producer frame is then released for a region-pure result:
-        // sever its residence here (copy the top node into an owned backing), so the merge below re-homes
-        // from that backing with the producer free. A value that genuinely borrows into the producer
-        // (its reach names it) keeps it — its interior borrows survive the re-stamp verbatim. When the
-        // home owner can't be resolved (a MATCH/TRY arm, or a released capture) the producer stays pinned
-        // (sound over-retention), since nothing else is proven to keep the home region alive.
+        // which the `home_carrier` operand below folds in via the merge composition. The producer frame
+        // is then released for a region-pure result: sever its residence here (copy the top node into an
+        // owned backing), so the merge below re-homes from that backing with the producer free. A value
+        // that genuinely borrows into the producer (its reach names it) keeps it — its interior borrows
+        // survive the re-stamp verbatim (folded as reach onto the merged result). When the home owner
+        // can't be resolved (a MATCH/TRY arm, or a released capture) the producer stays pinned (sound
+        // over-retention) instead — a region-pure carrier is rehosted onto it directly (nothing else
+        // proves the producer's region alive otherwise); an already-hosted carrier needs no change,
+        // since a downstream fold materializes its host as reach the same way regardless.
         let home_owner = declared_return_home_owner(contract);
         let carrier = if home_owner.is_some() && !carrier.witness().reach_covers(producer.region())
         {
             sever_residence(carrier, producer)
+        } else if matches!(carrier.witness(), CarrierWitness::Empty) {
+            carrier.rehost(CarrierWitness::singleton(producer.storage_rc()))
         } else {
-            carrier.reseal_under(CarrierWitness::reach_only(FrameSet::singleton(
-                producer.storage_rc(),
-            )))
+            carrier
         };
         // Check the declared return at the merge brand, where the carrier value and the home-region
         // declared type meet at one `'b`. `KType` is invariant in its lifetime, so a free-`'o` declared
@@ -99,15 +102,36 @@ impl NodeFinalize for KoanRuntime<'_> {
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        // Bundle `home` / `declared` under the empty set — the home region's owner is pinned on the
-        // checked result below, so the merge operand itself needs no witness: `merge(w, ∅) == w`.
-        let home_carrier =
-            Witnessed::<ContractHomeFamily, CarrierWitness>::resident((home, declared));
+        // Bundle `home` / `declared` witnessed by the home owner when resolvable — so the merge below
+        // mints `carrier`'s existing reach (and its own host, if foreign) into the home region's arena,
+        // re-homing the composed result onto the home owner in one step (the sound-over-retention comment
+        // above: a `Carried::Type` passthrough that never actually moves there keeps its true residence
+        // alive as a folded-in reach member instead). `resident` (unwitnessed) when no owner is
+        // resolvable — the merge then degrades to `merge(w, ∅) == w`, leaving `carrier`'s own witness
+        // (already pinned to the producer above) untouched.
+        let home_carrier: Witnessed<ContractHomeFamily, CarrierWitness> = match &home_owner {
+            Some(owner) => Witnessed::from_erased(
+                Erased::erase((home, declared)),
+                CarrierWitness::singleton(Rc::clone(owner)),
+            ),
+            None => Witnessed::resident((home, declared)),
+        };
+        // Cloned *before* the merge so it survives the merge's unconditional drop of `carrier`'s own
+        // witness regardless of which branch below runs — a cheap `Rc` bump (`Hosted.host`) or an
+        // owned-reach clone (`Severed`). The **type** branch needs it: `value` passes through
+        // unrelocated, still pointing at whatever `carrier` witnessed before the merge (a `Severed`
+        // backing, e.g.) — the merge's own composed witness only accounts for a *relocated* value
+        // (it mints reach forward but drops a `Severed.node`, since every other call site's
+        // projection copies), so trusting it here for a passthrough would free the very backing
+        // `value` still reads through. `moved` picks between the two after the fact.
+        let original_witness = carrier.witness().clone();
+        let mut moved = false;
         let mut mismatch: Option<KError> = None;
         let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
             home_carrier,
             |value, (home_region, declared_type), _brand| match value {
                 Carried::Object(_) => {
+                    moved = true;
                     let object = value.object();
                     if !declared_type.matches_value(object) {
                         mismatch = Some(return_type_mismatch(
@@ -135,15 +159,13 @@ impl NodeFinalize for KoanRuntime<'_> {
                 }
             },
         );
-        // Pin the home region's owner so the re-homed value's residence survives the producer frame's
-        // release (the sever above dropped the producer pin for a region-pure result). Idempotent when
-        // home is an ancestor the checked witness already pins; the load-bearing case is a severed
-        // scalar, whose only remaining region pin is this one.
-        let checked = match home_owner {
-            Some(owner) => {
-                checked.reseal_under(CarrierWitness::residence(owner, FrameSet::empty()))
-            }
-            None => checked,
+        // The **object** branch relocated: the merge-composed witness (home owner ∪ `carrier`'s old
+        // reach) is correct and is what `checked` already carries. The **type** branch didn't: restore
+        // the pre-merge witness verbatim, since `value` still reads through whatever it witnessed.
+        let checked = if moved {
+            checked
+        } else {
+            checked.rehost(original_witness)
         };
         match mismatch {
             Some(error) => Err(error),

@@ -135,8 +135,11 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
 
     /// Read the reach set this carrier references (or owns), pinned under whatever this carrier
     /// itself holds — the sole re-anchor of a `Hosted.reach` erased reference. `None` when the
-    /// carrier reaches nothing (`Empty`, or a `Hosted` with an empty reach).
-    fn with_reach_set<R>(&self, f: impl FnOnce(Option<&RegionSet<F>>) -> R) -> R {
+    /// carrier reaches nothing (`Empty`, or a `Hosted` with an empty reach). Public: a caller
+    /// re-hosting this carrier's value into its own arena under a policy the generic
+    /// [`ComposeWitness`] composition doesn't cover (an extra omission predicate beyond the mint's
+    /// built-in self-cycle rule) routes a direct [`RegionSet::mint`] through this reader instead.
+    pub fn with_reach<R>(&self, f: impl FnOnce(Option<&RegionSet<F>>) -> R) -> R {
         match self {
             Carrier::Empty => f(None),
             Carrier::Hosted { reach: None, .. } => f(None),
@@ -159,7 +162,7 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
                 borrows_host, host, ..
             } => {
                 (*borrows_host && host.pins_region(region))
-                    || self.with_reach_set(|reach| reach.is_some_and(|r| r.pins_region(region)))
+                    || self.with_reach(|reach| reach.is_some_and(|r| r.pins_region(region)))
             }
             Carrier::Severed { reach, .. } => reach.pins_region(region),
         }
@@ -172,9 +175,21 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
             Carrier::Empty => false,
             Carrier::Hosted { host, .. } => {
                 host.pins_region(region)
-                    || self.with_reach_set(|reach| reach.is_some_and(|r| r.pins_region(region)))
+                    || self.with_reach(|reach| reach.is_some_and(|r| r.pins_region(region)))
             }
             Carrier::Severed { reach, .. } => reach.pins_region(region),
+        }
+    }
+
+    /// The value's owned foreign reach: a clone of `Hosted.reach`'s content (never `host` itself,
+    /// which this deliberately excludes) or `Severed.reach` verbatim; empty for `Empty`. The
+    /// finalize sever's building block — it needs an owned clone of the reach *before* the producer
+    /// host it was read out of is dropped.
+    pub fn to_owned_reach(&self) -> RegionSet<F> {
+        match self {
+            Carrier::Empty => RegionSet::empty(),
+            Carrier::Hosted { .. } => self.with_reach(|reach| reach.cloned().unwrap_or_default()),
+            Carrier::Severed { reach, .. } => reach.clone(),
         }
     }
 
@@ -187,7 +202,7 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
             Carrier::Empty => RegionSet::empty(),
             Carrier::Hosted { host, .. } => {
                 let mut set = RegionSet::singleton(Rc::clone(host));
-                self.with_reach_set(|reach| {
+                self.with_reach(|reach| {
                     if let Some(reach) = reach {
                         set = RegionSet::union(&set, reach);
                     }
@@ -202,10 +217,21 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
 // SAFETY: identical obligation to `UnionWitness::union`, discharged by minting instead of by owned
 // union. `right` names the destination's own identity witness — `Empty` for a pure-data merge peer
 // (nothing to add; `left` already pins everything), or `Hosted` for a genuine relocation (`left`'s
-// reach is minted into `dest`'s own arena and the result re-homes onto `right`'s host, so holding
-// the composed carrier keeps `dest`'s arena — hence the minted set, hence every region `left`
-// reached — alive, exactly like `left` did before relocation). `right` is never `Severed`: a severed
-// backing hosts no arena to relocate into, so it never arises as a merge/transfer_into destination.
+// reach is minted into `dest`'s own arena and the result re-homes onto `right`'s host, demoting
+// `left`'s own host, if any, to an ordinary reach *member* rather than dropping it, so its `Rc` is
+// still cloned forward — so holding the composed carrier keeps `dest`'s arena — hence the minted
+// set, hence every region `left` reached — alive, exactly like `left` did before relocation).
+// `right` is never `Severed`: a severed backing hosts no arena to relocate into, so it never arises
+// as a merge/transfer_into destination.
+//
+// A `left` that is itself `Severed` drops its own owned `node` here (only its `reach` is minted
+// forward) — sound **only when the caller's projection copies the value** rather than passing the
+// same reference through (every current call site does: an aggregate fold deep-clones each cell,
+// and a relocation allocates fresh in `dest`). A verbatim passthrough merge (a declared-return
+// type-check that lets a `Carried::Type` through unchanged, e.g.) must not route this composition at
+// all for that value — see `finalize_terminal`'s pre-merge `Carrier` clone, which restores the
+// original (still-live, thanks to that extra `Rc` clone) witness after the merge for exactly that
+// case, rather than trusting the merge-computed one.
 unsafe impl<F, S, P, B> ComposeWitness<B> for Carrier<F, S>
 where
     F: PinsRegion + RegionOwner<Region = Region<P>> + 'static,
@@ -219,17 +245,28 @@ where
     fn compose<'b>(left: &Self, right: &Self, dest: &B::At<'b>) -> Self {
         match right {
             Carrier::Empty => left.clone(),
-            Carrier::Hosted { host, .. } => {
+            Carrier::Hosted {
+                host,
+                borrows_host: right_borrows_host,
+                ..
+            } => {
                 let handle = dest.region_handle();
                 let dest_host = Rc::clone(host);
-                let new_borrows_host = left.reach_covers(dest_host.region());
+                let new_borrows_host = *right_borrows_host || left.reach_covers(dest_host.region());
                 let materialize: Vec<Rc<F>> = match left {
                     Carrier::Hosted { host: lh, .. } => vec![Rc::clone(lh)],
                     _ => Vec::new(),
                 };
-                let minted = left.with_reach_set(|left_reach| {
-                    let sources: Vec<&RegionSet<F>> = left_reach.into_iter().collect();
-                    RegionSet::mint(handle, &sources, &materialize, |_| false)
+                // Mint BOTH operands' exact reach — `right`'s own reach (an accumulator's prior
+                // folds, already minted into this same `dest` arena, so re-minting is idempotent
+                // via subsumption) and `left`'s (the newly-folded source) — never `left` alone, or
+                // a multi-step accumulator fold would drop everything folded before this step.
+                let minted = left.with_reach(|left_reach| {
+                    right.with_reach(|right_reach| {
+                        let sources: Vec<&RegionSet<F>> =
+                            left_reach.into_iter().chain(right_reach).collect();
+                        RegionSet::mint(handle, &sources, &materialize, |_| false)
+                    })
                 });
                 Carrier::Hosted {
                     borrows_host: new_borrows_host,

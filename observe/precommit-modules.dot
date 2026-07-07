@@ -512,7 +512,6 @@ digraph {
     "koan::machine::core::bindings::pending" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::bindings::pending" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::bindings::pending" -> "koan::machine::model::types" [label="uses", style="dashed"];
-    "koan::machine::core::carrier_witness" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model::values" [label="uses", style="dashed"];

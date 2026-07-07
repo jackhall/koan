@@ -2,10 +2,10 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{CallFrame, CarrierPin, CarrierWitness, RegionBrand};
+use crate::machine::core::{CallFrame, CarrierWitness, RegionBrand, SeveredBacking};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
-use crate::witnessed::{erase_to_static, Witnessed};
+use crate::witnessed::{erase_to_static, RegionSet, Witnessed};
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) /
@@ -26,49 +26,59 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
     }
 }
 
-/// The owned backing a [`sever_residence`] copies a top node into, before it becomes a
-/// [`CarrierPin`]. Read out of the carrier brand-free (an `Rc` names no lifetime), so it escapes the
-/// rank-2 `with` the branded `Carried` could not.
-enum SeveredBacking {
-    Object(Rc<KObject<'static>>),
-    Type(Rc<KType<'static>>),
-}
-
 /// Sever a finalized terminal from its dying `producer` frame: copy the value's top node out of the
-/// frame's region into an owned `Rc` backing, and re-seal the carrier witnessed by a pin holding that
-/// backing — so the value outlives the frame with no fabricated lifetime.
+/// frame's region into an owned `Rc` backing, and re-seal the carrier as [`Carrier::Severed`], owning
+/// a clone of the old reach — so the value outlives the frame with no fabricated lifetime.
 ///
 /// The Done-boundary gate reaches here only when the carrier's **reach** does not cover `producer`
 /// (the value borrows nothing into the frame it resides in), so copying the top node out loses no
 /// borrow: a scalar owns everything, and an aggregate's spine is `Rc`-heap (shared by `deep_clone`)
-/// with every interior borrow reaching a *foreign* region the carrier's reach — carried forward
-/// verbatim — already pins. [`CarrierWitness::severed`] drops the frame's residence pin (nothing needs
-/// it live now) and adds the backing, leaving reach untouched: a scalar thus seals with empty reach.
+/// with every interior borrow reaching a *foreign* region the old reach — cloned forward verbatim —
+/// already pins. The old `host` pin is dropped **unless it is foreign to `producer`** (a pass-through
+/// value read from an unrelated ancestor's binding, not actually resident in the dying frame): such a
+/// host folds into the owned reach instead, so its region stays pinned exactly as the old
+/// `Vec<CarrierPin>` scheme's `severed()` retained a non-producer `Frame` pin verbatim. A host that
+/// *is* (or descends from) `producer` is simply dropped — nothing needs it live now.
+///
+/// [`Carrier::Severed`]: crate::witnessed::Carrier::Severed
 pub(in crate::machine::execute) fn sever_residence(
     carrier: Witnessed<CarriedFamily, CarrierWitness>,
     producer: &Rc<CallFrame>,
 ) -> Witnessed<CarriedFamily, CarrierWitness> {
     let old_witness = carrier.witness().clone();
+    let mut reach = old_witness.to_owned_reach();
+    if let CarrierWitness::Hosted { host, .. } = &old_witness {
+        if !host.pins_region(producer.region()) {
+            reach = RegionSet::union(&reach, &RegionSet::singleton(Rc::clone(host)));
+        }
+    }
     // Copy the top node out — a `deep_clone` of the object (its spine `Rc`s shared) or a `clone` of
     // the type — and erase it to its `'static` backing form, read brand-free out of the carrier.
     let backing = carrier.with(|carried| match carried {
-        Carried::Object(object) => SeveredBacking::Object(Rc::new(erase_to_static::<
-            KObject<'static>,
-        >(object.deep_clone()))),
+        Carried::Object(object) => {
+            SeveredBacking::Object(Rc::new(erase_to_static::<KObject<'static>>(
+                object.deep_clone(),
+            )))
+        }
         Carried::Type(kt) => {
             SeveredBacking::Type(Rc::new(erase_to_static::<KType<'static>>((*kt).clone())))
         }
     });
-    let producer_region = producer.region();
     match backing {
         SeveredBacking::Object(rc) => Witnessed::yoke_backing::<KObject<'static>>(
             rc,
-            |rc| old_witness.severed(producer_region, CarrierPin::Object(rc)),
+            move |rc| CarrierWitness::Severed {
+                node: SeveredBacking::Object(rc),
+                reach,
+            },
             |node| Carried::Object(node),
         ),
         SeveredBacking::Type(rc) => Witnessed::yoke_backing::<KType<'static>>(
             rc,
-            |rc| old_witness.severed(producer_region, CarrierPin::Type(rc)),
+            move |rc| CarrierWitness::Severed {
+                node: SeveredBacking::Type(rc),
+                reach,
+            },
             |node| Carried::Type(node),
         ),
     }

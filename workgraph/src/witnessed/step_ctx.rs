@@ -228,3 +228,13 @@ pub struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
 unsafe impl<V: Reattachable, R: ?Sized + 'static> Reattachable for AllocViews<V, R> {
     type At<'r> = (&'r R, Vec<V::At<'r>>);
 }
+
+// SAFETY: the handle authorizes allocation into `self.0`'s own region — exactly the region a
+// `Carrier` composed against this accumulator's live form re-homes into. Generic over the
+// accumulated second component `T` (an `alloc_with`-family's `Vec<V::At<'b>>`, for any `V`) since
+// only the region reference determines the handle.
+unsafe impl<'b, T, P: StorageProfile> super::HasRegionHandle<'b, P> for (&'b Region<P>, T) {
+    fn region_handle(&self) -> RegionHandle<'b, P> {
+        RegionHandle::new(self.0)
+    }
+}

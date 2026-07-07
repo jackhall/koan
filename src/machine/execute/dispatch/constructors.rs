@@ -11,29 +11,31 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{FrameStorage, Scope};
+use crate::machine::core::{FrameStorage, KoanRegionExt, RegionBrand, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, RegionTypeFamily};
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Witnessed};
 
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::dest_brand;
+use super::super::run_loop::{dest_brand, RegionRefFamily};
 use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
 use super::{Await, DepRequest, Outcome};
 use crate::scheduler::{DepResults, Deps};
 
-/// Fold accumulator for a record-repr newtype: the field values gathered from the value deps, each
-/// `transfer_into`-folded so the accumulator's witness names every region a field reaches. The final
-/// `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
-/// Layout-invariant: a `Vec` of layout-invariant `(String, KObject)` cells.
+/// Fold accumulator for a record-repr newtype: the destination region plus the field values
+/// gathered from the value deps, each `transfer_into`-folded so the accumulator's witness composes
+/// by minting into that region (the [`HasRegionHandle`](crate::witnessed::HasRegionHandle) seam).
+/// The final `merge` with [`RegionTypeFamily`] builds the `Record` and wraps it with the identity.
+/// Layout-invariant: a thin region pointer and a `Vec` of layout-invariant `(String, KObject)` cells
+/// — the same shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`.
 struct RecordFieldsFamily;
-reattachable!(RecordFieldsFamily => Vec<(String, KObject<'r>)>);
+reattachable!(RecordFieldsFamily => (RegionBrand<'r>, Vec<(String, KObject<'r>)>));
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -183,7 +185,10 @@ pub(crate) fn build_type_operand<'step>(
     // frame the home-omitted `reach` cannot record it, so materialize home back into reach (the
     // conservative reseal — an ancestor-declared identity's home ride is redundant but harmless).
     let identity_carrier = scope.resident_type_carrier(identity, reach, true);
-    dest_brand.merge::<CarriedFamily, RegionTypeFamily>(identity_carrier, |brand, carried, _b| {
+    // The dest brand is the *destination* operand (its `RegionRefFamily` live form is the
+    // `HasRegionHandle` mint target `merge`'s composition seam needs), so it rides as `other` —
+    // `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
+    identity_carrier.merge::<RegionRefFamily, RegionTypeFamily>(dest_brand, |carried, brand, _b| {
         let kt = match carried {
             Carried::Type(t) => t,
             _ => unreachable!("the identity carrier is always a Type"),
@@ -239,12 +244,12 @@ fn finish_witnessed<'step>(
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
             check_newtype_repr(identity, &KObject::record(probe))?;
-            // The fold accumulator is region-pure — an owned `Vec` of deep-cloned fields, reaching no
-            // region until the field carriers fold their reach in below — so it is born under the empty
-            // set via `resident` rather than `yoke`d over the dest frame; the dest frame's pin arrives
-            // with the `home` operand at the closing `merge`.
-            let acc0 = Witnessed::<RecordFieldsFamily, CarrierWitness>::resident(
-                Vec::with_capacity(field_names.len()),
+            // The fold accumulator is yoked into the dest frame's own region up front (mirroring
+            // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
+            // minting that field's reach into the accumulator's own arena rather than by plain union.
+            let acc0 = KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
+                view.dest_frame(),
+                |region| (region, Vec::with_capacity(field_names.len())),
             );
             let fields = terminals
                 .iter()
@@ -254,16 +259,16 @@ fn finish_witnessed<'step>(
                     term.carrier
                         .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
                             acc,
-                            move |value, mut fields, _brand| {
+                            move |value, (region, mut fields), _brand| {
                                 fields.push((name, value.object().deep_clone()));
-                                fields
+                                (region, fields)
                             },
                         )
                 });
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(fields.merge::<RegionTypeFamily, CarriedFamily>(
                 home,
-                |fields, (region, identity_ty), _brand| {
+                |(_region, fields), (region, identity_ty), _brand| {
                     let record = Record::from_pairs(fields);
                     Carried::Object(region.alloc_object(KObject::Wrapped {
                         inner: NonWrappedRef::peel(&KObject::record(record)),

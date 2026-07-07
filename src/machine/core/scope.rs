@@ -1,4 +1,4 @@
-use crate::machine::{CarrierPin, CarrierWitness};
+use crate::machine::CarrierWitness;
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
@@ -197,24 +197,26 @@ impl<'a> Scope<'a> {
     /// reach). `None` when the value reaches nothing foreign. Home-omission: the scope's home frame
     /// plus lexical-ancestor regions ([`Self::chain_reaches_region`]) — a per-call frame carries no
     /// storage `outer` under TCO, so the lexical half is what catches a closure's captured (ancestor)
-    /// scope, keeping a sibling bind of the call's result from closing a region cycle. A witness's
-    /// `Frame` pin materializes as a reach member under the same omission; its `Object` / `Type`
-    /// pins carry no region and are dropped here — they are severed backings, handled by
+    /// scope, keeping a sibling bind of the call's result from closing a region cycle. A `Hosted`
+    /// witness's `host` materializes as a reach member under the same omission; a `Severed` carries no
+    /// region and is dropped here — its owned node is a severed backing, handled by
     /// [`Self::adopt_sealed`]'s value re-home, never as reach.
     pub(crate) fn host_reach_of(&self, witness: &CarrierWitness) -> StoredReach<'a> {
         let home = self.region_owner.upgrade();
         let borrows_into_home = witness.reach_covers(self.region());
-        let hosts: Vec<Rc<FrameStorage>> = witness
-            .pins()
-            .iter()
-            .filter_map(|pin| match pin {
-                CarrierPin::Frame(frame) => Some(Rc::clone(frame)),
-                CarrierPin::Object(_) | CarrierPin::Type(_) => None,
+        let hosts: Vec<Rc<FrameStorage>> = match witness {
+            CarrierWitness::Hosted { host, .. } => vec![Rc::clone(host)],
+            CarrierWitness::Empty | CarrierWitness::Severed { .. } => Vec::new(),
+        };
+        let foreign = witness.with_reach(|reach| {
+            let sources: &[&FrameSet] = match &reach {
+                Some(r) => std::slice::from_ref(r),
+                None => &[],
+            };
+            self.brand().mint(sources, &hosts, |region| {
+                home.as_ref().is_some_and(|h| h.pins_region(region))
+                    || self.chain_reaches_region(region)
             })
-            .collect();
-        let foreign = self.brand().mint(&[witness.reach()], &hosts, |region| {
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self.chain_reaches_region(region)
         });
         StoredReach {
             foreign,
@@ -826,9 +828,11 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// Build a resident carrier's witness: the home frame as a residence pin, plus the value's exact
-    /// borrow reach — its home-omitted `foreign` reach, with home materialized back in only when the
-    /// binding recorded that the value `borrows_into_home`. A fully-owned value (`foreign: None`, bit
+    /// Build a resident carrier's witness: `Hosted` at the home frame, referencing `foreign` — the
+    /// value's binding-time-minted, already home-omitted reach — directly. A reference-copy of an
+    /// existing hosted set, never a rebuild: `foreign` was minted once, at bind time
+    /// ([`Self::host_reach_of`]), into this same home's arena, so re-anchoring it under the read's own
+    /// `host` pin is sound and free of any new allocation. A fully-owned value (`foreign: None`, bit
     /// unset) thus gets an empty reach, so the finalize gate severs it from a dying home frame.
     fn resident_witness(
         &self,
@@ -836,14 +840,11 @@ impl<'a> Scope<'a> {
         foreign: Option<&FrameSet>,
         borrows_into_home: bool,
     ) -> CarrierWitness {
-        let mut reach = FrameSet::empty();
-        if let Some(foreign) = foreign {
-            reach.fold_omitting(foreign, |region| home.pins_region(region));
+        CarrierWitness::Hosted {
+            borrows_host: borrows_into_home,
+            host: Rc::clone(home),
+            reach: foreign.map(Erased::erase),
         }
-        if borrows_into_home {
-            reach = FrameSet::union(&reach, &FrameSet::singleton(Rc::clone(home)));
-        }
-        CarrierWitness::residence(Rc::clone(home), reach)
     }
 
     /// Adopt a sealed dep carrier into this scope, copy-free where possible: mint its witness's
@@ -865,14 +866,10 @@ impl<'a> Scope<'a> {
         // holds the set, hence the pin, for the region's life.
         let _ = self.host_reach_of(cell.witness());
 
-        // A severed carrier rides an owned, frame-free backing (`Object`/`Type` pin). A resident
-        // `{ bit, ref }` scope cannot hold it, so re-home the top node into this arena and hand out an
-        // in-region `&'a` alias. The two channels are NOT symmetric:
-        let severed = cell
-            .witness()
-            .pins()
-            .iter()
-            .any(|pin| matches!(pin, CarrierPin::Object(_) | CarrierPin::Type(_)));
+        // A severed carrier rides an owned, frame-free backing. A resident `{ bit, ref }` scope cannot
+        // hold it, so re-home the top node into this arena and hand out an in-region `&'a` alias. The
+        // two channels are NOT symmetric:
+        let severed = matches!(cell.witness(), CarrierWitness::Severed { .. });
         if severed {
             return cell.open(|live| match live {
                 // Object: `deep_clone` returns a SELF-CONTAINED node (spine `Rc`s shared, no live
