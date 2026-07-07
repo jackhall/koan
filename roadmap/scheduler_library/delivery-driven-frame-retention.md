@@ -4,11 +4,11 @@ Move walking-carrier liveness onto scheduler frame-retention and collapse the
 carrier to the single reference-only witness, per
 [design/witness-hosting.md § Retention model](../../design/witness-hosting.md#retention-model).
 
-**Problem.** A walking carrier owns its liveness — the host frame-owner `Rc` it
-carries ([Host-pinned walking carrier](host-pinned-walking-carrier.md) leaves
-that one arm in place) — so a producer frame's release is a function of carrier
-drops scattered across consumers, not of the scheduler's deliveries, and every
-carrier hand-off pays a refcount bump. Around that self-owned liveness:
+**Problem.** A walking carrier owns its liveness — the
+[transitional owned host arm](../../design/witness-hosting.md#the-carrier) it
+carries — so a producer frame's release is a function of carrier drops scattered
+across consumers, not of the scheduler's deliveries, and every carrier hand-off
+pays a refcount bump. Around that self-owned liveness:
 
 - The finalize Done-boundary gate **conflates frame release with reach**: it
   decides whether to sever a value off its producer frame by asking whether the
@@ -74,8 +74,6 @@ with the retained frames.
 
 **Requires:**
 
-- [Host-pinned walking carrier](host-pinned-walking-carrier.md) — supplies the
-  hosted sets and the carrier whose owned arm this item deletes.
 - [Library-owned tail-call region reuse](tco-library-region-reuse.md) — makes
   region lifecycle library-owned, so retention is the only release mechanism.
 

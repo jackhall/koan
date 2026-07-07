@@ -61,8 +61,8 @@ deps.
   graph does not have.
 - *Free ordering by the arguments' witness — decided.* The retiring
   incarnation's sealed argument carriers each hold its frame-owner `Rc` (the
-  [host-pinned walking carrier](host-pinned-walking-carrier.md)'s one arm), so
-  when the library drops its own handle at the reinstall, the region lives
+  walking carrier's [one owned host arm](../../design/witness-hosting.md#the-carrier)),
+  so when the library drops its own handle at the reinstall, the region lives
   until the reinstalled incarnation's adoption copy drops those carriers —
   the free is ordered after the copy by refcount, with no retention machinery.
   [Delivery-driven frame retention](delivery-driven-frame-retention.md) later
@@ -91,14 +91,11 @@ deps.
 
 The free ordering rests on the carried arguments' witness: the sealed argument
 carriers pin the retiring incarnation's region until the reinstalled incarnation
-adopts them. The single host-pinned carrier those arguments ride ships first;
-delivery-driven retention later moves the same ordering onto pull-count release
-with no change to the turnover mechanism.
+adopts them. The single host-pinned carrier those arguments ride is shipped
+substrate; delivery-driven retention later moves the same ordering onto
+pull-count release with no change to the turnover mechanism.
 
-**Requires:**
-
-- [Host-pinned walking carrier](host-pinned-walking-carrier.md) — supplies the
-  single host-pinned carrier the sealed arguments and kept-first contract ride.
+**Requires:** none — the host-pinned walking carrier it rode is shipped substrate.
 
 **Unblocks:**
 

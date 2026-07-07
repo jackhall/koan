@@ -69,7 +69,10 @@ its set.
   One `{ bit, ref }` shape covers both. There is no owned host `Rc`, no
   severed-backing arm, and no separate liveness-pin channel beside the reach: a
   value's host is kept alive by retention or containment, its foreign reach by the
-  set members.
+  set members. The walking carrier's liveness moves onto scheduler frame-retention
+  with [delivery-driven frame retention](../roadmap/scheduler_library/delivery-driven-frame-retention.md);
+  until then it holds its host frame through a transitional owned arm (and a
+  severed-backing arm for frame-free values), which that item deletes.
 - *Resident locality.* A carrier's set reference points only into its **host
   region's own** arena. A reference into a foreign region's arena is never created
   — it would not be covered by the container's or the retention's liveness.
@@ -197,17 +200,17 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 
 - **Library-owned:** the witness-set type and its mechanism (freeze-at-store,
   home-omission, borrows-host materialization, subsumption fold), the hosting
-  family plumbing, the `{ borrows_host, reach }` carrier, the mint verbs (which
-  require a destination allocation capability by signature), and the scheduler's
-  frame-retention (release at pull-count zero).
+  family plumbing, the
+  [`{ borrows_host, reach }` carrier](../workgraph/src/witnessed/carrier.rs), the
+  mint verbs (which require a destination allocation capability by signature), and
+  the scheduler's frame-retention (release at pull-count zero).
 - **Workload-supplied:** the frame-owner type `F` with its `PinsRegion` subsumption
   hook, the storage profile listing the witness-set family, and the omission-policy
   predicate at bind sites.
 
 ## Open work
 
-- [roadmap/scheduler_library/host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)
-  — the walking carrier's collapse onto the hosted sets.
 - [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)
-  — the scheduler's frame-retention and the final reference-only walking
+  — the scheduler's frame-retention, deleting the walking carrier's transitional
+  owned host arm and severed-backing arm to reach the final reference-only
   carrier.

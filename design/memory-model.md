@@ -191,17 +191,20 @@ region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only re
 can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
 asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
 re-seals under the *combined* witness — the union of both operands' regions, with `outer`-chain
-subsumption dropping a region another already pins (the `UnionWitness` trait's `union`), total because
-a region set can always represent the combined pin. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
+subsumption dropping a region another already pins. The composition is `ComposeWitness::compose`, run
+inside the brand with the destination in scope: an owned region set composes by plain union (total,
+since a set can always represent the combined pin), while a hosted carrier mints the combined reach
+into the destination's own arena. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
 `Sealed<W::Value, W::Witness>` ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the
 opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
 `merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
-the erased value under a [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — a `{ pins, reach }`
-pair splitting liveness pins from the exact borrow reach — and applies the Done-boundary gate: a value
-whose `reach` borrows into its producer frame keeps that frame, while a region-pure value (empty reach)
+the erased value under a [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — a hosted carrier
+pairing the value's liveness arm (its host frame, or an owned backing once severed) with a reference to
+its foreign reach set — and applies the Done-boundary gate: a value
+whose reach covers its producer frame keeps that frame, while a region-pure value (empty reach)
 is severed off it, its top node copied into an owned backing pin so the frame frees at Done (a frameless
 / run-region terminal carries the empty witness). A value read goes through `Sealed::open`, which copies the value
 out inside a `for<'b>` brand — the fabricated content lifetime is un-nameable, so nothing branded

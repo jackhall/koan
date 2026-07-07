@@ -184,9 +184,6 @@ and the embedder boundary stays clean by construction rather than by convention.
 - [roadmap/scheduler_library/tco-library-region-reuse.md](../roadmap/scheduler_library/tco-library-region-reuse.md)
   — moves region turnover onto the library's node lifecycle, adds lazy per-node
   region mint, and retires Koan's in-place region reset.
-- [roadmap/scheduler_library/host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)
-  — supplies the hosted witness sets and the witnessed cross-region carrier
-  Lemma 3 rests on.
 - [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)
   — supplies the delivery-driven retention behind Lemma 2's
   release-at-pull-count-zero.

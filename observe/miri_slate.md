@@ -90,8 +90,8 @@ group just to silence the stale-anchor check.
   mint — just via that library type, not this file's own code.
 - `src/machine/execute/run_loop.rs` — `run_step`'s dep-union `pin` is built entirely through safe
   `Carrier`/`RegionSet` verbs (`to_liveness_frameset`, `FrameSet::union`/`singleton`); the file
-  carries no `unsafe` of its own. The group pins the severed-dep redundancy claim (§3.2 of
-  [host-pinned-walking-carrier.md](../roadmap/scheduler_library/host-pinned-walking-carrier.md)) —
+  carries no `unsafe` of its own. The group pins the severed-dep redundancy claim — a severed
+  dep's node is held by its duplicated `Sealed` across the step open, not by `run_step`'s `pin` —
   the real `unsafe` it exercises is the shared `retype` in `witnessed.rs`, routed through the
   `Sealed`/`SealedExtern` opens `run_step` and `dep_carrier` perform.
 <!-- slate-audit-whitelist:end -->
