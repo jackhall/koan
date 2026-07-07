@@ -87,9 +87,11 @@ embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness 
 
 The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
 region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
-widens into the region *set* the aggregate accumulates in through a distinct [`into_set`](../workgraph/src/witnessed.rs)
-lift, kept separate from `yoke` so minting stays a one-region act and combining regions stays `merge`'s
-job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
+lifts to the **reference-only** carrier the aggregate stores through a distinct
+[`into_reference_only`](../workgraph/src/witnessed.rs) lift — its own region kept alive externally,
+by containment or the retention hold, so the carrier holds no pin — kept separate from `yoke` so
+minting stays a one-region act and combining regions (minting the reach set into the destination
+arena) stays `merge`'s job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
 arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
 `Rc`. The object family's region-pure leaves and aggregates are built this way — a single-part
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
@@ -291,11 +293,12 @@ still pins its defining (lexical-ancestor) scope. Minting such an ancestor into 
 a sibling bind of the call's result — would close a `region → scope → arena → frame` cycle and defeat
 the `Rc::get_mut` TCO frame-reuse gate; omitting it realizes
 [`fold_omitting`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors" intent while
-keeping a region-pure or ancestor-bound value pinning nothing (the mint returns `None`). A carrier's
-owned, frame-free backing (a severed `Object` / `Type` pin, with no host region for a mint to pin) has
-no reach for the mint to carry; it is re-homed instead — its top node copied into the scope's own arena
-at the bind ([`Scope::adopt_sealed`](../src/machine/core/scope.rs)) — so no binding entry ever
-references a frame-free backing.
+keeping a region-pure or ancestor-bound value pinning nothing (the mint returns `None`). A value
+adopted into a scope arrives as its delivery envelope; the bind mints its reach — and, at
+`Residence::Kept`, the producer's host frame — into the scope's own arena
+([`Scope::adopt_sealed`](../src/machine/core/scope.rs)), so the resident binding entry names
+everything the value reaches under the scope's own liveness, and the reference-only carrier it stores
+holds no pin into a producer frame.
 
 The minted reach is stored **per binding**, so a later read hands its carrier back structurally.
 [`Bindings`](../src/machine/core/bindings.rs)' `data` and `types` entries each carry the bound value's

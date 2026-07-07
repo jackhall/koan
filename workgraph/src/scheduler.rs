@@ -39,14 +39,14 @@ mod workload;
 // The lifetime-erasure carrier substrate lives in the top-level `witnessed` module (below both
 // `machine` and `scheduler`); re-exported here so the scheduler's carriers name it unqualified.
 pub use crate::witnessed::{
-    ComposeWitness, Delivered, Erased, Reattachable, Sealed, UnionWitness, Witnessed,
+    Carrier, ComposeWitness, Delivered, Erased, Reattachable, Sealed, UnionWitness, Witnessed,
 };
 pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
 pub use node_id::NodeId;
-pub use workload::{Live, Workload};
+pub use workload::{Live, SealedTerminal, Terminal, Workload};
 
 /// Re-exported for the driver's white-box reclaim tests (the only cross-module user of the edge
 /// kind); production driver code never names it. Widened to `test-hooks` so the embedder's own
@@ -155,9 +155,9 @@ impl<W: Workload> Scheduler<W> {
     }
 
     /// The retained producer-frame owner of a finalized dep, or `None` for a frameless / run-region
-    /// producer — the liveness pin the run loop holds live across the dep read and folds into the
-    /// step's combined pin, sourced from the retention hold rather than the walking carrier.
-    pub fn dep_host(&self, id: NodeId) -> Option<Rc<W::Frame>> {
+    /// producer. Private: a bare frame pin never escapes the scheduler — consumers receive it
+    /// paired with the sealed carrier as a [`dep_delivered`](Self::dep_delivered) envelope.
+    fn dep_host(&self, id: NodeId) -> Option<Rc<W::Frame>> {
         self.deps.retained_owner(self.resolve_alias(id).index())
     }
 
@@ -167,18 +167,11 @@ impl<W: Workload> Scheduler<W> {
         self.store.result_error(self.resolve_alias(id))
     }
 
-    /// The finalized terminal's witness set — the regions it reaches, cloned out for the consumer-pull
-    /// lift's `pin` accumulation (the empty set for a frameless / run-region terminal, or for an
-    /// errored slot). Follows a bare-name-forward alias to the real producer.
-    pub fn dep_witness(&self, id: NodeId) -> W::Witness {
-        self.store.dep_witness(self.resolve_alias(id))
-    }
-
     /// Duplicate a finalized terminal's sealed carrier (value + witness set), leaving the producer's
     /// own seal intact — the consumer-pull lift hands each dep this so a construction finish folds it
     /// witnessed, naming the reach on the carrier rather than reconstructing it. Follows a
     /// bare-name-forward alias to the real producer (which holds the sole copy).
-    pub fn dep_carrier(&self, id: NodeId) -> Result<Sealed<W::Value, W::Witness>, &W::Error> {
+    pub fn dep_carrier(&self, id: NodeId) -> Result<SealedTerminal<W>, &W::Error> {
         self.store.dep_carrier(self.resolve_alias(id))
     }
 
@@ -197,7 +190,7 @@ impl<W: Workload> Scheduler<W> {
     pub fn dep_delivered(
         &self,
         id: NodeId,
-    ) -> Result<Delivered<W::Value, W::Witness, W::Frame>, &W::Error> {
+    ) -> Result<Delivered<W::Value, Carrier<W::Frame>, W::Frame>, &W::Error> {
         let cell = self.dep_carrier(id)?;
         let host = self
             .dep_host(id)
@@ -209,11 +202,7 @@ impl<W: Workload> Scheduler<W> {
     /// of any per-call source it still reaches), dropping the pinned producer frame. The drain
     /// boundary uses this for consumer-less roots. Resolves a bare-name alias so the real producer's
     /// frame — not the alias slot — is released.
-    pub fn rehome_terminal(
-        &mut self,
-        id: NodeId,
-        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
-    ) {
+    pub fn rehome_terminal(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
         let target = self.resolve_alias(id);
         // The re-homed terminal has no per-call producer frame to retain — its value moved into a
         // surviving region — so any hold seeded at its finalize is released here (its count is zero

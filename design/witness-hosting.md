@@ -69,10 +69,11 @@ its set.
   One `{ bit, ref }` shape covers both. There is no owned host `Rc`, no
   severed-backing arm, and no separate liveness-pin channel beside the reach: a
   value's host is kept alive by retention or containment, its foreign reach by the
-  set members. The walking carrier's liveness moves onto scheduler frame-retention
-  with [delivery-driven frame retention](../roadmap/scheduler_library/delivery-driven-frame-retention.md);
-  until then it holds its host frame through a transitional owned arm (and a
-  severed-backing arm for frame-free values), which that item deletes.
+  set members. A walking value travels as a **delivery envelope**
+  ([`Delivered`](../workgraph/src/witnessed/delivered.rs)) — the sealed carrier
+  paired with the retained host frame `Rc` — so the retention hold that pins the
+  carrier's set is carried alongside it to every consumer, and the carrier itself
+  stays pin-free.
 - *Resident locality.* A carrier's set reference points only into its **host
   region's own** arena. A reference into a foreign region's arena is never created
   — it would not be covered by the container's or the retention's liveness.
@@ -173,7 +174,10 @@ A set pins its members until its hosting region dies; those releases batch at
 region teardown. A carrier's own death releases nothing — it owns nothing.
 
 The lifetime of a **host frame** is the scheduler's frame-retention: it lives until
-every destination of its terminals has pulled. Two consequences:
+every destination of its terminals has pulled. A walking terminal carries this hold
+as its [`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's host `Rc`,
+so the pin travels with the value to each consumer rather than riding the carrier.
+Two consequences:
 
 - A **pass-through** value — a closure returned up the stack unmodified — stays
   hosted in its **birth frame** and rides up by reference. That birth frame is
@@ -190,9 +194,7 @@ keeping its node identity; the retiring incarnation's region — hosting the
 arguments it sealed as carriers — is held by retention until the reinstalled
 incarnation adopts them (release at pull-count zero), so the region free is ordered
 after the adoption copy. Koan issues only the reinstall and never touches a region.
-The full design is [tail-call-optimization.md](tail-call-optimization.md); retention
-itself lands with
-[its roadmap item](../roadmap/scheduler_library/delivery-driven-frame-retention.md).
+The full design is [tail-call-optimization.md](tail-call-optimization.md).
 
 ## Library boundary
 
@@ -207,10 +209,3 @@ Per the [scheduler-library.md](scheduler-library.md) division:
 - **Workload-supplied:** the frame-owner type `F` with its `PinsRegion` subsumption
   hook, the storage profile listing the witness-set family, and the omission-policy
   predicate at bind sites.
-
-## Open work
-
-- [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)
-  — the scheduler's frame-retention, deleting the walking carrier's transitional
-  owned host arm and severed-backing arm to reach the final reference-only
-  carrier.

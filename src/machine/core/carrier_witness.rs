@@ -20,4 +20,5 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
 /// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site.
-pub type DeliveredCarried = crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;
+pub type DeliveredCarried =
+    crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;

@@ -198,18 +198,20 @@ into the destination's own arena. All keep their `unsafe` retype inside the modu
 in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
-`Sealed<W::Value, W::Witness>` ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the
-opaque dormant form of a `Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` /
-`merge`) and re-anchors only through the rank-2 destination verb `Sealed::open`. `finalize` bundles
-the erased value under a [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — a hosted carrier
-pairing the value's liveness arm (its host frame, or an owned backing once severed) with a reference to
-its foreign reach set — and applies the Done-boundary gate: a value
-whose reach covers its producer frame keeps that frame, while a region-pure value (empty reach)
-is severed off it, its top node copied into an owned backing pin so the frame frees at Done (a frameless
-/ run-region terminal carries the empty witness). A value read goes through `Sealed::open`, which copies the value
-out inside a `for<'b>` brand — the fabricated content lifetime is un-nameable, so nothing branded
-escapes into the result (`open` delegates to the kept `Witnessed::read` for the copy, witness-pinned
-for the `&self` borrow it spans). The driver exposes two accessors over it:
+`SealedTerminal<W>` = `Sealed<W::Value, Carrier<W::Frame>>`
+([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the opaque dormant form of a
+`Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / `merge`) and re-anchors
+only through a rank-2 destination verb. `finalize` bundles the erased value under a
+[`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
+`borrows_host` bit plus a reference to the value's foreign reach set, pinning nothing itself — and,
+with no declared return, seals it **as-is**: there is no Done-boundary sever gate. What keeps the
+producer frame alive is the scheduler's **frame-retention hold**, seeded at finalize and released
+once every destination has pulled (pull-count zero); a walking terminal carries that hold as its
+[`Delivered`](../workgraph/src/witnessed/delivered.rs) envelope's host `Rc`. A value read goes
+through the envelope's pinned open (`Sealed::open_with` under the retained host — the carrier is not
+a `Witness`, so a bare `open` under it does not compile, and every read names its pin), which copies
+the value out inside a `for<'b>` brand: the fabricated content lifetime is un-nameable, so nothing
+branded escapes into the result. The driver exposes two accessors over it:
 [`read_result_with`](../src/machine/execute/runtime.rs) hands the value to a closure that copies out
 what it needs, and the borrow-free `result_error` reports a slot's success or failure without reading
 the value at all — the [`SchedulerView`](../src/machine/execute/dispatch/ctx.rs) a decide sees exposes
@@ -229,10 +231,12 @@ a closure / future / module riding its bare `&'b` borrow into the source region 
 `Outcome::Forward` pull lands in that same region at the brand, so every dep value is born at `'b`
 with no reattach of its own beyond the one step `open`. There is **no value-path `unsafe`** left: the
 relocation allocs at the destination region's own lifetime, so the lift hook is a safe
-`deep_clone` + `alloc`. The relocation seam `Sealed::transfer_into` wraps this as a `merge` — the
-relocated value re-sealed under the set union of every region it still reaches (its retained sources ∪
-`dest`) — and the storage-bound drain / forward path routes it via
-[`relocate_terminal`](../src/machine/execute/runtime.rs). The consumer-less root drain in
+`deep_clone` + `alloc`. The relocation seam
+[`Delivered::transfer_into`](../workgraph/src/witnessed/delivered.rs) wraps this as a mint — the
+relocated value re-sealed with its reach (and, for a value borrowing into the dying producer, that
+producer) minted into `dest`'s arena — and the storage-bound drain / forward path routes it via
+[`relocate_terminal`](../src/machine/execute/runtime.rs), which pairs the dep's envelope
+(`dep_delivered`) with a `Residence::Copied` transfer. The consumer-less root drain in
 [`run_program`](../src/machine/execute/runtime/interpret.rs) relocates each top-level terminal into the
 run-global root region the same way.
 

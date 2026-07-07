@@ -859,11 +859,7 @@ impl<T: Reattachable, W> Sealed<T, W> {
     /// call — the retained producer-frame `Rc` (pinning invariant rules 3-4). The value is read at the
     /// `&self` borrow via [`Witnessed::read`], and the `for<'b>` quantifier keeps it from escaping, so
     /// this adds no `unsafe` beyond the audited [`Witnessed`] reattach.
-    pub fn open_with<Wx: Witness, R>(
-        &self,
-        pin: &Wx,
-        f: impl for<'b> FnOnce(T::At<'b>) -> R,
-    ) -> R
+    pub fn open_with<Wx: Witness, R>(&self, pin: &Wx, f: impl for<'b> FnOnce(T::At<'b>) -> R) -> R
     where
         T::At<'static>: Copy,
     {

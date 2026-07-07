@@ -145,10 +145,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         F: RegionOwner<Region = Region<P>>,
         super::RegionSet<F>: super::Stored<P> + for<'r> Reattachable<At<'r> = super::RegionSet<F>>,
     {
-        let acc0: Witnessed<AllocViews<V, F::Region>, Carrier<F>> =
-            self.alloc::<AllocViews<V, F::Region>>(|region| {
-                (region, Vec::with_capacity(deps.len()))
-            });
+        let acc0: Witnessed<AllocViews<V, F::Region>, Carrier<F>> = self
+            .alloc::<AllocViews<V, F::Region>>(|region| (region, Vec::with_capacity(deps.len())));
         let acc = deps.iter().fold(acc0, |acc, dep| {
             dep.transfer_into::<AllocViews<V, F::Region>, AllocViews<V, F::Region>, P>(
                 acc,

@@ -15,8 +15,8 @@ use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
-use crate::machine::DeliveredCarried;
 use crate::machine::model::{KObject, KType};
+use crate::machine::DeliveredCarried;
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 

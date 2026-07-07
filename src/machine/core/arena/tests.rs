@@ -355,8 +355,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
     let foreign_count_before = Rc::strong_count(&foreign_frame);
 
     // The walking motion — dep delivery duplicates a producer slot's envelope for each consumer.
-    let envelope: DeliveredCarried =
-        Delivered::seal(merged, Rc::clone(&here_frame));
+    let envelope: DeliveredCarried = Delivered::seal(merged, Rc::clone(&here_frame));
     let here_count_before = here_count_before + 1; // the envelope itself holds one host clone.
     let copy_a = envelope.duplicate();
     let copy_b = envelope.duplicate();
@@ -658,24 +657,22 @@ fn multi_region_list_of_closures_survives_frame_free() {
     });
     // Fold each closure terminal (born witnessed by its own frame) into the accumulator; the temporary
     // source carrier drops after each statement, leaving only the aggregate witness holding the region.
-    let acc1 = delivered_closure(&frame_a)
-        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-            acc0,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        );
-    let acc2 = delivered_closure(&frame_b)
-        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-            acc1,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        );
+    let acc1 = delivered_closure(&frame_a).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+        acc0,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
+    let acc2 = delivered_closure(&frame_b).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+        acc1,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
     // The retention stand-in: the dest frame's storage, held past the shell drops below — the hold
     // the scheduler seeds at finalize.
     let dest_storage = dest_frame.storage_rc();
@@ -729,24 +726,22 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(frame_outer.storage_rc(), |region| {
         (region, Vec::new())
     });
-    let acc1 = delivered_closure(&frame_1)
-        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-            acc0,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        );
-    let acc2 = delivered_closure(&frame_2)
-        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-            acc1,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(Held::from_carried(dep));
-                (region, cells)
-            },
-        );
+    let acc1 = delivered_closure(&frame_1).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+        acc0,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
+    let acc2 = delivered_closure(&frame_2).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+        acc1,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(Held::from_carried(dep));
+            (region, cells)
+        },
+    );
     // The outer closure (born region-pure in frame_outer) `merge`s the still-`AggBuildFamily`-typed
     // accumulator directly — so the destination region (needed to allocate the list) and the
     // accumulated reach (frame_1 ∪ frame_2, needed for the composed witness) arrive together, rather
@@ -819,24 +814,22 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let acc0 = KoanRegion::yoke_branded::<RecordCellFamily, _>(dest_frame.storage_rc(), |region| {
         (region, Vec::new())
     });
-    let acc1 = delivered_closure(&frame_a)
-        .transfer_into::<RecordCellFamily, RecordCellFamily, _>(
-            acc0,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(("a".to_string(), Held::from_carried(dep)));
-                (region, cells)
-            },
-        );
-    let acc2 = delivered_closure(&frame_b)
-        .transfer_into::<RecordCellFamily, RecordCellFamily, _>(
-            acc1,
-            Residence::Kept,
-            |dep, (region, mut cells), _brand| {
-                cells.push(("b".to_string(), Held::from_carried(dep)));
-                (region, cells)
-            },
-        );
+    let acc1 = delivered_closure(&frame_a).transfer_into::<RecordCellFamily, RecordCellFamily, _>(
+        acc0,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(("a".to_string(), Held::from_carried(dep)));
+            (region, cells)
+        },
+    );
+    let acc2 = delivered_closure(&frame_b).transfer_into::<RecordCellFamily, RecordCellFamily, _>(
+        acc1,
+        Residence::Kept,
+        |dep, (region, mut cells), _brand| {
+            cells.push(("b".to_string(), Held::from_carried(dep)));
+            (region, cells)
+        },
+    );
     let dest_storage = dest_frame.storage_rc();
     let record: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _brand| {

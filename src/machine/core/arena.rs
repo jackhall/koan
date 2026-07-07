@@ -716,7 +716,8 @@ impl CallFrame {
             std::ptr::eq(run_storage.region(), scope.region() as *const KoanRegion),
             "adopting run_storage must own the run-root scope's region"
         );
-        let scope_carrier = Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
+        let scope_carrier =
+            Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
         Rc::new(CallFrame {
             envelope: Delivered::hosted(scope_carrier, run_storage),
             non_dying: true,

@@ -15,8 +15,8 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
-use super::{Live, NodeId, Workload};
-use crate::witnessed::{Sealed, Witnessed};
+use super::{Live, NodeId, SealedTerminal, Terminal, Workload};
+use crate::witnessed::{Carrier, Sealed, Witnessed};
 // `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
 // pre-built `Witnessed`, so the import is test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
@@ -60,11 +60,6 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     }
 }
 
-/// A finalized value terminal: the erased inter-node value bundled with the [`Workload::Witness`] set
-/// pinning its backing (empty for a frameless / run-region value), held in its dormant [`Sealed`] form
-/// between steps and read back through [`Sealed::open`].
-type FinalizedValue<W> = Sealed<<W as Workload>::Value, <W as Workload>::Witness>;
-
 enum SlotState<W: Workload> {
     PreRun(Node<W>),
     /// Node payload has been moved out by `take_for_run`. A matching
@@ -76,7 +71,7 @@ enum SlotState<W: Workload> {
     /// released at pull-count zero), so every read re-anchors under that retained owner
     /// (`Sealed::open_with`) and a drained root re-homed into the run region reads under the empty
     /// pin. The error carries no frame (it owns its data).
-    Done(Result<FinalizedValue<W>, W::Error>),
+    Done(Result<SealedTerminal<W>, W::Error>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
     /// slot's consumers were moved onto `producer`'s notify list at splice time, so `producer`'s
@@ -156,11 +151,7 @@ impl<W: Workload> NodeStore<W> {
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
     /// boundary uses this to re-home a consumer-less root into a surviving region (`output` already
     /// lifted there), releasing the per-call frame the producer kept it in.
-    pub(super) fn rehome_terminal(
-        &mut self,
-        id: NodeId,
-        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
-    ) {
+    pub(super) fn rehome_terminal(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
         debug_assert!(
             matches!(self.slots[id], SlotState::Done(..)),
             "rehome_terminal expects a finalized slot",
@@ -175,21 +166,8 @@ impl<W: Workload> NodeStore<W> {
     /// finalize hook: the producer frame ∪ every region the value reaches; the empty set for a
     /// frameless / run-region terminal), so this just seals it for dormant storage. On `Err` the
     /// erased error owns its data and carries no witness.
-    pub(super) fn finalize(
-        &mut self,
-        id: NodeId,
-        output: Result<Witnessed<W::Value, W::Witness>, W::Error>,
-    ) {
+    pub(super) fn finalize(&mut self, id: NodeId, output: Result<Terminal<W>, W::Error>) {
         self.slots[id] = SlotState::Done(output.map(Sealed::seal));
-    }
-
-    /// The finalized terminal's witness set (cloned), or the empty set for a frameless / run-region
-    /// or errored slot — the consumer-pull lift's `pin` accumulation reads it before relocating.
-    pub(super) fn dep_witness(&self, id: NodeId) -> W::Witness {
-        match &self.slots[id] {
-            SlotState::Done(Ok(sealed), ..) => sealed.witness().clone(),
-            _ => W::Witness::default(),
-        }
     }
 
     /// Duplicate the finalized terminal's sealed carrier — value + witness set — leaving the slot's
@@ -197,7 +175,7 @@ impl<W: Workload> NodeStore<W> {
     /// so the dep arrives **witnessed** (its reach named on the carrier), ready to fold via
     /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) — rather than the value read
     /// out bare and re-paired with a separately-read witness in an asserted co-location bundle.
-    pub(super) fn dep_carrier(&self, id: NodeId) -> Result<FinalizedValue<W>, &W::Error> {
+    pub(super) fn dep_carrier(&self, id: NodeId) -> Result<SealedTerminal<W>, &W::Error> {
         match &self.slots[id] {
             SlotState::Done(Ok(sealed), ..) => Ok(sealed.duplicate()),
             SlotState::Done(Err(e), ..) => Err(e),
@@ -327,7 +305,7 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(
             output
                 .map(Erased::erase)
-                .map(|e| Sealed::seal(Witnessed::from_erased(e, W::Witness::default()))),
+                .map(|e| Sealed::seal(Witnessed::from_erased(e, Carrier::default()))),
         );
     }
 
@@ -366,8 +344,6 @@ impl<W: Workload> NodeStore<W> {
 mod tests {
     use super::*;
 
-    use std::rc::Rc;
-
     use crate::witnessed::reattachable;
 
     /// A lifetime-free `Reattachable` family for the trivial test value.
@@ -394,9 +370,6 @@ mod tests {
         type Frame = crate::witnessed::doctest_fixture::Cart;
         type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
-        // A trivial finalized-value witness: `Rc<()>` is a `Witness` (the blanket `Rc<F>` impl),
-        // `Clone`, and `Default` (`Rc::new(())` — a pin the white-box store tests never inspect).
-        type Witness = Rc<()>;
     }
 
     fn sample_wait(carrier: Option<String>) -> NodeWork<TestWorkload> {

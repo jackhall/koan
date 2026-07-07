@@ -150,15 +150,17 @@ impl<'run> KoanRuntime<'run> {
         // `'b`, then unioned into `combined` — the witness the open re-anchors carriers against, keeping
         // every dep source alive past `reclaim_deps`. It is *only* a liveness pin: every value terminal
         // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
-        let pin: FrameSet = dep_sources.iter().fold(FrameSet::empty(), |acc, src| match src {
-            // The dep's liveness pin: its retained producer frame (the envelope's host, sourced from
-            // the retention hold since the reference-only carrier carries no pin of its own) unioned
-            // with the value's own foreign reach — `Delivered::liveness_frameset`, host ∪ reach
-            // members. An errored dep carries no value the step reads — its error owns its data — so
-            // it contributes nothing.
-            Ok(t) => FrameSet::union(&acc, &t.delivered.liveness_frameset()),
-            Err(_) => acc,
-        });
+        let pin: FrameSet = dep_sources
+            .iter()
+            .fold(FrameSet::empty(), |acc, src| match src {
+                // The dep's liveness pin: its retained producer frame (the envelope's host, sourced from
+                // the retention hold since the reference-only carrier carries no pin of its own) unioned
+                // with the value's own foreign reach — `Delivered::liveness_frameset`, host ∪ reach
+                // members. An errored dep carries no value the step reads — its error owns its data — so
+                // it contributes nothing.
+                Ok(t) => FrameSet::union(&acc, &t.delivered.liveness_frameset()),
+                Err(_) => acc,
+            });
         // The kept-first contract's own carried witness — the `FrameSet` holding its home region
         // owner, from `ReturnContract::home_owner` at seal time — unioned in alongside the cart and
         // the dep `pin` so the contract's home region stays live across the open independent of
@@ -170,9 +172,9 @@ impl<'run> KoanRuntime<'run> {
         // ancestor backings via its `outer` chain) unioned with `pin` (every dep source) and
         // `contract_pin` (the kept-first contract's own witness). Held across the open, so
         // re-anchoring the zipped carriers to `'b` cannot dangle. A plain `FrameSet`
-        // (§ the run-loop step-open witness is a plain frame set): a severed dep's owned node isn't a
-        // frame and doesn't ride it — it is pinned instead by the dep's duplicated `Sealed` carrier held
-        // across the whole open in `dep_sources` (see the struct doc above), never by this set.
+        // (§ the run-loop step-open witness is a plain frame set): every member is a frame owner —
+        // each dep contributes its envelope's host ∪ reach through `pin`, redundantly with the
+        // duplicated envelope held across the whole open in `dep_sources` (see the struct doc above).
         let combined: FrameSet = FrameSet::union(
             &FrameSet::union(
                 &FrameSet::singleton(continuation_witness.storage_rc()),
@@ -247,10 +249,9 @@ impl<'run> KoanRuntime<'run> {
                     // run frame's storage owns a real region (the run region, via `CallFrame::adopting`),
                     // so `storage_rc()` is well-defined at every step. A hold on run-region storage is
                     // sound over-retention — an `Rc` clone that outlives the run anyway, released at
-                    // pull-zero / node free. Retention is now a pure delivery fact; `non_dying` no longer
-                    // makes any memory decision (its sole reader, the `frame` gate above, keeps only the
-                    // per-call return-obligation semantics: the contract label, the finalize fold, and
-                    // the sever gate until Phase 8 deletes it).
+                    // pull-zero / node free. Retention is a pure delivery fact; `non_dying` makes no
+                    // memory decision — its sole reader, the `frame` gate above, carries only the
+                    // per-call return-obligation semantics (the contract label and the finalize fold).
                     let host = Some(post.prev_frame.storage_rc());
                     match step {
                         NodeStep::DoneWitnessed(carrier) => {

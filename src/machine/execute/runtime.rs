@@ -63,7 +63,6 @@ impl Workload for KoanWorkload {
     type Frame = crate::machine::FrameStorage;
     type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
-    type Witness = CarrierWitness;
 }
 
 /// The write harness: the sole holder of `&mut Scheduler` across the execute tree. It owns the
@@ -123,21 +122,16 @@ impl<'run> KoanRuntime<'run> {
         self.sched.result_error(id)
     }
 
-    /// The witness set of a slot's finalized terminal — every region the value reaches. The
-    /// test-harness [`extract_terminal`](crate::builtins::test_support) hook for minting a returned
-    /// closure's / module's reach into a surviving scope's arena, mirroring the run-root drain's
-    /// `host_reach_of` call. Production reads the witness off the relocated carrier instead.
+    /// A slot's finalized terminal as a delivery envelope (sealed carrier + retained producer-frame
+    /// owner) — the test-harness [`extract_terminal`](crate::builtins::test_support) hook for
+    /// minting an extracted value's reach into a surviving scope's arena, mirroring the drain. See
+    /// [`Scheduler::dep_delivered`].
     #[cfg(test)]
-    pub(crate) fn dep_witness(&self, id: NodeId) -> crate::machine::CarrierWitness {
-        self.sched.dep_witness(id)
-    }
-
-    /// The retained producer-frame owner of a finalized dep — the pin the test-harness
-    /// `extract_terminal` hands `host_reach_of` so the extracted value's residence materializes,
-    /// mirroring the drain. See [`Scheduler::dep_host`].
-    #[cfg(test)]
-    pub(crate) fn dep_host(&self, id: NodeId) -> Option<Rc<crate::machine::FrameStorage>> {
-        self.sched.dep_host(id)
+    pub(crate) fn dep_delivered(
+        &self,
+        id: NodeId,
+    ) -> Result<crate::machine::DeliveredCarried, &KError> {
+        self.sched.dep_delivered(id)
     }
 
     /// Relocate `producer`'s terminal into `dest` through its delivery envelope
@@ -161,11 +155,13 @@ impl<'run> KoanRuntime<'run> {
         dest: Witnessed<RegionRefFamily, CarrierWitness>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
-        Ok(delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
-            dest,
-            crate::witnessed::Residence::Copied,
-            |value, region, _brand| copy_carried(value, region),
-        ))
+        Ok(
+            delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
+                dest,
+                crate::witnessed::Residence::Copied,
+                |value, region, _brand| copy_carried(value, region),
+            ),
+        )
     }
 
     pub fn len(&self) -> usize {

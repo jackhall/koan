@@ -133,8 +133,8 @@ pub fn body_opaque<'a>(
     let reach = ctx.scope.reach_of_child(new_scope);
     let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
     // The opaque view's `new_scope` is a same-region child of this frame, so the module value borrows
-    // into home — the home-omitted `reach` drops that fact, so materialize it back via the bit (the
-    // finalize gate must keep the frame `new_scope` lives in, not sever it).
+    // into home — the home-omitted `reach` drops that fact, so materialize it back via the bit (a
+    // downstream copied-mode mint keeps the frame `new_scope` lives in as a reach member).
     Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, true)))
 }
 
@@ -162,8 +162,9 @@ pub fn body_transparent<'a>(
     let reach = ctx.scope.reach_of_child(m.child_scope());
     let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
     // A transparent view reuses the foreign source module's child scope: it borrows nothing into this
-    // home frame (its interior points at the source region, named by `reach`), so the bit is unset and
-    // the finalize gate may sever the top node from a dying home frame.
+    // home frame (its interior points at the source region, named by `reach`), so the bit is unset —
+    // a downstream copied-mode mint materializes no home-frame member, and the dying home frame
+    // frees once its retention hold releases.
     Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, false)))
 }
 

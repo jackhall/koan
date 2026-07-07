@@ -31,10 +31,9 @@ fn data_binding_round_trips_stored_reach() {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.obj, obj));
             assert!(
-                hit.reach
-                    .is_some_and(
-                        |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
-                    ),
+                hit.reach.is_some_and(
+                    |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
+                ),
                 "stored reach should round-trip the foreign frame",
             );
         }
@@ -102,10 +101,9 @@ fn type_binding_round_trips_stored_reach() {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.kt, kt));
             assert!(
-                hit.reach
-                    .is_some_and(
-                        |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
-                    ),
+                hit.reach.is_some_and(
+                    |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
+                ),
                 "stored type reach should round-trip the foreign frame",
             );
         }

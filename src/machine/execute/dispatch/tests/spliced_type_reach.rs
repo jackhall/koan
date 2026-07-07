@@ -54,8 +54,10 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     // type-channel mirror of a `LET` binding a module value returned from elsewhere. The envelope
     // host is the foreign frame the type resides in, exactly what a delivered dep would carry.
     let stored = scope.host_reach_of(produced.witness(), Some(&foreign));
-    let kt = match scope.adopt_sealed(&Delivered::hosted(produced.duplicate(), Rc::clone(&foreign)))
-    {
+    let kt = match scope.adopt_sealed(&Delivered::hosted(
+        produced.duplicate(),
+        Rc::clone(&foreign),
+    )) {
         Carried::Type(kt) => kt.clone(),
         _ => panic!("expected the adopted Type"),
     };

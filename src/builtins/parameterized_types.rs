@@ -76,16 +76,14 @@ fn finalize_carrier<'a>(
 /// directly (`Done`); FN/FUNCTOR route the parameter list through [`build_carrier`], which
 /// either folds synchronously or defers via [`defer_field_list_action`].
 mod action_bodies {
-    use crate::machine::DeliveredCarried;
     use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::DeliveredCarried;
 
-    
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
-    
 
     /// LIST / MAP / AS fold the carrier(s) of the arg(s) their result `KType` embeds by clone:
     /// `elem` / `k` / `v` / `applied` / `ctor` can be any caller-supplied type (a bound `KFunctor`,
@@ -94,8 +92,7 @@ mod action_bodies {
     /// (`None` — a scalar-literal argument — folds nothing, matching `alloc_type`).
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let carriers: Vec<&DeliveredCarried> =
-            ctx.arg_carrier("elem").into_iter().collect();
+        let carriers: Vec<&DeliveredCarried> = ctx.arg_carrier("elem").into_iter().collect();
         Action::Done(Ok(ctx
             .ctx
             .alloc_type_with(&carriers, KType::List(Box::new(elem)))))
@@ -104,12 +101,10 @@ mod action_bodies {
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let carriers: Vec<&DeliveredCarried> =
-            [ctx.arg_carrier("k"), ctx.arg_carrier("v")]
-                .into_iter()
-                .flatten()
-                
-                .collect();
+        let carriers: Vec<&DeliveredCarried> = [ctx.arg_carrier("k"), ctx.arg_carrier("v")]
+            .into_iter()
+            .flatten()
+            .collect();
         Action::Done(Ok(ctx
             .ctx
             .alloc_type_with(&carriers, KType::Dict(Box::new(k), Box::new(v)))))
@@ -145,7 +140,6 @@ mod action_bodies {
             [ctx.arg_carrier("applied"), ctx.arg_carrier("ctor")]
                 .into_iter()
                 .flatten()
-                
                 .collect();
         Action::Done(Ok(ctx.ctx.alloc_type_with(
             &carriers,

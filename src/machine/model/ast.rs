@@ -104,7 +104,9 @@ pub enum ExpressionPart<'a> {
     /// brand, reading the value under the envelope's own pin — the producer's retention hold for a
     /// working-copy splice, or the reading scope's own owner for a resident splice, or `None` for a
     /// frameless / run producer whose backing already outlives it.
-    Spliced { cell: DeliveredCarried },
+    Spliced {
+        cell: DeliveredCarried,
+    },
 }
 
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {

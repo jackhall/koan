@@ -183,7 +183,10 @@ impl<W: Workload> DepGraph<W> {
     /// when the count reaches zero. A `None` hold (frameless, or already released) is a no-op.
     fn decrement_pull(&mut self, producer: usize) {
         if let Some(hold) = self.rows[producer].retain.as_mut() {
-            debug_assert!(hold.pulls > 0, "retention over-discharge on slot {producer}");
+            debug_assert!(
+                hold.pulls > 0,
+                "retention over-discharge on slot {producer}"
+            );
             hold.pulls = hold.pulls.saturating_sub(1);
             if hold.pulls == 0 {
                 self.rows[producer].retain = None;

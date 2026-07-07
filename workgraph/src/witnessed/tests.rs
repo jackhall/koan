@@ -436,8 +436,8 @@ fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
     );
 
     let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
-    let w: Witnessed<RefFamily, Carrier<StepFrame>> =
-        ctx.alloc_with::<RefFamily, RefFamily, StepProfile>(
+    let w: Witnessed<RefFamily, Carrier<StepFrame>> = ctx
+        .alloc_with::<RefFamily, RefFamily, StepProfile>(
             &[&delivered_a, &delivered_b],
             |_region, views| {
                 assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);

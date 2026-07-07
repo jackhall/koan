@@ -15,9 +15,9 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
+use crate::machine::DeliveredCarried;
 use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, TraceFrame};
 use crate::witnessed::Witnessed;
-use crate::machine::DeliveredCarried;
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm

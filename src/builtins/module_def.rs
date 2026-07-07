@@ -73,7 +73,8 @@ pub fn body<'a>(
             let identity = KType::Module { module };
             // The module's `child_scope` is a same-region child of this frame, so the identity borrows
             // into home — the home-omitted `reach` cannot record that, so it rides the binding's bit
-            // (the finalize gate must keep the frame the child scope lives in, not sever the module).
+            // (a downstream copied-mode mint keeps the frame the child scope lives in as a reach
+            // member).
             match fctx.scope.register_type_upsert(
                 name_for_finish.clone(),
                 identity,

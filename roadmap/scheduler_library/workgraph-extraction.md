@@ -43,8 +43,5 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
-- [Delivery-driven frame retention](delivery-driven-frame-retention.md) — moves
-  the library surface (`Workload::Witness`, the set machinery) before identifiers
-  freeze.
 
 **Unblocks:** none tracked — the project's terminal item.

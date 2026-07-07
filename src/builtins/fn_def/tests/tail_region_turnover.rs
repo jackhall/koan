@@ -52,7 +52,9 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
-    runtime.execute().expect("the countdown should run to completion");
+    runtime
+        .execute()
+        .expect("the countdown should run to completion");
     assert!(
         runtime.result_error(id).is_ok(),
         "countdown should complete without error: {:?}",

@@ -59,6 +59,13 @@ a concept, not a final identifier.
   consumer.
 - **Terminal** — a slot's finished result: a sealed carrier, or the
   workload's error.
+- **Delivery envelope** — *(working name `Delivered`)* a walking terminal's
+  sealed carrier paired with the producer's retained frame owner `Rc`. The
+  carrier itself is **reference-only** (pins nothing); the envelope's retained
+  host is what keeps its reach alive in flight, and the only verb that
+  materializes a residence host into a minted set. A consumer receives one
+  through `dep_delivered`; relocations ride it too, so a bare frame pin never
+  escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the brand-indexed value family
   (Koan instantiates it with `Carried`), the error type, and the opaque
@@ -211,19 +218,24 @@ Error short-circuit is built in through one shared walk: a finish never sees
 an errored dep. Dep delivery is the terminal channel only — no bare
 pre-relocated value handoff: a finish reads each dep's step-brand value and
 reach carrier un-relocated. A dep whose value must outlive the resolving step
-travels as its sealed carrier — the value stays in its producer's region and
-the consumer adopts the carrier at its own step brand, folding the reach that
-pins it — never as a relocated copy. Every delivery, including the catch
-channel, is carrier-only; no dep crosses to a finish as a pre-copied value.
+travels as its **delivery envelope**
+([`Delivered`](../workgraph/src/witnessed/delivered.rs)) — the sealed carrier
+paired with the producer's retained frame owner
+([`Scheduler::dep_delivered`](../workgraph/src/scheduler.rs)) — so the value
+stays in its producer's region and the consumer adopts it at its own step
+brand under a pin sourced from the retention hold, folding the reach that pins
+it, never as a relocated copy. Every delivery, including the catch channel, is
+envelope-only; no dep crosses to a finish as a pre-copied value.
 The one structural copy that remains, `copy_carried`
 ([lift.rs](../src/machine/execute/lift.rs)), is not a delivery at all — it is
-the fold callback a witnessed transfer (`Sealed::transfer_into` /
-`Scheduler::transfer_lifted`) runs *inside* the two storage-bound folds that
-still need one: `KoanRuntime::relocate_terminal`'s `Forward`-ready pull /
-run-root drain, and `park_on_literal`'s literal fold. Both run the copy at the
-destination brand as part of assembling a result carrier, so the copy's reach
-is folded into that carrier's witness by construction — no pinless copy is
-expressible outside a witnessed fold.
+the fold callback the envelope transfer
+([`Delivered::transfer_into`](../workgraph/src/witnessed/delivered.rs)) runs
+*inside* the two storage-bound folds that still need one:
+`KoanRuntime::relocate_terminal`'s `Forward`-ready pull / run-root drain, and
+`park_on_literal`'s literal fold. Both run the copy at the destination brand as
+part of assembling a result carrier, so the copy's reach is folded into that
+carrier's witness by construction — no pinless copy is expressible outside a
+witnessed fold.
 
 **The step construction context** ([`StepContext`](../workgraph/src/witnessed/step_ctx.rs)).
 What a finish receives and the only way it can build a result:

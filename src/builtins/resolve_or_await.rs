@@ -10,9 +10,9 @@ use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType};
+use crate::machine::DeliveredCarried;
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
-use crate::machine::DeliveredCarried;
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -121,8 +121,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &DeliveredCarried) -> Action<'a>
-        + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &DeliveredCarried) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let (kt, carrier) = crate::try_action!(expect_type_terminal(&results, 0, slot));

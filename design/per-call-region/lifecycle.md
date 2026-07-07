@@ -63,12 +63,14 @@ relocates it across each dep edge — never the producer.
   erased contract against the producer cart, runs the declared-return check, and
   (only on a coarsening re-tag, e.g. `List<Number>` through `:(LIST OF Any)`)
   re-allocates the stamped value into the contract's captured-scope region so it
-  outlives the reused/freed producer frame. It also runs the Done-boundary
-  [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) gate: a
-  region-pure terminal (empty reach) is severed off the producer frame — its top
-  node copied into an owned backing pin — so its lifted witness stops pinning the
-  frame past free, while a value borrowing into the frame keeps it via reach. The
-  bare `NodeLift` hook is thereby reusable for any delivery edge.
+  outlives the reused/freed producer frame. With no declared return it seals the
+  [`CarrierWitness`](../../src/machine/core/carrier_witness.rs) — the
+  reference-only carrier, pinning nothing — **as-is**: there is no Done-boundary
+  sever gate. The producer frame's lifetime is the scheduler's frame-retention
+  hold, seeded at finalize and released once every destination has pulled
+  (pull-count zero), so a region-pure and a frame-borrowing terminal alike leave
+  the frame to retention. The bare `NodeLift` hook is thereby reusable for any
+  delivery edge.
 
 Because `KObject` / `Carried` / `Scope` are invariant in their lifetime, none
 of these transitions can be a coercion — each cross-frame move is a genuine

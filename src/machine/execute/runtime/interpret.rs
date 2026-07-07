@@ -61,8 +61,11 @@ impl<'run> KoanRuntime<'run> {
         // reaches a per-call region into the run region so it lives run-long and its per-call frame
         // releases; a fully-surviving root (empty witness) and an errored terminal need no re-home.
         for &id in &top_level {
-            let pin = self.sched.dep_witness(id);
-            if !pin.is_empty() {
+            let reaches_per_call = self
+                .sched
+                .dep_carrier(id)
+                .is_ok_and(|sealed| !sealed.witness().is_empty());
+            if reaches_per_call {
                 // The dest rides an empty-set `resident`: the run region outlives everything and is
                 // externally pinned, and yoking the run-root frame here would re-form a reference
                 // cycle into the drained value's witness.

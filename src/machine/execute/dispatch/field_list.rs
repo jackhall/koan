@@ -212,8 +212,7 @@ pub(crate) fn defer_field_list_action<'a>(
         // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
         // that producer's reach forward; the owned values, read live at the step brand
         // (un-relocated), feed the re-walk, which clones each type into the folded field list.
-        let carriers: Vec<&DeliveredCarried> =
-            results.all().iter().map(|t| &t.delivered).collect();
+        let carriers: Vec<&DeliveredCarried> = results.all().iter().map(|t| &t.delivered).collect();
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
             rewalk

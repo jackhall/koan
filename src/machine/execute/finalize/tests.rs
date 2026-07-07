@@ -430,7 +430,9 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
          frame's refcount, and no set holds it until the home region dies"
     );
     assert!(
-        checked.witness().reach_covers(None, foreign_storage.region()),
+        checked
+            .witness()
+            .reach_covers(None, foreign_storage.region()),
         "the checked carrier still names the foreign region its reach always named"
     );
     assert!(

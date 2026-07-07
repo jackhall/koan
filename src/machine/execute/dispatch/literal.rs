@@ -148,9 +148,11 @@ impl<'step> KoanRuntime<'step> {
             // The pin: the destination frame, whose arena holds the set the folds minted — through
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
-            Ok(acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
-                Carried::Object(region.alloc_object(assemble(keys, value_helds)))
-            }))
+            Ok(
+                acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
+                    Carried::Object(region.alloc_object(assemble(keys, value_helds)))
+                }),
+            )
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }
@@ -298,9 +300,8 @@ impl<'step> KoanRuntime<'step> {
                 s.resolve_value_carrier(name, active_chain.map(|c| &**c))
             });
             if let Some(NameLookup::Bound(carrier)) = resolved {
-                let delivered = with_current_node_scope(&self.ambient, |s| {
-                    s.seal_resident_delivered(carrier)
-                });
+                let delivered =
+                    with_current_node_scope(&self.ambient, |s| s.seal_resident_delivered(carrier));
                 return Slot::Static(delivered);
             }
         }

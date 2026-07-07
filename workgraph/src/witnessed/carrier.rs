@@ -144,10 +144,11 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         let _ = pin;
         match &self.reach {
             None => f(None),
-            Some(erased) => with_branded_ref::<HostedSetRef<F>, R>(
-                erased.as_static(),
-                |set_ref: &&_| f(Some(*set_ref)),
-            ),
+            Some(erased) => {
+                with_branded_ref::<HostedSetRef<F>, R>(erased.as_static(), |set_ref: &&_| {
+                    f(Some(*set_ref))
+                })
+            }
         }
     }
 

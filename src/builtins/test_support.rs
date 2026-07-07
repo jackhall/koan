@@ -44,8 +44,11 @@ pub(crate) fn extract_terminal<'a>(
     // The extraction deep-clones the value into `scope`'s region, so the copied-adoption rule
     // applies: the producer frame materializes into the surviving arena only when the copy's
     // borrows genuinely reach it (a returned closure / module), never for a residence-only scalar.
-    let host = runtime.dep_host(id);
-    let _ = scope.adopted_reach_of(&runtime.dep_witness(id), host.as_ref());
+    // The witness and its retained host travel together as the delivery envelope.
+    let delivered = runtime
+        .dep_delivered(id)
+        .expect("terminal should be a value, not an error");
+    let _ = scope.adopted_reach_of(delivered.witness(), Some(delivered.host()));
     value
 }
 

@@ -211,11 +211,14 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
         // it — co-located by construction rather than paired with an asserted singleton.
         let dest = dest_brand(view.dest_frame());
-        Ok(deps.owned(0).delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
-            dest,
-            Residence::Copied,
-            |value, region, _brand| copy_carried(value, region),
-        ))
+        Ok(deps
+            .owned(0)
+            .delivered
+            .transfer_into::<RegionRefFamily, CarriedFamily, _>(
+                dest,
+                Residence::Copied,
+                |value, region, _brand| copy_carried(value, region),
+            ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

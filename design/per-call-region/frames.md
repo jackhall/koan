@@ -75,9 +75,11 @@ TCO recursion stays bounded). Field declaration order on `FrameStorage`
 is load-bearing: `region` is declared before `outer`, so the
 auto-derived `Drop` tears down this frame's region *before* releasing
 the parent storage Rc — inner pointers die before the outer storage they
-may reference. The shell's own field order mirrors this: `storage` drops
-before `scope_carrier`, so the region tears down before the now-dangling
-child reference.
+may reference. The frame shell holds its child scope as a delivery envelope
+([`Delivered`](../../workgraph/src/witnessed/delivered.rs)) whose host is the
+storage — one co-located carrier, built witnessed at construction. Dropping the
+sealed carrier never dereferences the child pointer, so the shell needs no
+drop-order rule of its own.
 
 ## TCO frame reuse
 

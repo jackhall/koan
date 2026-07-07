@@ -178,9 +178,3 @@ reinstalls a slot. Region lifetime falls out of node lifetime — an incarnation
 region is minted lazily on first allocation and retired when the slot is
 reinstalled (or the node freed) — so Koan issues no region mint, reset, or drop,
 and the embedder boundary stays clean by construction rather than by convention.
-
-## Open work
-
-- [roadmap/scheduler_library/delivery-driven-frame-retention.md](../roadmap/scheduler_library/delivery-driven-frame-retention.md)
-  — supplies the delivery-driven retention behind Lemma 2's
-  release-at-pull-count-zero.

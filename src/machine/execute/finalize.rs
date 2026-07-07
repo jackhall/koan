@@ -36,7 +36,7 @@ reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
 pub(in crate::machine::execute) trait NodeFinalize {
     /// Seal the slot's value terminal against its declared return. With no declared return the
     /// carrier seals **as-is** — the scheduler's retention hold keeps the producer frame alive until
-    /// every destination pulls, so nothing severs and no residence moves. A declared-return
+    /// every destination pulls, so the value keeps residing where it was born. A declared-return
     /// re-stamp re-tags an **object** value into the contract's home region through the envelope
     /// transfer (the value comes to reside there; its reach — and, when it borrows into the dying
     /// producer, that producer — is minted into the home arena); a **type** value is checked at a
@@ -101,9 +101,7 @@ impl NodeFinalize for KoanRuntime<'_> {
                             &label,
                             object.ktype().name(),
                         ));
-                        return Carried::Object(
-                            home_region.alloc_object(object.deep_clone()),
-                        );
+                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
                     }
                     Carried::Object(
                         home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
