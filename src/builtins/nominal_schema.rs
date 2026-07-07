@@ -16,7 +16,8 @@ use crate::machine::model::types::{
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, TraceFrame};
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::Witnessed;
+use crate::machine::DeliveredCarried;
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
@@ -27,7 +28,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     String,
     Vec<(String, KType<'a>)>,
     BindingIndex,
-    &[&Sealed<CarriedFamily, CarrierWitness>],
+    &[&DeliveredCarried],
 )
     -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
 

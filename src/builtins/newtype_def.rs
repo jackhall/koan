@@ -30,9 +30,10 @@ use crate::machine::model::values::{CarriedFamily, KObject};
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
+use crate::machine::DeliveredCarried;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
@@ -49,7 +50,7 @@ fn finalize_newtype<'a>(
     name: String,
     repr: KType<'a>,
     bind_index: BindingIndex,
-    carrier: Option<&Sealed<CarriedFamily, CarrierWitness>>,
+    carrier: Option<&DeliveredCarried>,
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
@@ -59,7 +60,7 @@ fn finalize_newtype<'a>(
     let identity = KType::SetRef { set, index: 0 };
     let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
     let stored = carrier
-        .map(|c| scope.host_reach_of(c.witness()))
+        .map(|c| scope.host_reach_of(c.witness(), Some(c.host())))
         .unwrap_or_default();
     match scope
         .bindings()
@@ -92,7 +93,7 @@ fn finalize_record_newtype<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-    carriers: &[&Sealed<CarriedFamily, CarrierWitness>],
+    carriers: &[&DeliveredCarried],
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -172,7 +173,7 @@ pub fn body<'a>(
                 name,
                 other.clone(),
                 bind_index,
-                ctx.arg_carrier("repr").map(|d| d.cell()),
+                ctx.arg_carrier("repr"),
             )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {

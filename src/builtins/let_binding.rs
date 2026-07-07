@@ -108,7 +108,7 @@ pub fn body<'a>(
         // separate fold, no walk of the built value.
         let stored = ctx
             .arg_carrier("value")
-            .map(|carrier| ctx.scope.host_reach_of(carrier.witness()))
+            .map(|carrier| ctx.scope.host_reach_of(carrier.witness(), Some(carrier.host())))
             .unwrap_or_default();
         if let Err(e) = ctx
             .scope
@@ -153,7 +153,7 @@ pub fn body<'a>(
         // delivered carrier) reaches nothing foreign, so the reach is empty.
         let stored = ctx
             .arg_carrier("value")
-            .map(|carrier| ctx.scope.adopted_reach_of(carrier.witness()))
+            .map(|carrier| ctx.scope.adopted_reach_of(carrier.witness(), Some(carrier.host())))
             .unwrap_or_default();
         if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index, stored) {
             return done_err(e);

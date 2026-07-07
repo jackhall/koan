@@ -186,8 +186,12 @@ impl<W: Workload> Scheduler<W> {
     /// ([`dep_carrier`](Self::dep_carrier)) paired with its retained producer-frame owner
     /// ([`dep_host`](Self::dep_host)), so a consumer reads the value under a pin sourced from the
     /// retention hold rather than threaded per call site. Sound because the retention hold is active
-    /// while any consumer edge is undischarged (the pinning invariant). `None` host for a frameless /
-    /// run-region producer. Follows a bare-name-forward alias to the real producer.
+    /// while any consumer edge is undischarged (the pinning invariant) — and total for the same
+    /// reason: every finalize seeds a hold (the run frame's storage owns the run region), so a
+    /// pull-able dep always has a retained owner. Follows a bare-name-forward alias to the real
+    /// producer. Relocations ride the envelope too
+    /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)); the scheduler exposes no
+    /// separate transfer verb.
     // The three-parameter envelope over a witnessed `Result` reads clearer inline than split apart.
     #[allow(clippy::type_complexity)]
     pub fn dep_delivered(
@@ -195,35 +199,10 @@ impl<W: Workload> Scheduler<W> {
         id: NodeId,
     ) -> Result<Delivered<W::Value, W::Witness, W::Frame>, &W::Error> {
         let cell = self.dep_carrier(id)?;
-        Ok(Delivered::hosted(cell, self.dep_host(id)))
-    }
-
-    /// Relocate a finalized terminal into a destination region (the `Forward`-ready pull / drain
-    /// re-home) and re-seal it under the set union of the regions it reaches and `dest` — routing
-    /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), which owns the audited
-    /// retype (via [`Witnessed::merge`]). `dest` is the destination region wrapped as a witnessed
-    /// carrier; `relocate` is the workload's structural copy into it (it names the value type; the
-    /// scheduler does not). Follows a bare-name-forward alias to the real producer (which holds the
-    /// value).
-    // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
-    #[allow(clippy::type_complexity)]
-    pub fn transfer_lifted<B: Reattachable>(
-        &self,
-        id: NodeId,
-        dest: Witnessed<B, W::Witness>,
-        relocate: impl for<'b> FnOnce(
-            <W::Value as Reattachable>::At<'b>,
-            B::At<'b>,
-            std::marker::PhantomData<&'b ()>,
-        ) -> <W::Value as Reattachable>::At<'b>,
-    ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
-    where
-        W::Witness: ComposeWitness<B>,
-    {
-        let target = self.resolve_alias(id);
-        let pin = self.deps.retained_owner(target.index());
-        self.store
-            .transfer_lifted(target, pin.as_ref(), dest, relocate)
+        let host = self
+            .dep_host(id)
+            .expect("a pull-able dep's retention hold is active (seeded at every finalize)");
+        Ok(Delivered::hosted(cell, host))
     }
 
     /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set
@@ -304,6 +283,12 @@ impl<W: Workload> Scheduler<W> {
     }
     pub fn set_result(&mut self, id: NodeId, output: Result<Live<'_, W>, W::Error>) {
         self.store.set_result(id, output);
+    }
+    /// Seed a retention hold on a synthetically-finalized slot ([`Self::set_result`] writes the
+    /// terminal but runs no finalize, so no hold exists) — [`Self::dep_delivered`] requires one for
+    /// every pull-able dep.
+    pub fn seed_retention(&mut self, id: NodeId, owner: Rc<W::Frame>, pulls: usize) {
+        self.deps.seed_retain(id.index(), owner, pulls);
     }
     pub fn result_is_none(&self, id: NodeId) -> bool {
         self.store.result_is_none(id)

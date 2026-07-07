@@ -7,8 +7,8 @@
 use std::cell::Cell;
 
 use super::{
-    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, SealedExtern, StorageOf,
-    StorageProfile, Stored, Witness, WitnessRegion,
+    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet, SealedExtern, StorageOf,
+    StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -53,6 +53,15 @@ unsafe impl PinsRegion for Cart {
     }
 }
 
+/// Build a set-witnessed carrier over a cart: yoked from the cart's own region (so the value is
+/// provably region-derived), then re-bundled under the singleton [`RegionSet`] that pins the same
+/// cart. Fixture-only: the doctests for the set-witnessed merge/transfer verbs need one, and the
+/// crate-internal witness-retype they route is not part of the module's real surface.
+pub fn set_witnessed(cart: std::rc::Rc<Cart>) -> Witnessed<RefFamily, RegionSet<Cart>> {
+    Witnessed::<RefFamily, std::rc::Rc<Cart>>::yoke(std::rc::Rc::clone(&cart), |region| &region[0])
+        .rewitness(RegionSet::singleton(cart))
+}
+
 /// Build a [`SealedExtern`] from a live carrier. `SealedExtern`'s constructors are all
 /// crate-private (no production caller builds one from an arbitrary borrow), but a doctest
 /// compiles as an external crate, so the `SealedExtern::open` guard and its compiling twin need
@@ -61,14 +70,20 @@ pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
-/// Single-family profile for the region/handle doctests.
+/// Profile for the region/handle doctests: the reference family plus the witness-set family the
+/// fold verbs mint into.
 pub struct FixtureProfile;
 impl StorageProfile for FixtureProfile {
-    type Families = (RefFamily, ());
+    type Families = (RefFamily, (RegionSet<RegionCart>, ()));
 }
 impl Stored<FixtureProfile> for RefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
         &storage.0
+    }
+}
+impl Stored<FixtureProfile> for RegionSet<RegionCart> {
+    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
+        &storage.1 .0
     }
 }
 
@@ -87,5 +102,12 @@ unsafe impl RegionOwner for RegionCart {
     type Region = Region<FixtureProfile>;
     fn region(&self) -> &Region<FixtureProfile> {
         &self.0
+    }
+}
+// SAFETY: a `RegionCart` has no ancestry — it pins exactly its own region, so identity (pointer
+// equality) is the whole pins relation.
+unsafe impl PinsRegion for RegionCart {
+    fn pins_region(&self, region: &Region<FixtureProfile>) -> bool {
+        std::ptr::eq(&self.0, region)
     }
 }

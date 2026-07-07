@@ -25,6 +25,7 @@ use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::FrameSet;
 use crate::scheduler::{Deps, ProducerDisposition};
+use crate::witnessed::Residence;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
@@ -210,13 +211,11 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
         // it — co-located by construction rather than paired with an asserted singleton.
         let dest = dest_brand(view.dest_frame());
-        Ok(deps
-            .owned(0)
-            .delivered
-            .cell()
-            .transfer_into::<RegionRefFamily, CarriedFamily>(dest, |value, region, _brand| {
-                copy_carried(value, region)
-            }))
+        Ok(deps.owned(0).delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
+            dest,
+            Residence::Copied,
+            |value, region, _brand| copy_carried(value, region),
+        ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

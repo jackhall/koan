@@ -41,7 +41,11 @@ pub(crate) fn extract_terminal<'a>(
             Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
         })
         .expect("terminal should be a value, not an error");
-    let _ = scope.host_reach_of(&runtime.dep_witness(id));
+    // The extraction deep-clones the value into `scope`'s region, so the copied-adoption rule
+    // applies: the producer frame materializes into the surviving arena only when the copy's
+    // borrows genuinely reach it (a returned closure / module), never for a residence-only scalar.
+    let host = runtime.dep_host(id);
+    let _ = scope.adopted_reach_of(&runtime.dep_witness(id), host.as_ref());
     value
 }
 
@@ -184,10 +188,14 @@ pub(crate) fn marker<'a>(scope: &Scope<'a>, label: &'static str) -> &'a KObject<
 /// Seal a resolved value into a region-pure `ExpressionPart::Spliced` cell — the test-side peer of
 /// the scheduler's splice, so a classification test can build the exact carrier a real splice rests
 /// on the working expression. `Witnessed::resident` asserts the empty reach: the value borrows only
-/// caller-held test data, not a foreign region.
+/// caller-held test data, not a foreign region — a fresh throwaway storage stands in as the
+/// envelope's host pin.
 pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
     ExpressionPart::Spliced {
-        cell: Delivered::hosted(Sealed::seal(Witnessed::resident(c)), None),
+        cell: Delivered::hosted(
+            Sealed::seal(Witnessed::resident(c)),
+            crate::machine::core::run_root_storage(),
+        ),
     }
 }
 

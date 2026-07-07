@@ -2,7 +2,6 @@
 //! ordering for dispatch tie-breaking on `KType`. See
 //! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
-use crate::machine::CarrierWitness;
 use std::rc::Rc;
 
 use super::kkind::KKind;
@@ -10,8 +9,8 @@ use super::ktype::KType;
 use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
-use crate::witnessed::Sealed;
+use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::DeliveredCarried;
 
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
@@ -486,11 +485,11 @@ impl<'a> KType<'a> {
         self.accepts_carried(c)
     }
 
-    /// Classify a spliced **cell** against this slot without adopting it — opens the cell at a fresh
-    /// brand and routes the opened value through [`accepts_resolved`](Self::accepts_resolved) (which
-    /// re-anchors it to the slot's lifetime). The cell's witness pins the value across the open; the
-    /// picker may reject the candidate, so this deliberately does not adopt.
-    pub(crate) fn accepts_cell(&self, cell: &Sealed<CarriedFamily, CarrierWitness>) -> bool {
+    /// Classify a spliced **cell** against this slot without adopting it — opens the delivery
+    /// envelope at a fresh brand under its retained host pin and routes the opened value through
+    /// [`accepts_resolved`](Self::accepts_resolved) (which re-anchors it to the slot's lifetime).
+    /// The picker may reject the candidate, so this deliberately does not adopt.
+    pub(crate) fn accepts_cell(&self, cell: &DeliveredCarried) -> bool {
         cell.open(|c| self.accepts_resolved(c))
     }
 
@@ -504,7 +503,7 @@ impl<'a> KType<'a> {
         // cast lives inside `accepts_resolved`, which it routes). Every remaining arm is a
         // lifetime-agnostic shape check on the parser part, so no coercion of `part` is needed.
         if let ExpressionPart::Spliced { cell } = part {
-            return self.accepts_cell(cell.cell());
+            return self.accepts_cell(cell);
         }
         match self {
             KType::Any => true,

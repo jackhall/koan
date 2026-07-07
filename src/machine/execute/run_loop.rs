@@ -152,26 +152,20 @@ impl<'run> KoanRuntime<'run> {
         // rides `DoneWitnessed` with its own carrier naming its reach, so no terminal reads `pin`.
         let pin: FrameSet = dep_sources.iter().fold(FrameSet::empty(), |acc, src| match src {
             // The dep's liveness pin: its retained producer frame (the envelope's host, sourced from
-            // the retention hold since the collapsed carrier no longer carries its own) unioned with
-            // the value's own foreign reach (from the carrier). An errored dep carries no value the
-            // step reads — its error owns its data — so it contributes nothing.
-            Ok(t) => {
-                let host = t
-                    .delivered
-                    .host()
-                    .map_or_else(FrameSet::empty, |h| FrameSet::singleton(Rc::clone(h)));
-                let reach = t.delivered.witness().to_owned_reach();
-                FrameSet::union(&acc, &FrameSet::union(&host, &reach))
-            }
+            // the retention hold since the reference-only carrier carries no pin of its own) unioned
+            // with the value's own foreign reach — `Delivered::liveness_frameset`, host ∪ reach
+            // members. An errored dep carries no value the step reads — its error owns its data — so
+            // it contributes nothing.
+            Ok(t) => FrameSet::union(&acc, &t.delivered.liveness_frameset()),
             Err(_) => acc,
         });
-        // The kept-first contract's own carried witness — its home region owner, from
-        // `ReturnContract::home_owner` at seal time — unioned in alongside the cart and the dep `pin`
-        // so the contract's home region stays live across the open independent of which cart the slot
-        // currently carries.
+        // The kept-first contract's own carried witness — the `FrameSet` holding its home region
+        // owner, from `ReturnContract::home_owner` at seal time — unioned in alongside the cart and
+        // the dep `pin` so the contract's home region stays live across the open independent of
+        // which cart the slot currently carries.
         let contract_pin: FrameSet = prev_contract
             .as_ref()
-            .map_or_else(FrameSet::empty, |c| c.witness().to_liveness_frameset());
+            .map_or_else(FrameSet::empty, |c| c.witness().clone());
         // The open witness: the start cart (pinning the continuation and dest region — plus their
         // ancestor backings via its `outer` chain) unioned with `pin` (every dep source) and
         // `contract_pin` (the kept-first contract's own witness). Held across the open, so

@@ -19,11 +19,12 @@ use crate::machine::core::kfunction::body::ReturnContract;
 #[cfg(test)]
 use crate::machine::model::values::Carried;
 use crate::machine::model::values::CarriedFamily;
+use crate::machine::DeliveredCarried;
 
 use crate::machine::{CarrierWitness, KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::Witnessed;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::NodeWork;
@@ -171,12 +172,12 @@ impl<'step> Await<'step> {
 }
 
 /// Host-side closure for a catch [`NodeWork`](super::nodes::NodeWork). Receives the watched slot's
-/// sealed carrier (value and reach as one unit, adopted or opened at the finish's own step brand) or
-/// its error, plus a read-only view.
+/// delivery envelope (value, reach, and retained producer pin as one unit, adopted or opened at the
+/// finish's own step brand) or its error, plus a read-only view.
 pub(in crate::machine::execute) type CatchFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
-            Result<Sealed<CarriedFamily, CarrierWitness>, KError>,
+            Result<DeliveredCarried, KError>,
         ) -> Outcome<'a>
         + 'a,
 >;
@@ -291,9 +292,9 @@ pub(in crate::machine::execute) fn catch_continuation<'a>(
 ) -> NodeContinuation<'a> {
     Box::new(move |view, results, _idx| {
         let result = match &results.all()[0] {
-            // The watched producer's own sealed carrier, duplicated (the producer keeps its
+            // The watched producer's own delivery envelope, duplicated (the producer keeps its
             // terminal); the finish adopts or opens it at its own step brand.
-            Ok(t) => Ok(t.delivered.cell().duplicate()),
+            Ok(t) => Ok(t.delivered.duplicate()),
             // Frameless: the recovery-site dispatch attaches its own frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };

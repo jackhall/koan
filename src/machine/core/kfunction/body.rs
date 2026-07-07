@@ -9,7 +9,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::{FrameStorage, RegionBrand, Scope};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
-use crate::machine::CarrierWitness;
 use crate::scheduler::Sealed;
 use crate::witnessed::reattachable;
 
@@ -88,12 +87,13 @@ reattachable!(ContractFamily => ReturnContract<'r>);
 
 /// A [`ReturnContract`] sealed into its dormant, `'static`-storage form for a node's lifetime-free
 /// `NodeFrame`. Pinned by its own carried witness — [`ReturnContract::home_owner`]'s
-/// `Rc<FrameStorage>`, folded into a [`CarrierWitness`] singleton at seal time — not by the cart's
+/// `Rc<FrameStorage>`, folded into a [`FrameSet`](crate::machine::FrameSet) singleton at seal time
+/// (a genuine pinning witness; the reference-only value carrier pins nothing) — not by the cart's
 /// `outer` chain, so the contract's home region stays live across every hop of a tail chain
-/// independent of which cart the slot currently carries. Re-anchored at the Done read boundary
-/// through [`Sealed::open`]; the `Function` / `Arm` discriminant is readable there without
+/// independent of which cart the slot currently carries. Re-anchored at the Done read boundary at
+/// the step's combined open; the `Function` / `Arm` discriminant is readable there without
 /// re-anchoring the pointee, for the chain-shape decision that needs the tag but not the pointee.
-pub type SealedContract = Sealed<ContractFamily, CarrierWitness>;
+pub type SealedContract = Sealed<ContractFamily, crate::machine::FrameSet>;
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. The single source of
 /// truth for the all-`Expression` multi-statement detection: any non-`Expression` part or

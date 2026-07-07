@@ -234,10 +234,11 @@ fn merge_binds_ancestor_ref_into_descendant_scope() {
             scope: Cell::new(None),
             pool: region,
         })
-        .into_set();
+        .rewitness(RegionSet::singleton(Rc::clone(&descendant)));
     // Function stand-in: a reference sourced from the ancestor's region.
     let fn_w: Witnessed<RefFamily, RegionSet<TestCart>> =
-        Witnessed::yoke(Rc::clone(&ancestor), |region| &region[1]).into_set();
+        Witnessed::yoke(Rc::clone(&ancestor), |region| &region[1])
+            .rewitness(RegionSet::singleton(Rc::clone(&ancestor)));
     // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal under the
     // total union.
     let merged: Witnessed<ScopeFamily, RegionSet<TestCart>> = scope_w
@@ -247,10 +248,10 @@ fn merge_binds_ancestor_ref_into_descendant_scope() {
         });
     // Subsumption collapses the union to the descendant (whose `outer` chain already pins the
     // ancestor).
-    assert!(merged
-        .witness()
-        .sole()
-        .is_some_and(|d| Rc::ptr_eq(d, &descendant)));
+    assert!(matches!(
+        merged.witness().members(),
+        [only] if Rc::ptr_eq(only, &descendant)
+    ));
     // Drop both call handles. `merged`'s witness is the descendant clone; its `outer` chain still
     // pins the ancestor backing the bound `&200` points into.
     drop(descendant);
@@ -271,12 +272,13 @@ fn merge_keeps_unrelated_carts_as_a_two_member_set() {
         outer: None,
     });
     let wa: Witnessed<RefFamily, RegionSet<TestCart>> =
-        Witnessed::yoke(Rc::clone(&a), |r| &r[0]).into_set();
+        Witnessed::yoke(Rc::clone(&a), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&a)));
     let wb: Witnessed<RefFamily, RegionSet<TestCart>> =
-        Witnessed::yoke(Rc::clone(&b), |r| &r[0]).into_set();
+        Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&b)));
     let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
-    assert!(
-        merged.witness().sole().is_none(),
+    assert_eq!(
+        merged.witness().members().len(),
+        2,
         "neither cart pins the other, so both remain in the set"
     );
 }
@@ -359,55 +361,96 @@ fn seal_option_none_opens_to_none() {
     assert_eq!(got, 9);
 }
 
-/// [`StepContext::alloc`]: the built value's witness is the singleton pinning the context's own
-/// frame — reach = own region only.
+/// [`StepContext::alloc`]: the built value's carrier is the empty reference-only [`Carrier`] —
+/// reach = own region only, encoded as no reach at all; liveness is the frame the step loop holds.
 #[test]
-fn step_context_alloc_witness_is_singleton() {
+fn step_context_alloc_carrier_is_empty() {
     let cart: Rc<TestCart> = Rc::new(TestCart {
         backing: vec![1, 2, 3],
         outer: None,
     });
     let ctx: StepContext<TestCart> = StepContext::new(Rc::clone(&cart));
-    let w: Witnessed<RefFamily, RegionSet<TestCart>> = ctx.alloc(|region| &region[0]);
-    assert_eq!(w.with(|r| **r), 1);
-    assert!(w
-        .witness()
-        .sole()
-        .is_some_and(|owner| Rc::ptr_eq(owner, &cart)));
+    let w: Witnessed<RefFamily, Carrier<TestCart>> = ctx.alloc(|region| &region[0]);
+    assert_eq!(w.with_pinned(&cart, |r| **r), 1);
+    assert!(w.witness().is_empty());
 }
 
-/// [`StepContext::alloc_with`]: the witness is the union of the context's own frame and every named
-/// dep's reach, and the dep views arrive at `build` in the same order as `deps`.
-#[test]
-fn step_context_alloc_with_unions_witness_and_preserves_dep_order() {
-    let own: Rc<TestCart> = Rc::new(TestCart {
-        backing: vec![100],
-        outer: None,
-    });
-    let dep_a: Rc<TestCart> = Rc::new(TestCart {
-        backing: vec![1],
-        outer: None,
-    });
-    let dep_b: Rc<TestCart> = Rc::new(TestCart {
-        backing: vec![2],
-        outer: None,
-    });
-    let sealed_a: Sealed<RefFamily, RegionSet<TestCart>> =
-        Sealed::seal(Witnessed::yoke(Rc::clone(&dep_a), |r| &r[0]).into_set());
-    let sealed_b: Sealed<RefFamily, RegionSet<TestCart>> =
-        Sealed::seal(Witnessed::yoke(Rc::clone(&dep_b), |r| &r[0]).into_set());
+/// Library-`Region` frame profile for the [`StepContext::alloc_with`] fold test — the envelope-fed
+/// fold mints into a real library arena, so the plain `[u32]`-region `TestCart` cannot host it.
+struct StepProfile;
 
-    let ctx: StepContext<TestCart> = StepContext::new(Rc::clone(&own));
-    let w: Witnessed<RefFamily, RegionSet<TestCart>> =
-        ctx.alloc_with(&[&sealed_a, &sealed_b], |region, views| {
-            assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
-            &region[0]
-        });
-    assert_eq!(w.with(|r| **r), 100);
-    // Three unrelated carts (own, dep_a, dep_b) — none pins another, so the union stays a
-    // three-member set rather than collapsing to a singleton.
-    assert!(
-        w.witness().sole().is_none(),
-        "unrelated carts stay distinct set members"
+impl StorageProfile for StepProfile {
+    type Families = (RegionSet<StepFrame>, ());
+}
+
+impl crate::witnessed::Stored<StepProfile> for RegionSet<StepFrame> {
+    fn cell(storage: &crate::witnessed::StorageOf<StepProfile>) -> &FamilyArena<Self> {
+        &storage.0
+    }
+}
+
+struct StepFrame {
+    region: Region<StepProfile>,
+}
+
+// SAFETY: the owned `Region`'s arena pages stay fixed-address while `self` is held (behind an `Rc`
+// at every use site).
+unsafe impl RegionOwner for StepFrame {
+    type Region = Region<StepProfile>;
+    fn region(&self) -> &Region<StepProfile> {
+        &self.region
+    }
+}
+
+// SAFETY: a `StepFrame` has no ancestry — it pins exactly its own region, so identity is the whole
+// pins relation.
+unsafe impl PinsRegion for StepFrame {
+    fn pins_region(&self, region: &Region<StepProfile>) -> bool {
+        std::ptr::eq(&self.region, region)
+    }
+}
+
+fn step_frame() -> Rc<StepFrame> {
+    Rc::new(StepFrame {
+        region: Region::new(),
+    })
+}
+
+/// [`StepContext::alloc_with`]: each dep folds through its delivery envelope at `Residence::Kept`,
+/// so the built value's carrier names every dep's residence host as a minted reach member, and the
+/// dep views arrive at `build` in the same order as `deps`.
+#[test]
+fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
+    static ONE: u32 = 1;
+    static TWO: u32 = 2;
+    let own = step_frame();
+    let dep_a = step_frame();
+    let dep_b = step_frame();
+    let delivered_a: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
+        Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&ONE),
+        Rc::clone(&dep_a),
     );
+    let delivered_b: Delivered<RefFamily, Carrier<StepFrame>, StepFrame> = Delivered::seal(
+        Witnessed::<RefFamily, Carrier<StepFrame>>::resident(&TWO),
+        Rc::clone(&dep_b),
+    );
+
+    let ctx: StepContext<StepFrame> = StepContext::new(Rc::clone(&own));
+    let w: Witnessed<RefFamily, Carrier<StepFrame>> =
+        ctx.alloc_with::<RefFamily, RefFamily, StepProfile>(
+            &[&delivered_a, &delivered_b],
+            |_region, views| {
+                assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
+                &ONE
+            },
+        );
+    // Both dep hosts materialized as members of the set minted into `own`'s arena (Kept mode: the
+    // views keep living in their producers), and the consumer's own region is home-omitted.
+    w.witness().with_reach(None, |reach| {
+        let reach = reach.expect("dep hosts materialize as reach members");
+        assert!(reach.pins_region(dep_a.region()));
+        assert!(reach.pins_region(dep_b.region()));
+        assert!(!reach.pins_region(own.region()), "home is omitted");
+    });
+    assert!(!w.witness().borrows_host());
 }

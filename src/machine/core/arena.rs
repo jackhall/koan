@@ -13,7 +13,7 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::CarrierWitness;
+use crate::machine::{CarrierWitness, DeliveredCarried};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -182,12 +182,11 @@ impl<'a> RegionBrand<'a> {
     /// Bundle a value **already resident in this brand's region** under `witness` — the terminal
     /// carrier a name / ATTR read hands back and an FN-def / LET define site seals its object with.
     /// Unlike [`alloc_object_witnessed`](Self::alloc_object_witnessed) the value is not stored here;
-    /// it pre-exists in the region, so it is bundled through [`Witnessed::resident`] — a within-step
-    /// transient (the reading / defining frame pins the region for the step) — and immediately
-    /// [`reseal_under`](Witnessed::reseal_under) its own reach, fixing the carrier's witness before it
-    /// is stored on a node. Confines [`Witnessed::resident`] to this arena surface, so no read / define
-    /// builtin reaches for it. `witness` must name the value's full reach (its home frame ∪ its
-    /// home-omitted foreign reach); the caller
+    /// it pre-exists in the region, so it is bundled through [`Witnessed::resident`] — the reading /
+    /// defining frame pins the region for the step, and past the step the scheduler's retention hold
+    /// (the delivery envelope's host) carries the pin. Confines [`Witnessed::resident`] to this arena
+    /// surface, so no read / define builtin reaches for it. `witness` must name the value's
+    /// home-omitted foreign reach; the caller
     /// ([`Scope::resident_value_carrier`](crate::machine::core::Scope)) folds it. The brand is the
     /// capability marker: only a handle into the region the value lives in may re-seal it resident.
     pub(crate) fn seal_resident(
@@ -405,13 +404,15 @@ impl KoanRegionExt for KoanRegion {
         F: for<'b> FnOnce(RegionBrand<'b>) -> T::At<'b>,
     {
         // `yoke_handle` into `owner`'s own region under the single-owner `Rc<FrameStorage>` witness
-        // ([`WitnessRegion`]), then [`into_set`](Witnessed::into_set) widens that one pin into the
-        // `FrameSet` the aggregate world accumulates in — `yoke`'s source == bundle identity preserved,
-        // the single→set widening a separate lift. Turbofish `T` at the yoke: inference does not drive
-        // `yoke`'s `T` from the return type early enough to check `build`'s `-> T::At<'b>` bound, so it
-        // sees `<_ as Reattachable>::At` and fails to match the projection.
+        // ([`WitnessRegion`]) — the brand proves the built value is region-derived — then
+        // [`into_reference_only`](Witnessed::into_reference_only) re-bundles under the empty
+        // reference-only carrier: the value's reach is exactly its own region, and its liveness is
+        // external (the active frame during the step, the scheduler's retention hold once
+        // finalized). Turbofish `T` at the yoke: inference does not drive `yoke`'s `T` from the
+        // return type early enough to check `build`'s `-> T::At<'b>` bound, so it sees
+        // `<_ as Reattachable>::At` and fails to match the projection.
         Witnessed::<T, Rc<FrameStorage>>::yoke_handle(owner, |handle| build(RegionBrand(handle)))
-            .into_set::<CarrierWitness>()
+            .into_reference_only()
     }
 
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
@@ -440,10 +441,11 @@ pub(crate) trait KoanStepContextExt {
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`StepContext::alloc_with`] with the closure receiving a [`RegionBrand`] and the deps'
-    /// views: reach = own region unioned with every listed dep's reach, by construction.
+    /// views: the built carrier names every listed dep's reach **and residence host** (each dep
+    /// arrives as its delivery envelope and folds at `Residence::Kept`), by construction.
     fn alloc_carried_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
@@ -458,7 +460,7 @@ pub(crate) trait KoanStepContextExt {
     /// into the result's witness. The dep views are unused here; the fold is what matters.
     fn alloc_type_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
@@ -469,7 +471,7 @@ pub(crate) trait KoanStepContextExt {
     /// what matters.
     fn alloc_object_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         value: KObject<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 }
@@ -479,17 +481,15 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.alloc_handle::<KoanStorageProfile, CarriedFamily, CarrierWitness>(|handle| {
-            build(RegionBrand(handle))
-        })
+        self.alloc_handle::<KoanStorageProfile, CarriedFamily>(|handle| build(RegionBrand(handle)))
     }
 
     fn alloc_carried_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily, CarrierWitness>(
+        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
             deps,
             |handle, views| build(RegionBrand(handle), views),
         )
@@ -501,7 +501,7 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
 
     fn alloc_type_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         // Scalar gate: a region-free scalar type references none of `deps`, so folding their reach in
@@ -514,7 +514,7 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
 
     fn alloc_object_with(
         &self,
-        deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+        deps: &[&DeliveredCarried],
         value: KObject<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         // Scalar gate: a shallow scalar embeds no borrow into any dep, so the dep-witness union is
@@ -693,7 +693,7 @@ impl CallFrame {
         // address behind the Rc, keeping the erased reference valid.
         let scope_carrier = build_frame_child_witnessed(outer, &storage);
         Rc::new(CallFrame {
-            envelope: Delivered::hosted(scope_carrier, Some(storage)),
+            envelope: Delivered::hosted(scope_carrier, storage),
             non_dying: false,
             owner: Cell::new(None),
         })
@@ -718,7 +718,7 @@ impl CallFrame {
         );
         let scope_carrier = Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(scope));
         Rc::new(CallFrame {
-            envelope: Delivered::hosted(scope_carrier, Some(run_storage)),
+            envelope: Delivered::hosted(scope_carrier, run_storage),
             non_dying: true,
             owner: Cell::new(None),
         })
@@ -741,12 +741,10 @@ impl CallFrame {
         self.owner.get()
     }
 
-    /// This frame's own `FrameStorage` — the envelope's retained host, which a constructed
-    /// `CallFrame` always carries (every constructor pairs the child scope with `Some(storage)`).
+    /// This frame's own `FrameStorage` — the envelope's retained host, which every constructor
+    /// pairs with the child scope.
     fn storage(&self) -> &Rc<FrameStorage> {
-        self.envelope
-            .host()
-            .expect("a constructed CallFrame's envelope always carries its frame storage as host")
+        self.envelope.host()
     }
 
     /// The child scope's externally-witnessed carrier by value (`SealedExtern<ScopeRefFamily>` is

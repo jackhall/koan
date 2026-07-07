@@ -30,7 +30,7 @@ use crate::machine::core::ScopeRefFamily;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
-use crate::witnessed::{Erased, Sealed, SealedExtern, SetWitness};
+use crate::witnessed::{Erased, Sealed, SealedExtern};
 
 use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::copy_carried;
@@ -132,14 +132,24 @@ impl<'run> KoanRuntime<'run> {
         self.sched.dep_witness(id)
     }
 
-    /// Relocate `producer`'s terminal into `dest` and re-seal it under the set union of every region
-    /// it reaches and `dest`'s own witness — routing the merge-form
-    /// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into), so the relocation re-anchors
-    /// with **no fabricated lifetime** at this call site. The spine is copied into `dest` natively at
-    /// the merge brand; the surviving closure / module borrows ride the producer's own witness, folded
-    /// into the result set by the merge. `dest` arrives as a witnessed carrier — its witness pins its
-    /// own backing: the consuming slot's frame for a `Forward`-ready pull (`yoke`d there), the empty
-    /// set for the run region a drained root re-homes into (externally pinned).
+    /// The retained producer-frame owner of a finalized dep — the pin the test-harness
+    /// `extract_terminal` hands `host_reach_of` so the extracted value's residence materializes,
+    /// mirroring the drain. See [`Scheduler::dep_host`].
+    #[cfg(test)]
+    pub(crate) fn dep_host(&self, id: NodeId) -> Option<Rc<crate::machine::FrameStorage>> {
+        self.sched.dep_host(id)
+    }
+
+    /// Relocate `producer`'s terminal into `dest` through its delivery envelope
+    /// ([`Scheduler::dep_delivered`] + [`Delivered::transfer_into`](crate::witnessed::Delivered)),
+    /// re-sealing it under the composed carrier that names everything it reaches from `dest` — the
+    /// relocation re-anchors under the retained producer-frame pin (the envelope host), with **no
+    /// fabricated lifetime** at this call site. The spine is copied into `dest` natively at the
+    /// merge brand (`Residence::Copied`: the producer materializes as a reach member only when the
+    /// value's borrows genuinely reach it); the surviving closure / module borrows ride the
+    /// producer's reach, minted into `dest`'s arena. `dest` arrives as a witnessed carrier over the
+    /// destination brand — its backing is the consuming slot's live frame for a `Forward`-ready
+    /// pull, or the externally pinned run region a drained root re-homes into.
     ///
     /// This is the storage-bound relocation (`Forward`-ready, drain): the value lands as a re-sealed
     /// [`Witnessed`], not at a step brand. The consumer-pull dep slice does not route this — it opens
@@ -150,11 +160,12 @@ impl<'run> KoanRuntime<'run> {
         producer: NodeId,
         dest: Witnessed<RegionRefFamily, CarrierWitness>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        self.sched
-            .transfer_lifted(producer, dest, |value, region, _brand| {
-                copy_carried(value, region)
-            })
-            .map_err(|e| e.clone())
+        let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
+        Ok(delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
+            dest,
+            crate::witnessed::Residence::Copied,
+            |value, region, _brand| copy_carried(value, region),
+        ))
     }
 
     pub fn len(&self) -> usize {
@@ -468,14 +479,16 @@ impl<'run> KoanRuntime<'run> {
                 };
                 let chain = ChainOp::decide(block_scope_id, contract.as_ref(), body_index);
                 // Seal against the contract's own carried witness — its home owner's `Rc`, folded
-                // into a `CarrierWitness` singleton — rather than the cart's `outer` chain, so the
-                // kept-first contract's home region stays pinned across every hop of a tail chain
-                // independent of which cart the slot currently carries.
+                // into a `FrameSet` singleton (a genuine pinning witness) — rather than the cart's
+                // `outer` chain, so the kept-first contract's home region stays pinned across every
+                // hop of a tail chain independent of which cart the slot currently carries.
                 let sealed_contract = contract.map(|c| {
                     Sealed::seal(Witnessed::from_erased(
                         Erased::erase(c),
                         c.home_owner()
-                            .map_or(CarrierWitness::Empty, CarrierWitness::singleton),
+                            .map_or_else(crate::machine::FrameSet::empty, |o| {
+                                crate::machine::FrameSet::singleton(o)
+                            }),
                     ))
                 });
                 NodeStep::Replace {

@@ -6,8 +6,8 @@
 use std::rc::Rc;
 
 use super::{
-    ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, SetWitness, StorageProfile,
-    Stored, UnionWitness, Witness,
+    ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Stored,
+    UnionWitness, Witness,
 };
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
@@ -59,16 +59,6 @@ impl<F: PinsRegion> RegionSet<F> {
     /// Whether this set holds no region owner (the frameless / run-region terminal).
     pub fn is_empty(&self) -> bool {
         self.members.is_empty()
-    }
-
-    /// The sole region owner of a singleton set, or `None` for empty / multi-member sets — the hook
-    /// the consumer-pull lift uses to recover the producer owner from a finalized terminal's
-    /// witness (a finalized value is produced in exactly one frame, so its witness is a singleton).
-    pub fn sole(&self) -> Option<&Rc<F>> {
-        match self.members.as_slice() {
-            [only] => Some(only),
-            _ => None,
-        }
     }
 
     /// The set's members — the pinned read a hosted set exposes. Read-only: a stored set is
@@ -196,16 +186,6 @@ impl<F: PinsRegion> Clone for RegionSet<F> {
 // set carries no pin: a frameless value is backed by storage that outlives the carrier, so no held
 // pin is required.
 unsafe impl<F: PinsRegion> Witness for RegionSet<F> {}
-
-// SAFETY: `singleton(owner)` holds `owner` as the set's sole member, so the `Witness` impl above
-// pins `owner`'s region for as long as the set is held — exactly the region `owner: WitnessRegion`
-// pins, and no other. The single→set lift asserts nothing beyond the existing `RegionSet` witness
-// fact.
-unsafe impl<F: PinsRegion> SetWitness<Rc<F>> for RegionSet<F> {
-    fn singleton(single: Rc<F>) -> RegionSet<F> {
-        RegionSet::singleton(single)
-    }
-}
 
 // SAFETY: `union` returns the set union (deduplicated by region, a member dropped only when
 // another member's owner chain already pins its region), so holding the result keeps every region

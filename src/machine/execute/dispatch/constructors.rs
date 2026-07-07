@@ -18,6 +18,7 @@ use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
+use crate::witnessed::Residence;
 use crate::witnessed::{reattachable, Witnessed};
 
 use super::super::outcome::DepTerminal;
@@ -180,21 +181,31 @@ pub(crate) fn build_type_operand<'step>(
     identity: &'step KType<'step>,
     reach: Option<&FrameSet>,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
-    let dest_brand = dest_brand(dest_frame);
+    let dest_brand = dest_brand(Rc::clone(&dest_frame));
     // The `type_id` borrow targets the identity's declaring scope; when that is this same per-call
     // frame the home-omitted `reach` cannot record it, so materialize home back into reach (the
     // conservative reseal — an ancestor-declared identity's home ride is redundant but harmless).
     let identity_carrier = scope.resident_type_carrier(identity, reach, true);
     // The dest brand is the *destination* operand (its `RegionRefFamily` live form is the
-    // `HasRegionHandle` mint target `merge`'s composition seam needs), so it rides as `other` —
-    // `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
-    identity_carrier.merge::<RegionRefFamily, RegionTypeFamily>(dest_brand, |carried, brand, _b| {
-        let kt = match carried {
-            Carried::Type(t) => t,
-            _ => unreachable!("the identity carrier is always a Type"),
-        };
-        (brand, kt)
-    })
+    // `HasRegionHandle` mint target the pinned merge's composition seam needs), so it rides as
+    // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
+    // The pin: the identity's home region owner when live (the identity and its reach set live
+    // there), else the empty set — the identity is then covered by the live `scope` borrow itself.
+    let pin: FrameSet = scope
+        .region_owner()
+        .upgrade()
+        .map_or_else(FrameSet::empty, FrameSet::singleton);
+    identity_carrier.merge_pinned::<RegionRefFamily, RegionTypeFamily, _>(
+        dest_brand,
+        &pin,
+        |carried, brand, _b| {
+            let kt = match carried {
+                Carried::Type(t) => t,
+                _ => unreachable!("the identity carrier is always a Type"),
+            };
+            (brand, kt)
+        },
+    )
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
@@ -220,9 +231,9 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(terminals[0]
                 .delivered
-                .cell()
-                .transfer_into::<RegionTypeFamily, CarriedFamily>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    Residence::Copied,
                     |value, (region, identity_ty), _brand| {
                         Carried::Object(region.alloc_object(KObject::Wrapped {
                             inner: NonWrappedRef::peel(value.object()),
@@ -258,9 +269,9 @@ fn finish_witnessed<'step>(
                 .fold(acc0, |acc, (term, name)| {
                     let name = name.clone();
                     term.delivered
-                        .cell()
-                        .transfer_into::<RecordFieldsFamily, RecordFieldsFamily>(
+                        .transfer_into::<RecordFieldsFamily, RecordFieldsFamily, _>(
                             acc,
+                            Residence::Copied,
                             move |value, (region, mut fields), _brand| {
                                 fields.push((name, value.object().deep_clone()));
                                 (region, fields)
@@ -268,8 +279,11 @@ fn finish_witnessed<'step>(
                         )
                 });
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
-            Ok(fields.merge::<RegionTypeFamily, CarriedFamily>(
+            // The pin: the destination frame, whose arena holds the sets the field folds minted.
+            let dest_frame = view.dest_frame();
+            Ok(fields.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
                 home,
+                &dest_frame,
                 |(_region, fields), (region, identity_ty), _brand| {
                     let record = Record::from_pairs(fields);
                     Carried::Object(region.alloc_object(KObject::Wrapped {
@@ -312,9 +326,9 @@ fn finish_witnessed<'step>(
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered
-                .cell()
-                .transfer_into::<RegionTypeFamily, CarriedFamily>(
+                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    Residence::Copied,
                     move |value, (region, identity_ty), _brand| {
                         let (set, index) = match identity_ty {
                             KType::SetRef { set, index } => (Rc::clone(set), *index),

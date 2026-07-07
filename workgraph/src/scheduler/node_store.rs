@@ -11,13 +11,12 @@
 //!   orchestrates the notify-walk and cascade-free across this store and
 //!   `DepGraph`.
 
-use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Live, NodeId, Workload};
-use crate::witnessed::{ComposeWitness, Reattachable, Sealed, Witnessed};
+use crate::witnessed::{Sealed, Witnessed};
 // `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
 // pre-built `Witnessed`, so the import is test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
@@ -71,14 +70,12 @@ enum SlotState<W: Workload> {
     /// Node payload has been moved out by `take_for_run`. A matching
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
-    /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with the
-    /// producer frame `Rc` set that backs it (empty for a frameless / run-region value). A read opens the
-    /// value at a rank-2 brand through `Sealed::open`, witnessed by the bundled frame, so the
-    /// re-anchored carrier nests inside the access rather than escaping up-stack. Holding the frame
-    /// `Rc` inside the carrier pins the producer's per-call memory until the slot is freed, so frame
-    /// death moves from Done to free and an opened carrier cannot outlive the backing region. The pin
-    /// is read by the consumer-pull lift, which copies the terminal out of this frame into the
-    /// consumer's. The error carries no frame (it owns its data).
+    /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with its
+    /// reference-only reach witness, sealed as-is — the carrier pins nothing. What keeps the value's
+    /// backing alive is the scheduler's retention hold on the producer frame (seeded at finalize,
+    /// released at pull-count zero), so every read re-anchors under that retained owner
+    /// (`Sealed::open_with`) and a drained root re-homed into the run region reads under the empty
+    /// pin. The error carries no frame (it owns its data).
     Done(Result<FinalizedValue<W>, W::Error>),
     /// A bare-name forward spliced out: this slot's result *is* `producer`'s. `read_result` /
     /// `is_result_ready` follow the alias through to `producer` (which holds the sole copy). The
@@ -186,40 +183,6 @@ impl<W: Workload> NodeStore<W> {
         self.slots[id] = SlotState::Done(output.map(Sealed::seal));
     }
 
-    /// Relocate a finalized terminal into `dest` and re-seal it under the set union of the regions it
-    /// reaches and `dest` — the [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) the
-    /// `Forward`-ready pull and the drain re-home route (the consumer-pull dep slice opens in-band at
-    /// the step brand instead). `dest` is the destination region wrapped as a witnessed carrier;
-    /// `relocate` is the workload's structural copy into it. The stored seal is left untouched (the
-    /// producer keeps its terminal for other consumers).
-    // The rank-2 `relocate` closure plus the witnessed-`Result` return is irreducibly nested.
-    #[allow(clippy::type_complexity)]
-    pub(super) fn transfer_lifted<B: Reattachable>(
-        &self,
-        id: NodeId,
-        pin: Option<&Rc<W::Frame>>,
-        dest: Witnessed<B, W::Witness>,
-        relocate: impl for<'b> FnOnce(
-            <W::Value as Reattachable>::At<'b>,
-            B::At<'b>,
-            PhantomData<&'b ()>,
-        ) -> <W::Value as Reattachable>::At<'b>,
-    ) -> Result<Witnessed<W::Value, W::Witness>, &W::Error>
-    where
-        W::Witness: ComposeWitness<B>,
-    {
-        // `pin` (the retained producer-frame owner, `None` for a frameless / run-region terminal) is
-        // held for the whole call, keeping the value's backing alive while `transfer_into` reattaches
-        // and relocates it — the retention pin that outlives the walking carrier once it collapses to
-        // reach-only (belt-and-suspenders with the carrier's own witness until then).
-        let _ = &pin;
-        match &self.slots[id] {
-            SlotState::Done(Ok(sealed), ..) => Ok(sealed.transfer_into(dest, relocate)),
-            SlotState::Done(Err(e), ..) => Err(e),
-            _ => panic!("result must be ready by the time it's transferred"),
-        }
-    }
-
     /// The finalized terminal's witness set (cloned), or the empty set for a frameless / run-region
     /// or errored slot — the consumer-pull lift's `pin` accumulation reads it before relocating.
     pub(super) fn dep_witness(&self, id: NodeId) -> W::Witness {
@@ -277,13 +240,12 @@ impl<W: Workload> NodeStore<W> {
         f: impl for<'b> FnOnce(Live<'b, W>) -> R,
     ) -> Result<R, &W::Error> {
         match &self.slots[id] {
-            // Re-anchor under the retained frame owner (`open_with`) when the producer carries one,
-            // so the read is pinned by retention rather than the walking carrier's own witness; a
-            // frameless / run-region terminal is externally pinned, so the bundled empty witness on
-            // `open` suffices.
+            // Re-anchor under the retained frame owner (`open_with`) — the carrier's own witness is
+            // reference-only and pins nothing. A slot with no retained owner (a drained root re-homed
+            // into the run region) is externally pinned, so the read opens under the empty pin.
             SlotState::Done(Ok(w), ..) => Ok(match pin {
                 Some(p) => w.open_with(p, f),
-                None => w.open(f),
+                None => w.open_with(&crate::witnessed::RegionSet::<W::Frame>::empty(), f),
             }),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),

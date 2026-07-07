@@ -9,11 +9,10 @@ use crate::machine::core::kfunction::action::{
 use crate::machine::core::TypeHit;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CarrierWitness, KError, KErrorKind, NameLookup, Scope};
+use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
-use crate::witnessed::Sealed;
+use crate::machine::DeliveredCarried;
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -106,12 +105,12 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
     results: &DepResults<'_, &'d DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
-) -> Result<(KType<'a>, &'d Sealed<CarriedFamily, CarrierWitness>), KError> {
+) -> Result<(KType<'a>, &'d DeliveredCarried), KError> {
     // The sub-dispatch's resolved type read live at the step brand (un-relocated); the caller
     // re-allocates it into the destination region when it constructs, folding `carrier` in.
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
     match terminal.value {
-        Carried::Type(kt) => Ok((kt.clone(), terminal.delivered.cell())),
+        Carried::Type(kt) => Ok((kt.clone(), &terminal.delivered)),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
     }
 }
@@ -122,7 +121,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &Sealed<CarriedFamily, CarrierWitness>) -> Action<'a>
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &DeliveredCarried) -> Action<'a>
         + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {

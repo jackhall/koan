@@ -12,7 +12,7 @@
 //! - The witness traits an embedder implements for its own region-owner type:
 //!   [`witnessed::Witness`], [`witnessed::WitnessRegion`], [`witnessed::RegionOwner`] (the
 //!   `Rc<F>` blanket-impl seam for [`witnessed::WitnessRegion`]), [`witnessed::UnionWitness`],
-//!   [`witnessed::SetWitness`].
+//!   and the reference-only composition seam [`witnessed::ComposeWitness`].
 //! - The opaque reach-set library type [`witnessed::RegionSet`], generic over the member trait
 //!   [`witnessed::PinsRegion`] an embedder implements for its own frame-owner type.
 //! - The lifetime family contract: [`witnessed::Reattachable`] and the

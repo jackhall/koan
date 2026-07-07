@@ -10,9 +10,10 @@ use crate::machine::model::types::{
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope, TraceFrame};
-use crate::witnessed::{Sealed, Witnessed};
+use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
+use crate::machine::DeliveredCarried;
 
 /// Seal the elaborated variant schema into the UNION's [`RecursiveSet`] member and install
 /// the `SetRef` identity into `bindings.types` — type-only, no value-side carrier.
@@ -23,7 +24,7 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
-    carriers: &[&Sealed<CarriedFamily, CarrierWitness>],
+    carriers: &[&DeliveredCarried],
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -268,7 +269,7 @@ mod tests {
             &[],
         );
         let member_name = second.as_ref().map(|carrier| {
-            carrier.with(|c| match c {
+            carrier.with_pinned(&crate::machine::FrameSet::empty(), |c| match c {
                 Carried::Type(KType::SetRef { set, index }) => {
                     Some(set.member(*index).name.clone())
                 }

@@ -45,6 +45,7 @@ pub fn body<'a>(
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
     use crate::machine::{KoanRegion, RegionTypeFamily};
+    use crate::witnessed::Residence;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
@@ -85,8 +86,9 @@ pub fn body<'a>(
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.
-            Ok(carrier) => carrier.transfer_into::<RegionTypeFamily, CarriedFamily>(
+            Ok(carrier) => carrier.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                 home,
+                Residence::Copied,
                 |value, (region, identity), _brand| {
                     Carried::Object(region.alloc_object(build_result(
                         "Ok",
@@ -98,11 +100,14 @@ pub fn body<'a>(
             // The error payload is built region-pure into the scope region (it reaches no foreign
             // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
             Err(e) => {
-                let payload = KoanRegion::alloc_witnessed(frame, |region| {
+                let payload = KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
                     Carried::Object(region.alloc_object(e.to_tagged(region)))
                 });
-                payload.merge::<RegionTypeFamily, CarriedFamily>(
+                // The pinned merge: `frame` covers the freshly-built payload (it lives in that
+                // frame's own region); the identity operand's backing is the live scope.
+                payload.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
                     home,
+                    &frame,
                     |payload, (region, identity), _brand| {
                         Carried::Object(region.alloc_object(build_result(
                             "Error",

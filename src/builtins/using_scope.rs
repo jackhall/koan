@@ -67,9 +67,9 @@ pub fn body<'a>(
     // alive for the window's life (see the module-level soundness note). A top-level module reaches no
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
-        let witness = carrier.witness().clone();
+        let carrier = carrier.duplicate();
         let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| {
-            let _ = overlay.host_reach_of(&witness);
+            let _ = overlay.host_reach_of(carrier.witness(), Some(carrier.host()));
         });
         seed
     });

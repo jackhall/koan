@@ -50,20 +50,17 @@ pub(crate) fn resolve_arm_contract<'a>(
 
 /// How the matched scrutinee reaches the arm's `it` binding.
 pub(crate) enum ItSource<'a> {
-    /// An owned value plus its reach — `MATCH`'s resolved argument and `TRY`'s error payload.
+    /// An owned value plus the delivery envelope it was read out of — `MATCH`'s resolved argument
+    /// (the envelope supplies the copy's stored reach and its producer pin) and `TRY`'s error
+    /// payload (`None`: the payload is region-pure, reaching nothing).
     Value {
         value: crate::machine::model::KObject<'a>,
-        reach: crate::machine::CarrierWitness,
+        delivered: Option<crate::machine::DeliveredCarried>,
     },
-    /// The watched producer's sealed carrier — `TRY`'s success arm. Cloned once, directly into
-    /// the arm frame at bind time; the carrier's witness pins the producer until then and
+    /// The watched producer's delivery envelope — `TRY`'s success arm. Cloned once, directly into
+    /// the arm frame at bind time; the envelope's retained host pins the producer until then and
     /// supplies the binding's stored reach.
-    Carrier(
-        crate::witnessed::Sealed<
-            crate::machine::model::values::CarriedFamily,
-            crate::machine::CarrierWitness,
-        >,
-    ),
+    Carrier(crate::machine::DeliveredCarried),
 }
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
@@ -89,15 +86,18 @@ pub(crate) fn arm_tail<'a>(
     // binding), and a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
         let (it_object, reach) = match it_source {
-            ItSource::Value { value, reach } => (
+            ItSource::Value { value, delivered } => (
                 child.brand().alloc_object(value),
-                child.adopted_reach_of(&reach),
+                delivered
+                    .as_ref()
+                    .map(|d| child.adopted_reach_of(d.witness(), Some(d.host())))
+                    .unwrap_or_default(),
             ),
             ItSource::Carrier(carrier) => (
                 // Adopt at the bind brand: one structural copy, made directly into the arm frame's
-                // region inside the carrier's open; the binding stores the copy's reach.
+                // region inside the envelope's pinned open; the binding stores the copy's reach.
                 carrier.open(|live| child.brand().alloc_object(live.object().deep_clone())),
-                child.adopted_reach_of(carrier.witness()),
+                child.adopted_reach_of(carrier.witness(), Some(carrier.host())),
             ),
         };
         let _ = child.bind_value("it".to_string(), it_object, BindingIndex::value(0), reach);

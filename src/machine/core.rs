@@ -26,7 +26,7 @@ pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
     PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit, ValueHit,
 };
-pub use carrier_witness::{CarrierWitness, DeliveredCarried, SeveredBacking};
+pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};

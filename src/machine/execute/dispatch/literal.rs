@@ -1,15 +1,15 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::machine::core::KoanRegionExt;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
-    CarrierWitness, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome, NodeId, RegionBrand,
-    TraceFrame,
+    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
+    NodeId, RegionBrand, TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Sealed, Witnessed};
+use crate::witnessed::{reattachable, Delivered, Residence, Witnessed};
 
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
@@ -25,13 +25,14 @@ use crate::scheduler::{DepResults, ResolvedDeps};
 struct AggBuildFamily;
 reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
 
-/// One cell of a list / dict / record literal. A `Static` cell is wrapped into a witnessed carrier
+/// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
-/// — static or dep — folds uniformly. `Park(i)` / `Owned(j)` are the dep-finish's park / owned
-/// [`DepResults`] indices — the [`Deps`](crate::scheduler::Deps) builder hands them back at classify
-/// time and they read straight back through the view.
+/// — static or dep — folds uniformly, each carrying the frame owner its value lives under. `Park(i)`
+/// / `Owned(j)` are the dep-finish's park / owned [`DepResults`] indices — the
+/// [`Deps`](crate::scheduler::Deps) builder hands them back at classify time and they read straight
+/// back through the view.
 enum Slot {
-    Static(Sealed<CarriedFamily, CarrierWitness>),
+    Static(DeliveredCarried),
     Park(usize),
     Owned(usize),
 }
@@ -43,29 +44,31 @@ impl Slot {
     }
 }
 
-/// The per-cell carrier the fold consumes: a static cell's source-built carrier, or a dep terminal's
-/// own `Sealed` carrier (arriving witnessed from the lift, un-relocated — `transfer_into` relocates it
-/// once into the aggregate's region while unioning its reach onto the carrier). The dep arm hands back
-/// a [`duplicate`](crate::witnessed::Sealed::duplicate) of the terminal's carrier, never a fresh
+/// The per-cell envelope the fold consumes: a static cell's source-built envelope, or a dep
+/// terminal's own delivery envelope (arriving witnessed from the pull, un-relocated —
+/// `transfer_into` relocates it once into the aggregate's region while minting its reach and
+/// residence host onto the accumulator's carrier). The dep arm hands back a
+/// [`duplicate`](crate::witnessed::Delivered::duplicate) of the terminal's envelope, never a fresh
 /// bundle pairing the read-out value with a separately-read reach.
-fn cell_carrier(
-    slot: Slot,
-    terminals: DepResults<'_, &DepTerminal<'_>>,
-) -> Sealed<CarriedFamily, CarrierWitness> {
+fn cell_carrier(slot: Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> DeliveredCarried {
     match slot {
-        Slot::Static(sealed) => sealed,
-        Slot::Park(i) => terminals.park(i).delivered.cell().duplicate(),
-        Slot::Owned(j) => terminals.owned(j).delivered.cell().duplicate(),
+        Slot::Static(delivered) => delivered,
+        Slot::Park(i) => terminals.park(i).delivered.duplicate(),
+        Slot::Owned(j) => terminals.owned(j).delivered.duplicate(),
     }
 }
 
-/// Fold a sequence of cell carriers into a witnessed `(region, Vec<Held>)` accumulator over the
+/// Fold a sequence of cell envelopes into a witnessed `(region, Vec<Held>)` accumulator over the
 /// consumer scope's region: `yoke` an empty accumulator under the consumer frame, then
-/// `transfer_into` each cell so the result names the union of every cell's reach. The final aggregate
-/// shape (`list_of_held` / `dict_of_held` / `record_of_held`) is built by the caller's `map`.
+/// `transfer_into` each envelope at [`Residence::Copied`] — [`Held::from_carried`] deep-clones each
+/// cell into the aggregate, so the producer host materializes as a member of the minted set only
+/// when the copy's borrows genuinely reach it (a closure's captured environment), the same
+/// copied-adoption rule the param binds apply; a residence-only producer releases at retention
+/// discharge instead of riding the aggregate. The final aggregate shape (`list_of_held` /
+/// `dict_of_held` / `record_of_held`) is built by the caller's pinned map.
 fn fold_cells(
     view: &SchedulerView<'_, '_>,
-    cells: impl Iterator<Item = Sealed<CarriedFamily, CarrierWitness>>,
+    cells: impl Iterator<Item = DeliveredCarried>,
     capacity: usize,
 ) -> Witnessed<AggBuildFamily, CarrierWitness> {
     let dest_frame = view.dest_frame();
@@ -73,8 +76,9 @@ fn fold_cells(
         (region, Vec::with_capacity(capacity))
     });
     cells.fold(acc0, |acc, cell| {
-        cell.transfer_into::<AggBuildFamily, AggBuildFamily>(
+        cell.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
             acc,
+            Residence::Copied,
             |cell, (region, mut cells), _brand| {
                 cells.push(Held::from_carried(cell));
                 (region, cells)
@@ -87,7 +91,7 @@ fn fold_cells(
 /// region), so it is read out and converted in place. A `Type` arm or a non-scalar value errors.
 fn scalar_key(slot: &Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> Result<KKey, String> {
     match slot {
-        Slot::Static(sealed) => sealed.open(key_from_carried),
+        Slot::Static(delivered) => delivered.open(key_from_carried),
         Slot::Park(i) => key_from_carried(terminals.park(*i).value),
         Slot::Owned(j) => key_from_carried(terminals.owned(*j).value),
     }
@@ -129,7 +133,7 @@ impl<'step> KoanRuntime<'step> {
             // Keys stay scalar (reaching no region): read them out eagerly, erroring before the fold.
             // The value cells fold into the witnessed accumulator, paired back with the keys at `map`.
             let mut keys: Vec<KKey> = Vec::new();
-            let mut cells: Vec<Sealed<CarriedFamily, CarrierWitness>> = Vec::with_capacity(n);
+            let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             for row in rows {
                 if let Some(key_slot) = row.key {
                     let kkey = scalar_key(&key_slot, terminals).map_err(|msg| {
@@ -141,7 +145,10 @@ impl<'step> KoanRuntime<'step> {
                 cells.push(cell_carrier(row.value, terminals));
             }
             let acc = fold_cells(view, cells.into_iter(), n);
-            Ok(acc.map(move |(region, value_helds), _brand| {
+            // The pin: the destination frame, whose arena holds the set the folds minted — through
+            // it every producer the accumulated `Held` views point into.
+            let dest_frame = view.dest_frame();
+            Ok(acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
                 Carried::Object(region.alloc_object(assemble(keys, value_helds)))
             }))
         });
@@ -265,10 +272,10 @@ impl<'step> KoanRuntime<'step> {
                 // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free
                 // and folds uniformly with the dep cells.
                 let frame = current_dest_frame(&self.ambient);
-                let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
+                let carrier = KoanRegion::alloc_witnessed(Rc::clone(&frame), move |region| {
                     Carried::Object(region.alloc_object(other.resolve_region_pure()))
                 });
-                Slot::Static(Sealed::seal(carrier))
+                Slot::Static(Delivered::seal(carrier, frame))
             }
         }
     }
@@ -291,7 +298,10 @@ impl<'step> KoanRuntime<'step> {
                 s.resolve_value_carrier(name, active_chain.map(|c| &**c))
             });
             if let Some(NameLookup::Bound(carrier)) = resolved {
-                return Slot::Static(Sealed::seal(carrier));
+                let delivered = with_current_node_scope(&self.ambient, |s| {
+                    s.seal_resident_delivered(carrier)
+                });
+                return Slot::Static(delivered);
             }
         }
         // Resolve + seal inside the brand (the scope and its `NameOutcome` are branded); the rebuilt
@@ -318,7 +328,7 @@ impl<'step> KoanRuntime<'step> {
                     // The resolved type lives in an ancestor region (kept alive by the read scope's home
                     // frame's `outer` chain), never in the read scope's own home, so it borrows nothing
                     // into home: the bit is unset and `reach` names only its genuinely-foreign regions.
-                    Some(Slot::Static(Sealed::seal(
+                    Some(Slot::Static(s.seal_resident_delivered(
                         s.resident_type_carrier(kt, reach, false),
                     )))
                 }

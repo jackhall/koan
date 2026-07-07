@@ -56,18 +56,16 @@ pub fn body<'a>(
         }
         Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
     };
-    // The scrutinee's reach travels to the `it` binding: `it` is a clone of the matched value, so it
-    // reaches every region the scrutinee does. A region-pure scrutinee has no carrier → empty reach.
-    let scrutinee_witness = ctx
-        .arg_carrier("value")
-        .map(|carrier| carrier.witness().clone())
-        .unwrap_or_default();
+    // The scrutinee's envelope travels to the `it` binding: `it` is a clone of the matched value,
+    // so it reaches every region the scrutinee does, and the envelope's retained host is the pin
+    // the copy's reach mints under. A region-pure scrutinee has no carrier → empty reach.
+    let scrutinee = ctx.arg_carrier("value").map(|carrier| carrier.duplicate());
     arm_tail(
         ctx.scope,
         ctx.frame.map(|f| f.storage_rc()),
         super::branch_walk::ItSource::Value {
             value: value.deep_clone(),
-            reach: scrutinee_witness,
+            delivered: scrutinee,
         },
         branch_body,
         contract,

@@ -80,6 +80,8 @@ fn dep_finish_short_circuits_on_dep_error() {
     let _ = store.pop_next();
     let value = region.brand().alloc_object(KObject::Number(99.0));
     store.set_result(dep_ok, Ok(Carried::Object(value)));
+    // A synthetic terminal carries no finalize-seeded retention hold; the dep pull requires one.
+    store.seed_retention(dep_ok, std::rc::Rc::clone(&region), 1);
     store.set_result(
         dep_err,
         Err(KError::new(KErrorKind::ShapeError(

@@ -72,7 +72,7 @@ impl<'run> KoanRuntime<'run> {
                 ) {
                     // Mint the rehomed terminal's reach into the run root's arena so those regions stay
                     // alive past scheduler teardown.
-                    let _ = root.host_reach_of(witnessed.witness());
+                    let _ = root.host_reach_of(witnessed.witness(), None);
                     self.sched.rehome_terminal(id, Ok(witnessed));
                 }
             }

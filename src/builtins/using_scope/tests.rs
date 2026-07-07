@@ -13,7 +13,6 @@ use crate::machine::core::{run_root_storage, BindingIndex, CarrierWitness, Scope
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
-use crate::witnessed::SetWitness;
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -201,8 +200,8 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Bind a value in the module scope whose stored reach names the foreign frame -- minted for
     // real into the module's own arena via `host_reach_of`, the same primitive `adopt_sealed` uses
     // to root a functor result's reach at module-bind time.
-    let seed_witness = CarrierWitness::singleton(Rc::clone(&foreign_storage));
-    let stored_reach = module_scope.host_reach_of(&seed_witness);
+    let stored_reach =
+        module_scope.host_reach_of(&CarrierWitness::default(), Some(&foreign_storage));
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
     module_scope
         .bind_value(
@@ -225,8 +224,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
     // carrier into the window's (call-site) arena at overlay construction, before any read through
     // the window -- the step that roots the module's region transitively.
-    let module_witness = CarrierWitness::singleton(Rc::clone(&module_storage));
-    let _ = window.host_reach_of(&module_witness);
+    let _ = window.host_reach_of(&CarrierWitness::default(), Some(&module_storage));
 
     let carrier = window
         .resolve_value_carrier("val", None)
@@ -250,7 +248,7 @@ fn using_window_value_read_reach_survives_under_module_root() {
     assert!(
         carrier
             .witness()
-            .reach_covers(foreign_region_owner.region()),
+            .reach_covers(None, foreign_region_owner.region()),
         "the read carrier's reach still covers the foreign region after every other handle drops"
     );
 }

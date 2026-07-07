@@ -22,9 +22,10 @@ use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
     CarrierWitness, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
 };
-use crate::witnessed::{Sealed, StepContext, Witnessed};
+use crate::witnessed::{StepContext, Witnessed};
 
 use super::{arg, kw, sig};
+use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`Witnessed`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
@@ -161,7 +162,7 @@ pub fn body_newtype<'a>(
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
     // carrier names regions the read-site frame may not pin; fold the lhs carrier as the field
     // read's dep so the projected field outlives every region the lhs reaches.
-    let deps: Vec<_> = ctx.arg_carrier("s").map(|d| d.cell()).into_iter().collect();
+    let deps: Vec<_> = ctx.arg_carrier("s").into_iter().collect();
     route(access_field(&ctx.ctx, target, &field_name, &deps))
 }
 
@@ -239,7 +240,7 @@ fn access_field<'a>(
     step: &StepContext<FrameStorage>,
     target: &KObject<'a>,
     field: &str,
-    deps: &[&Sealed<CarriedFamily, CarrierWitness>],
+    deps: &[&DeliveredCarried],
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     match target {
         // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
@@ -334,11 +335,9 @@ fn access_module_member<'a>(
                 // pre-existing reference into that region, so it crosses as a fold operand — its
                 // carrier (named by the member's own `reach`) unions into the wrapped result's
                 // witness via `alloc_carried_with`.
-                let obj_carrier = Sealed::seal(module_scope.resident_value_carrier(
-                    obj,
-                    reach,
-                    borrows_into_home,
-                ));
+                let obj_carrier = module_scope.seal_resident_delivered(
+                    module_scope.resident_value_carrier(obj, reach, borrows_into_home),
+                );
                 let ctx = StepContext::new(scope_frame(module_scope));
                 return Ok(
                     ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {

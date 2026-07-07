@@ -1,7 +1,8 @@
-//! Tests for [`finalize_terminal`](super::NodeFinalize::finalize_terminal)'s Done-boundary gate: a
-//! region-pure terminal severs its residence and releases the dying producer frame, while a value
-//! that genuinely borrows into that frame keeps it pinned. The [`Weak`] census is the direct probe —
-//! a released frame's `FrameStorage` upgrades to `None` once the last strong holder drops.
+//! Tests for [`finalize_terminal`](super::NodeFinalize::finalize_terminal)'s Done boundary: a
+//! terminal seals **as-is** — the boundary makes no memory decision — and the producer frame's
+//! lifetime rides the scheduler's retention hold (stood in for here by the delivery envelope's
+//! host `Rc`), released when the hold drops. The [`Weak`] census is the direct probe — a released
+//! frame's `FrameStorage` upgrades to `None` once the last strong holder drops.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -20,7 +21,7 @@ use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, Signa
 use crate::machine::model::values::Module;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
-use crate::witnessed::{Delivered, Sealed};
+use crate::witnessed::Delivered;
 
 /// Build a scalar carrier residing in `producer`'s region with the given home-omitted foreign reach
 /// and `borrows_into_home` bit — the exact carrier a resident-value read hands to finalize. Returns
@@ -41,76 +42,84 @@ fn resident_scalar(
     (carrier, weak)
 }
 
-/// A region-pure scalar terminal (empty reach) is severed at the Done boundary: finalize copies the
-/// top node into an owned backing and drops the producer-residence pin, so once the caller drops the
-/// producer `CallFrame` the frame's `FrameStorage` is released — well before program end — while the
-/// value stays readable through the severed carrier's owned backing.
+/// A region-pure scalar terminal (empty reach) seals as-is at the Done boundary and rides the
+/// retention hold: the envelope's host `Rc` (the hold's stand-in) keeps the producer's storage —
+/// hence the value — alive across the producer shell's drop, and releasing the hold releases the
+/// frame. Frame release is a function of deliveries only, never of the value's reach.
 #[test]
-fn region_pure_scalar_releases_producer_frame() {
+fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
     let (carrier, weak) = resident_scalar(&producer, false);
     assert!(
-        !carrier.witness().reach_covers(producer.region()),
-        "a region-pure scalar's reach names nothing — it only pins its residence frame"
+        !carrier.witness().reach_covers(None, producer.region()),
+        "a region-pure scalar's reach names nothing"
     );
     assert!(
-        carrier.witness().covers(producer.region()),
-        "the residence Frame pin still keeps the region live before the sever"
+        carrier.witness().is_empty(),
+        "the carrier pins nothing — liveness is retention's"
     );
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
         .finalize_terminal(carrier, Some(&producer), None)
         .expect("no declared return, no error");
+    // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
+    // it to the scheduler at finalize.
+    let envelope = Delivered::seal(sealed, producer.storage_rc());
 
-    // The severed carrier holds an owned backing, not the frame — dropping the producer shell releases
-    // its storage.
     drop(producer);
     assert!(
-        weak.upgrade().is_none(),
-        "the producer frame drops once the region-pure scalar stops pinning it"
+        weak.upgrade().is_some(),
+        "the retention hold keeps the producer's storage alive across the shell drop"
     );
-    sealed.with(|carried| match carried {
-        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value survives the sever"),
-        other => panic!("expected the severed Number, got {:?}", other.ktype()),
+    envelope.open(|carried| match carried {
+        Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the hold"),
+        other => panic!("expected the retained Number, got {:?}", other.ktype()),
     });
+    drop(envelope);
+    assert!(
+        weak.upgrade().is_none(),
+        "releasing the hold releases the frame — a delivery fact, not a reach fact"
+    );
 }
 
-/// A value that genuinely borrows into its producer frame (the `borrows_into_home` bit set, so its
-/// reach names the frame) is **not** severed: finalize seals it as-is, and the returned carrier keeps
-/// the frame alive after the producer shell drops. The soundness counterweight to the sever — a home
-/// borrow must never be released early.
+/// A value that genuinely borrows into its producer frame carries the `borrows_host` bit through
+/// the Done boundary unchanged — finalize seals as-is; the bit is read only at a later copied
+/// re-home mint, never as a lifecycle input. The frame's lifetime is retention's either way.
 #[test]
-fn home_borrowing_value_keeps_producer_frame() {
+fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
     let (carrier, weak) = resident_scalar(&producer, true);
     assert!(
-        carrier.witness().reach_covers(producer.region()),
-        "the home-borrow bit materializes the producer region into reach"
+        carrier.witness().borrows_host(),
+        "the home-borrow bit rides the carrier"
     );
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
         .finalize_terminal(carrier, Some(&producer), None)
         .expect("no declared return, no error");
+    assert!(
+        sealed.witness().borrows_host(),
+        "the bit survives the Done boundary verbatim"
+    );
+    let envelope = Delivered::seal(sealed, producer.storage_rc());
 
     drop(producer);
     assert!(
         weak.upgrade().is_some(),
-        "the sealed carrier's reach still pins the producer frame after the shell drops"
+        "the retention hold — not the carrier — keeps the frame alive"
     );
-
-    // Releasing the carrier drops the last pin, so the frame finally dies — no leak.
-    drop(sealed);
+    drop(envelope);
     assert!(
         weak.upgrade().is_none(),
-        "dropping the last carrier releases the frame"
+        "dropping the hold releases the frame"
     );
 }
 
@@ -207,48 +216,54 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
     );
 }
 
-/// `Scope::adopt_sealed`'s severed re-home, Object channel: a region-pure scalar severed at the
-/// Done boundary (its top node copied into an owned, frame-free backing) is adopted into a
-/// consumer scope in a completely different frame, after the producer frame has already dropped —
-/// the severed backing, not a region pin, is what keeps it readable.
+/// `Scope::adopt_sealed` on a delivered object: the value rides its retention hold (the envelope's
+/// host) across the producer shell's drop, and the copy-free adoption materializes that host into
+/// the consumer's arena — so after the envelope itself drops, the consumer's minted set is the
+/// sole owner of the producer's storage and the adopted read stays live.
 #[test]
-fn adopt_sealed_severed_object_survives_producer_drop() {
+fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
 
     let (carrier, weak) = resident_scalar(&producer, false);
     let runtime = KoanRuntime::new();
-    let severed = runtime
+    let sealed = runtime
         .finalize_terminal(carrier, Some(&producer), None)
         .expect("no declared return, no error");
+    let cell = Delivered::seal(sealed, producer.storage_rc());
 
     drop(producer);
     assert!(
-        weak.upgrade().is_none(),
-        "the producer frame is already released before adoption"
+        weak.upgrade().is_some(),
+        "the retention hold keeps the producer's storage alive for the adoption"
     );
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let cell = Delivered::hosted(Sealed::seal(severed), None);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 
+    // Drop the hold: the consumer's minted arena set (the materialized host member) is now the
+    // sole owner of the producer's storage.
+    drop(cell);
+    assert!(
+        weak.upgrade().is_some(),
+        "the consumer's minted reach pins the producer past the hold's release"
+    );
     match adopted {
         Carried::Object(KObject::Number(n)) => {
-            assert_eq!(*n, 7.0, "severed value survives adoption")
+            assert_eq!(*n, 7.0, "adopted value reads live under the minted pin")
         }
-        other => panic!("expected the severed Number, got {:?}", other.ktype()),
+        other => panic!("expected the adopted Number, got {:?}", other.ktype()),
     }
 }
 
-/// `Scope::adopt_sealed`'s severed re-home, Type channel: a severed `KType` (here a `KType::Module`
-/// whose `&'a Scope` interior points into a **foreign** frame) is the dangerous case — `.clone()` is
-/// shallow, so the re-homed `&'a KType` still borrows the foreign region. Adoption's mint must pin
-/// that foreign frame into the consumer's arena *before* the re-home, so the module's child scope
-/// reads back cleanly after every other handle on the foreign frame drops.
+/// `Scope::adopt_sealed` on a delivered type: a `KType` whose interior (here a `KType::Module`'s
+/// `&'a Scope`) points into a **foreign** frame is the dangerous case — adoption's mint must pin
+/// both the foreign reach and the producer residence into the consumer's arena, so the module's
+/// child scope reads back cleanly after every other handle on the foreign frame drops.
 #[test]
-fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
+fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
     let foreign_storage = run_root_storage();
     let foreign_scope = run_root_bare(&foreign_storage);
     let foreign_child = foreign_storage
@@ -268,23 +283,24 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), false)
     });
     assert!(
-        !carrier.witness().reach_covers(producer.region()),
+        !carrier.witness().reach_covers(None, producer.region()),
         "the type borrows only into the foreign module region, not the producer's own"
     );
 
     let runtime = KoanRuntime::new();
-    let severed = runtime
+    let sealed = runtime
         .finalize_terminal(carrier, Some(&producer), None)
         .expect("no declared return, no error");
+    let cell = Delivered::seal(sealed, producer.storage_rc());
     drop(producer);
 
     let consumer_storage = run_root_storage();
     let consumer = run_root_bare(&consumer_storage);
-    let cell = Delivered::hosted(Sealed::seal(severed), None);
     let adopted: Carried = consumer.adopt_sealed(&cell);
 
-    // Drop every other handle on the foreign frame: the consumer's minted arena set is now the
-    // sole pin — Miri confirms no use-after-free on the read below.
+    // Drop the hold and every other handle on the foreign frame: the consumer's minted arena set is
+    // now the sole pin — Miri confirms no use-after-free on the read below.
+    drop(cell);
     drop(foreign_storage);
 
     match adopted {
@@ -303,12 +319,62 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
     );
 }
 
+/// The pass-through acceptance criterion: a value returned unmodified through the Done boundary
+/// rides by reference. Finalize clones nothing and allocates nothing — the read on the consumer
+/// side is the birth allocation, byte-for-byte the same address — and the only refcount the
+/// delivery pays is the envelope's single frame-level retention bump.
+#[test]
+fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
+    let root = run_root_storage();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let producer = CallFrame::new_test(scope, None);
+
+    let (carrier, birth_addr) = producer.with_scope(|child| {
+        let obj = child.brand().alloc_object(KObject::Number(7.0));
+        let addr = obj as *const KObject as usize;
+        (child.resident_value_carrier(obj, None, false), addr)
+    });
+    let storage = producer.storage_rc();
+    let count_before = Rc::strong_count(&storage);
+
+    let runtime = KoanRuntime::new();
+    let sealed = runtime
+        .finalize_terminal(carrier, Some(&producer), None)
+        .expect("no declared return, no error");
+    assert_eq!(
+        Rc::strong_count(&storage),
+        count_before,
+        "the Done boundary itself pays no refcount"
+    );
+
+    let envelope = Delivered::seal(sealed, producer.storage_rc());
+    assert_eq!(
+        Rc::strong_count(&storage),
+        count_before + 1,
+        "the delivery pays exactly one frame-level bump — the retention hold"
+    );
+
+    drop(producer);
+    envelope.open(|carried| match carried {
+        Carried::Object(obj) => {
+            assert_eq!(
+                obj as *const KObject as usize, birth_addr,
+                "the pass-through reads back the birth allocation — no deep_clone anywhere \
+                 between production and delivery"
+            );
+            assert!(
+                matches!(obj, KObject::Number(n) if *n == 7.0),
+                "and the value is intact"
+            );
+        }
+        Carried::Type(other) => panic!("expected the passed-through Number, got {}", other.name()),
+    });
+}
+
 /// A declared-return re-stamp whose carrier holds a **type** value passes through un-relocated on
-/// the type channel: the merge composes against an unwitnessed home operand (`merge(w, ∅) == w`),
-/// so nothing is minted into the home region for a value that never moves there. Before this was
-/// gated on the carried discriminant, the merge always built a witnessed home operand when the home
-/// owner resolved, minting the type's foreign reach into the home arena and orphaning it there for
-/// the home region's whole life even though the type-channel result discarded that composed witness.
+/// the type channel: the check runs at a shared brand under the producer ∪ home-owner pin, and the
+/// carrier returns verbatim — nothing is minted into the home region for a value that never moves
+/// there.
 #[test]
 fn type_passthrough_declared_return_mints_nothing_into_home() {
     let foreign_storage = run_root_storage();
@@ -324,10 +390,8 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let producer = CallFrame::new_test(scope, None);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
-    // `borrows_into_home = true` so the carrier's reach already covers the producer region -- this
-    // keeps the pre-merge triage's sever branch from firing (it only severs when the home owner
-    // resolves *and* the reach doesn't already cover the producer), so the carrier the merge sees is
-    // exactly the one `resident_type_carrier` built, with no extra reach-clone muddying the refcount.
+    // `borrows_into_home = true` marks the value as home-borrowing; the type channel must pass the
+    // carrier through with the bit and the reach untouched either way.
     let carrier = producer.with_scope(|child| {
         let kt_ref = child.brand().alloc_ktype(KType::Module { module });
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), true)
@@ -366,7 +430,11 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
          frame's refcount, and no set holds it until the home region dies"
     );
     assert!(
-        checked.witness().covers(foreign_storage.region()),
-        "the checked carrier still covers the foreign region its reach always named"
+        checked.witness().reach_covers(None, foreign_storage.region()),
+        "the checked carrier still names the foreign region its reach always named"
+    );
+    assert!(
+        checked.witness().borrows_host(),
+        "the home-borrow bit passes through the type channel verbatim"
     );
 }

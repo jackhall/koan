@@ -4,17 +4,17 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::RegionBrand;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallFrame, CarrierWitness, FrameStorage, KError, KErrorKind};
-use crate::witnessed::{reattachable, Erased, SetWitness, Witnessed};
+use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
+use crate::witnessed::{reattachable, Delivered, Residence, Sealed, SealedExtern, Witnessed};
 
-use super::lift::sever_residence;
 use super::runtime::KoanRuntime;
 
 /// `Reattachable` carrier family for a declared-return re-stamp's two home-region operands: the
 /// contract's home region and the declared `KType`. Both live in the home region, into which
-/// [`finalize_terminal`](NodeFinalize::finalize_terminal) re-homes the checked value with
-/// [`merge`](Witnessed::merge) — pinning that region's owner on the result so the re-homed value
-/// outlives the released producer frame. Layout-invariant: `(RegionBrand<'r>, &'r KType<'r>)` is two
+/// [`finalize_terminal`](NodeFinalize::finalize_terminal) re-homes the checked value through the
+/// delivery envelope's [`transfer_into`](Delivered::transfer_into) — minting the value's reach (and,
+/// for a home-borrowing value, its producer frame) into that region's arena so the re-homed value's
+/// carrier names everything it reaches. Layout-invariant: `(RegionBrand<'r>, &'r KType<'r>)` is two
 /// thin pointers whose representation never depends on `'r`.
 struct ContractHomeFamily;
 
@@ -28,19 +28,20 @@ reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
 /// ([`crate::scheduler`]) names no Koan type. Errors carry no value and finalize bare through
 /// [`finalize_error`], which never reaches this hook.
 ///
-/// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks, but
-/// the contract layer is never folded into the lift (see [`lift`](super::lift)).
+/// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks.
 ///
 /// The terminal arrives **already witnessed** (a lifetime-free [`Witnessed`] carrier), so nothing is
-/// erased here; the declared-return re-stamp runs at the merge brand, where the carrier value and the
+/// erased here; the declared-return re-stamp runs at a shared brand, where the carrier value and the
 /// contract's home-region declared type meet.
 pub(in crate::machine::execute) trait NodeFinalize {
-    /// Seal the slot's value terminal against its dying producer frame. With no declared return, the
-    /// Done-boundary gate severs a region-pure value's residence (releasing the frame) and passes a
-    /// frame-borrowing value through unchanged. A declared-return re-stamp re-tags the value into the
-    /// contract's home region via [`merge`](Witnessed::merge) and pins that home region's owner, so a
-    /// region-pure result is severed off the producer frame too and only a frame-borrowing value keeps
-    /// it. A `None` frame (frameless / run producer) seals as-is.
+    /// Seal the slot's value terminal against its declared return. With no declared return the
+    /// carrier seals **as-is** — the scheduler's retention hold keeps the producer frame alive until
+    /// every destination pulls, so nothing severs and no residence moves. A declared-return
+    /// re-stamp re-tags an **object** value into the contract's home region through the envelope
+    /// transfer (the value comes to reside there; its reach — and, when it borrows into the dying
+    /// producer, that producer — is minted into the home arena); a **type** value is checked at a
+    /// shared brand and passes through un-relocated. A `None` frame (frameless / run producer)
+    /// seals as-is.
     fn finalize_terminal<'o>(
         &self,
         carrier: Witnessed<CarriedFamily, CarrierWitness>,
@@ -57,85 +58,41 @@ impl NodeFinalize for KoanRuntime<'_> {
         contract: Option<ReturnContract<'o>>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         // A frameless / run producer has no per-call return obligation (the contract is gated to
-        // `None`) and no producer frame to fold: its backing already outlives the carrier. Seal as-is.
+        // `None`); a framed producer with no declared return seals as-is too — retention owns the
+        // frame's lifetime, so the Done boundary makes no memory decision.
         let Some(producer) = frame else {
             return Ok(carrier);
         };
-        // No declared return (or a non-`Resolved` FN-def carrier): the Done-boundary gate. If the
-        // carrier's **reach** already covers the producer, the value genuinely borrows into the dying
-        // frame — the reach names it, so seal as-is (residence pinned via reach, no fold needed).
-        // Otherwise the value borrows nothing into the frame, so sever its residence: copy the top node
-        // into an owned backing and release the frame. A fully-owned scalar thus seals with empty reach.
         let Some((declared, label, per_call)) = pull_declared_return(contract) else {
-            let carrier = if carrier.witness().reach_covers(producer.region()) {
-                carrier
-            } else {
-                sever_residence(carrier, producer)
-            };
             return Ok(carrier);
         };
-        // Declared-return re-stamp path: the re-stamp deep-clones the value into the contract's home
-        // region below, so the checked value comes to reside there — pinned by the home region's owner,
-        // which the `home_carrier` operand below folds in via the merge composition. The producer frame
-        // is then released for a region-pure result: sever its residence here (copy the top node into an
-        // owned backing), so the merge below re-homes from that backing with the producer free. A value
-        // that genuinely borrows into the producer (its reach names it) keeps it — its interior borrows
-        // survive the re-stamp verbatim (folded as reach onto the merged result). When the home owner
-        // can't be resolved (a released capture — the `Weak` has already dropped) the producer stays
-        // pinned (sound over-retention) instead — a region-pure carrier is rehosted onto it directly
-        // (nothing else proves the producer's region alive otherwise); an already-hosted carrier needs
-        // no change, since a downstream fold materializes its host as reach the same way regardless.
-        let home_owner = declared_return_home_owner(contract);
-        let carrier = if home_owner.is_some() && !carrier.witness().reach_covers(producer.region())
-        {
-            sever_residence(carrier, producer)
-        } else if matches!(carrier.witness(), CarrierWitness::Empty) {
-            carrier.rehost(CarrierWitness::singleton(producer.storage_rc()))
-        } else {
-            carrier
-        };
-        // Check the declared return at the merge brand, where the carrier value and the home-region
-        // declared type meet at one `'b`. `KType` is invariant in its lifetime, so a free-`'o` declared
-        // type and the lifetime-free carrier can only be compared under a shared brand. The **object**
-        // channel coarsens/re-stamps into the home region; the **type** channel checks but passes the
-        // value through unchanged. A failed check is captured and raised after the fold.
+        // Declared-return path. The producer frame's storage is the pin the value is read (and
+        // relocated) under — the same owner the run loop seeds as the slot's retention host.
+        let producer_pin = producer.storage_rc();
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        // The object channel relocates into the home region, so its merge composition mints the
-        // carrier's existing reach (and its own host, if foreign) into the home arena and re-homes
-        // the result onto the home owner in one step. The type channel passes the value through
-        // un-relocated, so it composes against an unwitnessed operand — `merge(w, ∅) == w` — leaving
-        // `carrier`'s own witness (already pinned to the producer above) untouched and minting nothing
-        // for a value that never moves. `is_object` decides the channel before `home_carrier` is
-        // built, so only a genuine relocation gets a witnessed destination. Accepted residual: on the
-        // object channel a failed type check still leaves its minted set in the home arena — the
-        // value was genuinely relocated before the check failed, and the path returns `Err` terminal.
-        let is_object = carrier.with(|carried| matches!(carried, Carried::Object(_)));
-        let home_carrier: Witnessed<ContractHomeFamily, CarrierWitness> = match &home_owner {
-            Some(owner) if is_object => Witnessed::from_erased(
-                Erased::erase((home, declared)),
-                CarrierWitness::singleton(Rc::clone(owner)),
-            ),
-            _ => Witnessed::resident((home, declared)),
-        };
-        // `merge` consumes `carrier` and drops its witness before returning, while Tree Borrows
-        // still protects the by-value operands' interior references for the whole call — so a
-        // severed backing must not hit refcount zero inside the call, even on the object channel,
-        // whose projection copies the value out of it. The composed witness cannot carry a
-        // `Severed` node forward (`Hosted` has no owned-backing slot; see the
-        // `ComposeWitness for Carrier` notes in `workgraph/src/witnessed/carrier.rs`), so this pin
-        // holds the backing across the merge and releases it after. Deleted with the sever gate
-        // (`delivery-driven-frame-retention`).
-        let severed_backing_pin = match carrier.witness() {
-            CarrierWitness::Severed { node, .. } => Some(node.clone()),
-            _ => None,
-        };
+        let envelope: Delivered<CarriedFamily, CarrierWitness, _> =
+            Delivered::seal(carrier, Rc::clone(&producer_pin));
+        let is_object = envelope.open(|carried| matches!(carried, Carried::Object(_)));
         let mut mismatch: Option<KError> = None;
-        let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
-            home_carrier,
-            |value, (home_region, declared_type), _brand| match value {
-                Carried::Object(_) => {
+        if is_object {
+            // The **object** channel coarsens/re-stamps into the home region: a genuine relocation,
+            // run through the envelope transfer at `Residence::Copied` — the value's reach is minted
+            // into the home arena, and the dying producer materializes as a member only when the
+            // value's borrows genuinely reach it (`borrows_host`); a region-pure result leaves the
+            // producer to retention alone, releasing it at pull-count zero. The home-region operand
+            // rides `resident` (the empty carrier): its backing — the home region and the declared
+            // type in it — stays live across the call via the step's contract pin. Accepted
+            // residual: a failed type check still leaves its minted set in the home arena — the
+            // value was genuinely relocated before the check failed, and the path returns the `Err`
+            // terminal.
+            let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
+                Witnessed::resident((home, declared));
+            let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
+                home_operand,
+                Residence::Copied,
+                |value, (home_region, declared_type), _brand| {
                     let object = value.object();
                     if !declared_type.matches_value(object) {
                         mismatch = Some(return_type_mismatch(
@@ -144,13 +101,43 @@ impl NodeFinalize for KoanRuntime<'_> {
                             &label,
                             object.ktype().name(),
                         ));
-                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
+                        return Carried::Object(
+                            home_region.alloc_object(object.deep_clone()),
+                        );
                     }
                     Carried::Object(
                         home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
                     )
-                }
-                Carried::Type(t) => {
+                },
+            );
+            return match mismatch {
+                Some(error) => Err(error),
+                None => Ok(checked),
+            };
+        }
+        // The **type** channel checks but never relocates: the value keeps its residence and its
+        // carrier verbatim. `KType` is invariant in its lifetime, so the free-`'o` declared type and
+        // the lifetime-free carrier can only be compared under one shared brand: both are erased and
+        // zip-opened together, pinned by the producer (the value's backing) unioned with the
+        // contract's home owner (the declared type's backing). A failed check is captured and raised
+        // after the open.
+        let sealed = Sealed::seal(envelope.into_cell().unseal());
+        let value_cell: SealedExtern<CarriedFamily> = SealedExtern::seal(*sealed.erased());
+        let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home, declared));
+        let pin = match contract.and_then(ReturnContract::home_owner) {
+            Some(owner) => FrameSet::union(
+                &FrameSet::singleton(producer_pin),
+                &FrameSet::singleton(owner),
+            ),
+            // A released home owner (the capture's `Weak` already dropped): the home region is still
+            // live for this synchronous check — the contract itself was opened at the step brand
+            // under the step's own pins — so the producer pin alone rides the open.
+            None => FrameSet::singleton(producer_pin),
+        };
+        value_cell
+            .zip(contract_operand)
+            .open(&pin, |(value, (_home_region, declared_type))| {
+                if let Carried::Type(t) = value {
                     if !declared_type.matches_type(t) {
                         mismatch = Some(return_type_mismatch(
                             declared_type,
@@ -159,26 +146,13 @@ impl NodeFinalize for KoanRuntime<'_> {
                             t.name(),
                         ));
                     }
-                    value
                 }
-            },
-        );
-        drop(severed_backing_pin);
+            });
         match mismatch {
             Some(error) => Err(error),
-            None => Ok(checked),
+            None => Ok(sealed.unseal()),
         }
     }
-}
-
-/// The `Rc<FrameStorage>` owning a declared-return contract's home region — the region a re-stamp
-/// re-homes its checked value into. A `Function` / `PerCall` resolves it off the callee's
-/// captured-scope region owner; a MATCH / TRY `Arm` resolves it off its declaring scope's region
-/// owner (see [`ReturnContract::home_owner`]). `None` only for a `None` contract, or a released
-/// capture whose owner `Weak` has already dropped — the caller keeps the producer frame pinned
-/// (sound over-retention) in that case.
-fn declared_return_home_owner(contract: Option<ReturnContract<'_>>) -> Option<Rc<FrameStorage>> {
-    contract.and_then(ReturnContract::home_owner)
 }
 
 /// Label a `Done`-step **error** with its return contract's trace frame and return it for a bare

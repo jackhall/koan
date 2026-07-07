@@ -1,25 +1,33 @@
-//! [`Carrier<F, S>`] — the collapsed carrier witness for a walking (in-flight, node-slot) value:
-//! exactly one owned liveness arm plus a *reference* to a hosted reach set, replacing an owned
-//! `{ pins: Vec<_>, reach: FrameSet }` pair. See
+//! [`Carrier<F>`] — the reference-only carrier witness: one `borrows_host` bit plus a *reference*
+//! to a hosted reach set, the same shape whether the value is resident in a region or walking
+//! between nodes. See
 //! [design/witness-hosting.md § The carrier](../../../design/witness-hosting.md#the-carrier).
 //!
-//! A frame-backed clone is a bit-copy, one refcount bump (`host`), and a reference-copy (`reach`) —
-//! no set allocation, no per-member refcount traffic. The set a `Hosted` carrier references is never
-//! owned by it: [`RegionSet::mint`] is the only way such a set comes to exist, and it always lands in
-//! *some* region's own arena — `Hosted.host` is exactly the arm that arena's owner backs, so holding
-//! `host` pins the arena, hence the set, hence (through its members) every region the value reaches.
-//! Never construct a `Hosted { reach: Some(_), .. }` whose set lives in a *different* region's arena
-//! than `host`'s own — nothing would cover it.
+//! The carrier **owns no pin**: cloning is a bit-copy plus a reference-copy, and a carrier's death
+//! releases nothing. What keeps its reach set (and the value it describes) alive is external —
+//! the container's liveness when resident, the scheduler's frame-retention hold (travelling as the
+//! [`Delivered`](super::Delivered) envelope) when walking — so every re-anchor of the erased reach
+//! reference names its pin at the read ([`Carrier::with_reach`]). The set a carrier references is
+//! never owned by it: [`RegionSet::mint`] is the only way such a set comes to exist, and it always
+//! lands in the value's host region's own arena, so whatever covers the host arena covers the set
+//! and, through its members, every region the value reaches.
+//!
+//! `Carrier` is deliberately **not** a [`super::Witness`]: a bare [`super::Sealed::open`] under it
+//! does not compile. Reads name their coverage — [`super::Sealed::open_with`] under an external
+//! pin, or the envelope's [`Delivered::open`](super::Delivered::open) — and relocations run
+//! through the envelope-bearing mint verbs ([`Delivered::mint_reach`](super::Delivered::mint_reach),
+//! [`Delivered::transfer_into`](super::Delivered::transfer_into)), the only places a residence
+//! host materializes as a set member.
 
 use std::rc::Rc;
 
 use super::{
     with_branded_ref, ComposeWitness, Erased, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionOwner, RegionSet, SetWitness, StorageProfile, Stored, Witness,
+    RegionOwner, RegionSet, StorageProfile, Stored,
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&RegionSet<F>` — the erased reach reference a
-/// `Carrier::Hosted` re-anchors under its held `host` pin. Not exported: the pinned reader on
+/// [`Carrier`] re-anchors under an externally supplied pin. Not exported: the pinned reader on
 /// [`Carrier`] is the sole re-anchor site, so no branded reader escapes this module.
 pub struct HostedSetRef<F>(std::marker::PhantomData<F>);
 
@@ -28,227 +36,231 @@ unsafe impl<F: PinsRegion + 'static> Reattachable for HostedSetRef<F> {
     type At<'r> = &'r RegionSet<F>;
 }
 
-/// A destination family's live form that exposes the [`RegionHandle`] mint target a
-/// [`ComposeWitness`] impl needs to allocate a hosted set into — the compose-time counterpart of
+/// A destination family's live form that exposes the [`RegionHandle`] mint target a reach
+/// composition needs to allocate a hosted set into — the compose-time counterpart of
 /// [`super::WitnessRegion::region`] for a region/builder family's *live* form rather than its
 /// witness. Each destination family a relocation/merge site uses (a region-ref family, an
 /// aggregate-builder family) implements this once for its `At<'b>`.
 ///
 /// # Safety
 ///
-/// The returned handle must authorize allocation into the region `dest`'s own witness ultimately
-/// pins, so a set minted through it is co-located with the composed carrier's `host`.
+/// The returned handle must authorize allocation into the region `dest`'s live form builds into,
+/// so a set minted through it is co-located with the relocated value it describes.
 pub unsafe trait HasRegionHandle<'b, P: StorageProfile> {
     /// The region handle `dest` (or the region it builds into) allocates through.
     fn region_handle(&self) -> RegionHandle<'b, P>;
 }
 
-/// The collapsed walking-carrier witness: exactly one owned liveness arm, plus (for a hosted value)
-/// a reference to a reach set living in that arm's own arena. `F` is the workload's frame-owner type
-/// (`Rc<F>` is the residence pin); `S` is the workload's severed-backing type (a frame-free owned
-/// node, transitional debt — see [design/witness-hosting.md § The carrier](
-/// ../../../design/witness-hosting.md#the-carrier)).
-#[derive(Default)]
-pub enum Carrier<F: PinsRegion + 'static, S> {
-    /// Frameless / run-region terminal: pins nothing, reaches nowhere. Backed by storage that
-    /// outlives the carrier, so no held pin is required. The [`Default`].
-    #[default]
-    Empty,
-    /// Frame-backed: the value lives in `host`'s region. `reach` is a reference into `host`'s OWN
-    /// arena naming the value's foreign reach (home-omitted, so it never names `host`'s own region);
-    /// `borrows_host` carries the separate "borrows into its own home" bit. Clone is a bit-copy plus
-    /// one refcount bump (`host`) plus a reference-copy (`reach`) — no set allocation.
-    Hosted {
-        /// Whether the value's borrows also reach into `host`'s own region (materialized separately
-        /// from `reach`, which is home-omitted by construction).
-        borrows_host: bool,
-        /// The residence pin: holding it keeps `host`'s arena — hence `reach`'s pointee, hence every
-        /// region `reach` names — alive.
-        host: Rc<F>,
-        /// The value's foreign reach, erased and re-anchored only under the held `host` pin.
-        /// `None` == the empty set (encoded without an allocation).
-        reach: Option<Erased<HostedSetRef<F>>>,
-    },
-    /// Severed: the finalize sever's frame-free owned backing. No live host arena exists to host a
-    /// set for such a value, so it OWNS its reach outright. Transitional debt, deleted along with
-    /// the sever gate once the scheduler retains producer frames itself.
-    Severed {
-        /// The value's own owned backing (an `Rc`-shaped node) — holding it is what keeps the
-        /// severed value's pointee alive.
-        node: S,
-        /// The value's foreign reach, owned (no host arena to reference into).
-        reach: RegionSet<F>,
-    },
+/// The residence mode of a re-home mint: did the value **keep living** in the producer's region
+/// (a copy-free re-anchor), or was it **copied out** into the destination? Decides whether the
+/// producer host materializes as a member of the minted set unconditionally (`Kept` — residence
+/// itself must stay pinned) or only when the value's borrows genuinely reach it (`Copied` — the
+/// `borrows_host` bit; a residence-only host is dropped, freeing the producer at retention
+/// release). Policy is the embedder's: each adoption site names its mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Residence {
+    /// The value keeps living in the producer's region — the copy-free re-anchor. The host always
+    /// materializes as a member of the minted destination set.
+    Kept,
+    /// The value was copied out into the destination. The host materializes only if the value's
+    /// borrows genuinely reach it (`borrows_host`).
+    Copied,
 }
 
-impl<F: PinsRegion + 'static, S: Clone> Clone for Carrier<F, S> {
-    fn clone(&self) -> Self {
-        match self {
-            Carrier::Empty => Carrier::Empty,
-            Carrier::Hosted {
-                borrows_host,
-                host,
-                reach,
-            } => Carrier::Hosted {
-                borrows_host: *borrows_host,
-                host: Rc::clone(host),
-                reach: *reach,
-            },
-            Carrier::Severed { node, reach } => Carrier::Severed {
-                node: node.clone(),
-                reach: reach.clone(),
-            },
-        }
-    }
+/// The reference-only carrier witness: the `borrows_host` bit plus (for a value with foreign
+/// reach) a reference to a reach set living in the value's host region's own arena. `F` is the
+/// workload's frame-owner type (`Rc<F>` is the residence pin the *envelope*, not the carrier,
+/// holds). Clone is a bit-copy plus a reference-copy — no refcount traffic; the carrier keeps
+/// nothing alive.
+pub struct Carrier<F: PinsRegion + 'static> {
+    /// Whether the value's borrows reach into its own home region (materialized separately from
+    /// `reach`, which is home-omitted by construction).
+    borrows_host: bool,
+    /// The value's foreign reach, erased and re-anchored only under an externally supplied pin.
+    /// `None` == the empty set (encoded without an allocation).
+    reach: Option<Erased<HostedSetRef<F>>>,
 }
 
-// SAFETY: `Empty` pins nothing — its backing outlives the carrier (the `Witness` contract's escape
-// hatch for a frameless / run-region terminal). `Hosted.host` is a `StableDeref` `Rc<F>` (per the
-// blanket `Witness for Rc<F>` impl), so holding it keeps `F`'s own storage alive. `Hosted.reach`'s
-// pointee lives in an arena `host` keeps alive — either `host`'s own arena (every direct construction
-// site), or an arena rooted by a set that `host`'s own arena holds (the Borrowed-window read, where
-// the USING overlay's construction minted the module region into the reader's arena before any such
-// carrier exists) — so holding `host` roots `reach`'s pointee either directly or one hop removed, and
-// through its members every region it names, alive. `Severed.node` is the value's own owned backing
-// (an `Rc`-shaped `S`, by the sole production constructor's obligation), so holding it keeps the
-// severed value's pointee alive the same way a `Hosted.host` does; `Severed.reach` is an owned
-// `RegionSet`, independently `Witness`-sound.
-unsafe impl<F: PinsRegion + 'static, S> Witness for Carrier<F, S> {}
-
-// SAFETY: `singleton(single)` holds `single` as the sole `host` arm with an empty reach, so the
-// `Witness` impl above pins exactly `single`'s region for as long as the carrier is held — the
-// single-region `yoke` precondition.
-unsafe impl<F: PinsRegion + 'static, S> SetWitness<Rc<F>> for Carrier<F, S> {
-    fn singleton(single: Rc<F>) -> Self {
-        Carrier::Hosted {
+impl<F: PinsRegion + 'static> Default for Carrier<F> {
+    /// The frameless / region-pure carrier: no borrows into home, empty reach. Every koan-side
+    /// construction site builds this; reach-carrying carriers are library-minted (or reference a
+    /// binding's library-minted set through [`Carrier::new`]).
+    fn default() -> Self {
+        Carrier {
             borrows_host: false,
-            host: single,
             reach: None,
         }
     }
 }
 
-impl<F: PinsRegion + 'static, S> Carrier<F, S> {
-    /// Whether this carrier pins and reaches nothing — the frameless / run-region terminal, whose
-    /// backing outlives the carrier so no re-home is needed.
+impl<F: PinsRegion + 'static> Clone for Carrier<F> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<F: PinsRegion + 'static> Copy for Carrier<F> {}
+
+impl<F: PinsRegion + 'static> Carrier<F> {
+    /// Reference an already-minted reach set (with its `borrows_host` bit) as a carrier — the
+    /// resident-read constructor: a binding entry stores the set reference and bit this rebuilds a
+    /// read carrier from. The set was minted by the library at bind time into the value's home
+    /// arena; this constructor only re-packages the reference, so reach totality still rests on
+    /// the mint. The carrier pins nothing — the read that re-anchors `reach` names its pin there.
+    pub fn new(borrows_host: bool, reach: Option<&RegionSet<F>>) -> Self {
+        Carrier {
+            borrows_host,
+            reach: reach.map(Erased::erase),
+        }
+    }
+
+    /// Whether the value's borrows reach into its own home region — the bit consumed at exactly
+    /// one kind of site, the re-home mint into a different destination arena (`Residence::Copied`
+    /// materialization). Never a lifecycle input.
+    pub fn borrows_host(&self) -> bool {
+        self.borrows_host
+    }
+
+    /// Whether this carrier represents no reach at all — the frameless / region-pure terminal,
+    /// whose backing outlives the carrier so no pin or mint is ever needed for it.
     pub fn is_empty(&self) -> bool {
-        matches!(self, Carrier::Empty)
+        !self.borrows_host && self.reach.is_none()
     }
 
-    /// Read the reach set this carrier references (or owns), pinned under whatever this carrier
-    /// itself holds — the sole re-anchor of a `Hosted.reach` erased reference. `None` when the
-    /// carrier reaches nothing (`Empty`, or a `Hosted` with an empty reach). Public: a caller
-    /// re-hosting this carrier's value into its own arena under a policy the generic
-    /// [`ComposeWitness`] composition doesn't cover (an extra omission predicate beyond the mint's
-    /// built-in self-cycle rule) routes a direct [`RegionSet::mint`] through this reader instead.
-    pub fn with_reach<R>(&self, f: impl FnOnce(Option<&RegionSet<F>>) -> R) -> R {
-        match self {
-            Carrier::Empty => f(None),
-            Carrier::Hosted { reach: None, .. } => f(None),
-            Carrier::Hosted {
-                reach: Some(erased),
-                ..
-            } => with_branded_ref::<HostedSetRef<F>, R>(erased.as_static(), |set_ref: &&_| {
-                f(Some(*set_ref))
-            }),
-            Carrier::Severed { reach, .. } => f(Some(reach)),
+    /// Read the reach set this carrier references, re-anchored under `pin` — the sole re-anchor of
+    /// the erased reach reference. `None` reach means the empty set.
+    ///
+    /// `pin` names the coverage of the set's hosting arena — the value's retained frame owner (the
+    /// [`Delivered`](super::Delivered) envelope's host, the retention hold) — and is held for the
+    /// whole call, so the re-anchored reference cannot dangle; the closure confines it exactly as
+    /// [`super::Sealed::open_with`] confines a value. Pass `pin: None` only when the hosting arena
+    /// is covered by the caller's ambient container — the reader's own region for a resident
+    /// carrier's set, or the step pin held across a step-brand read.
+    pub fn with_reach<R>(
+        &self,
+        pin: Option<&Rc<F>>,
+        f: impl FnOnce(Option<&RegionSet<F>>) -> R,
+    ) -> R {
+        let _ = pin;
+        match &self.reach {
+            None => f(None),
+            Some(erased) => with_branded_ref::<HostedSetRef<F>, R>(
+                erased.as_static(),
+                |set_ref: &&_| f(Some(*set_ref)),
+            ),
         }
     }
 
-    /// Whether the value's **reach** already names `region` — reach members, plus `host`'s own
-    /// region when `borrows_host` is set. The finalize gate and the bind-bit derivation key on this.
-    pub fn reach_covers(&self, region: &F::Region) -> bool {
-        match self {
-            Carrier::Empty => false,
-            Carrier::Hosted {
-                borrows_host, host, ..
-            } => {
-                (*borrows_host && host.pins_region(region))
-                    || self.with_reach(|reach| reach.is_some_and(|r| r.pins_region(region)))
-            }
-            Carrier::Severed { reach, .. } => reach.pins_region(region),
-        }
+    /// Whether the value's foreign reach names `region` — reach members only; the borrows-into-home
+    /// bit is a separate query ([`Self::borrows_host`]) because the home it refers to is the
+    /// envelope's knowledge, not the carrier's. `pin` covers the reach set's hosting arena, as in
+    /// [`Self::with_reach`].
+    pub fn reach_covers(&self, pin: Option<&Rc<F>>, region: &F::Region) -> bool {
+        self.with_reach(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))
     }
 
-    /// Whether **anything** this carrier holds — the host residence pin or a reach member — keeps
-    /// `region` alive. The step-liveness query, where residence counts just as much as reach.
-    pub fn covers(&self, region: &F::Region) -> bool {
-        match self {
-            Carrier::Empty => false,
-            Carrier::Hosted { host, .. } => {
-                host.pins_region(region)
-                    || self.with_reach(|reach| reach.is_some_and(|r| r.pins_region(region)))
-            }
-            Carrier::Severed { reach, .. } => reach.pins_region(region),
-        }
+    /// Mint this carrier's reach into `dest`, materializing `host` (the value's producer frame
+    /// owner) per `mode`, and report whether the value's borrows reach `dest`'s own region — the
+    /// re-home mint every bind / adoption routes (through the envelope's
+    /// [`mint_reach`](super::Delivered::mint_reach), or directly with an `Option` host at a site
+    /// whose value is resident or whose producer is frameless). Applies, via [`RegionSet::mint`]:
+    /// home-omission (`dest`'s own region is never a member), the caller's `omit` policy
+    /// predicate, and outer-chain subsumption.
+    ///
+    /// `host` doubles as the pin for the source-set read ([`Self::with_reach`]); `None` asserts
+    /// the source arena is ambiently covered (a resident value's own region, a held step pin) —
+    /// and also that there is no residence to materialize, so `mode` only gates a `Some` host.
+    /// Returns the minted set (`None` == empty, no allocation) and the borrows-into-dest bit:
+    /// reach members pinning `dest`'s region, or the `borrows_host` bit when `host` itself pins it
+    /// (the value's home *is* — or subsumes — the destination).
+    pub fn mint_into<'d, P>(
+        &self,
+        dest: RegionHandle<'d, P>,
+        host: Option<&Rc<F>>,
+        mode: Residence,
+        omit: impl Fn(&Region<P>) -> bool,
+    ) -> (Option<&'d RegionSet<F>>, bool)
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+    {
+        let materialize = materialize_hosts(host, mode, self.borrows_host);
+        let minted = self.with_reach(host, |reach| {
+            let sources: &[&RegionSet<F>] = match &reach {
+                Some(r) => std::slice::from_ref(r),
+                None => &[],
+            };
+            RegionSet::mint(dest, sources, &materialize, omit)
+        });
+        let borrows_into_dest = self.reach_covers(host, dest.region())
+            || (self.borrows_host && host.is_some_and(|h| h.pins_region(dest.region())));
+        (minted, borrows_into_dest)
     }
 
-    /// The value's owned foreign reach: a clone of `Hosted.reach`'s content (never `host` itself,
-    /// which this deliberately excludes) or `Severed.reach` verbatim; empty for `Empty`. The
-    /// finalize sever's building block — it needs an owned clone of the reach *before* the producer
-    /// host it was read out of is dropped.
-    pub fn to_owned_reach(&self) -> RegionSet<F> {
-        match self {
-            Carrier::Empty => RegionSet::empty(),
-            Carrier::Hosted { .. } => self.with_reach(|reach| reach.cloned().unwrap_or_default()),
-            Carrier::Severed { reach, .. } => reach.clone(),
-        }
-    }
-
-    /// Collapse to a plain [`RegionSet`] naming every region this carrier keeps alive through a
-    /// frame (`host` ∪ reach members for `Hosted`; the owned reach for `Severed`; empty for
-    /// `Empty`) — the step-open liveness pin a consumer folds when it has no arena to host-mint
-    /// against. A `Severed.node` carries no region and is deliberately not representable here.
-    pub fn to_liveness_frameset(&self) -> RegionSet<F> {
-        match self {
-            Carrier::Empty => RegionSet::empty(),
-            Carrier::Hosted { host, .. } => {
-                let mut set = RegionSet::singleton(Rc::clone(host));
-                self.with_reach(|reach| {
-                    if let Some(reach) = reach {
-                        set = RegionSet::union(&set, reach);
-                    }
-                });
-                set
-            }
-            Carrier::Severed { reach, .. } => reach.clone(),
+    /// The relocation composition behind the envelope's
+    /// [`transfer_into`](super::Delivered::transfer_into) and the generic [`ComposeWitness`]
+    /// impl: mint BOTH operands' exact reach — `right`'s (an accumulator's prior folds, already
+    /// minted into this same `dest` arena, so re-minting is idempotent via subsumption) and
+    /// `left`'s (the newly-folded source) — plus `left`'s `host` per `mode`, into `dest`'s arena,
+    /// and compute the composed borrows-into-dest bit. Never `left` alone, or a multi-step
+    /// accumulator fold would drop everything folded before this step.
+    pub(in crate::witnessed) fn compose_into<'b, P>(
+        left: &Self,
+        right: &Self,
+        dest: RegionHandle<'b, P>,
+        host: Option<&Rc<F>>,
+        mode: Residence,
+    ) -> Self
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+    {
+        let materialize = materialize_hosts(host, mode, left.borrows_host);
+        // `left`'s reach reads under the supplied host pin; `right`'s reach is the destination's
+        // own prior folds, hosted in `dest`'s arena — covered by the live `dest` the caller is
+        // composing against.
+        let minted = left.with_reach(host, |left_reach| {
+            right.with_reach(None, |right_reach| {
+                let sources: Vec<&RegionSet<F>> =
+                    left_reach.into_iter().chain(right_reach).collect();
+                RegionSet::mint(dest, &sources, &materialize, |_| false)
+            })
+        });
+        let borrows_into_dest = right.borrows_host
+            || left.reach_covers(host, dest.region())
+            || (left.borrows_host && host.is_some_and(|h| h.pins_region(dest.region())));
+        Carrier {
+            borrows_host: borrows_into_dest,
+            reach: minted.map(Erased::<HostedSetRef<F>>::erase),
         }
     }
 }
 
-// SAFETY: identical obligation to `UnionWitness::union`, discharged by minting instead of by owned
-// union. `right` names the destination's own identity witness — `Empty` for a pure-data merge peer
-// (nothing to add; `left` already pins everything), or `Hosted` for a genuine relocation (`left`'s
-// reach is minted into `dest`'s own arena and the result re-homes onto `right`'s host, demoting
-// `left`'s own host, if any, to an ordinary reach *member* rather than dropping it, so its `Rc` is
-// still cloned forward — so holding the composed carrier keeps `dest`'s arena — hence the minted
-// set, hence every region `left` reached — alive, exactly like `left` did before relocation).
-// `right` is never `Severed`: a severed backing hosts no arena to relocate into, so it never arises
-// as a merge/transfer_into destination.
-//
-// A `left` that is itself `Severed` has no slot in the composed carrier for its owned `node` (only
-// its `reach` is minted forward), which leaves two obligations at the merge boundary — both
-// deleted with the `Severed` arm (`delivery-driven-frame-retention`).
-//
-// Result validity: a projection may pass `left`'s value through un-copied only when `left` is
-// provably never `Severed`, or when the passed-through view is never read; every other projection
-// must copy (`deep_clone` / `copy_carried` / `Held::from_carried`). Two non-copying discharges
-// exist today: the `alloc_type_with` / `alloc_object_with` veneers (`src/machine/core/arena.rs`)
-// fold dep views via `fold_dep_view` but discard them, never reading the pushed view; and the one
-// view-reading fold (`src/machine/model/values/attr.rs`, the field lookup) consumes a dep built by
-// `resident_value_carrier`, which is always `Hosted`, never `Severed`.
-//
-// Deallocation timing: `Witnessed::merge` drops the source witnesses before it returns, while the
-// call-duration protectors on its by-value operands' interior references are still active — so the
-// `node` must not hit refcount zero inside the call even when the projection copied the value out.
-// A consuming-merge caller that can present a `Severed` left holds a node pin across the call (the
-// severed-backing pin in `finalize_terminal`, `src/machine/execute/finalize.rs`);
-// `Sealed::transfer_into` discharges it structurally — it merges a duplicate while the borrowed
-// seal retains the original witness past the call.
-unsafe impl<F, S, P, B> ComposeWitness<B> for Carrier<F, S>
+/// The materialization rule (witness-hosting.md § Composition, rule 2, plus the `Kept` residence
+/// pin): a `Kept` re-home always materializes the host — the value still lives there; a `Copied`
+/// re-home materializes it only when the value's borrows genuinely reach it (`borrows_host`).
+fn materialize_hosts<F>(host: Option<&Rc<F>>, mode: Residence, borrows_host: bool) -> Vec<Rc<F>> {
+    match (mode, host) {
+        (Residence::Kept, Some(h)) => vec![Rc::clone(h)],
+        (Residence::Copied, Some(h)) if borrows_host => vec![Rc::clone(h)],
+        _ => Vec::new(),
+    }
+}
+
+// SAFETY: `ComposeWitness`'s obligation is representational for a reference-only witness: the
+// composed carrier must NAME every region the relocated value's borrows reach, relative to `dest`.
+// `compose_into` mints both operands' exact reach into `dest`'s own arena (so the composed
+// reference is covered by whatever covers `dest`) and derives the borrows-into-dest bit from both
+// operands' bits and members. With no host in hand there is nothing to materialize — this is the
+// PURE reach mint; a relocation whose source has a residence pin to fold routes the
+// envelope-bearing [`Delivered::transfer_into`](super::Delivered::transfer_into) instead, which
+// supplies the host. Both operands' backings are externally covered across the composition (the
+// pinned-merge caller's contract).
+unsafe impl<F, P, B> ComposeWitness<B> for Carrier<F>
 where
     F: PinsRegion + RegionOwner<Region = Region<P>> + 'static,
-    S: Clone,
     P: StorageProfile,
     B: Reattachable,
     for<'b> B::At<'b>: HasRegionHandle<'b, P>,
@@ -256,42 +268,7 @@ where
     P: 'static,
 {
     fn compose<'b>(left: &Self, right: &Self, dest: &B::At<'b>) -> Self {
-        match right {
-            Carrier::Empty => left.clone(),
-            Carrier::Hosted {
-                host,
-                borrows_host: right_borrows_host,
-                ..
-            } => {
-                let handle = dest.region_handle();
-                let dest_host = Rc::clone(host);
-                let new_borrows_host = *right_borrows_host || left.reach_covers(dest_host.region());
-                let materialize: Vec<Rc<F>> = match left {
-                    Carrier::Hosted { host: lh, .. } => vec![Rc::clone(lh)],
-                    _ => Vec::new(),
-                };
-                // Mint BOTH operands' exact reach — `right`'s own reach (an accumulator's prior
-                // folds, already minted into this same `dest` arena, so re-minting is idempotent
-                // via subsumption) and `left`'s (the newly-folded source) — never `left` alone, or
-                // a multi-step accumulator fold would drop everything folded before this step.
-                let minted = left.with_reach(|left_reach| {
-                    right.with_reach(|right_reach| {
-                        let sources: Vec<&RegionSet<F>> =
-                            left_reach.into_iter().chain(right_reach).collect();
-                        RegionSet::mint(handle, &sources, &materialize, |_| false)
-                    })
-                });
-                Carrier::Hosted {
-                    borrows_host: new_borrows_host,
-                    host: dest_host,
-                    reach: minted.map(Erased::<HostedSetRef<F>>::erase),
-                }
-            }
-            Carrier::Severed { .. } => unreachable!(
-                "ComposeWitness destination carrier is never itself Severed — a severed backing \
-                 hosts no arena to relocate/merge into"
-            ),
-        }
+        Self::compose_into(left, right, dest.region_handle(), None, Residence::Copied)
     }
 }
 
@@ -356,80 +333,117 @@ mod tests {
 
     #[test]
     fn default_is_empty() {
-        let c: Carrier<TestFrame, ()> = Carrier::default();
+        let c: Carrier<TestFrame> = Carrier::default();
         assert!(c.is_empty());
+        assert!(!c.borrows_host());
     }
 
     #[test]
-    fn singleton_is_hosted_with_no_reach() {
-        let frame = root_frame();
-        let c: Carrier<TestFrame, ()> = Carrier::singleton(Rc::clone(&frame));
-        assert!(!c.is_empty());
-        assert!(c.covers(frame.region()));
-        assert!(
-            !c.reach_covers(frame.region()),
-            "singleton carries no reach — only residence"
-        );
+    fn clone_is_a_bit_copy_with_no_refcount_traffic() {
+        let host = root_frame();
+        let foreign = root_frame();
+        let handle = RegionHandle::from_owner(&*host);
+        let minted: Option<&RegionSet<TestFrame>> =
+            RegionSet::mint(handle, &[], &[Rc::clone(&foreign)], |_| false);
+        let c: Carrier<TestFrame> = Carrier::new(false, minted);
+        let host_before = Rc::strong_count(&host);
+        let foreign_before = Rc::strong_count(&foreign);
+        let cloned = c;
+        assert_eq!(Rc::strong_count(&host), host_before);
+        assert_eq!(Rc::strong_count(&foreign), foreign_before);
+        let _ = cloned;
+        assert_eq!(Rc::strong_count(&foreign), foreign_before);
     }
 
     #[test]
-    fn cheap_clone_bumps_host_refcount_only() {
-        let frame = root_frame();
-        let c: Carrier<TestFrame, ()> = Carrier::singleton(Rc::clone(&frame));
-        let before = Rc::strong_count(&frame);
-        let cloned = c.clone();
-        assert_eq!(Rc::strong_count(&frame), before + 1);
-        drop(cloned);
-        assert_eq!(Rc::strong_count(&frame), before);
-    }
-
-    #[test]
-    fn pinned_read_returns_host_and_foreign_members() {
+    fn pinned_read_names_foreign_members_only() {
         let foreign = root_frame();
         let host = root_frame();
         // Mint a set naming `foreign` into `host`'s own region — the shape a resident bind produces.
         let handle = RegionHandle::from_owner(&*host);
         let minted: Option<&RegionSet<TestFrame>> =
             RegionSet::mint(handle, &[], &[Rc::clone(&foreign)], |_| false);
-        let reach = minted.map(Erased::<HostedSetRef<TestFrame>>::erase);
-        let c: Carrier<TestFrame, ()> = Carrier::Hosted {
-            borrows_host: false,
-            host: Rc::clone(&host),
-            reach,
-        };
-        assert!(c.covers(host.region()));
-        assert!(c.covers(foreign.region()));
-        assert!(c.reach_covers(foreign.region()));
+        let c: Carrier<TestFrame> = Carrier::new(false, minted);
+        assert!(c.reach_covers(Some(&host), foreign.region()));
         assert!(
-            !c.reach_covers(host.region()),
-            "host is residence, not reach, without borrows_host"
+            !c.reach_covers(Some(&host), host.region()),
+            "home is residence, not reach, without borrows_host"
         );
     }
 
     #[test]
-    fn to_liveness_frameset_unions_host_and_reach() {
-        let foreign = root_frame();
-        let host = root_frame();
-        let handle = RegionHandle::from_owner(&*host);
-        let minted: Option<&RegionSet<TestFrame>> =
-            RegionSet::mint(handle, &[], &[Rc::clone(&foreign)], |_| false);
-        let reach = minted.map(Erased::<HostedSetRef<TestFrame>>::erase);
-        let c: Carrier<TestFrame, ()> = Carrier::Hosted {
-            borrows_host: false,
-            host: Rc::clone(&host),
-            reach,
-        };
-        let liveness = c.to_liveness_frameset();
-        assert!(liveness.pins_region(host.region()));
-        assert!(liveness.pins_region(foreign.region()));
+    fn empty_carrier_reaches_nothing() {
+        let frame = root_frame();
+        let c: Carrier<TestFrame> = Carrier::default();
+        assert!(!c.reach_covers(None, frame.region()));
+        c.with_reach(None, |reach| assert!(reach.is_none()));
     }
 
     #[test]
-    fn empty_carrier_reaches_and_covers_nothing() {
-        let frame = root_frame();
-        let c: Carrier<TestFrame, ()> = Carrier::Empty;
-        assert!(!c.covers(frame.region()));
-        assert!(!c.reach_covers(frame.region()));
-        assert!(c.to_liveness_frameset().is_empty());
+    fn mint_kept_materializes_host_unconditionally() {
+        let host = root_frame();
+        let dest = root_frame();
+        let c: Carrier<TestFrame> = Carrier::default();
+        let handle = RegionHandle::from_owner(&*dest);
+        let (minted, borrows_into_dest) =
+            c.mint_into(handle, Some(&host), Residence::Kept, |_| false);
+        let set = minted.expect("Kept materializes the residence host");
+        assert!(set.pins_region(host.region()));
+        assert!(!borrows_into_dest);
+    }
+
+    #[test]
+    fn mint_copied_drops_residence_only_host() {
+        let host = root_frame();
+        let dest = root_frame();
+        let c: Carrier<TestFrame> = Carrier::default();
+        let handle = RegionHandle::from_owner(&*dest);
+        let (minted, borrows_into_dest) =
+            c.mint_into(handle, Some(&host), Residence::Copied, |_| false);
+        assert!(
+            minted.is_none(),
+            "a residence-only host never rides a copied re-home"
+        );
+        assert!(!borrows_into_dest);
+    }
+
+    #[test]
+    fn mint_copied_keeps_borrowing_host() {
+        let host = root_frame();
+        let dest = root_frame();
+        let c: Carrier<TestFrame> = Carrier::new(true, None);
+        let handle = RegionHandle::from_owner(&*dest);
+        let (minted, _) = c.mint_into(handle, Some(&host), Residence::Copied, |_| false);
+        let set = minted.expect("a borrows_host value keeps its old home as a member");
+        assert!(set.pins_region(host.region()));
+    }
+
+    #[test]
+    fn mint_reports_borrows_into_dest_via_host_subsumption() {
+        let dest = root_frame();
+        let c: Carrier<TestFrame> = Carrier::new(true, None);
+        let handle = RegionHandle::from_owner(&*dest);
+        // The value's home IS the destination (host pins dest's region): borrows_host carries over.
+        let (_, borrows_into_dest) = c.mint_into(handle, Some(&dest), Residence::Kept, |_| false);
+        assert!(borrows_into_dest);
+    }
+
+    #[test]
+    fn mint_forwards_reach_members() {
+        let foreign = root_frame();
+        let host = root_frame();
+        let dest = root_frame();
+        let host_handle = RegionHandle::from_owner(&*host);
+        let source: Option<&RegionSet<TestFrame>> =
+            RegionSet::mint(host_handle, &[], &[Rc::clone(&foreign)], |_| false);
+        let c: Carrier<TestFrame> = Carrier::new(false, source);
+        let dest_handle = RegionHandle::from_owner(&*dest);
+        let (minted, _) = c.mint_into(dest_handle, Some(&host), Residence::Copied, |_| false);
+        let set = minted.expect("reach members always mint forward");
+        assert!(set.pins_region(foreign.region()));
+        assert!(
+            !set.pins_region(host.region()),
+            "residence-only host dropped on the copied direction"
+        );
     }
 }

@@ -58,10 +58,11 @@ pub struct NodeFrame<W: Workload> {
     /// step; the scheduler stores and hands it back but calls no method on it.
     pub cart: Rc<W::Cart>,
     /// Return contract enforced at the Done boundary, dormant between steps as a [`Sealed`] carrier
-    /// — pinned by its own carried witness (the contract's home region owner), independent of
-    /// `cart`. The workload re-anchors it at the step brand via [`Sealed::open`]. `None` for slots
-    /// with no declared-return obligation.
-    pub contract: Option<Sealed<W::Contract, W::Witness>>,
+    /// — pinned by its own carried witness, a [`RegionSet`](crate::witnessed::RegionSet) holding
+    /// the contract's home region owner, independent of `cart` (and a genuine pinning witness,
+    /// unlike the reference-only value carrier). The workload re-anchors it at the step brand.
+    /// `None` for slots with no declared-return obligation.
+    pub contract: Option<Sealed<W::Contract, crate::witnessed::RegionSet<W::Frame>>>,
 }
 
 pub struct Node<W: Workload> {

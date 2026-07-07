@@ -10,7 +10,6 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
-use crate::witnessed::SetWitness;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -80,12 +79,12 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
 
     let storage = run_root_storage();
     let producer = run_root_bare(&storage);
-    // A value resident in the producer scope's region, sealed as its own delivery envelope. `None`
-    // host: the carrier's own resident witness pins the region, so the envelope's open reads under it.
+    // A value resident in the producer scope's region, sealed as its own delivery envelope pinned
+    // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
     let cell = Delivered::hosted(
         Sealed::seal(producer.resident_value_carrier(obj, None, false)),
-        None,
+        std::rc::Rc::clone(&storage),
     );
 
     // A separate (open) consumer scope adopts the carrier.
@@ -109,14 +108,14 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     use crate::witnessed::{Delivered, Sealed};
     use std::rc::Rc;
 
-    // A value in the producer frame's own region, sealed witnessed by that frame, wrapped as a
-    // delivery envelope (`None` host — its own witness pins the producer frame until adoption).
+    // A value in the producer frame's own region, wrapped as a delivery envelope pinned by that
+    // frame — the shape a delivered dep arrives in (host = the retention hold's owner).
     let producer_frame = run_root_storage();
     let cell: DeliveredCarried = Delivered::hosted(
         Sealed::seal(KoanRegion::alloc_witnessed(Rc::clone(&producer_frame), |r| {
             Carried::Object(r.alloc_object(KObject::Number(9.0)))
         })),
-        None,
+        Rc::clone(&producer_frame),
     );
 
     // A consumer scope in a *different* frame adopts the carrier — its reach-set folds the producer.
@@ -158,8 +157,8 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
     // Bind a member into `source_scope` whose stored reach names `inner_storage` — mirrors a nested
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
-    let inner_witness = CarrierWitness::singleton(Rc::clone(&inner_storage));
-    let stored = source_scope.host_reach_of(&inner_witness);
+    let stored =
+        source_scope.host_reach_of(&CarrierWitness::default(), Some(&inner_storage));
     source_scope
         .bind_value("m".to_string(), obj, BindingIndex::value(0), stored)
         .expect("bind should succeed");

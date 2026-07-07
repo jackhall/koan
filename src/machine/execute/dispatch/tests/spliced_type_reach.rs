@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::{run_root_storage, FrameStorageExt, Scope, StoredReach};
@@ -49,9 +51,11 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         ));
 
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the
-    // type-channel mirror of a `LET` binding a module value returned from elsewhere.
-    let stored = scope.host_reach_of(produced.witness());
-    let kt = match scope.adopt_sealed(&Delivered::hosted(produced.duplicate(), None)) {
+    // type-channel mirror of a `LET` binding a module value returned from elsewhere. The envelope
+    // host is the foreign frame the type resides in, exactly what a delivered dep would carry.
+    let stored = scope.host_reach_of(produced.witness(), Some(&foreign));
+    let kt = match scope.adopt_sealed(&Delivered::hosted(produced.duplicate(), Rc::clone(&foreign)))
+    {
         Carried::Type(kt) => kt.clone(),
         _ => panic!("expected the adopted Type"),
     };
@@ -67,12 +71,13 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         "the stored reach should round-trip a non-empty foreign reach",
     );
 
-    // Build the cell as the splice now does — the resident carrier as a delivery envelope (`None`
-    // host: its own resident witness pins the region until adoption).
-    let cell = Delivered::hosted(
-        Sealed::seal(scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)),
-        None,
-    );
+    // Build the cell as the splice now does — the resident carrier as a delivery envelope pinned
+    // by the home frame the value lives under.
+    let cell = scope.seal_resident_delivered(scope.resident_type_carrier(
+        hit.kt,
+        hit.reach,
+        hit.borrows_into_home,
+    ));
 
     // The consumer lives in its own frame, independent of `scope`'s (`storage`) and the type's
     // original producer frame (`foreign`) — nothing but its own adopted fold may keep them alive.
@@ -83,7 +88,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     // Drop every other direct handle: `consumer`'s reach-set (folded by `adopt_sealed` above) is
     // now the sole pin on both `scope`'s frame and the type's producer frame.
     drop(cell);
-    drop(produced);
+    let _ = produced;
     drop(storage);
     drop(foreign);
 

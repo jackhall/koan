@@ -15,11 +15,10 @@ use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::DeliveredCarried;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
 use crate::source::Spanned;
-use crate::witnessed::Sealed;
 
 use super::{arg, kw, sig};
 
@@ -116,7 +115,7 @@ pub fn body<'a>(
                 name,
                 kt,
                 bind_index,
-                ctx.arg_carrier("ty").map(|d| d.cell()),
+                ctx.arg_carrier("ty"),
             );
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
@@ -148,11 +147,11 @@ fn finalize_val<'a>(
     name: String,
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
-    carrier: Option<&Sealed<CarriedFamily, CarrierWitness>>,
+    carrier: Option<&DeliveredCarried>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     let stored = carrier
-        .map(|c| fctx.scope.host_reach_of(c.witness()))
+        .map(|c| fctx.scope.host_reach_of(c.witness(), Some(c.host())))
         .unwrap_or_default();
     if let Err(e) = fctx
         .scope

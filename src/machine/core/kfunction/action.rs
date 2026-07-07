@@ -16,7 +16,7 @@ use crate::machine::model::values::{CarriedFamily, Held};
 use crate::machine::model::{Carried, KObject};
 use crate::machine::{BindingIndex, CarrierWitness, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
-use crate::witnessed::{Sealed, StepContext, Witnessed};
+use crate::witnessed::{StepContext, Witnessed};
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -269,12 +269,11 @@ pub struct DepTerminal<'a> {
 pub type AwaitContinue<'a> =
     Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a>;
 
-/// A `Catch` finish: re-entered with the watched slot's sealed carrier (value and reach as one unit,
-/// adopted or opened at the finish's own step brand) or the watched `KError`.
-pub type CatchContinue<'a> = Box<
-    dyn FnOnce(&FinishCtx<'a>, Result<Sealed<CarriedFamily, CarrierWitness>, KError>) -> Action<'a>
-        + 'a,
->;
+/// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
+/// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the
+/// watched `KError`.
+pub type CatchContinue<'a> =
+    Box<dyn FnOnce(&FinishCtx<'a>, Result<DeliveredCarried, KError>) -> Action<'a> + 'a>;
 
 /// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type

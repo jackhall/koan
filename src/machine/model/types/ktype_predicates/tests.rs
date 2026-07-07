@@ -197,7 +197,7 @@ fn spliced_cell_classifies_by_opening() {
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
     let carrier = scope.resident_value_carrier(obj, None, false);
     let cell_part = ExpressionPart::Spliced {
-        cell: Delivered::hosted(Sealed::seal(carrier), None),
+        cell: Delivered::hosted(Sealed::seal(carrier), std::rc::Rc::clone(&storage)),
     };
 
     for (ty, admits) in [

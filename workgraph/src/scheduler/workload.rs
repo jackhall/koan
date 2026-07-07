@@ -27,12 +27,13 @@ pub trait Workload {
     /// the reach-set member contract; the scheduler retains and drops the `Rc` but calls no method on
     /// it. The Koan instantiation is `FrameStorage`.
     type Frame: PinsRegion + 'static;
-    /// The finalized-value witness: the set of region owners pinning a stored terminal's backing
-    /// (empty for a frameless / run-region value, which is already in a surviving region). The result
-    /// slot stores `Sealed<Self::Value, Self::Witness>`; a `Default` empty value re-homes a drained
-    /// root that needs no pin, and `Clone` hands the set out to the consumer-pull lift. The Koan
-    /// instantiation is `FrameSet`.
-    type Witness: crate::witnessed::Witness + Clone + Default;
+    /// The finalized-value reach witness: the description of the regions a stored terminal's value
+    /// reaches (empty for a frameless / run-region value). Reference-only — liveness is the
+    /// scheduler's retention hold (`Self::Frame`), not this witness — so the only bounds are
+    /// storage-shaped: the result slot stores `Sealed<Self::Value, Self::Witness>`, a `Default`
+    /// empty value re-homes a drained root, and `Clone` duplicates the carrier for each consumer
+    /// pull. The Koan instantiation is the library `Carrier<FrameStorage>`.
+    type Witness: Clone + Default;
     /// The per-node return contract: a one-lifetime [`Reattachable`] family the scheduler stores
     /// erased (`Erased<Self::Contract>`) on a slot's frame and hands back at the Done boundary; the
     /// workload re-anchors it, witnessed by the frame `Rc`. Never inspected. `At<'static>: Copy` lets
