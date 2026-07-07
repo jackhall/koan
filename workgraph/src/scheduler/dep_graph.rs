@@ -47,11 +47,8 @@ pub(super) fn work_owned_edges<W: Workload>(work: &NodeWork<W>) -> Vec<DepEdge> 
 /// parker or an explicit free" — so only a decrement-to-zero triggers release. See
 /// [design/witness-hosting.md § Retention model](../../../design/witness-hosting.md#retention-model).
 struct RetentionHold<F> {
-    // Held for its retention effect: dropping the hold drops this `Rc`, releasing the frame. The
-    // pinned read of a retained terminal re-anchors under it; the walking carrier holds its own host
-    // `Rc` in parallel until the carrier collapses, so the read still borrows through the carrier and
-    // this owner is not yet the re-anchor pin.
-    #[allow(dead_code)]
+    /// The retained producer frame's owner. Its Drop releases the frame; the pinned read of a
+    /// retained terminal re-anchors the value under a clone of it ([`DepGraph::retained_owner`]).
     owner: Rc<F>,
     pulls: usize,
 }
@@ -206,6 +203,16 @@ impl<W: Workload> DepGraph<W> {
         for producer in producers {
             self.decrement_pull(producer);
         }
+    }
+
+    /// A clone of `producer`'s retained frame owner, or `None` for a frameless / released producer —
+    /// the liveness pin a retention-pinned read holds live across [`Sealed::open_with`] while it
+    /// re-anchors the terminal's value.
+    pub(super) fn retained_owner(&self, producer: usize) -> Option<Rc<W::Frame>> {
+        self.rows[producer]
+            .retain
+            .as_ref()
+            .map(|hold| Rc::clone(&hold.owner))
     }
 
     /// Drop `producer`'s retention hold outright — the owned-producer prompt release (its owning

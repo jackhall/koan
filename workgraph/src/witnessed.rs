@@ -868,6 +868,34 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         f(self.inner.read())
     }
 
+    /// Open the sealed carrier at a **rank-2** brand pinned by an **externally supplied** witness
+    /// rather than the bundled one — the retention-pinned read. Identical to [`Self::open`] except the
+    /// liveness pin is `pin` (held by the caller for the whole call), so a carrier whose own bundled
+    /// witness pins nothing (a reference-only reach carrier, whose value's backing is kept alive by the
+    /// scheduler's frame-retention hold) still opens soundly. The `for<'b>` brand confines the
+    /// re-anchored value exactly as `open` does.
+    ///
+    /// # Panics / soundness
+    ///
+    /// The caller guarantees `pin` keeps the carrier's pointee live and fixed-address for the whole
+    /// call — the retained producer-frame `Rc` (pinning invariant rules 3-4). The value is read at the
+    /// `&self` borrow via [`Witnessed::read`], and the `for<'b>` quantifier keeps it from escaping, so
+    /// this adds no `unsafe` beyond the audited [`Witnessed`] reattach.
+    pub fn open_with<Wx: Witness, R>(
+        &self,
+        pin: &Wx,
+        f: impl for<'b> FnOnce(T::At<'b>) -> R,
+    ) -> R
+    where
+        T::At<'static>: Copy,
+    {
+        // The borrowed `pin` keeps the pointee live for the whole call — the same role the bundled
+        // witness plays in `open`, supplied externally here. `read()` re-anchors at the `&self`
+        // borrow and the `for<'b>` brand forbids escape, so nothing content-branded outlives `pin`.
+        let _ = pin;
+        f(self.inner.read())
+    }
+
     /// Relocate the sealed carrier into a destination region and re-seal it under the witness that
     /// pins **both** — the borrow-checked replacement for the consumer-pull lift's one open-coded
     /// reattach. Built from [`Witnessed::merge`]: the bundled carrier is [`duplicated`](Witnessed::duplicate)

@@ -133,7 +133,18 @@ impl<W: Workload> Scheduler<W> {
         id: NodeId,
         f: impl for<'b> FnOnce(Live<'b, W>) -> R,
     ) -> Result<R, &W::Error> {
-        self.store.read_result_with(self.resolve_alias(id), f)
+        let target = self.resolve_alias(id);
+        // The retained producer frame owner pins the value across the open (`None` for a frameless /
+        // run-region producer); held in `pin` for the duration of the read.
+        let pin = self.deps.retained_owner(target.index());
+        self.store.read_result_with(target, pin.as_ref(), f)
+    }
+
+    /// The retained producer-frame owner of a finalized dep, or `None` for a frameless / run-region
+    /// producer — the liveness pin the run loop holds live across the dep read and folds into the
+    /// step's combined pin, sourced from the retention hold rather than the walking carrier.
+    pub fn dep_host(&self, id: NodeId) -> Option<Rc<W::Frame>> {
+        self.deps.retained_owner(self.resolve_alias(id).index())
     }
 
     /// The terminal's error, or `Ok(())` for a value terminal — the borrow-free success/failure
@@ -179,8 +190,10 @@ impl<W: Workload> Scheduler<W> {
     where
         W::Witness: ComposeWitness<B>,
     {
+        let target = self.resolve_alias(id);
+        let pin = self.deps.retained_owner(target.index());
         self.store
-            .transfer_lifted(self.resolve_alias(id), dest, relocate)
+            .transfer_lifted(target, pin.as_ref(), dest, relocate)
     }
 
     /// Re-home a finalized terminal (relocated into a surviving region, bundled with the witness set

@@ -129,9 +129,15 @@ impl<'run> KoanRuntime<'run> {
             .map(|d| {
                 // The producer slot's own `Sealed` carrier (duplicated so a construction finish folds
                 // the dep witnessed) plus the live value erased out of it. One slot read; an errored
-                // slot short-circuits here.
+                // slot short-circuits here. The read is pinned by the producer's retained frame owner
+                // (`None` == frameless / run-region, externally pinned) rather than the carrier's own
+                // witness, so it stays sound once the carrier collapses to reach-only.
                 let carrier = self.sched.dep_carrier(d).map_err(|e| e.clone())?;
-                let value = carrier.open(|live| erase_to_static::<CarriedFamily>(live));
+                let host = self.sched.dep_host(d);
+                let value = match &host {
+                    Some(h) => carrier.open_with(h, |live| erase_to_static::<CarriedFamily>(live)),
+                    None => carrier.open(|live| erase_to_static::<CarriedFamily>(live)),
+                };
                 Ok(DepTerminal { value, carrier })
             })
             .collect();
@@ -143,8 +149,19 @@ impl<'run> KoanRuntime<'run> {
         let pin: FrameSet = dep_sources.iter().zip(deps.all_ids()).fold(
             FrameSet::empty(),
             |acc, (src, d)| match src {
-                Ok(t) => FrameSet::union(&acc, &t.carrier.witness().to_liveness_frameset()),
-                Err(_) => FrameSet::union(&acc, &self.sched.dep_witness(d).to_liveness_frameset()),
+                // The dep's liveness pin: its retained producer frame (read from the retention hold,
+                // since the collapsed carrier no longer carries its host) unioned with the value's own
+                // foreign reach (from the carrier). An errored dep carries no value the step reads —
+                // its error owns its data — so it contributes nothing.
+                Ok(t) => {
+                    let host = self
+                        .sched
+                        .dep_host(d)
+                        .map_or_else(FrameSet::empty, FrameSet::singleton);
+                    let reach = t.carrier.witness().to_owned_reach();
+                    FrameSet::union(&acc, &FrameSet::union(&host, &reach))
+                }
+                Err(_) => acc,
             },
         );
         // The kept-first contract's own carried witness — its home region owner, from

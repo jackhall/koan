@@ -13,6 +13,7 @@
 
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
+use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Live, NodeId, Workload};
@@ -196,6 +197,7 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn transfer_lifted<B: Reattachable>(
         &self,
         id: NodeId,
+        pin: Option<&Rc<W::Frame>>,
         dest: Witnessed<B, W::Witness>,
         relocate: impl for<'b> FnOnce(
             <W::Value as Reattachable>::At<'b>,
@@ -206,6 +208,11 @@ impl<W: Workload> NodeStore<W> {
     where
         W::Witness: ComposeWitness<B>,
     {
+        // `pin` (the retained producer-frame owner, `None` for a frameless / run-region terminal) is
+        // held for the whole call, keeping the value's backing alive while `transfer_into` reattaches
+        // and relocates it — the retention pin that outlives the walking carrier once it collapses to
+        // reach-only (belt-and-suspenders with the carrier's own witness until then).
+        let _ = &pin;
         match &self.slots[id] {
             SlotState::Done(Ok(sealed), ..) => Ok(sealed.transfer_into(dest, relocate)),
             SlotState::Done(Err(e), ..) => Err(e),
@@ -266,10 +273,18 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn read_result_with<R>(
         &self,
         id: NodeId,
+        pin: Option<&Rc<W::Frame>>,
         f: impl for<'b> FnOnce(Live<'b, W>) -> R,
     ) -> Result<R, &W::Error> {
         match &self.slots[id] {
-            SlotState::Done(Ok(w), ..) => Ok(w.open(f)),
+            // Re-anchor under the retained frame owner (`open_with`) when the producer carries one,
+            // so the read is pinned by retention rather than the walking carrier's own witness; a
+            // frameless / run-region terminal is externally pinned, so the bundled empty witness on
+            // `open` suffices.
+            SlotState::Done(Ok(w), ..) => Ok(match pin {
+                Some(p) => w.open_with(p, f),
+                None => w.open(f),
+            }),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
         }
