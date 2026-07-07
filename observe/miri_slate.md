@@ -98,7 +98,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-40 tests, grouped by the unsafe site each pins down. Names below are the exact
+41 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -332,8 +332,14 @@ that an escaping closure reading a surfaced member of a *temporary* functor-resu
 module — the harder case, relying on the call-site-region `Rc` rooting — does not
 dangle into the freed module/USING region. (Safe code by construction; pinned
 because tree borrows catches a regression in the aliasing or rooting discipline.)
+A second shape pins the transitive-root exception on `Witness for Carrier` / `Scope::resident_witness`:
+a value read through the window carries `Hosted { host: <call-site frame>, reach: <set living in
+the module's own arena> }`, sound only because `USING`'s own overlay fold mints the opened module's
+carrier into the call-site arena before any such read — so holding `host` roots the module's arena
+one hop removed, and through it the read entry's reach.
 
 - `using_temporary_functor_result_is_sound`
+- `using_window_value_read_reach_survives_under_module_root`
 
 **MATCH on `Tagged` recursion** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — MATCH
 builds its per-call frame and seeds its `it` bind through `CallFrame::with_scope`: the matched value,
@@ -521,9 +527,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-06: 260s — 41 tests, 0 leaks, 0 UB
 - 2026-07-06: 201s — 40 tests, 0 leaks, 0 UB
 - 2026-07-06: 248s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 159s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 180s — 35 tests, 0 leaks, 0 UB
-- 2026-07-05: 152s — 34 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

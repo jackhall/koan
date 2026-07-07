@@ -414,6 +414,57 @@ fn alloc_witnessed_merge_folds_an_independent_foreign_value() {
     assert_eq!(got, 1.0); // the foreign element survived the merge and both handle drops.
 }
 
+/// AC bullet 3's walking half: duplicating a carrier for dep delivery is a pure pass-through — it
+/// copies the erased value and clones the witness's `host` `Rc`, but the reach set itself is never
+/// re-minted, so every duplicate's reach pointer is identical to the original's. Fails on UB/leaks
+/// under Miri (a re-mint would show up as extra per-member `Rc` traffic on the foreign frame), not on
+/// values.
+#[test]
+fn pass_through_duplicate_keeps_host_and_reach_pointers_and_mints_nothing() {
+    let foreign_frame = FrameStorage::run_root();
+    let here_frame = FrameStorage::run_root();
+    let foreign: Witnessed<CarriedFamily, CarrierWitness> =
+        KoanRegion::alloc_witnessed(Rc::clone(&foreign_frame), |r| {
+            Carried::Object(r.alloc_object(KObject::Number(1.0)))
+        });
+    let here_dest: Witnessed<BrandFamily, CarrierWitness> =
+        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b);
+    let merged: Witnessed<CarriedFamily, CarrierWitness> = foreign
+        .merge::<BrandFamily, CarriedFamily>(here_dest, |foreign, _brand, _b: PhantomData<&_>| {
+            foreign
+        });
+
+    let reach_ptr = merged
+        .witness()
+        .with_reach(|r| r.map(|set| set as *const _));
+    let here_count_before = Rc::strong_count(&here_frame);
+    let foreign_count_before = Rc::strong_count(&foreign_frame);
+
+    // The walking motion — dep delivery duplicates a producer slot's carrier for each consumer.
+    let sealed: Sealed<CarriedFamily, CarrierWitness> = Sealed::seal(merged);
+    let copy_a = sealed.duplicate();
+    let copy_b = sealed.duplicate();
+
+    for copy in [&copy_a, &copy_b] {
+        let copy_ptr = copy.witness().with_reach(|r| r.map(|set| set as *const _));
+        assert_eq!(
+            copy_ptr, reach_ptr,
+            "duplicating rides the same reach set by reference -- no re-mint"
+        );
+    }
+    assert_eq!(
+        Rc::strong_count(&here_frame),
+        here_count_before + 2,
+        "one host Rc clone per duplicate, nothing more"
+    );
+    assert_eq!(
+        Rc::strong_count(&foreign_frame),
+        foreign_count_before,
+        "the reach set itself is a reference copy -- no per-member refcount traffic on the \
+         foreign frame duplicating minted into the reach"
+    );
+}
+
 /// Workload-level accumulator carrier for the aggregate construction fold: the dest region the
 /// finished aggregate node lands in, paired with the partial element cells built so far. The
 /// production family the object-family construction inversion uses lives in the execute layer; this
@@ -773,7 +824,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     // mint target). The merged witness re-homes onto the outer frame with the list's reach folded
     // in, so the outer closure now reaches frame_1 / frame_2 through the bound list (the reach tree).
     let captured: Witnessed<CarriedFamily, CarrierWitness> = witnessed_closure(&frame_outer)
-        .merge::<AggBuildFamily, CarriedFamily>(acc2, |outer_v, (region, cells), _brand| {
+        .merge::<AggBuildFamily, CarriedFamily>(
+        acc2,
+        |outer_v, (region, cells), _brand| {
             if let KObject::KFunction(kf) = outer_v.object() {
                 let list_obj = region.alloc_object(KObject::list_of_held(cells));
                 kf.captured_scope()
@@ -786,7 +839,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                     .expect("bind the inners list into the outer closure's scope");
             }
             outer_v
-        });
+        },
+    );
 
     drop(frame_outer);
     drop(frame_1);

@@ -191,6 +191,11 @@ impl<F: RegionOwner> StepContext<F> {
 /// to outlive `'static`. Building the closure here, where no such bound is in scope, and handing back
 /// only the finished opaque `impl for<'b> FnOnce(..)` value sidesteps it: `alloc_with` itself never
 /// binds a `V::At<'b>` value, only moves this closure around.
+///
+/// The folded views ride the accumulator un-copied — [`ComposeWitness for Carrier`](super::carrier)
+/// drops a `Severed` dep's owned node rather than carrying it forward, so a caller that *reads* the
+/// views this closure pushes must guarantee every dep carrier is provably not `Severed`, or must
+/// never read the view at all.
 #[allow(clippy::type_complexity)]
 fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>() -> impl for<'b> FnOnce(
     V::At<'b>,

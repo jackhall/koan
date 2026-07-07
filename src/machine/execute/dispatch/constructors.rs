@@ -247,10 +247,10 @@ fn finish_witnessed<'step>(
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
-            let acc0 = KoanRegion::yoke_branded::<RecordFieldsFamily, _>(
-                view.dest_frame(),
-                |region| (region, Vec::with_capacity(field_names.len())),
-            );
+            let acc0 =
+                KoanRegion::yoke_branded::<RecordFieldsFamily, _>(view.dest_frame(), |region| {
+                    (region, Vec::with_capacity(field_names.len()))
+                });
             let fields = terminals
                 .iter()
                 .zip(field_names)

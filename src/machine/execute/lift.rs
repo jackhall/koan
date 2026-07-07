@@ -55,11 +55,9 @@ pub(in crate::machine::execute) fn sever_residence(
     // Copy the top node out — a `deep_clone` of the object (its spine `Rc`s shared) or a `clone` of
     // the type — and erase it to its `'static` backing form, read brand-free out of the carrier.
     let backing = carrier.with(|carried| match carried {
-        Carried::Object(object) => {
-            SeveredBacking::Object(Rc::new(erase_to_static::<KObject<'static>>(
-                object.deep_clone(),
-            )))
-        }
+        Carried::Object(object) => SeveredBacking::Object(Rc::new(erase_to_static::<
+            KObject<'static>,
+        >(object.deep_clone()))),
         Carried::Type(kt) => {
             SeveredBacking::Type(Rc::new(erase_to_static::<KType<'static>>((*kt).clone())))
         }

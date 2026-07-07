@@ -4,11 +4,16 @@
 //! classifier reads all-uppercase names as keywords; dispatch keywords
 //! (`DBL`, `GETIT`, `GETV`, `NOOP`) stay all-uppercase.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::core::FrameStorage;
+use std::rc::Rc;
+
+use crate::builtins::test_support::{
+    parse_one, run, run_one, run_one_err, run_root_bare, run_root_silent,
+};
+use crate::machine::core::{BindingIndex, CarrierWitness, FrameStorage, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
+use crate::witnessed::SetWitness;
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {
@@ -174,5 +179,78 @@ fn using_on_non_module_fails_dispatch() {
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for USING on a Number, got {err}",
+    );
+}
+
+/// SAFETY-anchor: the transparent-window transitive-root exception documented on `Witness for
+/// Carrier` and `Scope::resident_witness`. A module binding's stored reach lives in the *module's*
+/// own arena, not the reading window's call-site arena -- sound only because the window's overlay
+/// fold (mirrored here, as `USING`'s own body performs it in `builtins/using_scope.rs`) mints the
+/// module's own carrier into the call-site arena before any read, rooting the module region
+/// transitively. Drops every other handle on both the module and foreign frames before reading the
+/// carrier's reach back; under Miri this is a use-after-free the moment that rooting is missing.
+#[test]
+fn using_window_value_read_reach_survives_under_module_root() {
+    let foreign_storage = FrameStorage::run_root();
+    let foreign_weak = Rc::downgrade(&foreign_storage);
+
+    let module_storage = FrameStorage::run_root();
+    let module_weak = Rc::downgrade(&module_storage);
+    let module_scope = run_root_bare(&module_storage);
+
+    // Bind a value in the module scope whose stored reach names the foreign frame -- minted for
+    // real into the module's own arena via `host_reach_of`, the same primitive `adopt_sealed` uses
+    // to root a functor result's reach at module-bind time.
+    let seed_witness = CarrierWitness::singleton(Rc::clone(&foreign_storage));
+    let stored_reach = module_scope.host_reach_of(&seed_witness);
+    let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
+    module_scope
+        .bind_value(
+            "val".to_string(),
+            value_obj,
+            BindingIndex::value(0),
+            stored_reach,
+        )
+        .expect("fresh binding name in an unborrowed scope");
+
+    let call_site_storage = FrameStorage::run_root();
+    let call_site_scope = run_root_bare(&call_site_storage);
+    let window = call_site_scope
+        .brand()
+        .alloc_scope(Scope::child_transparent(
+            call_site_scope,
+            module_scope.bindings(),
+        ));
+
+    // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
+    // carrier into the window's (call-site) arena at overlay construction, before any read through
+    // the window -- the step that roots the module's region transitively.
+    let module_witness = CarrierWitness::singleton(Rc::clone(&module_storage));
+    let _ = window.host_reach_of(&module_witness);
+
+    let carrier = window
+        .resolve_value_carrier("val", None)
+        .expect("val is bound in the module scope, surfaced through the transparent window")
+        .bound()
+        .expect("val is fully bound, not a placeholder");
+
+    drop(module_storage);
+    drop(foreign_storage);
+    assert!(
+        module_weak.upgrade().is_some(),
+        "the window's overlay fold roots the module region transitively"
+    );
+    assert!(
+        foreign_weak.upgrade().is_some(),
+        "the module's own arena, rooted transitively, keeps the entry's stored reach set -- and \
+         the foreign frame it names -- alive"
+    );
+
+    let foreign_region_owner = foreign_weak.upgrade().unwrap();
+    assert!(
+        carrier
+            .witness()
+            .reach_covers(foreign_region_owner.region()),
+        "the read carrier's reach still covers the foreign region after every other handle drops"
     );
 }

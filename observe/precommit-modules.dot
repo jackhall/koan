@@ -455,6 +455,7 @@ digraph {
     "koan::builtins::union" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::union" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::using_scope" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine" [label="uses", style="dashed"];
@@ -755,6 +756,7 @@ digraph {
     "koan::machine::execute::finalize" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::finalize" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::execute" [label="uses", style="dashed"];

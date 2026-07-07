@@ -102,36 +102,40 @@ impl NodeFinalize for KoanRuntime<'_> {
         let home = contract
             .expect("a declared return type implies a contract")
             .home_region();
-        // Bundle `home` / `declared` witnessed by the home owner when resolvable — so the merge below
-        // mints `carrier`'s existing reach (and its own host, if foreign) into the home region's arena,
-        // re-homing the composed result onto the home owner in one step (the sound-over-retention comment
-        // above: a `Carried::Type` passthrough that never actually moves there keeps its true residence
-        // alive as a folded-in reach member instead). `resident` (unwitnessed) when no owner is
-        // resolvable — the merge then degrades to `merge(w, ∅) == w`, leaving `carrier`'s own witness
-        // (already pinned to the producer above) untouched.
+        // The object channel relocates into the home region, so its merge composition mints the
+        // carrier's existing reach (and its own host, if foreign) into the home arena and re-homes
+        // the result onto the home owner in one step. The type channel passes the value through
+        // un-relocated, so it composes against an unwitnessed operand — `merge(w, ∅) == w` — leaving
+        // `carrier`'s own witness (already pinned to the producer above) untouched and minting nothing
+        // for a value that never moves. `is_object` decides the channel before `home_carrier` is
+        // built, so only a genuine relocation gets a witnessed destination. Accepted residual: on the
+        // object channel a failed type check still leaves its minted set in the home arena — the
+        // value was genuinely relocated before the check failed, and the path returns `Err` terminal.
+        let is_object = carrier.with(|carried| matches!(carried, Carried::Object(_)));
         let home_carrier: Witnessed<ContractHomeFamily, CarrierWitness> = match &home_owner {
-            Some(owner) => Witnessed::from_erased(
+            Some(owner) if is_object => Witnessed::from_erased(
                 Erased::erase((home, declared)),
                 CarrierWitness::singleton(Rc::clone(owner)),
             ),
-            None => Witnessed::resident((home, declared)),
+            _ => Witnessed::resident((home, declared)),
         };
-        // Cloned *before* the merge so it survives the merge's unconditional drop of `carrier`'s own
-        // witness regardless of which branch below runs — a cheap `Rc` bump (`Hosted.host`) or an
-        // owned-reach clone (`Severed`). The **type** branch needs it: `value` passes through
-        // unrelocated, still pointing at whatever `carrier` witnessed before the merge (a `Severed`
-        // backing, e.g.) — the merge's own composed witness only accounts for a *relocated* value
-        // (it mints reach forward but drops a `Severed.node`, since every other call site's
-        // projection copies), so trusting it here for a passthrough would free the very backing
-        // `value` still reads through. `moved` picks between the two after the fact.
-        let original_witness = carrier.witness().clone();
-        let mut moved = false;
+        // `merge` consumes `carrier` and drops its witness before returning, while Tree Borrows
+        // still protects the by-value operands' interior references for the whole call — so a
+        // severed backing must not hit refcount zero inside the call, even on the object channel,
+        // whose projection copies the value out of it. The composed witness cannot carry a
+        // `Severed` node forward (`Hosted` has no owned-backing slot; see the
+        // `ComposeWitness for Carrier` notes in `workgraph/src/witnessed/carrier.rs`), so this pin
+        // holds the backing across the merge and releases it after. Deleted with the sever gate
+        // (`delivery-driven-frame-retention`).
+        let severed_backing_pin = match carrier.witness() {
+            CarrierWitness::Severed { node, .. } => Some(node.clone()),
+            _ => None,
+        };
         let mut mismatch: Option<KError> = None;
         let checked = carrier.merge::<ContractHomeFamily, CarriedFamily>(
             home_carrier,
             |value, (home_region, declared_type), _brand| match value {
                 Carried::Object(_) => {
-                    moved = true;
                     let object = value.object();
                     if !declared_type.matches_value(object) {
                         mismatch = Some(return_type_mismatch(
@@ -159,14 +163,7 @@ impl NodeFinalize for KoanRuntime<'_> {
                 }
             },
         );
-        // The **object** branch relocated: the merge-composed witness (home owner ∪ `carrier`'s old
-        // reach) is correct and is what `checked` already carries. The **type** branch didn't: restore
-        // the pre-merge witness verbatim, since `value` still reads through whatever it witnessed.
-        let checked = if moved {
-            checked
-        } else {
-            checked.rehost(original_witness)
-        };
+        drop(severed_backing_pin);
         match mismatch {
             Some(error) => Err(error),
             None => Ok(checked),

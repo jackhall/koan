@@ -14,8 +14,8 @@
 use std::rc::Rc;
 
 use super::{
-    ComposeWitness, Erased, PinsRegion, Reattachable, Region, RegionHandle, RegionOwner,
-    RegionSet, SetWitness, StorageProfile, Stored, Witness, with_branded_ref,
+    with_branded_ref, ComposeWitness, Erased, PinsRegion, Reattachable, Region, RegionHandle,
+    RegionOwner, RegionSet, SetWitness, StorageProfile, Stored, Witness,
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&RegionSet<F>` — the erased reach reference a
@@ -104,13 +104,15 @@ impl<F: PinsRegion + 'static, S: Clone> Clone for Carrier<F, S> {
 
 // SAFETY: `Empty` pins nothing — its backing outlives the carrier (the `Witness` contract's escape
 // hatch for a frameless / run-region terminal). `Hosted.host` is a `StableDeref` `Rc<F>` (per the
-// blanket `Witness for Rc<F>` impl), so holding it keeps `F`'s own storage alive — and, by every
-// construction site's obligation, `Hosted.reach`'s pointee lives ONLY inside `host`'s own arena (see
-// the module doc), so holding `host` also keeps `reach`'s pointee, and through its members every
-// region it names, alive. `Severed.node` is the value's own owned backing (an `Rc`-shaped `S`, by
-// the sole production constructor's obligation), so holding it keeps the severed value's pointee
-// alive the same way a `Hosted.host` does; `Severed.reach` is an owned `RegionSet`, independently
-// `Witness`-sound.
+// blanket `Witness for Rc<F>` impl), so holding it keeps `F`'s own storage alive. `Hosted.reach`'s
+// pointee lives in an arena `host` keeps alive — either `host`'s own arena (every direct construction
+// site), or an arena rooted by a set that `host`'s own arena holds (the Borrowed-window read, where
+// the USING overlay's construction minted the module region into the reader's arena before any such
+// carrier exists) — so holding `host` roots `reach`'s pointee either directly or one hop removed, and
+// through its members every region it names, alive. `Severed.node` is the value's own owned backing
+// (an `Rc`-shaped `S`, by the sole production constructor's obligation), so holding it keeps the
+// severed value's pointee alive the same way a `Hosted.host` does; `Severed.reach` is an owned
+// `RegionSet`, independently `Witness`-sound.
 unsafe impl<F: PinsRegion + 'static, S> Witness for Carrier<F, S> {}
 
 // SAFETY: `singleton(single)` holds `single` as the sole `host` arm with an empty reach, so the
@@ -224,14 +226,25 @@ impl<F: PinsRegion + 'static, S> Carrier<F, S> {
 // `right` is never `Severed`: a severed backing hosts no arena to relocate into, so it never arises
 // as a merge/transfer_into destination.
 //
-// A `left` that is itself `Severed` drops its own owned `node` here (only its `reach` is minted
-// forward) — sound **only when the caller's projection copies the value** rather than passing the
-// same reference through (every current call site does: an aggregate fold deep-clones each cell,
-// and a relocation allocates fresh in `dest`). A verbatim passthrough merge (a declared-return
-// type-check that lets a `Carried::Type` through unchanged, e.g.) must not route this composition at
-// all for that value — see `finalize_terminal`'s pre-merge `Carrier` clone, which restores the
-// original (still-live, thanks to that extra `Rc` clone) witness after the merge for exactly that
-// case, rather than trusting the merge-computed one.
+// A `left` that is itself `Severed` has no slot in the composed carrier for its owned `node` (only
+// its `reach` is minted forward), which leaves two obligations at the merge boundary — both
+// deleted with the `Severed` arm (`delivery-driven-frame-retention`).
+//
+// Result validity: a projection may pass `left`'s value through un-copied only when `left` is
+// provably never `Severed`, or when the passed-through view is never read; every other projection
+// must copy (`deep_clone` / `copy_carried` / `Held::from_carried`). Two non-copying discharges
+// exist today: the `alloc_type_with` / `alloc_object_with` veneers (`src/machine/core/arena.rs`)
+// fold dep views via `fold_dep_view` but discard them, never reading the pushed view; and the one
+// view-reading fold (`src/machine/model/values/attr.rs`, the field lookup) consumes a dep built by
+// `resident_value_carrier`, which is always `Hosted`, never `Severed`.
+//
+// Deallocation timing: `Witnessed::merge` drops the source witnesses before it returns, while the
+// call-duration protectors on its by-value operands' interior references are still active — so the
+// `node` must not hit refcount zero inside the call even when the projection copied the value out.
+// A consuming-merge caller that can present a `Severed` left holds a node pin across the call (the
+// severed-backing pin in `finalize_terminal`, `src/machine/execute/finalize.rs`);
+// `Sealed::transfer_into` discharges it structurally — it merges a duplicate while the borrowed
+// seal retains the original witness past the call.
 unsafe impl<F, S, P, B> ComposeWitness<B> for Carrier<F, S>
 where
     F: PinsRegion + RegionOwner<Region = Region<P>> + 'static,
@@ -353,7 +366,10 @@ mod tests {
         let c: Carrier<TestFrame, ()> = Carrier::singleton(Rc::clone(&frame));
         assert!(!c.is_empty());
         assert!(c.covers(frame.region()));
-        assert!(!c.reach_covers(frame.region()), "singleton carries no reach — only residence");
+        assert!(
+            !c.reach_covers(frame.region()),
+            "singleton carries no reach — only residence"
+        );
     }
 
     #[test]
@@ -384,7 +400,10 @@ mod tests {
         assert!(c.covers(host.region()));
         assert!(c.covers(foreign.region()));
         assert!(c.reach_covers(foreign.region()));
-        assert!(!c.reach_covers(host.region()), "host is residence, not reach, without borrows_host");
+        assert!(
+            !c.reach_covers(host.region()),
+            "host is residence, not reach, without borrows_host"
+        );
     }
 
     #[test]

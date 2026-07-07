@@ -834,6 +834,14 @@ impl<'a> Scope<'a> {
     /// ([`Self::host_reach_of`]), into this same home's arena, so re-anchoring it under the read's own
     /// `host` pin is sound and free of any new allocation. A fully-owned value (`foreign: None`, bit
     /// unset) thus gets an empty reach, so the finalize gate severs it from a dying home frame.
+    ///
+    /// When `self` is a transparent window over borrowed bindings ([`Self::child_transparent`]),
+    /// `home` is the call-site frame but `foreign` points into the *owning* (module) scope's own
+    /// arena, not `home`'s — the binding was minted there at the module's own bind time. Sound because
+    /// the window's overlay reach-fold (`USING`'s body, `builtins/using_scope.rs`) mints the opened
+    /// module's own carrier into the call-site arena at overlay construction, before any such carrier
+    /// exists — so holding `home` roots the module's arena one hop removed, and through it `foreign`'s
+    /// pointee.
     fn resident_witness(
         &self,
         home: &Rc<FrameStorage>,

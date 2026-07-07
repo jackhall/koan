@@ -10,6 +10,8 @@ use super::NodeFinalize;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_root_silent};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
+use crate::machine::core::kfunction::body::{Body, ReturnContract};
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CarrierWitness, FrameSet, FrameStorage, Scope};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -296,5 +298,73 @@ fn adopt_sealed_severed_type_pins_foreign_region_after_producer_drop() {
     assert!(
         foreign_weak.upgrade().is_some(),
         "the consumer's minted reach still pins the foreign frame"
+    );
+}
+
+/// A declared-return re-stamp whose carrier holds a **type** value passes through un-relocated on
+/// the type channel: the merge composes against an unwitnessed home operand (`merge(w, ∅) == w`),
+/// so nothing is minted into the home region for a value that never moves there. Before this was
+/// gated on the carried discriminant, the merge always built a witnessed home operand when the home
+/// owner resolved, minting the type's foreign reach into the home arena and orphaning it there for
+/// the home region's whole life even though the type-channel result discarded that composed witness.
+#[test]
+fn type_passthrough_declared_return_mints_nothing_into_home() {
+    let foreign_storage = FrameStorage::run_root();
+    let foreign_scope = run_root_bare(&foreign_storage);
+    let foreign_child = foreign_storage
+        .brand()
+        .alloc_scope(Scope::child_under(foreign_scope));
+    let module = foreign_storage
+        .brand()
+        .alloc_module(Module::new("M".to_string(), foreign_child));
+
+    let root = FrameStorage::run_root();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let producer = CallFrame::new_test(scope, None);
+    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
+    // `borrows_into_home = true` so the carrier's reach already covers the producer region -- this
+    // keeps the pre-merge triage's sever branch from firing (it only severs when the home owner
+    // resolves *and* the reach doesn't already cover the producer), so the carrier the merge sees is
+    // exactly the one `resident_type_carrier` built, with no extra reach-clone muddying the refcount.
+    let carrier = producer.with_scope(|child| {
+        let kt_ref = child.brand().alloc_ktype(KType::Module { module });
+        child.resident_type_carrier(kt_ref, Some(&foreign_reach), true)
+    });
+
+    // A declared return of `Any` matches any carried type, so the merge takes the no-mismatch path;
+    // the home owner (`home_storage`) resolves via the FN's captured scope, so `home_owner.is_some()`.
+    let home_storage = FrameStorage::run_root();
+    let home_scope = run_root_bare(&home_storage);
+    let signature = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![],
+    };
+    let kfunc = KFunction::new(
+        signature,
+        Body::Builtin(probe_body),
+        home_scope,
+        None,
+        None,
+        false,
+    );
+    let kf_ref = home_storage.brand().alloc_function(kfunc);
+    let contract = Some(ReturnContract::Function(kf_ref));
+
+    let foreign_count_before = Rc::strong_count(&foreign_storage);
+
+    let runtime = KoanRuntime::new();
+    let checked = runtime
+        .finalize_terminal(carrier, Some(&producer), contract)
+        .expect("declared type Any matches the carried Module -- no mismatch");
+
+    assert_eq!(
+        Rc::strong_count(&foreign_storage),
+        foreign_count_before,
+        "the type channel passes the carrier through un-relocated -- no mint bumps the foreign \
+         frame's refcount, and no set holds it until the home region dies"
+    );
+    assert!(
+        checked.witness().covers(foreign_storage.region()),
+        "the checked carrier still covers the foreign region its reach always named"
     );
 }

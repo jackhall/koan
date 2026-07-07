@@ -254,7 +254,10 @@ unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile> for RegionBrand<'b> {
 // not by family marker — two distinct private `AggBuildFamily` markers share this one impl because
 // their `At<'r>` GAT projects to the identical concrete tuple type.
 unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
-    for (RegionBrand<'b>, Vec<crate::machine::model::values::Held<'b>>)
+    for (
+        RegionBrand<'b>,
+        Vec<crate::machine::model::values::Held<'b>>,
+    )
 {
     fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
         self.0.handle()
@@ -276,7 +279,9 @@ unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
 
 // SAFETY: same obligation, for the named-field builder shape `(RegionBrand<'r>, Vec<(String,
 // KObject<'r>)>)` (the record-repr newtype's field accumulator, `RecordFieldsFamily`).
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile> for (RegionBrand<'b>, Vec<(String, KObject<'b>)>) {
+unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
+    for (RegionBrand<'b>, Vec<(String, KObject<'b>)>)
+{
     fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
         self.0.handle()
     }

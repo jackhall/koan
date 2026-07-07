@@ -13,7 +13,9 @@ use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::ErasedContract;
 use crate::machine::core::{FrameStorage, KoanRegionExt};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand};
+use crate::machine::{
+    CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand,
+};
 use crate::witnessed::{erase_to_static, reattachable, seal_option, SealedExtern, Witnessed};
 
 use super::dispatch::SchedulerView;
@@ -143,9 +145,7 @@ impl<'run> KoanRuntime<'run> {
             FrameSet::empty(),
             |acc, (src, d)| match src {
                 Ok(t) => FrameSet::union(&acc, &t.carrier.witness().to_liveness_frameset()),
-                Err(_) => {
-                    FrameSet::union(&acc, &self.sched.dep_witness(d).to_liveness_frameset())
-                }
+                Err(_) => FrameSet::union(&acc, &self.sched.dep_witness(d).to_liveness_frameset()),
             },
         );
         // The open witness: the start cart (pinning the continuation, contract, and dest region — plus

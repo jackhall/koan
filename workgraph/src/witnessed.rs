@@ -177,8 +177,10 @@ impl<T: Reattachable> Erased<T> {
     /// The `'static`-erased inner value, for a crate-internal re-anchor via [`with_branded_ref`] —
     /// the route for a carrier that stores an erased reference *alongside* (not inside) its own
     /// witness, so it re-anchors under a pin other than the one bundled with it. The sole caller is
-    /// [`Carrier`](carrier::Carrier)'s pinned reach reader.
-    pub(crate) fn as_static(&self) -> &T::At<'static> {
+    /// [`Carrier`](carrier::Carrier)'s pinned reach reader. The returned `&T::At<'static>` interior is
+    /// `Copy`, so a caller must re-anchor it under a held pin immediately (as `with_reach` does) and
+    /// never let the `'static` form escape the re-anchor expression.
+    pub(in crate::witnessed) fn as_static(&self) -> &T::At<'static> {
         &self.inner
     }
 }
@@ -295,7 +297,13 @@ pub unsafe trait UnionWitness: Witness + Sized {
 ///
 /// Holding the value [`compose`](Self::compose) returns must keep every region `left`, `right`, and
 /// `dest` reach live for as long as it is held — the same obligation as [`UnionWitness::union`], but
-/// discharged with the destination's allocation capability available to satisfy it.
+/// discharged with the destination's allocation capability available to satisfy it. An owned value
+/// backing a source witness pins (not a region) is part of the same obligation: [`Witnessed::merge`]
+/// drops the source witnesses before it returns, while the call-duration protectors on its by-value
+/// operands' interior references are still active, so deallocating such a backing inside the call is
+/// undefined behavior even when the projection copied the value out. An impl whose composed value
+/// cannot represent that pin (the [`Carrier`] `Severed` node) obligates the merge caller to hold it
+/// across the call instead — see that impl's notes.
 pub unsafe trait ComposeWitness<B: Reattachable>: Witness + Sized {
     /// Compose `left` and `right`'s witnesses into one pinning both — and, for an impl that mints,
     /// `dest`'s own region too — with `dest`'s live form available as a mint target.
@@ -603,7 +611,11 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         let witness = W::compose(&left_witness, &right_witness, &live_right);
         let projected = f(live_left, live_right, PhantomData);
         // The source witnesses pinned both backings across `f`; drop them now — the composed `witness`
-        // computed above carries both pins forward.
+        // computed above carries their pins forward (`ComposeWitness`'s obligation). These drops run
+        // while the call-duration protectors on the by-value operands' interior references are still
+        // active, so a backing deallocated here is undefined behavior even after a copying
+        // projection — a pin the composed witness cannot represent must be held by the caller across
+        // this call instead (see the `Carrier` impl's `Severed` notes).
         drop(left_witness);
         drop(right_witness);
         Witnessed {
@@ -737,6 +749,12 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// carried forward as the caller's obligation, not re-asserted here — a caller rebuilds a witness
     /// that provably covers everything the old one did (a residence pin folded in at seal time, or a
     /// home re-host that mirrors a mint the value's binding already performed).
+    ///
+    /// Transitional: its sole production caller is the finalize gate's region-pure triage (the
+    /// no-declared-return / `Empty`-witness Done-boundary rehost onto the producer frame); this verb
+    /// is deleted along with the sever gate once the scheduler retains producer frames itself
+    /// (`delivery-driven-frame-retention`), before `workgraph-extraction` freezes the crate's public
+    /// surface.
     pub fn rehost<W2: Witness>(self, witness: W2) -> Witnessed<T, W2> {
         Witnessed {
             value: self.value,
