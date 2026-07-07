@@ -46,7 +46,5 @@ the surface being documented and frozen is the final one.
 - [Delivery-driven frame retention](delivery-driven-frame-retention.md) — moves
   the library surface (`Workload::Witness`, the set machinery) before identifiers
   freeze.
-- [Library-owned tail-call region reuse](tco-library-region-reuse.md) — removes Koan's last direct
-  region manipulation before the boundary is frozen.
 
 **Unblocks:** none tracked — the project's terminal item.

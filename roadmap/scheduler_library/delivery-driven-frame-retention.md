@@ -74,8 +74,6 @@ with the retained frames.
 
 **Requires:**
 
-- [Library-owned tail-call region reuse](tco-library-region-reuse.md) — makes
-  region lifecycle library-owned, so retention is the only release mechanism.
 
 **Unblocks:**
 
