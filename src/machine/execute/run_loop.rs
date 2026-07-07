@@ -98,25 +98,22 @@ impl<'run> KoanRuntime<'run> {
     /// consumer `dest` region is the opened scope's own
     /// region. The closure's result cannot name `'b`, so the `Outcome<'b>` and the finalized
     /// `Carried<'b>` are erased into the slot store *before* return: a value born at `'b` never has to
-    /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The cart clone is
-    /// confined to this call and dropped at return; a `FreshTail` placement for the next iteration
-    /// mints an entirely fresh cart rather than reusing this one, so nothing aliases across the
-    /// boundary.
+    /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The step's cart clone
+    /// is confined to this call and dropped at return; a `FreshTail` placement for the next iteration
+    /// mints an entirely fresh cart, so nothing aliases across the boundary.
     fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
         let idx = id.index();
         // Read the scope as a value up front: nothing holds a scope borrow across the step's
-        // `&mut self` work or the in-step TCO frame reset.
+        // `&mut self` work or a tail hop's frame swap.
         let node_scope = node.payload.scope;
         let NodeFrame {
             cart,
-            reserve,
             contract: prev_contract,
         } = node.frame;
         let prev_chain_carrier = node.payload.chain;
         let (deps, erased_continuation, _carrier) = node.work.into_run_parts();
-        // The step's open witness: a step-confined cart clone, dropped at return so it does not
-        // contend with the TCO `Rc::get_mut` gate. The tail open re-anchors the step's carriers to the
-        // brand `'b` this witness pins, and owns that reattach.
+        // The step's open witness: a step-confined cart clone, dropped at return. The tail open
+        // re-anchors the step's carriers to the brand `'b` this witness pins, and owns that reattach.
         let continuation_witness = Rc::clone(&cart);
         // Consumer-pull: read each dep's terminal out of its producer frame so it can be re-anchored
         // in this consumer's own scope region, where the value dies with the consumer and no surviving
@@ -165,7 +162,10 @@ impl<'run> KoanRuntime<'run> {
         // frame and doesn't ride it — it is pinned instead by the dep's duplicated `Sealed` carrier held
         // across the whole open in `dep_sources` (see the struct doc above), never by this set.
         let combined: FrameSet = FrameSet::union(
-            &FrameSet::union(&FrameSet::singleton(continuation_witness.storage_rc()), &pin),
+            &FrameSet::union(
+                &FrameSet::singleton(continuation_witness.storage_rc()),
+                &pin,
+            ),
             &contract_pin,
         );
         // Open the four externally-witnessed carriers — continuation, frame-gated contract, active
@@ -194,14 +194,13 @@ impl<'run> KoanRuntime<'run> {
                     // un-relocated. A `ForwardReady` relocation below builds its destination carrier
                     // from this same scope's brand.
                     //
-                    // Bracket the step's ambient frame/reserve/payload and contract-chain flag —
-                    // whether this slot is a tail call within an established contract chain, so a
+                    // Bracket the step's ambient frame/payload and contract-chain flag — whether
+                    // this slot is a tail call within an established contract chain, so a
                     // deferred-return FN dispatched here skips resolving its own return type
                     // (keep-first discards it anyway) — restored on every exit path, including
                     // unwinds, by `with_slot_step` itself.
                     let (step, post) = self.with_slot_step(
                         cart,
-                        reserve,
                         NodePayload {
                             scope: node_scope,
                             chain: prev_chain_carrier.clone(),
@@ -278,7 +277,6 @@ impl<'run> KoanRuntime<'run> {
                             overlay_scope,
                         } => {
                             let prev_frame = post.prev_frame;
-                            let post_step_reserve = post.post_step_reserve;
                             // Keep the **first** contract of a tail chain: a nested tail call does not
                             // overwrite an established contract, so the chain checks the original caller's
                             // declared return, not the tail-most callee's. `prev_contract` was only
@@ -301,16 +299,12 @@ impl<'run> KoanRuntime<'run> {
                                         overlay_scope.is_none(),
                                         "a framed tail-replace carries no overlay scope"
                                     );
-                                    // Rotate the ping-pong reserve: drop the superseded post-step reserve.
-                                    drop(post_step_reserve);
-                                    // The non-dying run frame is not a reusable per-call region; parking
-                                    // it as the reserve would mis-time a real frame's drop. Treat it as no
-                                    // reserve — the run scope is re-reached via the scheduler's `run_frame`.
-                                    let new_reserve =
-                                        (!prev_frame.non_dying()).then_some(prev_frame);
                                     // The slot's scope is always this `f` cart's own child, so store a
                                     // payload-less `NodeScope::Yoked` re-projected at the read boundary —
-                                    // no persisted `&'run` to dangle across a TCO reset.
+                                    // no persisted `&'run` to dangle across the tail hop. `prev_frame`
+                                    // (the retiring cart) drops here, at the end of this arm: its storage
+                                    // stays pinned by `combined` until the step open above exits, and by
+                                    // the loop-carried argument carriers beyond that.
                                     self.sched.replace(
                                         id,
                                         Node {
@@ -321,7 +315,6 @@ impl<'run> KoanRuntime<'run> {
                                             },
                                             frame: NodeFrame {
                                                 cart: f,
-                                                reserve: new_reserve,
                                                 contract: next_contract,
                                             },
                                         },
@@ -344,7 +337,6 @@ impl<'run> KoanRuntime<'run> {
                                             },
                                             frame: NodeFrame {
                                                 cart: prev_frame,
-                                                reserve: post_step_reserve,
                                                 contract: next_contract,
                                             },
                                         },

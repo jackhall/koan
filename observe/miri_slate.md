@@ -98,7 +98,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-38 tests, grouped by the unsafe site each pins down. Names below are the exact
+39 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 14 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -333,6 +333,17 @@ MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
+**Tail-hop argument adoption ordering (Lemma 2)** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
+tail call's loop-carried argument is delivered as a sealed carrier hosted in the retiring
+incarnation's region and adopted by copy (`Scope::adopt_sealed_copied`): the copy's interior borrows
+are re-pinned by the adopted-reach mint before the copy's `&'a` is fabricated, while the
+residence-only producer host is released with the working expression — so the retiring region frees
+strictly after the adoption copy reads it. The test rebuilds an aggregate from the previous hop's own
+carried value at every hop, so the spliced carrier genuinely pins the retiring region across the hop;
+tree borrows catches a use-after-free if the free ever reorders before the adoption read.
+
+- `loop_carried_aggregate_survives_tail_hop_adoption`
+
 **TRY-WITH inside TCO position** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — same
 `CallFrame::with_scope` seed relocation + bind as MATCH for the per-branch frame; the
 `FrameStorage.outer` chain keeps the call-site region alive when the branch body
@@ -510,9 +521,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-07: 212s — 39 tests, 0 leaks, 0 UB
+- 2026-07-07: 200s — 38 tests, 0 leaks, 0 UB
 - 2026-07-07: 199s — 38 tests, 0 leaks, 0 UB
 - 2026-07-06: 260s — 41 tests, 0 leaks, 0 UB
 - 2026-07-06: 201s — 40 tests, 0 leaks, 0 UB
-- 2026-07-06: 248s — 38 tests, 0 leaks, 0 UB
-- 2026-07-06: 159s — 38 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

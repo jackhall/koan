@@ -34,7 +34,7 @@ use super::KFunction;
 #[derive(Clone)]
 pub struct ExecFrame {
     /// The per-call region the body executes in: it backs allocations and its child scope is the
-    /// body's scope. Supplied (and, for TCO, reset) by the scheduler.
+    /// body's scope. Supplied by the scheduler; a tail hop supplies a freshly minted one.
     pub region: Rc<CallFrame>,
 }
 
@@ -136,9 +136,12 @@ where
                         // Mint the parameter's reach from its delivered arg carrier (home-omitted) so
                         // a later read rebuilds its carrier. A region-pure arg has no entry → empty reach.
                         // The home-borrow bit is captured alongside, since the home-omitted reach drops it.
+                        // The cell is a deep copy (`Held::from_carried` above), so the carrier's
+                        // residence-only host is not part of the copy's reach — a tail call's retiring
+                        // frame must not ride the fresh frame's binding.
                         let stored = arg_carriers
                             .get(name)
-                            .map(|carrier| child.host_reach_of(carrier.witness()))
+                            .map(|carrier| child.adopted_reach_of(carrier.witness()))
                             .unwrap_or_default();
                         let _ =
                             child.bind_value(name.clone(), object, BindingIndex::value(0), stored);

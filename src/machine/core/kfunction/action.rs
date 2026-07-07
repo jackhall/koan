@@ -410,7 +410,7 @@ pub enum FramePlacement<'a> {
     /// carriers that pin it release their hold. The minted frame strong-owns no ancestor, so it
     /// carries no back-edge.
     FreshTail { outer: &'a Scope<'a> },
-    /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`, never the reserve), handed
+    /// A **pre-built** fresh cart the builtin minted (`CallFrame::new`), handed
     /// to the harness to install. The builtin owns construction because it may seed the cart before
     /// the tail dispatches — MATCH/TRY bind `it` into it via `CallFrame::with_scope`; EVAL builds it
     /// for the UAF guard.

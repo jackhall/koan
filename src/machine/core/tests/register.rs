@@ -3,8 +3,8 @@
 use super::super::{BindingIndex, NameLookup};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
-use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };

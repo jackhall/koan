@@ -22,7 +22,7 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        runtime.with_slot_step(frame, None, payload, true, |_rt| -> () {
+        runtime.with_slot_step(frame, payload, true, |_rt| -> () {
             panic!("step body unwinds");
         })
     }));
@@ -30,7 +30,6 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
     assert!(result.is_err());
     assert!(runtime.current_frame().is_none());
     assert!(!runtime.has_active_payload());
-    assert!(runtime.take_active_reserve().is_none());
     assert!(!runtime.ambient.in_contract_chain());
 }
 
@@ -46,11 +45,10 @@ fn slot_step_bracket_restores_ambient_on_normal_return() {
         chain: LexicalFrame::detached(),
     };
 
-    let (_, post) = runtime.with_slot_step(frame.clone(), None, payload, true, |_rt| {});
+    let (_, post) = runtime.with_slot_step(frame.clone(), payload, true, |_rt| {});
 
     assert!(runtime.current_frame().is_none());
     assert!(!runtime.has_active_payload());
-    assert!(runtime.take_active_reserve().is_none());
     assert!(!runtime.ambient.in_contract_chain());
     assert!(Rc::ptr_eq(&post.prev_frame, &frame));
 }

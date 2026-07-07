@@ -9,6 +9,7 @@
 //! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
 //! - [`functor`] — FN as a functor over module-typed parameters.
+//! - [`tail_region_turnover`] — library-owned tail-call region-turnover acceptance criteria.
 
 mod anonymous;
 mod arena;
@@ -20,6 +21,7 @@ mod functor;
 mod param_type;
 mod record_types;
 mod return_type;
+mod tail_region_turnover;
 
 use crate::builtins::test_support::{run, run_root_with_buf};
 use crate::machine::core::run_root_storage;

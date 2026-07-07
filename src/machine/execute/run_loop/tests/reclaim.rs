@@ -1,7 +1,7 @@
 //! `free` / node-reclamation invariants.
 
 use crate::builtins::default_scope;
-use crate::machine::core::{FrameStorageExt, run_root_storage};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::{Carried, KObject};

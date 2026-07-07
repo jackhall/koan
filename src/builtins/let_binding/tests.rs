@@ -206,7 +206,7 @@ fn let_aliases_struct_preserves_type_identity() {
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);

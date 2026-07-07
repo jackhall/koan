@@ -198,15 +198,39 @@ impl<'a> Scope<'a> {
     /// plus lexical-ancestor regions ([`Self::chain_reaches_region`]) — a per-call frame carries no
     /// storage `outer` under TCO, so the lexical half is what catches a closure's captured (ancestor)
     /// scope, keeping a sibling bind of the call's result from closing a region cycle. A `Hosted`
-    /// witness's `host` materializes as a reach member under the same omission; a `Severed` carries no
-    /// region and is dropped here — its owned node is a severed backing, handled by
-    /// [`Self::adopt_sealed`]'s value re-home, never as reach.
+    /// witness's `host` materializes as a reach member under the same omission — the value keeps
+    /// living in the host's region ([`Self::adopt_sealed`]'s copy-free re-anchor), so its residence
+    /// must be pinned; a `Severed` carries no region and is dropped here — its owned node is a
+    /// severed backing, handled by [`Self::adopt_sealed`]'s value re-home, never as reach.
     pub(crate) fn host_reach_of(&self, witness: &CarrierWitness) -> StoredReach<'a> {
+        self.reach_of(witness, true)
+    }
+
+    /// The stored reach for a value **deep-copied** out of a delivered carrier into this scope's own
+    /// region — the copy-bind twin of [`Self::host_reach_of`] (a parameter bind, a MATCH/TRY `it`
+    /// bind). The copy does not reside in the carrier's `host` region, so residence alone pins
+    /// nothing: the host materializes as a reach member only when the value's **reach** genuinely
+    /// borrows into it (`reach_covers` — the predicate the Done-boundary sever gate applies to a
+    /// dying producer frame). Dropping a residence-only host is what lets a tail loop's retiring
+    /// region free once its delivered carrier drops, instead of riding every later incarnation's
+    /// stored reach.
+    pub(crate) fn adopted_reach_of(&self, witness: &CarrierWitness) -> StoredReach<'a> {
+        self.reach_of(witness, false)
+    }
+
+    /// Shared mint behind [`Self::host_reach_of`] / [`Self::adopted_reach_of`]: `residence_is_reach`
+    /// decides whether a `Hosted` witness's `host` materializes unconditionally (the value keeps
+    /// living there) or only when the value's reach covers it (the value was copied out).
+    fn reach_of(&self, witness: &CarrierWitness, residence_is_reach: bool) -> StoredReach<'a> {
         let home = self.region_owner.upgrade();
         let borrows_into_home = witness.reach_covers(self.region());
         let hosts: Vec<Rc<FrameStorage>> = match witness {
-            CarrierWitness::Hosted { host, .. } => vec![Rc::clone(host)],
-            CarrierWitness::Empty | CarrierWitness::Severed { .. } => Vec::new(),
+            CarrierWitness::Hosted { host, .. }
+                if residence_is_reach || witness.reach_covers(host.region()) =>
+            {
+                vec![Rc::clone(host)]
+            }
+            _ => Vec::new(),
         };
         let foreign = witness.with_reach(|reach| {
             let sources: &[&FrameSet] = match &reach {
@@ -901,6 +925,32 @@ impl<'a> Scope<'a> {
         // a member) into this scope's arena, held for the region's life ⊇ `'a`. So the re-anchored
         // `Carried<'a>` cannot outlive its pin. Copy-free; only the borrow is re-anchored.
         unsafe { erased.reattach() }
+    }
+
+    /// Adopt a sealed dep carrier's **object** into this scope by structural copy — the
+    /// value-channel twin of [`Self::adopt_sealed`] for a consumer that re-homes the value anyway (a
+    /// call's argument delivery). The top node is `deep_clone`d into this scope's own arena, so the
+    /// producer's region is *not* part of the copy's residence: the mint stores the copy's reach
+    /// ([`Self::adopted_reach_of`] — reach members plus the host only when the value's borrows
+    /// genuinely cover it), never a residence-only host pin. This is what frees a tail loop's
+    /// retiring region once its delivered carrier drops (the working expression at step end),
+    /// instead of chaining it into every successor region's arena.
+    ///
+    /// The **type** channel stays on [`Self::adopt_sealed`]: a `KType` clone is shallow (interior
+    /// borrows into the host region survive it), so a type adoption genuinely needs the host
+    /// materialized as reach.
+    pub(crate) fn adopt_sealed_copied(
+        &self,
+        cell: &Sealed<CarriedFamily, CarrierWitness>,
+    ) -> Carried<'a> {
+        let is_object = cell.open(|live| matches!(live, Carried::Object(_)));
+        if !is_object {
+            return self.adopt_sealed(cell);
+        }
+        // Mint FIRST: pin every region the copy still reaches (interior borrows survive
+        // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated.
+        let _ = self.adopted_reach_of(cell.witness());
+        cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's

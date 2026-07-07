@@ -199,7 +199,7 @@ fn unstamped_empty_container_detection() {
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
@@ -220,7 +220,7 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::types::Parseable;
     let storage = run_root_storage();
     let region = storage.brand();
@@ -238,7 +238,7 @@ fn wrapped_summarize_renders_surface_form() {
 /// source `Wrapped`, not re-deep-cloning the repr) and copies the `&'a` `type_id` slot.
 #[test]
 fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));

@@ -2,8 +2,8 @@
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 use crate::machine::BindingIndex;

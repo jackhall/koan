@@ -1,7 +1,7 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, spliced_part};
-use crate::machine::core::{FrameStorageExt, run_root_storage};
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 
 /// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned

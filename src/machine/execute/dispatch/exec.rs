@@ -258,11 +258,15 @@ fn extract_carried_args<'step>(
     for part in &working_expr.parts {
         match &part.value {
             ExpressionPart::Keyword(_) => {}
-            // Adopt the spliced cell into the call scope: its reach folds in and its value re-anchors
-            // at `'step` copy-free. `view.current_scope()` *is* the call scope (the run loop opens
-            // each step's scope from the Continue-installed cart), so the fold never lands in the
-            // caller's scope.
-            ExpressionPart::Spliced(cell) => args.push(view.current_scope().adopt_sealed(cell)),
+            // Adopt the spliced cell into the call scope — an object by structural copy (the copy's
+            // reach folds in; a residence-only producer host is released with the working
+            // expression, so a tail call's retiring region does not chain into the fresh frame's
+            // arena), a type copy-free with its host pinned. `view.current_scope()` *is* the call
+            // scope (the run loop opens each step's scope from the Continue-installed cart), so the
+            // fold never lands in the caller's scope.
+            ExpressionPart::Spliced(cell) => {
+                args.push(view.current_scope().adopt_sealed_copied(cell))
+            }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`.
             ExpressionPart::Literal(_) => {

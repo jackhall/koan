@@ -3,7 +3,7 @@
 //! [`Stored`](crate::witnessed::Stored) impls (which library-owned cell a family lands in), and
 //! the Koan-typed `alloc_*` wrappers. `CallFrame`
 //! — the per-call frame shell over a refcounted `FrameStorage` (the `KoanRegion` plus the ancestor
-//! chain), holding the child `Scope` and resetting in place for TCO — also lives here.
+//! chain), holding the child `Scope` — also lives here.
 //!
 //! The generic erase-store engine lives in [`crate::witnessed::region`]; this file supplies the
 //! Koan policy it runs.
@@ -163,7 +163,7 @@ impl<'a> RegionBrand<'a> {
     /// constructor that names the region-pure obligation, so the active frame is deliberately excluded.
     /// The producing frame is folded in only at finalize/close (the scope-reach seal), so a
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
-    /// would defeat the `Rc::get_mut` TCO gate).
+    /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
     ///
     /// Region-pure is this surface's precondition: the object — built fresh inside the brand —
     /// references nothing foreign, so the empty set is its exact reach. Soundness is the within-step
@@ -568,8 +568,8 @@ impl CallFrame {
 /// [`CallFrame::new`] builds immediately, so a constructed frame's region is minted by the time
 /// anything reads it — and the `outer` link chains the lexical-ancestor frames' storage alive. An
 /// escaping value (a returned closure, a module frame) pins *this* — not the [`CallFrame`] shell —
-/// so the shell stays uniquely owned and the scheduler can reuse it for the next tail iteration
-/// while the escapee's captured environment rides the old `FrameStorage` it still holds.
+/// so a tail hop's shell can drop outright while the escapee's captured
+/// environment rides the old `FrameStorage` it still holds.
 /// The library's raw-region constructor is sealed to `workgraph`, so nothing outside the library
 /// can mint a `KoanRegion` directly; the Koan-typed [`RegionBrand`] mint over a `FrameStorage` lives
 /// on [`FrameStorageExt`] (an extension trait, since a type alias takes no inherent impls of its own).
@@ -642,9 +642,10 @@ pub(crate) fn build_frame_child_witnessed<'p>(
 
 /// One user-fn call's allocation frame: a thin shell over a refcounted [`FrameStorage`]. `Rc`-pinned
 /// so the scheduler manages the frame by `Rc<CallFrame>`; an escaping closure extends only the
-/// *storage* (via [`Self::storage_rc`]), not the shell, so tail reuse can reset the shell's storage
-/// without foreclosing on the escapee. Field order is load-bearing: `storage` drops before
-/// `scope_carrier`, so the region tears down before the now-dangling child reference.
+/// *storage* (via [`Self::storage_rc`]), not the shell, so a `FreshTail` tail hop can drop this
+/// frame's shell outright without foreclosing on the escapee. Field order is load-bearing:
+/// `storage` drops before `scope_carrier`, so the region tears down before the now-dangling child
+/// reference.
 ///
 /// See [per-call-region/README.md](../../../design/per-call-region/README.md) for the
 /// carrier set, escaping-value retention, ancestor chain, and TCO
@@ -785,8 +786,8 @@ impl CallFrame {
 
     /// Clone this frame's `FrameStorage` Rc — the handle an escaping value (a returned closure, a
     /// module frame) pins to keep its captured environment alive independently of the shell: a
-    /// `FreshTail` tail hop drops this frame's shell outright rather than resetting it in place, and
-    /// the escaped storage clone keeps the region it names alive regardless.
+    /// `FreshTail` tail hop drops this frame's shell outright, and the escaped storage clone keeps
+    /// the region it names alive regardless.
     pub fn storage_rc(&self) -> Rc<FrameStorage> {
         Rc::clone(&self.storage)
     }

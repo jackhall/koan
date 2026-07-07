@@ -121,8 +121,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
     use crate::machine::core::StoredReach;
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, KErrorKind, Scope};

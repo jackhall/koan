@@ -150,7 +150,7 @@ fn record_disjoint_fields_incomparable() {
 /// pins the value-shaped arms (object type-tag, type-channel `OfKind`) the delegation now owns.
 #[test]
 fn accepts_carried_matches_spliced_delegation() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
@@ -226,7 +226,7 @@ fn spliced_cell_classifies_by_opening() {
 /// literal admits any record slot shape-only.
 #[test]
 fn record_value_admission_and_matches() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
     let value: &KObject<'_> = region.alloc_object(KObject::record(Record::from_pairs(vec![
@@ -257,7 +257,7 @@ fn record_value_admission_and_matches() {
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::default_scope;
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::{Module, ModuleSignature};
     use std::collections::HashMap;
     let region = run_root_storage();
@@ -318,7 +318,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 /// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
     let newtype_ty = KType::OfKind(KKind::NewType);
@@ -392,7 +392,7 @@ fn user_type_specificity_lattice() {
 #[test]
 fn is_type_denoting_table() {
     use crate::builtins::default_scope;
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::ModuleSignature;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -448,7 +448,7 @@ fn is_type_denoting_table() {
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
     use crate::builtins::default_scope;
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::ModuleSignature;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));

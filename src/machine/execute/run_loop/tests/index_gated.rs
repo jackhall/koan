@@ -9,7 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::{FrameStorage, run_root_storage};
+use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::{KError, KErrorKind, Scope};

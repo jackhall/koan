@@ -83,19 +83,21 @@ pub(crate) fn arm_tail<'a>(
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
     // Bind `it` into the frame's own scope: `alloc_object` erases the caller-`'a` input and
-    // re-homes it at the frame region, so no pre-shortening is needed. Either source ends up
-    // stored with the reach it arrived with, so a later read of `it` rebuilds its carrier from it.
+    // re-homes it at the frame region, so no pre-shortening is needed. Either source is a deep copy
+    // living in the arm frame, so the stored reach is the copy's (`adopted_reach_of` — a
+    // residence-only host is not carried; a tail loop's retiring frame must not ride the arm's
+    // binding), and a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
         let (it_object, reach) = match it_source {
             ItSource::Value { value, reach } => (
                 child.brand().alloc_object(value),
-                child.host_reach_of(&reach),
+                child.adopted_reach_of(&reach),
             ),
             ItSource::Carrier(carrier) => (
                 // Adopt at the bind brand: one structural copy, made directly into the arm frame's
-                // region inside the carrier's open; the binding stores the carrier's reach.
+                // region inside the carrier's open; the binding stores the copy's reach.
                 carrier.open(|live| child.brand().alloc_object(live.object().deep_clone())),
-                child.host_reach_of(carrier.witness()),
+                child.adopted_reach_of(carrier.witness()),
             ),
         };
         let _ = child.bind_value("it".to_string(), it_object, BindingIndex::value(0), reach);

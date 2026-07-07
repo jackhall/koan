@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::core::{FrameStorageExt, run_root_storage};
 use crate::machine::core::StoredReach;
+use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::KType;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;

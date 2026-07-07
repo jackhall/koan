@@ -76,7 +76,7 @@ impl Workload for KoanWorkload {
 /// See design/execution/README.md § the dispatcher / scheduler boundary.
 pub struct KoanRuntime<'run> {
     pub(in crate::machine::execute) sched: Scheduler<KoanWorkload>,
-    /// The ambient per-step context — the active per-call frame, slot reserve, run frame, the
+    /// The ambient per-step context — the active per-call frame, run frame, the
     /// executing slot's payload, and the contract-chain flag. The scheduler is a pure DAG runtime;
     /// this driver-side state floats across a single step. See [`ambient`](super::ambient).
     pub(in crate::machine::execute) ambient: super::ambient::AmbientContext,
@@ -473,7 +473,8 @@ impl<'run> KoanRuntime<'run> {
                 let sealed_contract = contract.map(|c| {
                     Sealed::seal(Witnessed::from_erased(
                         Erased::erase(c),
-                        c.home_owner().map_or(CarrierWitness::Empty, CarrierWitness::singleton),
+                        c.home_owner()
+                            .map_or(CarrierWitness::Empty, CarrierWitness::singleton),
                     ))
                 });
                 NodeStep::Replace {

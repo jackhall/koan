@@ -48,18 +48,15 @@ impl<W: Workload> NodeWork<W> {
     }
 }
 
-/// A node's per-call frame state: the execution cart, its ping-pong reserve, and the opaque return
-/// contract. Lifetime-free — the cart `Rc` pins everything its members point at, and the contract is
-/// stored opaquely as `W::Contract` (the workload re-anchors it at the Done boundary witnessed by
-/// `cart`). Every node owns a `NodeFrame`: the cart is the per-node memory the slot's step runs
-/// against. `reserve` and `contract` are sparse.
+/// A node's per-call frame state: the execution cart and the opaque return contract. Lifetime-free —
+/// the cart `Rc` pins everything its members point at, and the contract is stored opaquely as
+/// `W::Contract` (the workload re-anchors it at the Done boundary witnessed by `cart`). Every node
+/// owns a `NodeFrame`: the cart is the per-node memory the slot's step runs against. `contract` is
+/// sparse.
 pub struct NodeFrame<W: Workload> {
     /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
     /// step; the scheduler stores and hands it back but calls no method on it.
     pub cart: Rc<W::Cart>,
-    /// Per-slot reserve cart for the ping-pong rotation that lets a stateful resume reuse a frame
-    /// across iterations.
-    pub reserve: Option<Rc<W::Cart>>,
     /// Return contract enforced at the Done boundary, dormant between steps as a [`Sealed`] carrier
     /// — pinned by its own carried witness (the contract's home region owner), independent of
     /// `cart`. The workload re-anchors it at the step brand via [`Sealed::open`]. `None` for slots
@@ -72,7 +69,6 @@ pub struct Node<W: Workload> {
     /// The slot's opaque workload payload, stored and handed back but never inspected by the
     /// scheduler.
     pub payload: W::Payload,
-    /// The slot's per-call frame state (cart + reserve + opaque contract) — never absent, see
-    /// [`NodeFrame`].
+    /// The slot's per-call frame state (cart + opaque contract) — never absent, see [`NodeFrame`].
     pub frame: NodeFrame<W>,
 }

@@ -12,7 +12,9 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::core::kfunction::body::{Body, ReturnContract};
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope};
+use crate::machine::core::{
+    run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope,
+};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::values::{CarriedFamily, Module};

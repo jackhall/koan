@@ -39,7 +39,6 @@ impl<W: Workload> Scheduler<W> {
             payload,
             frame: NodeFrame {
                 cart,
-                reserve: None,
                 contract: None,
             },
         });

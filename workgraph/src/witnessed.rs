@@ -929,8 +929,8 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
 /// supplying one at the access. Where [`Sealed`] bundles `W` (and so [`Sealed::open`] reads the pin
 /// from the bundle), `SealedExtern` carries the carrier alone — the holder already pins the backing
 /// and hands a borrow of the witness in at [`open`](Self::open). This is the form for a carrier whose
-/// witness the holder must *not* duplicate: bundling a clone of a reference-counted cart would peg the
-/// holder's own `Rc::get_mut` uniqueness check (the TCO frame-reuse gate). It wraps an [`Erased`]
+/// witness the holder must *not* duplicate: bundling a clone of a reference-counted cart would extend
+/// its lifetime beyond the holder's own drop. It wraps an [`Erased`]
 /// rather than re-storing the retype, so [`retype`] stays the single audited reattach home.
 ///
 /// Its [`open`](Self::open) is **consuming** (takes `self`), so a non-`Copy` carrier — a

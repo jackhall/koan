@@ -175,8 +175,8 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::{FrameStorageExt, run_root_storage};
     use crate::machine::core::StoredReach;
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::machine::BindingIndex;
 
