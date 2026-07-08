@@ -17,7 +17,12 @@ pin at a consumer site, against the boundary rule that pins travel as
 ([design/scheduler-library.md](../../design/scheduler-library.md)). The
 bundled verb `Delivered::mint_reach`
 ([delivered.rs](../../workgraph/src/witnessed/delivered.rs)) — whose body is
-exactly this mint — ships with zero callers.
+exactly this mint — ships with zero callers. The same split shows up as
+koan-side `unsafe`: `Scope::adopt_sealed`
+([scope.rs](../../src/machine/core/scope.rs)) mints the reach and then
+re-anchors the sealed value in a second, separately-unsafe step
+(`Erased::reattach`), with the soundness link between the two carried by a
+comment rather than a signature.
 
 **Acceptance criteria.**
 
@@ -30,6 +35,9 @@ exactly this mint — ships with zero callers.
 - The resident mint case (a value already living in an ambiently covered
   region, today the `None`-host arm of `Scope::reach_of`) has its own explicit
   entry rather than riding `Some`/`None` on a shared parameter.
+- Copy-free adoption is one library verb: the mint and the re-anchor it
+  justifies are fused behind a `Delivered` adopt entry, and
+  [scope.rs](../../src/machine/core/scope.rs) contains no `unsafe`.
 
 **Directions.**
 
@@ -40,6 +48,16 @@ exactly this mint — ships with zero callers.
   the resident path; (b) add an envelope-free `Witnessed`-level mint twin so
   `mint_into` goes `pub(crate)`. Recommended: (b) — the surface then states
   "resident" in its type rather than in a `None` argument.
+- *Adopt verb — decided.* `Scope::adopt_sealed`'s mint-then-reattach pair
+  fuses into one library entry on the envelope (`Delivered::adopt_into`:
+  the `Residence::Kept` mint, then the re-anchor that mint justifies), so
+  the caller cannot split them and the reattach `unsafe` moves into the
+  library beside `retype`. (Unsafe-elimination review, 2026-07-07.)
+- *Adopt omission — open.* The adopt verb's omit predicate: (a)
+  caller-supplied, as `mint_reach` takes today — trust surface identical to
+  the existing mint path, no retention change; (b) fixed to the destination
+  region only — fully structural soundness, at the cost of materializing
+  ancestor-region pins into child arenas (over-retention). Recommended: (a).
 
 ## Dependencies
 

@@ -48,6 +48,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Consumer mints ride the delivery envelope](scheduler_library/consumer-envelope-mint.md)
 - [Return contracts ride continuations](scheduler_library/contract-as-continuation.md)
 - [Workgraph contract-surface sweep](scheduler_library/contract-surface-sweep.md)
+- [Handle-headed construction operands](scheduler_library/handle-headed-operands.md)
 - [Region-purity typed at the move-in allocs](scheduler_library/region-pure-move-in.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
