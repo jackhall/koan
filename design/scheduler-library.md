@@ -1,10 +1,15 @@
 # The scheduler library
 
 Koan's runtime substrate — the deferred-work scheduler, the region memory
-system, and the witnessed carrier machinery — is one self-contained library
-with no dependency on Koan's language semantics. It ships as the `workgraph`
-workspace crate: the dependency direction (`workgraph` does not depend on
-`koan`) is what makes "no Koan type in scope" compile-enforced rather than a
+system, and the witnessed carrier machinery — is a self-contained library
+stack with no dependency on Koan's language semantics. It ships as two
+workspace crates: `workcell` *(working name — [workcell.md](workcell.md))*,
+the computation-cell substrate (witnessed memory plus a cell table:
+continuations, memory anchors, inter-cell values — no acyclicity, no
+terminality), and `workgraph`, the DAG scheduler layered on it (dep edges,
+park/notify, cycle detection, terminal results, retention, splicing). The
+dependency direction (`koan` → `workgraph` → `workcell`, never the reverse)
+is what makes "no Koan type in scope" compile-enforced rather than a
 convention. Koan is its first embedder, re-exporting `workgraph::witnessed`
 and `workgraph::scheduler` from its own crate root so internal
 `crate::witnessed::…` / `crate::scheduler::…` paths keep resolving unchanged;
@@ -67,9 +72,14 @@ a concept, not a final identifier.
   through `dep_delivered`; relocations ride it too, so a bare frame pin never
   escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
-- **Workload** — the embedder-facing trait: the brand-indexed value family
-  (Koan instantiates it with `Carried`), the error type, and the opaque
-  payload/cart types the scheduler stores but never inspects.
+- **Workload** — the embedder-facing trait: the cell contract
+  ([workcell.md](workcell.md) — the continuation family, the frame owner
+  `Frame`, and the brand-indexed value family Koan instantiates with
+  `Carried`) plus the terminal error type the DAG layer's `Result`-shaped
+  terminal protocol adds. Embedder details the scheduler would only store
+  and hand back — Koan's lexical-position payload, its declared-return
+  checker, its per-call semantic shell — are continuation captures, not
+  trait types.
 
 ## The boundary
 
@@ -285,3 +295,19 @@ picture:
 - **Scope binding folds reaches through carriers.** Binding a value into a
   scope takes the value's carrier and unions its reach set into the
   scope's — policy code composing library values, never inspecting them.
+
+## Open work
+
+- [Workgraph contract-surface sweep](../roadmap/scheduler_library/contract-surface-sweep.md)
+  — retires the dead relocation path and shrinks the exported surface.
+- [Consumer mints ride the delivery envelope](../roadmap/scheduler_library/consumer-envelope-mint.md)
+  — makes the envelope the sole consumer-side mint verb.
+- [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
+  — moves frame ownership into scheduler slot state; collapses the trait's
+  memory types to `Frame` and folds the payload into continuation captures.
+- [Return contracts ride continuations](../roadmap/scheduler_library/contract-as-continuation.md)
+  — dissolves the stored contract type into continuation captures.
+- [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
+  — the crate split beneath the DAG layer.
+- [Publishing the workgraph crate](../roadmap/scheduler_library/workgraph-extraction.md)
+  — names, docs, and publish metadata once the boundary stops moving.

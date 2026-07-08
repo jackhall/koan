@@ -38,6 +38,11 @@ Root concerns:
   soundness guarantees, the two-currency step contract, and the consumer
   API (`producer_disposition`, `Deps`, `Await`, the step construction
   context).
+- [workcell.md](workcell.md) — the computation-cell substrate beneath the
+  DAG scheduler (working name `workcell`): cells with a continuation, a
+  memory anchor, and inter-cell values — no acyclicity, no terminality,
+  long-lived cells — and the three-type cell contract `workgraph` extends
+  with its terminal error type.
 - [witness-hosting.md](witness-hosting.md) — the witness-set
   representation: reach sets stored frozen in per-region sub-arenas,
   the resident (bare-reference) and walking (host-`Rc` + set-reference)

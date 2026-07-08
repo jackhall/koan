@@ -43,5 +43,15 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
+- [Workgraph contract-surface sweep](contract-surface-sweep.md) — the frozen
+  surface should not include dead API.
+- [Consumer mints ride the delivery envelope](consumer-envelope-mint.md) —
+  mint-surface visibility settles before the API freezes.
+- [Scheduler-owned frame storage](scheduler-owned-frame-storage.md) — moves
+  the boundary; the frozen API is the post-move one.
+- [Carving the workcell crate](workcell-extraction.md) — the published
+  boundary is the layered pair.
+- [Region-purity typed at the move-in allocs](region-pure-move-in.md) —
+  tightens the published `alloc_resident` surface before the API freezes.
 
 **Unblocks:** none tracked — the project's terminal item.
