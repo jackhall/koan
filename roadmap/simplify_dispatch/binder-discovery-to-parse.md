@@ -23,6 +23,22 @@ is spread across per-builtin extractors (`binder_name` in `let_binding.rs`,
 `recursive_types.rs`, …) with no single statement of "what introduces a binder" and no
 exhaustive test that the recursion installs every nested binder form.
 
+The install channel itself is encoded twice. Submission models the two binder
+channels as the mutually-exclusive `enum BinderKey` (submit.rs), while dispatch's
+`build_resolved`
+([resolve_dispatch.rs](../../src/machine/execute/dispatch/resolve_dispatch.rs)) runs
+the *same two extractors* into `Resolved.placeholder` /
+`Resolved.pending_overload_bucket` — two independent `Option` fields whose exclusivity
+is nowhere enforced — and `keyworded::initial`
+([keyworded.rs](../../src/machine/execute/dispatch/keyworded.rs)) installs them again
+with the same binding index. Downstream, the binder pre-subs ride a channel almost no
+consumer wants: `classify_dispatch`
+([dispatch.rs](../../src/machine/execute/dispatch.rs)) threads `pre_subs` through all
+twelve `DispatchShape` arms, but only `Keyworded` consumes it, so ten arms open with
+`debug_assert!(pre_subs.is_empty())` — the invariant "binder pre-subs exist ⇒ shape is
+Keyworded" is held at a distance between submit.rs and dispatch.rs instead of by a
+type.
+
 **Acceptance criteria.**
 
 - The set of binder-introducing AST forms is specified in one place and covered by a
@@ -34,6 +50,13 @@ exhaustive test that the recursion installs every nested binder form.
 - Submission reads the cached binder plan; the only work left at submission is the
   genuinely scope-dependent residue (resolving which user FN/FUNCTOR overloads in
   scope are binder-shaped), if any remains.
+- Binder installs flow through one mutually-exclusive `BinderKey`-typed channel from
+  extraction to install — submission and `Resolved` share it, and no struct carries the
+  placeholder and pending-overload channels as independent `Option` fields.
+- `pre_subs` reaches only the `Keyworded` dispatch path: the other `DispatchShape`
+  arms neither receive the parameter nor assert on it, and the per-arm
+  `debug_assert!(pre_subs.is_empty())` guards are gone because the types make the
+  states they checked unrepresentable.
 - Behavior is unchanged: the same placeholders and pending-overload entries install at
   the same point in the submission flow.
 
@@ -50,6 +73,13 @@ exhaustive test that the recursion installs every nested binder form.
   overload-bucket lookup at submission.
 - *Cache home — open.* Fold the binder shape into `KExpression::fill_cache` alongside
   the existing parse-time caches. Recommended.
+- *`BinderKey` home and `pre_subs` routing — open.* Where the shared `BinderKey` enum
+  lives once both submit.rs and `Resolved` use it, and how `pre_subs` is confined to
+  the keyworded path: (a) `classify_dispatch` hands `pre_subs` straight to the
+  keyworded constructor and the other eleven arms never see the parameter; (b) the
+  dispatch work-item type carries `pre_subs` inside its `Keyworded` variant.
+  Recommended: (a) — it is the smaller signature change and already deletes every
+  guard.
 
 ## Dependencies
 

@@ -15,7 +15,8 @@ share design constraints and ship together. Each has a README naming what the pr
 buys the language and listing its ready-to-start items:
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
 [operator_chaining/](operator_chaining/README.md), [type_language/](type_language/README.md),
-[editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md), and
+[editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
+[simplify_dispatch/](simplify_dispatch/README.md), and
 [scheduler_library/](scheduler_library/README.md).
 
 Design rationale for what's already in the language lives in [design/](../design/) — five
@@ -34,7 +35,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Files and imports](libraries/files-and-imports.md)
 - [User-definable n-ary operators](operator_chaining/n-ary-operators.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
-- [Move binder discovery into the parser](refactor/binder-discovery-to-parse.md)
 - [Fold the two type-write paths](refactor/fold-type-write-paths.md)
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
@@ -50,6 +50,9 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Workgraph contract-surface sweep](scheduler_library/contract-surface-sweep.md)
 - [Handle-headed construction operands](scheduler_library/handle-headed-operands.md)
 - [Region-purity typed at the move-in allocs](scheduler_library/region-pure-move-in.md)
+- [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
+- [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
+- [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
