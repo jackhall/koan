@@ -859,7 +859,6 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         // no `unsafe` of its own.
         f(self.inner.read())
     }
-
 }
 
 /// The **externally-witnessed** dormant form: an erased carrier that bundles *no* witness, opened by

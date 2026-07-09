@@ -243,10 +243,14 @@ fn merge_pinned_binds_ancestor_ref_into_descendant_scope() {
     // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal under the
     // total union.
     let merged: Witnessed<ScopeFamily, RegionSet<TestCart>> = scope_w
-        .merge_pinned::<RefFamily, ScopeFamily, _>(fn_w, &descendant, |scope, func, _brand: PhantomData<&_>| {
-            scope.scope.set(Some(func));
-            scope
-        });
+        .merge_pinned::<RefFamily, ScopeFamily, _>(
+            fn_w,
+            &descendant,
+            |scope, func, _brand: PhantomData<&_>| {
+                scope.scope.set(Some(func));
+                scope
+            },
+        );
     // Subsumption collapses the union to the descendant (whose `outer` chain already pins the
     // ancestor).
     assert!(matches!(
@@ -277,7 +281,8 @@ fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
         Witnessed::yoke(Rc::clone(&a), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&a)));
     let wb: Witnessed<RefFamily, RegionSet<TestCart>> =
         Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&b)));
-    let merged = wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _brand: PhantomData<&_>| l);
+    let merged =
+        wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _brand: PhantomData<&_>| l);
     assert_eq!(
         merged.witness().members().len(),
         2,

@@ -84,7 +84,10 @@ impl<W: Workload> Scheduler<W> {
     /// reinstalled incarnation adopts the carried arguments out of it (`None` for any slot with no
     /// pending handoff — a first run, or a frameless replace).
     pub fn take_for_run(&mut self, id: NodeId) -> (Node<W>, Option<Rc<W::Frame>>) {
-        (self.store.take_for_run(id), self.deps.take_handoff(id.index()))
+        (
+            self.store.take_for_run(id),
+            self.deps.take_handoff(id.index()),
+        )
     }
 
     /// Reinstall a tail-replaced slot's node and re-enqueue it if its deps are already satisfied —

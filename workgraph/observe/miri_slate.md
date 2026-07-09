@@ -29,10 +29,10 @@ consuming externally-witnessed `SealedExtern::open` (which reattaches a witness-
 supplied witness pins), and through the `Witnessed` accessors: the rank-2 branded `with`
 (borrow + read) and `map` (consume + transform), the borrow-bounded `read` that hands the carrier
 *out* at the `&self` borrow — sound because its content lifetime is the borrow itself (not a free
-`'b`), so the bundled `Witness` pins it for exactly that long — and the rank-2 branded `merge`, which
-re-anchors *two* carriers under one `'b`, runs a binding projection, and re-seals under the
-descendant witness (the one whose ancestor-chain pin keeps both regions live), rejecting unrelated
-carts. The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
+`'b`), so the bundled `Witness` pins it for exactly that long — and the rank-2 branded
+`merge_pinned`, which re-anchors *two* carriers under one `'b`, runs a binding projection, and
+re-seals under the composed witness (the descendant's ancestor-chain pin keeps both regions live),
+rejecting unrelated carts. The co-location-enforcing constructor `yoke` sources its carrier from the witness's region
 through a `for<'b>` closure (no `unsafe` of its own — it routes the safe `erase`), so it is exercised
 for the brand discipline, not a retype. The `unsafe impl Reattachable` families declare
 layout-invariance and carry no runtime `unsafe` of their own — they are exercised through this
@@ -46,14 +46,16 @@ after the original binding drops), and the `Witnessed` accessors that drop the *
 read back only through the bundled witness (the load-bearing case for the invariant `Cell<&'r u32>`
 carrier) — plus `map`'s branded projection (binding a cart-coherent `&'b` value into the invariant
 scope slot, the write `with` rejects). `yoke` sources a carrier from a stand-in cart's region, and
-`merge` binds an ancestor-cart ref into a descendant-cart scope at the shared brand and re-seals under
-the descendant (read back after both call handles drop), plus a `None`-on-unrelated-carts check.
+`merge_pinned` binds an ancestor-cart ref into a descendant-cart scope at the shared brand — under an
+externally supplied pin, the live production entry point (Koan's `catch`/constructor sites route
+through it) — and re-seals under the composed witness (read back after both call handles drop), plus
+a `None`-on-unrelated-carts check.
 `SealedExtern::open` is exercised distinctly from the bundled `with` / `read`: a witness-less carrier
 opened against a *separately-held* `Rc` witness (invariant `Cell<&'r u32>` read back after the
 original drops), a **non-`Copy`** `Box<&'r u32>` consumed by the open (the boxed-continuation shape
 `Copy`-bounded `Sealed::open` excludes), and a heterogeneous `zip` of a boxed carrier + a present
 `seal_option` optional + a reference opened together at one brand (plus the `None`-optional arm). The
-escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` / `merge` /
+escape-can't-compile guards are `compile_fail` doctests on `with` / `map` / `yoke` /
 `SealedExtern::open`.
 
 An embedder's realisation of the `unsafe trait` impls this primitive routes for — Koan's
@@ -61,9 +63,9 @@ An embedder's realisation of the `unsafe trait` impls this primitive routes for 
 (the unified region-owner witness `FrameSet` aliases, generic over the member trait in
 `workgraph::witnessed::region_set`) — is covered cross-crate: its region-plus-`outer`-ancestry shape
 is exactly what the `TestCart` stand-in mirrors, so `yoke_sources_carrier_from_witness_region` and
-`merge_binds_ancestor_ref_into_descendant_scope` pin its yoke / merge / subsumption
+`merge_pinned_binds_ancestor_ref_into_descendant_scope` pin its yoke / merge_pinned / subsumption
 (drop-an-ancestor-still-pinned-by-the-chain) UB shapes, and
-`merge_keeps_unrelated_carts_as_a_two_member_set` the two-member-set case (a set witness always
+`merge_pinned_keeps_unrelated_carts_as_a_two_member_set` the two-member-set case (a set witness always
 represents the union — there is no failure verdict). Koan's `RegionSet::union` antichain logic
 (union with `outer`-chain subsumption) is pinned separately by that embedder's own `frameset_*` /
 `pins_region_walks_outer_chain` unit tests, which run under plain `cargo test` (no `unsafe` of their
@@ -77,8 +79,8 @@ own — the `unsafe` they exercise is this primitive).
 - `continuation_binds_cart_coherent_value_via_map`
 - `invariant_same_brand_mutation`
 - `yoke_sources_carrier_from_witness_region`
-- `merge_binds_ancestor_ref_into_descendant_scope`
-- `merge_keeps_unrelated_carts_as_a_two_member_set`
+- `merge_pinned_binds_ancestor_ref_into_descendant_scope`
+- `merge_pinned_keeps_unrelated_carts_as_a_two_member_set`
 - `sealed_extern_open_externally_witnessed`
 - `sealed_extern_open_consumes_non_copy`
 - `sealed_extern_zip_opens_heterogeneous_at_one_brand`

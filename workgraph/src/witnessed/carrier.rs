@@ -142,7 +142,11 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// [`super::Sealed::open_with`] confines a value. Pass `pin: None` only when the hosting arena
     /// is covered by the caller's ambient container — the reader's own region for a resident
     /// carrier's set, or the step pin held across a step-brand read.
-    fn with_reach_impl<R>(&self, pin: Option<&Rc<F>>, f: impl FnOnce(Option<&RegionSet<F>>) -> R) -> R {
+    fn with_reach_impl<R>(
+        &self,
+        pin: Option<&Rc<F>>,
+        f: impl FnOnce(Option<&RegionSet<F>>) -> R,
+    ) -> R {
         let _ = pin;
         match &self.reach {
             None => f(None),
