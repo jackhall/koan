@@ -4,7 +4,8 @@
 //! families (a covariant `&'r u32`, an invariant `Cell<&'r u32>`, a mutable-scope-plus-pool family)
 //! and a stand-in cart (`TestCart`: a region-backing `Vec` plus an `outer` ancestor chain), never a
 //! koan type. Fails on UB, not values. The escape-can't-compile guards live as `compile_fail`
-//! doctests on [`Witnessed::with`] / [`Witnessed::map`] / [`Witnessed::yoke`] / [`Witnessed::merge`].
+//! doctests on [`Witnessed::with`] / [`Witnessed::map`] / [`Witnessed::yoke`] /
+//! [`Witnessed::merge_pinned`].
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -44,7 +45,7 @@ reattachable! {
     BoxFamily => Box<&'r u32>,
 }
 
-/// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge`): a backing `Vec` (the
+/// Cart stand-in for the witness-with-a-region cases (`yoke` / `merge_pinned`): a backing `Vec` (the
 /// "region") plus an `outer` link, mirroring `FrameStorage`'s region + ancestor-pin chain without
 /// naming a koan type. Held by `Rc`, so the backing's heap address is stable (a `StableDeref`); a
 /// descendant's `outer` chain keeps its ancestors' backings alive, exactly the relation the
@@ -213,12 +214,12 @@ fn yoke_sources_carrier_from_witness_region() {
     assert_eq!(w.with(|r| **r), 7);
 }
 
-/// `merge` as the function-into-scope composition: a witnessed `ScopeFamily` carrier in the
+/// `merge_pinned` as the function-into-scope composition: a witnessed `ScopeFamily` carrier in the
 /// *descendant* cart binds, at the shared brand, a witnessed `&u32` sourced from the *ancestor* cart.
 /// The result is sealed under the descendant, whose `outer` chain keeps the ancestor backing alive
 /// after both call handles drop. Miri must stay clean reading the bound ancestor ref back.
 #[test]
-fn merge_binds_ancestor_ref_into_descendant_scope() {
+fn merge_pinned_binds_ancestor_ref_into_descendant_scope() {
     let ancestor: Rc<TestCart> = Rc::new(TestCart {
         backing: vec![100, 200],
         outer: None,
@@ -242,7 +243,7 @@ fn merge_binds_ancestor_ref_into_descendant_scope() {
     // Bind the ancestor ref into the descendant scope at the shared brand, then re-seal under the
     // total union.
     let merged: Witnessed<ScopeFamily, RegionSet<TestCart>> = scope_w
-        .merge::<RefFamily, ScopeFamily>(fn_w, |scope, func, _brand: PhantomData<&_>| {
+        .merge_pinned::<RefFamily, ScopeFamily, _>(fn_w, &descendant, |scope, func, _brand: PhantomData<&_>| {
             scope.scope.set(Some(func));
             scope
         });
@@ -259,10 +260,11 @@ fn merge_binds_ancestor_ref_into_descendant_scope() {
     assert_eq!(merged.with(|c| *c.scope.get().unwrap()), 200);
 }
 
-/// `merge` unions two unrelated carts into a two-member set — under the set currency there is no
-/// failure verdict (unlike a single-region witness, which could not represent the combined pin).
+/// `merge_pinned` unions two unrelated carts into a two-member set — under the set currency there
+/// is no failure verdict (unlike a single-region witness, which could not represent the combined
+/// pin).
 #[test]
-fn merge_keeps_unrelated_carts_as_a_two_member_set() {
+fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
     let a: Rc<TestCart> = Rc::new(TestCart {
         backing: vec![1],
         outer: None,
@@ -275,7 +277,7 @@ fn merge_keeps_unrelated_carts_as_a_two_member_set() {
         Witnessed::yoke(Rc::clone(&a), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&a)));
     let wb: Witnessed<RefFamily, RegionSet<TestCart>> =
         Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&b)));
-    let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
+    let merged = wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _brand: PhantomData<&_>| l);
     assert_eq!(
         merged.witness().members().len(),
         2,

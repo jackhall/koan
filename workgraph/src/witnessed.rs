@@ -11,8 +11,8 @@
 //! are rank-2 (`for<'b>`) branded so a fabricated content lifetime cannot escape the witness pin:
 //! [`Witnessed::with`] (borrow + read) and [`Witnessed::map`] (consume + transform) re-anchor an
 //! already-bundled carrier, [`Witnessed::yoke`] *sources* one from the witness's own region so
-//! co-location holds by construction, and [`Witnessed::merge`] combines two under one brand and
-//! re-seals under the witness that pins both. For storage *between* accesses a carrier rests in a
+//! co-location holds by construction, and [`Witnessed::merge_pinned`] combines two under one brand
+//! and re-seals under their composed witness. For storage *between* accesses a carrier rests in a
 //! [`Sealed`], the opaque dormant form that hides every transform and re-anchors only through the
 //! rank-2 [`Sealed::open`].
 //!
@@ -168,8 +168,8 @@ impl<T: Reattachable> Erased<T> {
 
     /// Re-anchor the carrier to a caller-chosen `'r` without a bundled witness — the raw fabrication
     /// the externally-witnessed [`SealedExtern::open`] wraps behind its rank-2 brand, supplying the pin
-    /// at the access. The bundled-witness accessors ([`Witnessed::map`], [`Witnessed::merge`], the
-    /// borrow-bounded [`Witnessed::read`]) route their re-anchor through here, each discharging this
+    /// at the access. The bundled-witness accessors ([`Witnessed::map`], [`Witnessed::merge_pinned`],
+    /// the borrow-bounded [`Witnessed::read`]) route their re-anchor through here, each discharging this
     /// contract with its held witness; [`Witnessed::with`] reads through [`with_branded_ref`] instead.
     ///
     /// # Safety
@@ -274,26 +274,12 @@ unsafe impl<F: RegionOwner> WitnessRegion for Rc<F> {
     }
 }
 
-/// A [`Witness`] whose values compose **totally** to the one that pins both operands' regions —
-/// the set-union seam [`Witnessed::merge`] and [`Sealed::transfer_into`] route. A set of region
-/// owners can always represent a union, so there is no failure verdict.
-///
-/// # Safety
-///
-/// Holding the value `union` returns must keep both `left`'s and `right`'s pinned regions live for
-/// as long as it is held.
-pub unsafe trait UnionWitness: Witness + Sized {
-    /// The witness pinning both `left`'s and `right`'s regions (set union with `outer`-chain
-    /// subsumption).
-    fn union(left: &Self, right: &Self) -> Self;
-}
-
-/// Witness composition for [`Witnessed::merge`] / [`Witnessed::merge_pinned`] /
-/// [`Sealed::transfer_into`], run **inside** the `for<'b>` brand while both operands' backings are
-/// still covered (by the bundled witnesses, or by the pinned-merge caller's external pins) and the
-/// destination's live form `B::At<'b>` is in scope — so an impl can *mint* into the destination
-/// rather than only computing a pure union. Total, like [`UnionWitness`]: every pair of witnesses is
-/// composable against any destination, so there is no failure verdict.
+/// Witness composition for [`Witnessed::merge_pinned`] /
+/// [`Delivered::transfer_into`](delivered::Delivered::transfer_into), run **inside** the `for<'b>`
+/// brand while both operands' backings are still covered (by the bundled witnesses, or by the
+/// pinned-merge caller's external pins) and the destination's live form `B::At<'b>` is in scope —
+/// so an impl can *mint* into the destination rather than only computing a pure union. Total: every
+/// pair of witnesses is composable against any destination, so there is no failure verdict.
 ///
 /// Deliberately **not** `: Witness` — a reference-only witness composes too. [`RegionSet`] (a
 /// pinning witness) composes by plain union, ignoring `dest`; [`Carrier`] (reference-only) composes
@@ -305,9 +291,9 @@ pub unsafe trait UnionWitness: Witness + Sized {
 ///
 /// Holding the value [`compose`](Self::compose) returns must keep — for a pinning impl — or must
 /// **name**, relative to `dest` — for a reference-only impl — every region `left`, `right`, and
-/// `dest` reach, for as long as it is held: the same coverage obligation as [`UnionWitness::union`],
-/// discharged with the destination's allocation capability available. A reference-only composed
-/// witness must land its minted set in `dest`'s own arena, so whatever covers `dest` covers it.
+/// `dest` reach, for as long as it is held, discharged with the destination's allocation
+/// capability available. A reference-only composed witness must land its minted set in `dest`'s
+/// own arena, so whatever covers `dest` covers it.
 pub unsafe trait ComposeWitness<B: Reattachable>: Sized {
     /// Compose `left` and `right`'s witnesses into one pinning both — and, for an impl that mints,
     /// `dest`'s own region too — with `dest`'s live form available as a mint target.
@@ -681,86 +667,6 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         }
     }
 
-    /// Combine two witnessed carriers under one brand and re-seal the result under the witness that
-    /// pins **both** — the composition law for [`Witnessed`]. The two carriers are re-anchored at a
-    /// shared `for<'b>` brand and handed to `f`, which may bind one into the other (e.g. a witnessed
-    /// `KFunction` into a witnessed `Scope`); the projection is then sealed under
-    /// [`UnionWitness::union`] of the two witnesses — the set union (with `outer`-chain subsumption)
-    /// that keeps every region the combined carrier reaches live. Total: a set witness can always
-    /// represent the union, so there is no failure verdict to compute before `f` runs.
-    ///
-    /// Sound for the same reason as [`Self::map`], doubled: both source witnesses are held for the
-    /// whole of `f`, so re-anchoring both carriers to one brand `'b` cannot dangle; the `for<'b>`
-    /// quantifier keeps either branded carrier from escaping into the result type, and the combined
-    /// witness pins the sealed carrier's backing thereafter.
-    ///
-    /// ```
-    /// use workgraph::witnessed::doctest_fixture::{set_witnessed, Cart, RefFamily};
-    /// use std::marker::PhantomData;
-    /// use std::rc::Rc;
-    ///
-    /// let wa = set_witnessed(Rc::new(Cart(vec![1])));
-    /// let wb = set_witnessed(Rc::new(Cart(vec![2])));
-    /// // Two unrelated carts both land in the union set — no failure verdict.
-    /// let merged = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| l);
-    /// assert_eq!(merged.with(|r| **r), 1);
-    /// ```
-    ///
-    /// ```compile_fail
-    /// use workgraph::witnessed::doctest_fixture::{set_witnessed, Cart, RefFamily};
-    /// use std::marker::PhantomData;
-    /// use std::rc::Rc;
-    ///
-    /// let wa = set_witnessed(Rc::new(Cart(vec![1])));
-    /// let wb = set_witnessed(Rc::new(Cart(vec![2])));
-    /// let mut stolen: Option<&u32> = None;
-    /// // Try to capture a branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
-    /// let _ = wa.merge::<RefFamily, RefFamily>(wb, |l, _r, _brand: PhantomData<&_>| {
-    ///     stolen = Some(l);
-    ///     l
-    /// });
-    /// println!("{}", *stolen.unwrap());
-    /// ```
-    pub fn merge<B: Reattachable, P: Reattachable>(
-        self,
-        other: Witnessed<B, W>,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
-    ) -> Witnessed<P, W>
-    where
-        W: ComposeWitness<B>,
-    {
-        let Witnessed {
-            value: left,
-            witness: left_witness,
-        } = self;
-        let Witnessed {
-            value: right,
-            witness: right_witness,
-        } = other;
-        // SAFETY: both source witnesses are held across `f`, each pinning its own carrier's backing;
-        // the two carriers are re-anchored to one existential brand the `for<'b>` closure cannot leak,
-        // and the projection is immediately re-erased to `'static` for storage. `compose` runs before
-        // `f` consumes `live_right`, so the destination's live form is still available to mint into;
-        // the composed `witness` pins both regions (and, for a minting impl, `dest`'s) thereafter —
-        // `reattach`'s contract, discharged for both carriers.
-        let live_left: T::At<'_> = unsafe { left.reattach() };
-        let live_right: B::At<'_> = unsafe { right.reattach() };
-        let witness = W::compose(&left_witness, &right_witness, &live_right);
-        let projected = f(live_left, live_right, PhantomData);
-        // The source witnesses pinned both backings across `f`; drop them now — the composed `witness`
-        // computed above carries their pins forward (`ComposeWitness`'s obligation). These drops run
-        // while the call-duration protectors on the by-value operands' interior references are still
-        // active, so a backing deallocated here is undefined behavior even after a copying
-        // projection — a pin the composed witness cannot represent must be held by the caller across
-        // this call instead.
-        drop(left_witness);
-        drop(right_witness);
-        Witnessed {
-            value: Erased::erase(projected),
-            witness,
-        }
-    }
-
     /// Re-anchor the carrier and hand it **out** bounded by the `&self` borrow — the internal
     /// borrow-bounded reader [`Sealed::open`] copies its value through. The borrow-bounded sibling of
     /// [`Self::with`]: where `with`'s `for<'b>` brand forbids the carrier from escaping the closure,
@@ -814,9 +720,8 @@ pub struct Sealed<T: Reattachable, W> {
 
 /// Storage verbs and the externally-pinned read — **unbounded** in `W`, so a reference-only
 /// witness (the collapsed [`Carrier`]) seals, travels, and duplicates as plain data, and opens
-/// only under an externally supplied pin. The bundled-witness read ([`Self::open`]) and the
-/// bundled-witness relocation ([`Self::transfer_into`]) sit in the `W: Witness` block below — a
-/// bare `open` under a witness that pins nothing does not compile.
+/// only under an externally supplied pin. The bundled-witness read ([`Self::open`]) sits in the
+/// `W: Witness` block below — a bare `open` under a witness that pins nothing does not compile.
 impl<T: Reattachable, W> Sealed<T, W> {
     /// Seal a live [`Witnessed`] into its dormant storage form — the only way in. `Sealed` exposes no
     /// other constructor and no transform once sealed, so a value can re-enter circulation only
@@ -955,31 +860,6 @@ impl<T: Reattachable, W: Witness> Sealed<T, W> {
         f(self.inner.read())
     }
 
-    /// Relocate the sealed carrier into a destination region and re-seal it under the witness that
-    /// pins **both** — the borrow-checked replacement for the consumer-pull lift's one open-coded
-    /// reattach. Built from [`Witnessed::merge`]: the bundled carrier is duplicated
-    /// (the `&self` seal is left intact for other consumers), re-anchored at a shared `for<'b>` brand
-    /// with `dest`, and handed to `relocate` — the workload's structural copy, which allocs into
-    /// `dest` at the brand **natively** (no fabricated lifetime); the projection is then re-sealed
-    /// under [`ComposeWitness::compose`] of this carrier's witness and `dest`'s — for a set witness,
-    /// the union of every region the relocated value reaches (its retained sources ∪ the
-    /// destination). Total: a set witness always represents the union.
-    ///
-    /// Because it routes `merge`'s already-audited retype it **adds no `unsafe`**, and because the
-    /// value lands at the destination region's own lifetime there is **no fabricated lifetime** at
-    /// the call site — a soundness the type system enforces, not one a hand-written reattach must
-    /// assert in prose.
-    pub fn transfer_into<B: Reattachable, P: Reattachable>(
-        &self,
-        dest: Witnessed<B, W>,
-        relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
-    ) -> Witnessed<P, W>
-    where
-        W: ComposeWitness<B> + Clone,
-        T::At<'static>: Copy,
-    {
-        self.inner.duplicate().merge::<B, P>(dest, relocate)
-    }
 }
 
 /// The **externally-witnessed** dormant form: an erased carrier that bundles *no* witness, opened by

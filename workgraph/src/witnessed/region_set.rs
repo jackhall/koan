@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::{
     ComposeWitness, Reattachable, Region, RegionHandle, RegionOwner, StorageProfile, Stored,
-    UnionWitness, Witness,
+    Witness,
 };
 
 /// A [`RegionOwner`] that can report whether holding it keeps another region's storage alive — the
@@ -189,14 +189,6 @@ unsafe impl<F: PinsRegion> Witness for RegionSet<F> {}
 
 // SAFETY: `union` returns the set union (deduplicated by region, a member dropped only when
 // another member's owner chain already pins its region), so holding the result keeps every region
-// either input pinned alive.
-unsafe impl<F: PinsRegion> UnionWitness for RegionSet<F> {
-    fn union(left: &Self, right: &Self) -> Self {
-        Self::union(left, right)
-    }
-}
-
-// SAFETY: identical to the `UnionWitness` impl above — the plain union already keeps every region
 // either input pinned alive, regardless of `dest`: an owned set can always represent the union, so
 // there is nothing a destination allocation capability would let this impl do that plain union
 // doesn't already achieve.
