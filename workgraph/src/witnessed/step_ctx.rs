@@ -232,7 +232,7 @@ fn finalize_alloc_with<F: RegionOwner, T: Reattachable, V: Reattachable>(
 /// folded in so far, re-anchored as one carrier. Layout-invariant in `'r`: a reference and a `Vec` of
 /// a layout-invariant family are each layout-invariant, so the pair is too — the [`Reattachable`]
 /// contract, discharged componentwise, the same justification as [`super::And`].
-pub struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
+struct AllocViews<V, R: ?Sized>(PhantomData<(V, *const R)>);
 
 // SAFETY: `(&'r R, Vec<V::At<'r>>)` is one type up to `'r` when `V` is — see the type's doc comment.
 // `R: 'static` is required for the GAT to type-check for every `'r` (a bound the concrete `Region`

@@ -29,8 +29,7 @@ use stable_deref_trait::StableDeref;
 
 mod region;
 pub use region::{
-    FamilyArena, FamilyList, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile,
-    Stored,
+    FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile, Stored,
 };
 
 mod region_set;
@@ -42,7 +41,7 @@ pub use host::RegionHost;
 pub use host::{region_metrics, reset_region_metrics, RegionMetrics};
 
 mod carrier;
-pub use carrier::{Carrier, HasRegionHandle, HostedSetRef, Residence};
+pub use carrier::{Carrier, HasRegionHandle, Residence};
 
 mod delivered;
 pub use delivered::Delivered;

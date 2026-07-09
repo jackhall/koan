@@ -27,9 +27,9 @@ use super::{
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&RegionSet<F>` — the erased reach reference a
-/// [`Carrier`] re-anchors under an externally supplied pin. Not exported: the pinned reader on
+/// [`Carrier`] re-anchors under an externally supplied pin. Module-private: the pinned reader on
 /// [`Carrier`] is the sole re-anchor site, so no branded reader escapes this module.
-pub struct HostedSetRef<F>(std::marker::PhantomData<F>);
+struct HostedSetRef<F>(std::marker::PhantomData<F>);
 
 // SAFETY: `&'r RegionSet<F>` is a thin pointer whose layout does not depend on `'r`.
 unsafe impl<F: PinsRegion + 'static> Reattachable for HostedSetRef<F> {
@@ -117,6 +117,12 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// Whether the value's borrows reach into its own home region — the bit consumed at exactly
     /// one kind of site, the re-home mint into a different destination arena (`Residence::Copied`
     /// materialization). Never a lifecycle input.
+    ///
+    /// White-box reach introspection: production code ([`Self::mint_into`] / [`Self::compose_into`])
+    /// reads the `borrows_host` field directly, so this accessor has no library-internal caller and
+    /// is gated entirely behind `test-hooks` for an embedder's white-box tests (mirroring
+    /// `Scheduler::payload_of`'s gate) rather than split into a `pub(crate)` core.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn borrows_host(&self) -> bool {
         self.borrows_host
     }
@@ -136,11 +142,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// [`super::Sealed::open_with`] confines a value. Pass `pin: None` only when the hosting arena
     /// is covered by the caller's ambient container — the reader's own region for a resident
     /// carrier's set, or the step pin held across a step-brand read.
-    pub fn with_reach<R>(
-        &self,
-        pin: Option<&Rc<F>>,
-        f: impl FnOnce(Option<&RegionSet<F>>) -> R,
-    ) -> R {
+    fn with_reach_impl<R>(&self, pin: Option<&Rc<F>>, f: impl FnOnce(Option<&RegionSet<F>>) -> R) -> R {
         let _ = pin;
         match &self.reach {
             None => f(None),
@@ -152,12 +154,44 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         }
     }
 
+    /// White-box reach introspection: kept ungated `pub(crate)` for [`Self::mint_into`] /
+    /// [`Self::compose_into`]'s own use, and re-exposed `pub` only under `test-hooks` for an
+    /// embedder's white-box tests (mirroring `Scheduler::payload_of`'s gate).
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    pub(crate) fn with_reach<R>(
+        &self,
+        pin: Option<&Rc<F>>,
+        f: impl FnOnce(Option<&RegionSet<F>>) -> R,
+    ) -> R {
+        self.with_reach_impl(pin, f)
+    }
+
+    /// See [`Self::with_reach_impl`].
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn with_reach<R>(
+        &self,
+        pin: Option<&Rc<F>>,
+        f: impl FnOnce(Option<&RegionSet<F>>) -> R,
+    ) -> R {
+        self.with_reach_impl(pin, f)
+    }
+
     /// Whether the value's foreign reach names `region` — reach members only; the borrows-into-home
     /// bit is a separate query ([`Self::borrows_host`]) because the home it refers to is the
     /// envelope's knowledge, not the carrier's. `pin` covers the reach set's hosting arena, as in
     /// [`Self::with_reach`].
+    ///
+    /// White-box reach introspection: same `test-hooks` gate as [`Self::with_reach`] /
+    /// [`Self::borrows_host`].
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    pub(crate) fn reach_covers(&self, pin: Option<&Rc<F>>, region: &F::Region) -> bool {
+        self.with_reach_impl(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))
+    }
+
+    /// See [`Self::reach_covers`] above.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn reach_covers(&self, pin: Option<&Rc<F>>, region: &F::Region) -> bool {
-        self.with_reach(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))
+        self.with_reach_impl(pin, |reach| reach.is_some_and(|r| r.pins_region(region)))
     }
 
     /// Mint this carrier's reach into `dest`, materializing `host` (the value's producer frame

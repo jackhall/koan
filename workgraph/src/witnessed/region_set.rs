@@ -63,6 +63,11 @@ impl<F: PinsRegion> RegionSet<F> {
 
     /// The set's members — the pinned read a hosted set exposes. Read-only: a stored set is
     /// reached only by shared `&`, so this is the whole mutation-free surface over its members.
+    ///
+    /// White-box reach introspection: no library-internal caller, so gated entirely behind
+    /// `test-hooks` for an embedder's own white-box tests (mirroring `Scheduler::payload_of`'s
+    /// gate) rather than split into a `pub(crate)` core.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn members(&self) -> &[Rc<F>] {
         &self.members
     }
@@ -82,13 +87,27 @@ impl<F: PinsRegion> RegionSet<F> {
     /// already kept alive — the predicate form the per-scope reach-set uses, which must omit
     /// regions the caller's policy considers already pinned (home frame, lexical ancestors) that
     /// [`PinsRegion::pins_region`] alone cannot see.
-    pub fn fold_omitting(&mut self, other: &Self, omit: impl Fn(&F::Region) -> bool) {
+    fn fold_omitting_impl(&mut self, other: &Self, omit: impl Fn(&F::Region) -> bool) {
         for owner in &other.members {
             if omit(owner.region()) {
                 continue;
             }
             self.insert(Rc::clone(owner));
         }
+    }
+
+    /// White-box reach introspection: kept ungated `pub(crate)` for [`Self::mint`]'s own use, and
+    /// re-exposed `pub` only under `test-hooks` for an embedder's white-box tests (mirroring
+    /// `Scheduler::payload_of`'s gate).
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    pub(crate) fn fold_omitting(&mut self, other: &Self, omit: impl Fn(&F::Region) -> bool) {
+        self.fold_omitting_impl(other, omit)
+    }
+
+    /// See [`Self::fold_omitting_impl`].
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn fold_omitting(&mut self, other: &Self, omit: impl Fn(&F::Region) -> bool) {
+        self.fold_omitting_impl(other, omit)
     }
 
     /// Whether any member's owner chain keeps `region`'s storage alive — the set-level lift of

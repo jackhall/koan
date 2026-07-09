@@ -61,18 +61,25 @@ impl<K: Reattachable + 'static> FamilyArena<K> {
 }
 
 /// A cons-list of storage families — `(A, (B, (C, ())))` — from which the library derives the
-/// arena bundle a [`Region`] owns: one [`FamilyArena`] cell per family, in list order.
-pub trait FamilyList {
-    type Arenas: Default;
-}
+/// arena bundle a [`Region`] owns: one [`FamilyArena`] cell per family, in list order. Sealed: the
+/// trait itself must be `pub` to appear in [`StorageProfile::Families`]'s bound and [`StorageOf`]'s
+/// projection, but the module boundary keeps it unnameable outside the crate.
+mod family_list {
+    use super::{FamilyArena, Reattachable};
 
-impl FamilyList for () {
-    type Arenas = ();
-}
+    pub trait FamilyList {
+        type Arenas: Default;
+    }
 
-impl<K: Reattachable + 'static, Rest: FamilyList> FamilyList for (K, Rest) {
-    type Arenas = (FamilyArena<K>, Rest::Arenas);
+    impl FamilyList for () {
+        type Arenas = ();
+    }
+
+    impl<K: Reattachable + 'static, Rest: FamilyList> FamilyList for (K, Rest) {
+        type Arenas = (FamilyArena<K>, Rest::Arenas);
+    }
 }
+use family_list::FamilyList;
 
 /// The arena bundle a profile's family list derives.
 pub type StorageOf<W> = <<W as StorageProfile>::Families as FamilyList>::Arenas;

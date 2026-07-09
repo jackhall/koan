@@ -19,7 +19,7 @@ pub type SealedTerminal<W> = Sealed<<W as Workload>::Value, Carrier<<W as Worklo
 /// it stores opaquely and never inspects. The Koan instantiation is `machine::execute::KoanWorkload`.
 pub trait Workload {
     /// The per-node name-resolution payload the scheduler stores, installs ambient, and hands back.
-    type Payload: Clone;
+    type Payload;
     /// The inter-node value carried along dep edges. A one-lifetime [`Reattachable`] family: the
     /// scheduler stores it in a finalized terminal's `Witnessed<Self::Value, _>` (the value erased,
     /// bundled with the producer frame `Rc`) and re-anchors it to the read borrow through

@@ -21,7 +21,7 @@ use super::{NodeId, Scheduler, Workload};
 impl<W: Workload> Scheduler<W> {
     /// Follow a chain of bare-name-forward aliases to the slot that actually holds the result.
     /// Aliases always point downstream to a real producer, so the walk terminates.
-    pub fn resolve_alias(&self, mut id: NodeId) -> NodeId {
+    pub(crate) fn resolve_alias(&self, mut id: NodeId) -> NodeId {
         let mut guard = 0;
         while let Some(to) = self.store.alias_target(id) {
             id = to;
@@ -60,7 +60,7 @@ impl<W: Workload> Scheduler<W> {
 
     /// Park (`Notify`) sibling of [`Self::add_owned_edge`]: the consumer reads `producer` but does
     /// not own it. Same alias-resolve and already-finalized late-park increment.
-    pub fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
+    pub(crate) fn add_park_edge(&mut self, producer: NodeId, consumer: NodeId) {
         let producer = self.resolve_alias(producer);
         if self.store.is_result_ready(producer) {
             self.deps.owe_late_pull(producer.index(), consumer.index());

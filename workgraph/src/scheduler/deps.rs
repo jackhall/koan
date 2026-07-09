@@ -106,7 +106,7 @@ impl<R> Deps<R> {
     }
 
     /// The park-prefix length — the split point of the `[park..., owned...]` delivery order.
-    pub fn park_count(&self) -> usize {
+    pub(crate) fn park_count(&self) -> usize {
         self.parks.len()
     }
 
