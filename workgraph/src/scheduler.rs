@@ -77,10 +77,14 @@ impl<W: Workload> Scheduler<W> {
         self.queues.pop_next()
     }
 
-    /// Take a slot's stored node to run it (`PreRun` → `Running`); the slot sits empty until the
-    /// driver finalizes or [`replace`](Self::replace)s it.
-    pub fn take_for_run(&mut self, id: NodeId) -> Node<W> {
-        self.store.take_for_run(id)
+    /// Take a slot's stored node to run it (`PreRun` → `Running`), together with its pending TCO
+    /// frame handoff — the retiring incarnation's frame owner a framed tail [`replace`](Self::replace)
+    /// parked on it. The slot sits empty until the driver finalizes or `replace`s it. The caller
+    /// holds the returned `Rc` across the step: drop order frees the retiring region only after the
+    /// reinstalled incarnation adopts the carried arguments out of it (`None` for any slot with no
+    /// pending handoff — a first run, or a frameless replace).
+    pub fn take_for_run(&mut self, id: NodeId) -> (Node<W>, Option<Rc<W::Frame>>) {
+        (self.store.take_for_run(id), self.deps.take_handoff(id.index()))
     }
 
     /// Reinstall a tail-replaced slot's node and re-enqueue it if its deps are already satisfied —
@@ -101,15 +105,6 @@ impl<W: Workload> Scheduler<W> {
         if self.deps.pending_count(id.index()) == 0 {
             self.queues.push_after_replace(id.index());
         }
-    }
-
-    /// Take a slot's pending TCO handoff hold — the retiring incarnation frame owner a framed tail
-    /// [`replace`](Self::replace) parked on it. The run loop calls this just before running the
-    /// reinstalled incarnation's step and holds the returned `Rc` across it, so the retiring region
-    /// outlives the adoption of the carried arguments and frees only after. `None` for any slot with
-    /// no pending handoff (the common case — a first run, or a frameless replace).
-    pub fn take_handoff(&mut self, id: NodeId) -> Option<Rc<W::Frame>> {
-        self.deps.take_handoff(id.index())
     }
 
     /// Slots still `PreRun` after the queue drained — each is parked on a dependency that can no
