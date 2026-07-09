@@ -305,8 +305,6 @@ picture:
 
 ## Open work
 
-- [Consumer mints ride the delivery envelope](../roadmap/scheduler_library/consumer-envelope-mint.md)
-  — makes the envelope the sole consumer-side mint verb.
 - [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
   — moves frame ownership into scheduler slot state; collapses the trait's
   memory types to `Frame` and folds the payload into continuation captures.

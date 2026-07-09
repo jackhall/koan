@@ -43,8 +43,6 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
-- [Consumer mints ride the delivery envelope](consumer-envelope-mint.md) —
-  mint-surface visibility settles before the API freezes.
 - [Scheduler-owned frame storage](scheduler-owned-frame-storage.md) — moves
   the boundary; the frozen API is the post-move one.
 - [Carving the workcell crate](workcell-extraction.md) — the published

@@ -45,7 +45,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Structural value equality](refactor/structural-value-equality.md)
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
-- [Consumer mints ride the delivery envelope](scheduler_library/consumer-envelope-mint.md)
 - [Return contracts ride continuations](scheduler_library/contract-as-continuation.md)
 - [Region-purity typed at the move-in allocs](scheduler_library/region-pure-move-in.md)
 - [Scheduler-owned frame storage](scheduler_library/scheduler-owned-frame-storage.md)
