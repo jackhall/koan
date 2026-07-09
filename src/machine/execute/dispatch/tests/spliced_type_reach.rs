@@ -53,14 +53,16 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     // Adopt the sealed type into `scope` and register it there with the foreign reach — the
     // type-channel mirror of a `LET` binding a module value returned from elsewhere. The envelope
     // host is the foreign frame the type resides in, exactly what a delivered dep would carry.
-    let stored = scope.host_reach_of(produced.witness(), Some(&foreign));
-    let kt = match scope.adopt_sealed(&Delivered::hosted(
-        produced.duplicate(),
-        Rc::clone(&foreign),
-    )) {
+    let cell = Delivered::hosted(produced.duplicate(), Rc::clone(&foreign));
+    let stored = scope.host_reach_of(&cell);
+    let kt = match scope.adopt_sealed(&cell) {
         Carried::Type(kt) => kt.clone(),
         _ => panic!("expected the adopted Type"),
     };
+    // Drop the envelope now: its only job was the mint + adopt above, and holding it past this
+    // point (its `Rc::clone(&foreign)`) would mask the later `drop(foreign)` check below —
+    // `scope`'s minted arena set, not this envelope, must be what keeps `foreign` alive from here.
+    drop(cell);
     scope.register_type("T".to_string(), kt, BindingIndex::BUILTIN, stored);
 
     // Drive the exact surface the fixed splice arm uses.

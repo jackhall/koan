@@ -19,6 +19,11 @@ pub type CarrierWitness = crate::witnessed::Carrier<FrameStorage>;
 /// [`CarrierWitness`]-witnessed value carrier paired with its retained [`FrameStorage`] owner. The
 /// in-transit form of a value's liveness — from a scheduler pull (or a resident seal) to its
 /// adoption — and the only surface that materializes a producer frame into a minted reach set
-/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site.
+/// (`mint_reach` / `transfer_into`), so koan never holds a bare frame pin at a consumer site. Every
+/// envelope-bearing mint routes through `Delivered::mint_reach` (koan's `Scope::envelope_reach_of`
+/// funnel); the one envelope-free case — a value already resident in a region the caller's context
+/// covers ambiently — routes through
+/// [`Witnessed::mint_resident_reach`](crate::witnessed::Witnessed::mint_resident_reach) (koan's
+/// `Scope::resident_reach_of`) instead.
 pub type DeliveredCarried =
     crate::witnessed::Delivered<CarriedFamily, CarrierWitness, FrameStorage>;

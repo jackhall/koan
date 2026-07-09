@@ -90,14 +90,14 @@ pub(crate) fn arm_tail<'a>(
                 child.brand().alloc_object(value),
                 delivered
                     .as_ref()
-                    .map(|d| child.adopted_reach_of(d.witness(), Some(d.host())))
+                    .map(|d| child.adopted_reach_of(d))
                     .unwrap_or_default(),
             ),
             ItSource::Carrier(carrier) => (
                 // Adopt at the bind brand: one structural copy, made directly into the arm frame's
                 // region inside the envelope's pinned open; the binding stores the copy's reach.
                 carrier.open(|live| child.brand().alloc_object(live.object().deep_clone())),
-                child.adopted_reach_of(carrier.witness(), Some(carrier.host())),
+                child.adopted_reach_of(&carrier),
             ),
         };
         let _ = child.bind_value("it".to_string(), it_object, BindingIndex::value(0), reach);

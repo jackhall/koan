@@ -140,9 +140,7 @@ where
                         // frame must not ride the fresh frame's binding.
                         let stored = arg_carriers
                             .get(name)
-                            .map(|carrier| {
-                                child.adopted_reach_of(carrier.witness(), Some(carrier.host()))
-                            })
+                            .map(|carrier| child.adopted_reach_of(carrier))
                             .unwrap_or_default();
                         let _ =
                             child.bind_value(name.clone(), object, BindingIndex::value(0), stored);
@@ -153,9 +151,7 @@ where
                     Held::Type(kt) => {
                         let stored = arg_carriers
                             .get(name)
-                            .map(|carrier| {
-                                child.host_reach_of(carrier.witness(), Some(carrier.host()))
-                            })
+                            .map(|carrier| child.host_reach_of(carrier))
                             .unwrap_or_default();
                         child.register_type(
                             name.clone(),

@@ -14,7 +14,7 @@ use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{KError, Scope};
+use crate::machine::{DeliveredCarried, KError, Scope};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
 use crate::witnessed::{Delivered, Sealed, Witnessed};
@@ -48,7 +48,7 @@ pub(crate) fn extract_terminal<'a>(
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
-    let _ = scope.adopted_reach_of(delivered.witness(), Some(delivered.host()));
+    let _ = scope.adopted_reach_of(&delivered);
     value
 }
 
@@ -200,6 +200,14 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
             crate::machine::core::run_root_storage(),
         ),
     }
+}
+
+/// Build a delivery envelope around `value` (an empty-reach resident witness) pinned by `host` —
+/// for tests that only need a real `DeliveredCarried` to drive a mint, not any particular reach
+/// content. `Delivered::seal` requires the true owner in hand, so the caller supplies `host`
+/// exactly as a scheduler pull or a resident seal would.
+pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) -> DeliveredCarried {
+    Delivered::seal(Witnessed::resident(value), host)
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.

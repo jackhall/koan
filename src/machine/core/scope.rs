@@ -14,7 +14,7 @@ use super::scope_id::ScopeId;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::DeliveredCarried;
-use crate::witnessed::{Delivered, Erased, Residence, Witnessed};
+use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
 
 /// Lexical environment. Only the root scope holds a writer in `out`; child scopes
 /// have `None` and `write_out` walks `outer` to find one.
@@ -192,54 +192,58 @@ impl<'a> Scope<'a> {
             .any(|scope| std::ptr::eq(scope.region(), region))
     }
 
-    /// Mint a carrier's reach into this scope's own arena and package it as the binding entry's
-    /// stored reach, for a value that **keeps living** in its producer's region (the copy-free
-    /// re-anchor — [`Self::adopt_sealed`]'s type-channel adoption): `host` — the value's producer
-    /// frame owner, sourced from the delivery envelope — materializes as a reach member
-    /// unconditionally, so the residence stays pinned for the scope's life. The minted set is held
-    /// by the arena for the region's life — the same schedule the scope itself is held on — and its
-    /// `&'a` reference is stored on the entry (the reach). `None` when the value reaches nothing
-    /// foreign. Home-omission: the scope's home frame plus lexical-ancestor regions
+    /// Mint a delivered value's reach into this scope's own arena and package it as the binding
+    /// entry's stored reach, for a value that **keeps living** in its producer's region (the
+    /// copy-free re-anchor — [`Self::adopt_sealed`]'s type-channel adoption): the envelope's host —
+    /// the value's producer frame owner — materializes as a reach member unconditionally, so the
+    /// residence stays pinned for the scope's life. The minted set is held by the arena for the
+    /// region's life — the same schedule the scope itself is held on — and its `&'a` reference is
+    /// stored on the entry (the reach). `None` when the value reaches nothing foreign.
+    /// Home-omission: the scope's home frame plus lexical-ancestor regions
     /// ([`Self::chain_reaches_region`]) — a per-call frame carries no storage `outer` under TCO, so
     /// the lexical half is what catches a closure's captured (ancestor) scope, keeping a sibling
     /// bind of the call's result from closing a region cycle.
-    pub(crate) fn host_reach_of(
-        &self,
-        witness: &CarrierWitness,
-        host: Option<&Rc<FrameStorage>>,
-    ) -> StoredReach<'a> {
-        self.reach_of(witness, host, Residence::Kept)
+    pub(crate) fn host_reach_of(&self, cell: &DeliveredCarried) -> StoredReach<'a> {
+        self.envelope_reach_of(cell, Residence::Kept)
     }
 
     /// The stored reach for a value **deep-copied** out of a delivered carrier into this scope's own
     /// region — the copy-bind twin of [`Self::host_reach_of`] (a parameter bind, a MATCH/TRY `it`
     /// bind, the LET value route). The copy does not reside in the producer's region, so residence
-    /// alone pins nothing: `host` materializes as a reach member only when the value's borrows
-    /// genuinely reach it (the carrier's `borrows_host` bit). Dropping a residence-only host is what
-    /// lets a tail loop's retiring region free once its delivered carrier drops, instead of riding
-    /// every later incarnation's stored reach.
-    pub(crate) fn adopted_reach_of(
-        &self,
-        witness: &CarrierWitness,
-        host: Option<&Rc<FrameStorage>>,
-    ) -> StoredReach<'a> {
-        self.reach_of(witness, host, Residence::Copied)
+    /// alone pins nothing: the envelope's host materializes as a reach member only when the value's
+    /// borrows genuinely reach it (the carrier's `borrows_host` bit). Dropping a residence-only host
+    /// is what lets a tail loop's retiring region free once its delivered carrier drops, instead of
+    /// riding every later incarnation's stored reach.
+    pub(crate) fn adopted_reach_of(&self, cell: &DeliveredCarried) -> StoredReach<'a> {
+        self.envelope_reach_of(cell, Residence::Copied)
     }
 
     /// Shared mint behind [`Self::host_reach_of`] / [`Self::adopted_reach_of`]: the library
-    /// [`Carrier::mint_into`](crate::witnessed::Carrier) with koan's omission policy (home frame +
-    /// lexical ancestors). `host` is the value's producer frame owner — the delivery envelope's
-    /// retained host at an adoption site, or `None` for a value already resident in an ambiently
-    /// covered region (its reach set then lives in an arena the caller's context keeps live).
-    fn reach_of(
+    /// [`Delivered::mint_reach`](crate::witnessed::Delivered::mint_reach) with koan's omission
+    /// policy (home frame + lexical ancestors), taking the envelope itself rather than its
+    /// decomposed witness/host pair.
+    fn envelope_reach_of(&self, cell: &DeliveredCarried, mode: Residence) -> StoredReach<'a> {
+        let home = self.region_owner.upgrade();
+        let (foreign, borrows_into_home) = cell.mint_reach(self.brand().handle(), mode, |region| {
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+                || self.chain_reaches_region(region)
+        });
+        StoredReach {
+            foreign,
+            borrows_into_home,
+        }
+    }
+
+    /// Reach of a value already resident in a region this scope's context covers ambiently (the
+    /// run-teardown rehome path) — no delivery envelope in hand, so no host to fold: the value's
+    /// reach set already lives in an arena the caller's context keeps live.
+    pub(crate) fn resident_reach_of<T: Reattachable>(
         &self,
-        witness: &CarrierWitness,
-        host: Option<&Rc<FrameStorage>>,
-        mode: Residence,
+        cell: &Witnessed<T, CarrierWitness>,
     ) -> StoredReach<'a> {
         let home = self.region_owner.upgrade();
         let (foreign, borrows_into_home) =
-            witness.mint_into(self.brand().handle(), host, mode, |region| {
+            cell.mint_resident_reach(self.brand().handle(), |region| {
                 home.as_ref().is_some_and(|h| h.pins_region(region))
                     || self.chain_reaches_region(region)
             });
@@ -890,28 +894,21 @@ impl<'a> Scope<'a> {
         Delivered::seal(witnessed, home)
     }
 
-    /// Adopt a sealed dep carrier into this scope, copy-free: mint its reach — with its residence
-    /// host materialized as a member ([`Residence::Kept`]) — into the scope's own arena for
-    /// liveness, so every region the value reaches, its own home included, stays alive for the
-    /// scope's life; then re-anchor the sealed value at the scope's own brand. Where
-    /// [`resident_value_carrier`] seals a value already living **in** this region, adoption is the
-    /// consumption verb for a carrier produced **elsewhere**: the value stays put in its producer's
-    /// region and the mint is what pins that region, so the dep survives past its resolving step as
-    /// its carrier rather than as a relocated copy (the head-deferred callable, an FN signature
-    /// type slot, a spliced argument).
+    /// Adopt a sealed dep carrier into this scope, copy-free: [`Delivered::adopt_into`] mints its
+    /// reach — with its residence host materialized as a member ([`Residence::Kept`]) — into the
+    /// scope's own arena for liveness, so every region the value reaches, its own home included,
+    /// stays alive for the scope's life; then re-anchors the sealed value at the scope's own brand.
+    /// Where [`resident_value_carrier`] seals a value already living **in** this region, adoption is
+    /// the consumption verb for a carrier produced **elsewhere**: the value stays put in its
+    /// producer's region and the mint is what pins that region, so the dep survives past its
+    /// resolving step as its carrier rather than as a relocated copy (the head-deferred callable, an
+    /// FN signature type slot, a spliced argument).
     pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
-        // Mint FIRST: pin every region the value reaches — its residence host included — into this
-        // scope's arena before any borrow of the value is fabricated. The `&'a` ref is discarded —
-        // the arena holds the set, hence the pin, for the region's life.
-        let _ = self.host_reach_of(cell.witness(), Some(cell.host()));
-
-        // Copy-free re-anchor. The materialized host member minted above pins the producer region
-        // for all of `'a`.
-        let erased: Erased<CarriedFamily> = cell.open(|live| Erased::<CarriedFamily>::erase(live));
-        // SAFETY: the mint above stored the carrier's reach (with the producer frame materialized as
-        // a member) into this scope's arena, held for the region's life ⊇ `'a`. So the re-anchored
-        // `Carried<'a>` cannot outlive its pin. Copy-free; only the borrow is re-anchored.
-        unsafe { erased.reattach() }
+        let home = self.region_owner.upgrade();
+        cell.adopt_into(self.brand().handle(), |region| {
+            home.as_ref().is_some_and(|h| h.pins_region(region))
+                || self.chain_reaches_region(region)
+        })
     }
 
     /// Adopt a sealed dep carrier's **object** into this scope by structural copy — the
@@ -939,7 +936,7 @@ impl<'a> Scope<'a> {
         // Mint FIRST: pin every region the copy still reaches (interior borrows survive
         // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated. Copied mode:
         // the producer host materializes only if the value's borrows genuinely reach it.
-        let _ = self.adopted_reach_of(cell.witness(), Some(cell.host()));
+        let _ = self.adopted_reach_of(cell);
         cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
     }
 

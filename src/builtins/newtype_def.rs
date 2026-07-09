@@ -59,9 +59,7 @@ fn finalize_newtype<'a>(
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
     let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
-    let stored = carrier
-        .map(|c| scope.host_reach_of(c.witness(), Some(c.host())))
-        .unwrap_or_default();
+    let stored = carrier.map(|c| scope.host_reach_of(c)).unwrap_or_default();
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index, stored)

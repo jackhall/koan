@@ -7,11 +7,11 @@
 use std::rc::Rc;
 
 use crate::builtins::test_support::{
-    parse_one, run, run_one, run_one_err, run_root_bare, run_root_silent,
+    delivered_with_host, parse_one, run, run_one, run_one_err, run_root_bare, run_root_silent,
 };
-use crate::machine::core::{run_root_storage, BindingIndex, CarrierWitness, Scope};
+use crate::machine::core::{run_root_storage, BindingIndex, Scope};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::KObject;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
 
 #[test]
@@ -200,9 +200,12 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Bind a value in the module scope whose stored reach names the foreign frame -- minted for
     // real into the module's own arena via `host_reach_of`, the same primitive `adopt_sealed` uses
     // to root a functor result's reach at module-bind time.
-    let stored_reach =
-        module_scope.host_reach_of(&CarrierWitness::default(), Some(&foreign_storage));
     let value_obj = module_scope.brand().alloc_object(KObject::Number(1.0));
+    let cell = delivered_with_host(Carried::Object(value_obj), Rc::clone(&foreign_storage));
+    let stored_reach = module_scope.host_reach_of(&cell);
+    // Drop the envelope now: it must not be what keeps `foreign_storage` alive below — the
+    // stored reach it minted into `module_scope`'s own arena is what the test exercises.
+    drop(cell);
     module_scope
         .bind_value(
             "val".to_string(),
@@ -224,7 +227,13 @@ fn using_window_value_read_reach_survives_under_module_root() {
     // Mirror `USING`'s own overlay fold (`builtins/using_scope.rs`): mint the opened module's own
     // carrier into the window's (call-site) arena at overlay construction, before any read through
     // the window -- the step that roots the module's region transitively.
-    let _ = window.host_reach_of(&CarrierWitness::default(), Some(&module_storage));
+    let window_root_dummy = window.brand().alloc_object(KObject::Number(0.0));
+    let window_root_cell = delivered_with_host(
+        Carried::Object(window_root_dummy),
+        Rc::clone(&module_storage),
+    );
+    let _ = window.host_reach_of(&window_root_cell);
+    drop(window_root_cell);
 
     let carrier = window
         .resolve_value_carrier("val", None)

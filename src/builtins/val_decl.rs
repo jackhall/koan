@@ -151,7 +151,7 @@ fn finalize_val<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
     let stored = carrier
-        .map(|c| fctx.scope.host_reach_of(c.witness(), Some(c.host())))
+        .map(|c| fctx.scope.host_reach_of(c))
         .unwrap_or_default();
     if let Err(e) = fctx
         .scope

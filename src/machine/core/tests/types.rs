@@ -4,12 +4,12 @@
 use std::rc::Rc;
 
 use super::super::Scope;
-use crate::builtins::test_support::run_root_bare;
+use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::KType;
+use crate::machine::model::values::Carried;
 use crate::machine::BindingIndex;
-use crate::machine::CarrierWitness;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -158,7 +158,11 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
     // Bind a member into `source_scope` whose stored reach names `inner_storage` — mirrors a nested
     // module member reaching into another module's own region.
     let obj: &KObject = source_scope.brand().alloc_object(KObject::Number(1.0));
-    let stored = source_scope.host_reach_of(&CarrierWitness::default(), Some(&inner_storage));
+    let cell = delivered_with_host(Carried::Object(obj), Rc::clone(&inner_storage));
+    let stored = source_scope.host_reach_of(&cell);
+    // Drop the envelope now: it must not be what keeps `inner_storage` alive below — the minted
+    // reach folded into `stored` (and, downstream, `parent`'s union) is what the test exercises.
+    drop(cell);
     source_scope
         .bind_value("m".to_string(), obj, BindingIndex::value(0), stored)
         .expect("bind should succeed");

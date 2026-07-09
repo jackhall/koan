@@ -69,7 +69,7 @@ pub fn body<'a>(
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
         let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| {
-            let _ = overlay.host_reach_of(carrier.witness(), Some(carrier.host()));
+            let _ = overlay.host_reach_of(&carrier);
         });
         seed
     });

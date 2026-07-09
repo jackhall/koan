@@ -17,13 +17,16 @@
 //! pin, or the envelope's [`Delivered::open`](super::Delivered::open) — and relocations run
 //! through the envelope-bearing mint verbs ([`Delivered::mint_reach`](super::Delivered::mint_reach),
 //! [`Delivered::transfer_into`](super::Delivered::transfer_into)), the only places a residence
-//! host materializes as a set member.
+//! host materializes as a set member. A value with no envelope — already resident in a region the
+//! caller's context covers ambiently — mints through [`Witnessed::mint_resident_reach`] instead,
+//! the envelope-free twin. [`Self::mint_into`] is the crate-internal core both route through; it is
+//! not part of the public surface.
 
 use std::rc::Rc;
 
 use super::{
     with_branded_ref, ComposeWitness, Erased, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionOwner, RegionSet, StorageProfile, Stored,
+    RegionOwner, RegionSet, StorageProfile, Stored, Witnessed,
 };
 
 /// [`Reattachable`] family for a lifetime-erased `&RegionSet<F>` — the erased reach reference a
@@ -219,11 +222,12 @@ impl<F: PinsRegion + 'static> Carrier<F> {
 
     /// Mint this carrier's reach into `dest`, materializing `host` (the value's producer frame
     /// owner) per `mode`, and report whether the value's borrows reach `dest`'s own region — the
-    /// re-home mint every bind / adoption routes (through the envelope's
-    /// [`mint_reach`](super::Delivered::mint_reach), or directly with an `Option` host at a site
-    /// whose value is resident or whose producer is frameless). Applies, via [`RegionSet::mint`]:
-    /// home-omission (`dest`'s own region is never a member), the caller's `omit` policy
-    /// predicate, and outer-chain subsumption.
+    /// shared core both crate-internal mint verbs route through:
+    /// [`Delivered::mint_reach`](super::Delivered::mint_reach) supplies `Some(host)` for an
+    /// envelope-bearing value, and [`Witnessed::mint_resident_reach`] supplies `None` for a value
+    /// already resident in a region the caller's context covers ambiently. Not itself part of the
+    /// public surface. Applies, via [`RegionSet::mint`]: home-omission (`dest`'s own region is
+    /// never a member), the caller's `omit` policy predicate, and outer-chain subsumption.
     ///
     /// `host` doubles as the pin for the source-set read (`with_reach`); `None` asserts
     /// the source arena is ambiently covered (a resident value's own region, a held step pin) —
@@ -231,7 +235,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// Returns the minted set (`None` == empty, no allocation) and the borrows-into-dest bit:
     /// reach members pinning `dest`'s region, or the `borrows_host` bit when `host` itself pins it
     /// (the value's home *is* — or subsumes — the destination).
-    pub fn mint_into<'d, P>(
+    pub(in crate::witnessed) fn mint_into<'d, P>(
         &self,
         dest: RegionHandle<'d, P>,
         host: Option<&Rc<F>>,
@@ -293,6 +297,33 @@ impl<F: PinsRegion + 'static> Carrier<F> {
             borrows_host: borrows_into_dest,
             reach: minted.map(Erased::<HostedSetRef<F>>::erase),
         }
+    }
+}
+
+/// The envelope-free mint entry: a value carried under a reference-only [`Carrier`] witness with no
+/// [`Delivered`](super::Delivered) envelope in hand, because it already lives in a region the
+/// caller's context covers ambiently (the run-teardown rehome path). Resident twin of
+/// [`Delivered::mint_reach`](super::Delivered::mint_reach).
+impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
+    /// Mints this resident value's reach into `dest`.
+    ///
+    /// Resident twin of [`Delivered::mint_reach`](super::Delivered::mint_reach): the value already
+    /// lives in a region the caller's context covers ambiently, so there is no residence host to
+    /// materialize and no `Residence` mode to choose.
+    pub fn mint_resident_reach<'d, P>(
+        &self,
+        dest: RegionHandle<'d, P>,
+        omit: impl Fn(&Region<P>) -> bool,
+    ) -> (Option<&'d RegionSet<F>>, bool)
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+    {
+        // `host: None` means there is no residence host to materialize, so `Residence::Kept` here
+        // is arbitrary — `mint_into`'s `materialize_hosts` returns an empty vec under either mode
+        // once `host` is `None`.
+        self.witness().mint_into(dest, None, Residence::Kept, omit)
     }
 }
 

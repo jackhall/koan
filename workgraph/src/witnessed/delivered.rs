@@ -18,6 +18,12 @@
 //! frame is folded into a minted destination set, gated on the [`Residence`] mode (unconditionally
 //! for a value that keeps living in the producer's region; on `borrows_host` for a value copied
 //! out). See [design/witness-hosting.md § Composition](../../../design/witness-hosting.md#composition-minting-a-set).
+//!
+//! [`Delivered::mint_reach`] is the sole envelope-bearing mint entry a consumer routes; a value with
+//! no envelope in hand instead mints through [`Witnessed::mint_resident_reach`](super::Witnessed::mint_resident_reach).
+//! Both are thin callers over the crate-internal [`Carrier::mint_into`](super::Carrier::mint_into)
+//! core. [`Delivered::adopt_into`] fuses that mint with the re-anchor it justifies into one
+//! copy-free adoption verb, so a caller cannot split the pin from the reattach it pins.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -145,6 +151,32 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
     {
         self.witness().mint_into(dest, Some(&self.host), mode, omit)
+    }
+
+    /// Copy-free adoption: mints this envelope's reach — residence host
+    /// materialized (`Residence::Kept`) — into `dest`'s region, then re-anchors
+    /// the sealed value at `dest`'s lifetime. Fused so the re-anchor cannot be
+    /// reached without the mint that pins it: the minted set lives in `dest`'s
+    /// arena for the region's life, so every region the value reaches (its home
+    /// included) outlives the returned borrow. `omit` names regions the caller's
+    /// context covers ambiently, as in [`Self::mint_reach`].
+    pub fn adopt_into<'d, P>(
+        &self,
+        dest: RegionHandle<'d, P>,
+        omit: impl Fn(&Region<P>) -> bool,
+    ) -> T::At<'d>
+    where
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+        RegionSet<F>: Stored<P> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+        T::At<'static>: Copy,
+    {
+        let _ = self.mint_reach(dest, Residence::Kept, omit);
+        let erased: Erased<T> = self.open(Erased::<T>::erase);
+        // SAFETY: the mint above stored this carrier's reach — residence host
+        // materialized as a member — into `dest`'s arena, held for the region's
+        // life ⊇ 'd; the re-anchored borrow cannot outlive its pin.
+        unsafe { erased.reattach() }
     }
 
     /// Relocate the delivered value into a destination and re-seal it under the composed carrier
