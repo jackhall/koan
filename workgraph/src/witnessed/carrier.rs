@@ -51,6 +51,25 @@ pub unsafe trait HasRegionHandle<'b, P: StorageProfile> {
     fn region_handle(&self) -> RegionHandle<'b, P>;
 }
 
+// SAFETY: the operand IS the destination handle; the region it authorizes allocation into is
+// definitionally the region a carrier composed against it re-homes into.
+unsafe impl<'b, P: StorageProfile> HasRegionHandle<'b, P> for RegionHandle<'b, P> {
+    fn region_handle(&self) -> RegionHandle<'b, P> {
+        *self
+    }
+}
+
+// SAFETY: a handle-headed operand re-homes through its head — the only 'b-branded allocation
+// capability its live form carries. Peer of the (&'b Region<P>, T) blanket in step_ctx.rs; an
+// embedder whose operand heads are a `RegionHandle` newtype veneer (rather than a bare
+// `&'b Region<P>`) discharges its `HasRegionHandle` obligation through this blanket instead of a
+// per-family impl of its own.
+unsafe impl<'b, P: StorageProfile, T> HasRegionHandle<'b, P> for (RegionHandle<'b, P>, T) {
+    fn region_handle(&self) -> RegionHandle<'b, P> {
+        self.0
+    }
+}
+
 /// The residence mode of a re-home mint: did the value **keep living** in the producer's region
 /// (a copy-free re-anchor), or was it **copied out** into the destination? Decides whether the
 /// producer host materializes as a member of the minted set unconditionally (`Kept` — residence

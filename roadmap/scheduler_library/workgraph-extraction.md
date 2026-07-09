@@ -51,7 +51,5 @@ the surface being documented and frozen is the final one.
   boundary is the layered pair.
 - [Region-purity typed at the move-in allocs](region-pure-move-in.md) —
   tightens the published `alloc_resident` surface before the API freezes.
-- [Handle-headed construction operands](handle-headed-operands.md) — the
-  blanket impls are published surface; they land before the API freezes.
 
 **Unblocks:** none tracked — the project's terminal item.

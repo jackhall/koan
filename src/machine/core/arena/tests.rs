@@ -14,11 +14,10 @@ use crate::machine::DeliveredCarried;
 use crate::witnessed::{Delivered, Erased, Residence, Witnessed};
 use std::marker::PhantomData;
 
-/// Test-only destination-region operand: a bare [`RegionBrand`], the `HasRegionHandle` mint target
-/// a `merge`/`transfer_into` composition needs. Mirrors `execute::run_loop::RegionRefFamily`, which
-/// this file (under `core`, not `execute`) cannot reach.
-struct BrandFamily;
-crate::witnessed::reattachable!(BrandFamily => RegionBrand<'r>);
+/// Test-only destination-region operand: the library's [`RegionHandleFamily`], the
+/// `HasRegionHandle` mint target a `merge`/`transfer_into` composition needs — the same family
+/// production's `execute::run_loop::DestHandleFamily` aliases.
+type BrandFamily = RegionHandleFamily<KoanStorageProfile>;
 
 /// A child `FrameStorage` whose `outer` chains `parent` — the ancestry shape `FrameSet`
 /// subsumption walks. Region escape is irrelevant to the `outer`-chain test, so a plain region.
@@ -309,7 +308,7 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
     // as a reach member (Kept: the value keeps living there).
     let delivered: DeliveredCarried = Delivered::seal(foreign, Rc::clone(&foreign_frame));
     let here_dest: Witnessed<BrandFamily, CarrierWitness> =
-        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b);
+        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b.handle());
     let merged: Witnessed<CarriedFamily, CarrierWitness> = delivered
         .transfer_into::<BrandFamily, CarriedFamily, _>(
             here_dest,
@@ -339,7 +338,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
             Carried::Object(r.alloc_object(KObject::Number(1.0)))
         });
     let here_dest: Witnessed<BrandFamily, CarrierWitness> =
-        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b);
+        KoanRegion::yoke_branded::<BrandFamily, _>(Rc::clone(&here_frame), |b| b.handle());
     let merged: Witnessed<CarriedFamily, CarrierWitness> =
         Delivered::seal(foreign, Rc::clone(&foreign_frame))
             .transfer_into::<BrandFamily, CarriedFamily, _>(
@@ -387,7 +386,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
 /// production family the object-family construction inversion uses lives in the execute layer; this
 /// is the spike stand-in that proves the carrier round-trips and the fold composition is sound.
 struct AggBuildFamily;
-crate::witnessed::reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
+crate::witnessed::reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
 /// The **aggregate** construction fold: a list / dict / record built from several dep producers —
 /// the shape the object family folds with shipped verbs only (no new substrate primitive). The
@@ -424,7 +423,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
-            (region, Vec::new())
+            (region.handle(), Vec::new())
         });
     // Fold each dep in: bind its re-anchored carrier into the cells (a list element borrows into the
     // foreign region exactly as a surviving closure rides its bare borrow); the witness accumulates
@@ -450,6 +449,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // regions, both now minted as members into the dest arena.
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_frame, |(region, cells), _brand| {
+            let region = RegionBrand(region);
             Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
         });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
@@ -635,7 +635,7 @@ fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
 /// twin of [`AggBuildFamily`]. Each closure cell `transfer_into`s (a `merge`) its value and reach onto
 /// the accumulator; the final `map` builds the record from the region.
 struct RecordCellFamily;
-crate::witnessed::reattachable!(RecordCellFamily => (RegionBrand<'r>, Vec<(String, Held<'r>)>));
+crate::witnessed::reattachable!(RecordCellFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(String, Held<'r>)>));
 
 /// **Multi-region shape 1 — a list of closures over distinct, independently-dying per-call regions.**
 /// Each closure is `transfer_into`d into a list accumulator, relocating the value into the dest region
@@ -654,7 +654,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None); // the list node lands here.
 
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
-        (region, Vec::new())
+        (region.handle(), Vec::new())
     });
     // Fold each closure terminal (born witnessed by its own frame) into the accumulator; the temporary
     // source carrier drops after each statement, leaving only the aggregate witness holding the region.
@@ -679,6 +679,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let dest_storage = dest_frame.storage_rc();
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
+            let region = RegionBrand(region);
             Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
         });
 
@@ -725,7 +726,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
     // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(frame_outer.storage_rc(), |region| {
-        (region, Vec::new())
+        (region.handle(), Vec::new())
     });
     let acc1 = delivered_closure(&frame_1).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
         acc0,
@@ -755,6 +756,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         acc2,
         Residence::Kept,
         |outer_v, (region, cells), _brand| {
+            let region = RegionBrand(region);
             if let KObject::KFunction(kf) = outer_v.object() {
                 let list_obj = region.alloc_object(KObject::list_of_held(cells));
                 kf.captured_scope()
@@ -813,7 +815,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
     // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
     // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
     let acc0 = KoanRegion::yoke_branded::<RecordCellFamily, _>(dest_frame.storage_rc(), |region| {
-        (region, Vec::new())
+        (region.handle(), Vec::new())
     });
     let acc1 = delivered_closure(&frame_a).transfer_into::<RecordCellFamily, RecordCellFamily, _>(
         acc0,
@@ -834,6 +836,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let dest_storage = dest_frame.storage_rc();
     let record: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
+            let region = RegionBrand(region);
             Carried::Object(region.alloc_object(KObject::record_of_held(Record::from_pairs(cells))))
         });
 

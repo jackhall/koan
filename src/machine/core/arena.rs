@@ -27,9 +27,9 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Delivered, Erased, FamilyArena, HasRegionHandle, Reattachable, Region, RegionHandle,
-    RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
-    Stored, WitnessRegion, Witnessed,
+    Delivered, Erased, FamilyArena, Reattachable, Region, RegionHandle, RegionHandleFamily,
+    RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile, Stored, WitnessRegion,
+    Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -78,7 +78,7 @@ pub type KoanRegion = Region<KoanStorageProfile>;
 /// is sealed to `workgraph`, so the only route to a region is a library-provisioned [`FrameStorage`],
 /// never an ambient region reference Koan mints itself.
 #[derive(Clone, Copy)]
-pub struct RegionBrand<'a>(RegionHandle<'a, KoanStorageProfile>);
+pub struct RegionBrand<'a>(pub(crate) RegionHandle<'a, KoanStorageProfile>);
 
 impl<'a> RegionBrand<'a> {
     /// The bare region this brand authorizes — for identity compares (`ptr::eq`, `pins_region`). A
@@ -88,10 +88,12 @@ impl<'a> RegionBrand<'a> {
         self.0.region()
     }
 
-    /// The bare library allocation capability this brand wraps — the [`HasRegionHandle`] accessor
-    /// a `Carrier` composition mints through, and the sole route to it outside this module (the
-    /// field itself stays private, so a brand's only public surfaces are the Koan-typed `alloc_*`
-    /// veneer and this raw handle for the compose seam).
+    /// The bare library allocation capability this brand wraps — the handle-headed construction
+    /// operand families (`RegionTypeFamily`, the aggregate accumulators, `execute::run_loop`'s
+    /// `DestHandleFamily`) cross the brand as this raw handle rather than the koan veneer, so the
+    /// library's own `HasRegionHandle` impls for `RegionHandle`/`(RegionHandle, T)` discharge their
+    /// obligation with no koan-side impl. A closure that needs the koan-typed `alloc_*` veneer back
+    /// rewraps locally: `RegionBrand(handle)`.
     pub(crate) fn handle(self) -> RegionHandle<'a, KoanStorageProfile> {
         self.0
     }
@@ -214,73 +216,15 @@ reattachable! {
     OperatorGroup => OperatorGroup,
 }
 
-/// A witnessed-construction operand bundling a destination region's [`RegionBrand`] with a
+/// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
 /// type-channel identity (a `SetRef` / declared type) that must cross the build brand. A
 /// value-embedding construction `transfer_into`/`merge`s its object carrier with this operand so the
-/// wrapped value lands — allocated through the brand — tagged by the identity, both re-anchored to the
-/// build brand under the same witness; the dest frame's `outer` chain pins the identity's (ancestor)
-/// region. Used by the newtype / tagged-union constructors and the `CATCH` `Result` build.
-/// Layout-invariant: two thin pointers, representation independent of `'r`.
+/// wrapped value lands — allocated through the handle — tagged by the identity, both re-anchored to
+/// the build brand under the same witness; the dest frame's `outer` chain pins the identity's
+/// (ancestor) region. Used by the newtype / tagged-union constructors and the `CATCH` `Result`
+/// build. Layout-invariant: two thin pointers, representation independent of `'r`.
 pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (RegionBrand<'r>, &'r KType<'r>));
-
-// SAFETY: the handle authorizes allocation into `self.0`'s own region — exactly the region a
-// `Carrier` composed against this family's live form re-homes into, so a set minted through it is
-// co-located with the composed carrier's `host` (this operand's `RegionBrand` IS that host).
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile> for (RegionBrand<'b>, &'b KType<'b>) {
-    fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
-        self.0.handle()
-    }
-}
-
-// SAFETY: the handle authorizes allocation into the brand's own region — the region a `Carrier`
-// composed against a bare region-ref operand re-homes into (the brand itself becomes the composed
-// carrier's `host`). The one instance where the family's live form *is* the brand, not a tuple
-// wrapping it (the destination-region relocation operand, `execute::run_loop::RegionRefFamily`).
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile> for RegionBrand<'b> {
-    fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
-        (*self).handle()
-    }
-}
-
-// SAFETY: same obligation as the tuple impl above — `self.0`'s own region is where a composed
-// `Carrier` re-homes. Covers every aggregate-builder family shaped `(RegionBrand<'r>, Vec<Held<'r>>)`
-// (the list/dict aggregate accumulator, in both production and test fixtures) by structural type,
-// not by family marker — two distinct private `AggBuildFamily` markers share this one impl because
-// their `At<'r>` GAT projects to the identical concrete tuple type.
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
-    for (
-        RegionBrand<'b>,
-        Vec<crate::machine::model::values::Held<'b>>,
-    )
-{
-    fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
-        self.0.handle()
-    }
-}
-
-// SAFETY: same obligation, for the named-field builder shape `(RegionBrand<'r>, Vec<(String,
-// Held<'r>)>)` (the record-literal field accumulator).
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
-    for (
-        RegionBrand<'b>,
-        Vec<(String, crate::machine::model::values::Held<'b>)>,
-    )
-{
-    fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
-        self.0.handle()
-    }
-}
-
-// SAFETY: same obligation, for the named-field builder shape `(RegionBrand<'r>, Vec<(String,
-// KObject<'r>)>)` (the record-repr newtype's field accumulator, `RecordFieldsFamily`).
-unsafe impl<'b> HasRegionHandle<'b, KoanStorageProfile>
-    for (RegionBrand<'b>, Vec<(String, KObject<'b>)>)
-{
-    fn region_handle(&self) -> RegionHandle<'b, KoanStorageProfile> {
-        self.0.handle()
-    }
-}
+reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored

@@ -1,11 +1,13 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::RegionBrand;
+use crate::machine::core::{KoanStorageProfile, RegionBrand};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
-use crate::witnessed::{reattachable, Delivered, Residence, Sealed, SealedExtern, Witnessed};
+use crate::witnessed::{
+    reattachable, Delivered, RegionHandle, Residence, Sealed, SealedExtern, Witnessed,
+};
 
 use super::runtime::KoanRuntime;
 
@@ -14,11 +16,11 @@ use super::runtime::KoanRuntime;
 /// [`finalize_terminal`](NodeFinalize::finalize_terminal) re-homes the checked value through the
 /// delivery envelope's [`transfer_into`](Delivered::transfer_into) — minting the value's reach (and,
 /// for a home-borrowing value, its producer frame) into that region's arena so the re-homed value's
-/// carrier names everything it reaches. Layout-invariant: `(RegionBrand<'r>, &'r KType<'r>)` is two
-/// thin pointers whose representation never depends on `'r`.
+/// carrier names everything it reaches. Layout-invariant: `(RegionHandle<'r, _>, &'r KType<'r>)` is
+/// two thin pointers whose representation never depends on `'r`.
 struct ContractHomeFamily;
 
-reattachable!(ContractHomeFamily => (RegionBrand<'r>, &'r KType<'r>));
+reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
 
 /// Seal a finished node's **value** terminal against its declared return contract, returning the
 /// slot's final terminal. The driver opens the slot's contract at the step brand (via
@@ -88,11 +90,12 @@ impl NodeFinalize for KoanRuntime<'_> {
             // value was genuinely relocated before the check failed, and the path returns the `Err`
             // terminal.
             let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
-                Witnessed::resident((home, declared));
+                Witnessed::resident((home.handle(), declared));
             let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
                 home_operand,
                 Residence::Copied,
                 |value, (home_region, declared_type), _brand| {
+                    let home_region = RegionBrand(home_region);
                     let object = value.object();
                     if !declared_type.matches_value(object) {
                         mismatch = Some(return_type_mismatch(
@@ -121,7 +124,7 @@ impl NodeFinalize for KoanRuntime<'_> {
         // after the open.
         let sealed = Sealed::seal(envelope.into_cell().unseal());
         let value_cell: SealedExtern<CarriedFamily> = SealedExtern::seal(*sealed.erased());
-        let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home, declared));
+        let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home.handle(), declared));
         let pin = match contract.and_then(ReturnContract::home_owner) {
             Some(owner) => FrameSet::union(
                 &FrameSet::singleton(producer_pin),

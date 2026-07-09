@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{FrameStorage, KoanRegionExt, RegionBrand, Scope};
+use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
@@ -19,10 +19,10 @@ use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
 use crate::witnessed::Residence;
-use crate::witnessed::{reattachable, Witnessed};
+use crate::witnessed::{reattachable, RegionHandle, Witnessed};
 
 use super::super::outcome::DepTerminal;
-use super::super::run_loop::{dest_brand, RegionRefFamily};
+use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::WitnessedDepFinish;
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
@@ -36,7 +36,7 @@ use crate::scheduler::{DepResults, Deps};
 /// Layout-invariant: a thin region pointer and a `Vec` of layout-invariant `(String, KObject)` cells
 /// — the same shape as [`dispatch::literal`](super::literal)'s `AggBuildFamily`.
 struct RecordFieldsFamily;
-reattachable!(RecordFieldsFamily => (RegionBrand<'r>, Vec<(String, KObject<'r>)>));
+reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(String, KObject<'r>)>));
 
 pub(in crate::machine::execute) mod tagged_union;
 
@@ -186,7 +186,7 @@ pub(crate) fn build_type_operand<'step>(
     // frame the home-omitted `reach` cannot record it, so materialize home back into reach (the
     // conservative reseal — an ancestor-declared identity's home ride is redundant but harmless).
     let identity_carrier = scope.resident_type_carrier(identity, reach, true);
-    // The dest brand is the *destination* operand (its `RegionRefFamily` live form is the
+    // The dest brand is the *destination* operand (its `DestHandleFamily` live form is the
     // `HasRegionHandle` mint target the pinned merge's composition seam needs), so it rides as
     // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
     // The pin: the identity's home region owner when live (the identity and its reach set live
@@ -195,7 +195,7 @@ pub(crate) fn build_type_operand<'step>(
         .region_owner()
         .upgrade()
         .map_or_else(FrameSet::empty, FrameSet::singleton);
-    identity_carrier.merge_pinned::<RegionRefFamily, RegionTypeFamily, _>(
+    identity_carrier.merge_pinned::<DestHandleFamily, RegionTypeFamily, _>(
         dest_brand,
         &pin,
         |carried, brand, _b| {
@@ -235,6 +235,7 @@ fn finish_witnessed<'step>(
                     home,
                     Residence::Copied,
                     |value, (region, identity_ty), _brand| {
+                        let region = RegionBrand(region);
                         Carried::Object(region.alloc_object(KObject::Wrapped {
                             inner: NonWrappedRef::peel(value.object()),
                             type_id: identity_ty,
@@ -261,7 +262,7 @@ fn finish_witnessed<'step>(
             // minting that field's reach into the accumulator's own arena rather than by plain union.
             let acc0 =
                 KoanRegion::yoke_branded::<RecordFieldsFamily, _>(view.dest_frame(), |region| {
-                    (region, Vec::with_capacity(field_names.len()))
+                    (region.handle(), Vec::with_capacity(field_names.len()))
                 });
             let fields = terminals
                 .iter()
@@ -285,6 +286,7 @@ fn finish_witnessed<'step>(
                 home,
                 &dest_frame,
                 |(_region, fields), (region, identity_ty), _brand| {
+                    let region = RegionBrand(region);
                     let record = Record::from_pairs(fields);
                     Carried::Object(region.alloc_object(KObject::Wrapped {
                         inner: NonWrappedRef::peel(&KObject::record(record)),
@@ -330,6 +332,7 @@ fn finish_witnessed<'step>(
                     home,
                     Residence::Copied,
                     move |value, (region, identity_ty), _brand| {
+                        let region = RegionBrand(region);
                         let (set, index) = match identity_ty {
                             KType::SetRef { set, index } => (Rc::clone(set), *index),
                             _ => unreachable!("a Tagged identity is always a SetRef"),

@@ -167,7 +167,7 @@ store-side `erase_to_static` all route it. The carrier families live beside thei
 types as declarative `unsafe impl Reattachable` instantiations — `ContractFamily` for the
 node's [`ErasedContract`](../src/machine/core/kfunction/body.rs), `CarriedFamily` /
 `ContinuationFamily` for the scheduler value (`Workload::Value`) and continuation
-(`Workload::Continuation`), `RegionRefFamily` for the consumer region the run-loop step opens its
+(`Workload::Continuation`), `DestHandleFamily` for the consumer region the run-loop step opens its
 tail against, and `ScopeRefFamily` so the frame / node `&Scope` carriers and the
 region's `&Scope → &Scope<'static>` storage erasures route the same primitive — so `witnessed.rs`
 names no concrete Koan type and the scheduler stays workload-independent (the workload depends on

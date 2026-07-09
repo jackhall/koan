@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{KoanRegion, KoanRegionExt, Scope};
+use crate::machine::core::{KoanRegion, KoanRegionExt, RegionBrand, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
@@ -17,7 +17,7 @@ use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
 use super::super::lift::copy_carried;
-use super::super::run_loop::{dest_brand, RegionRefFamily};
+use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -214,10 +214,10 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         Ok(deps
             .owned(0)
             .delivered
-            .transfer_into::<RegionRefFamily, CarriedFamily, _>(
+            .transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 Residence::Copied,
-                |value, region, _brand| copy_carried(value, region),
+                |value, region, _brand| copy_carried(value, RegionBrand(region)),
             ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)

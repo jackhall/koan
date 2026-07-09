@@ -11,12 +11,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::scope_frame;
 use crate::machine::core::kfunction::body::SealedContract;
-use crate::machine::core::{FrameStorage, KoanRegionExt};
+use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::{
-    CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId, RegionBrand,
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId};
+use crate::witnessed::{
+    erase_to_static, reattachable, seal_option, RegionHandleFamily, SealedExtern, Witnessed,
 };
-use crate::witnessed::{erase_to_static, reattachable, seal_option, SealedExtern, Witnessed};
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
@@ -29,23 +29,21 @@ mod run_tests;
 #[cfg(test)]
 mod tests;
 
-/// `Reattachable` family for a destination region's [`RegionBrand`] — the carrier a
-/// [`ForwardReady`](NodeStep::ForwardReady) relocation feeds to
-/// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into) to re-anchor the
-/// relocated value at the destination's lifetime, allocating the copy through the brand.
-/// Layout-invariant: a [`RegionBrand`] is a thin pointer whose representation never depends on `'r`,
-/// so the shared `reattachable!` macro discharges the obligation.
-pub(in crate::machine::execute) struct RegionRefFamily;
+/// Koan's destination-region operand family: the library's [`RegionHandleFamily`] fixed to
+/// [`KoanStorageProfile`] — the carrier a [`ForwardReady`](NodeStep::ForwardReady) relocation feeds
+/// to [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into) to re-anchor the
+/// relocated value at the destination's lifetime, allocating the copy through the handle. The
+/// library discharges `HasRegionHandle` for this family's live form itself (the base impl for
+/// `RegionHandle` alone), so koan carries no impl of its own for it.
+pub(in crate::machine::execute) type DestHandleFamily = RegionHandleFamily<KoanStorageProfile>;
 
-reattachable!(RegionRefFamily => RegionBrand<'r>);
-
-/// The destination-region carrier for a relocation: `dest_frame`'s brand `yoke`d into that frame's
+/// The destination-region carrier for a relocation: `dest_frame`'s handle `yoke`d into that frame's
 /// own region, witnessed by it — co-located by construction rather than paired with an asserted
 /// singleton.
 pub(in crate::machine::execute) fn dest_brand(
     dest_frame: Rc<FrameStorage>,
-) -> Witnessed<RegionRefFamily, CarrierWitness> {
-    KoanRegion::yoke_branded::<RegionRefFamily, _>(dest_frame, |b| b)
+) -> Witnessed<DestHandleFamily, CarrierWitness> {
+    KoanRegion::yoke_branded::<DestHandleFamily, _>(dest_frame, |b| b.handle())
 }
 
 /// `Reattachable` family for the step's **dep slice** — the producer terminals read out, erased, and
@@ -284,8 +282,8 @@ impl<'run> KoanRuntime<'run> {
                             // `resident` carries it. A ready-but-errored producer relocates to an `Err`.
                             let dest = match frame {
                                 Some(f) => dest_brand(f.storage_rc()),
-                                None => Witnessed::<RegionRefFamily, CarrierWitness>::resident(
-                                    scope.brand(),
+                                None => Witnessed::<DestHandleFamily, CarrierWitness>::resident(
+                                    scope.brand().handle(),
                                 ),
                             };
                             let result = self.relocate_terminal(producer, dest);

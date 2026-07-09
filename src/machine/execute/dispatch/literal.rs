@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::KoanRegionExt;
+use crate::machine::core::{KoanRegionExt, KoanStorageProfile, RegionBrand};
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
-    NodeId, RegionBrand, TraceFrame,
+    NodeId, TraceFrame,
 };
 use crate::source::Spanned;
-use crate::witnessed::{reattachable, Delivered, Residence, Witnessed};
+use crate::witnessed::{reattachable, Delivered, RegionHandle, Residence, Witnessed};
 
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
@@ -23,7 +23,7 @@ use crate::scheduler::{DepResults, ResolvedDeps};
 /// reach onto the accumulator's witness — then the final `map` allocates the aggregate from the
 /// region. Layout-invariant in `'r`: a thin region pointer and a `Vec` of layout-invariant cells.
 struct AggBuildFamily;
-reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>>));
+reattachable!(AggBuildFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<Held<'r>>));
 
 /// One cell of a list / dict / record literal. A `Static` cell is wrapped into a delivery envelope
 /// **at its source** (when the literal is classified), so the layout is lifetime-free and every cell
@@ -73,7 +73,7 @@ fn fold_cells(
 ) -> Witnessed<AggBuildFamily, CarrierWitness> {
     let dest_frame = view.dest_frame();
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame, |region| {
-        (region, Vec::with_capacity(capacity))
+        (region.handle(), Vec::with_capacity(capacity))
     });
     cells.fold(acc0, |acc, cell| {
         cell.transfer_into::<AggBuildFamily, AggBuildFamily, _>(
@@ -150,6 +150,7 @@ impl<'step> KoanRuntime<'step> {
             let dest_frame = view.dest_frame();
             Ok(
                 acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
+                    let region = RegionBrand(region);
                     Carried::Object(region.alloc_object(assemble(keys, value_helds)))
                 }),
             )

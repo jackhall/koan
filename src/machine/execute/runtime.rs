@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ReturnContract,
 };
 use crate::machine::core::kfunction::exec::home_return_type;
-use crate::machine::core::ScopeRefFamily;
+use crate::machine::core::{RegionBrand, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
@@ -36,7 +36,7 @@ use super::dispatch::{BodyPlacement, DepRequest};
 use super::lift::copy_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
-use super::run_loop::RegionRefFamily;
+use super::run_loop::DestHandleFamily;
 use super::{
     catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
     ContinuationFamily,
@@ -152,14 +152,14 @@ impl<'run> KoanRuntime<'run> {
     pub(in crate::machine::execute) fn relocate_terminal(
         &self,
         producer: NodeId,
-        dest: Witnessed<RegionRefFamily, CarrierWitness>,
+        dest: Witnessed<DestHandleFamily, CarrierWitness>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         Ok(
-            delivered.transfer_into::<RegionRefFamily, CarriedFamily, _>(
+            delivered.transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 crate::witnessed::Residence::Copied,
-                |value, region, _brand| copy_carried(value, region),
+                |value, region, _brand| copy_carried(value, RegionBrand(region)),
             ),
         )
     }

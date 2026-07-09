@@ -47,7 +47,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Consumer mints ride the delivery envelope](scheduler_library/consumer-envelope-mint.md)
 - [Return contracts ride continuations](scheduler_library/contract-as-continuation.md)
-- [Handle-headed construction operands](scheduler_library/handle-headed-operands.md)
 - [Region-purity typed at the move-in allocs](scheduler_library/region-pure-move-in.md)
 - [Scheduler-owned frame storage](scheduler_library/scheduler-owned-frame-storage.md)
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)

@@ -41,6 +41,7 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
+    use crate::machine::core::RegionBrand;
     use crate::machine::execute::build_type_operand;
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
@@ -90,6 +91,7 @@ pub fn body<'a>(
                 home,
                 Residence::Copied,
                 |value, (region, identity), _brand| {
+                    let region = RegionBrand(region);
                     Carried::Object(region.alloc_object(build_result(
                         "Ok",
                         identity,
@@ -109,6 +111,7 @@ pub fn body<'a>(
                     home,
                     &frame,
                     |payload, (region, identity), _brand| {
+                        let region = RegionBrand(region);
                         Carried::Object(region.alloc_object(build_result(
                             "Error",
                             identity,

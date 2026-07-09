@@ -4,7 +4,7 @@
 //! the scheduler to quiescence, and rejects a bare top-level expression that resolved to an
 //! unstamped empty container. All values allocated by the program die when these return.
 
-use super::{KoanRuntime, RegionRefFamily};
+use super::{DestHandleFamily, KoanRuntime};
 use crate::builtins::default_scope;
 use crate::machine::core::run_root_storage;
 use crate::machine::model::ast::KExpression;
@@ -71,7 +71,7 @@ impl<'run> KoanRuntime<'run> {
                 // cycle into the drained value's witness.
                 if let Ok(witnessed) = self.relocate_terminal(
                     id,
-                    Witnessed::<RegionRefFamily, CarrierWitness>::resident(root.brand()),
+                    Witnessed::<DestHandleFamily, CarrierWitness>::resident(root.brand().handle()),
                 ) {
                     // Mint the rehomed terminal's reach into the run root's arena so those regions stay
                     // alive past scheduler teardown.
