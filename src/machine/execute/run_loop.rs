@@ -31,8 +31,8 @@ mod tests;
 
 /// `Reattachable` family for a destination region's [`RegionBrand`] — the carrier a
 /// [`ForwardReady`](NodeStep::ForwardReady) relocation feeds to
-/// [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into) to re-anchor the relocated value
-/// at the destination's lifetime, allocating the copy through the brand.
+/// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into) to re-anchor the
+/// relocated value at the destination's lifetime, allocating the copy through the brand.
 /// Layout-invariant: a [`RegionBrand`] is a thin pointer whose representation never depends on `'r`,
 /// so the shared `reattachable!` macro discharges the obligation.
 pub(in crate::machine::execute) struct RegionRefFamily;

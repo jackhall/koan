@@ -101,7 +101,7 @@ impl<'step> Outcome<'step> {
 pub(in crate::machine::execute) enum Continuation<'step> {
     /// Reads the resolved dep terminals directly (un-relocated value + reach carrier) and returns the
     /// next [`Outcome`]. A finish whose value must outlive the resolving step folds the dep's carrier
-    /// via [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into).
+    /// via [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into).
     FinishTerminal(TerminalDepFinish<'step>),
     FinishWitnessed(WitnessedDepFinish<'step>),
     Catch {

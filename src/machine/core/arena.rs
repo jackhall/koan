@@ -352,7 +352,7 @@ pub(crate) trait KoanRegionExt {
     /// other site. One primitive for both value families — the closure returns a `Carried::Object` (an
     /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (an
     /// [`alloc_ktype`](RegionBrand::alloc_ktype)). A value that *references* another region's resident
-    /// value folds that in with [`Witnessed::merge`] instead, unioning its reach; this primitive covers
+    /// value folds that in with [`Witnessed::merge_pinned`] instead, unioning its reach; this primitive covers
     /// the case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
     ///
     /// `build`'s return is spelled `<CarriedFamily as Reattachable>::At<'b>`, not the concrete

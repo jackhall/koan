@@ -392,8 +392,9 @@ crate::witnessed::reattachable!(AggBuildFamily => (RegionBrand<'r>, Vec<Held<'r>
 /// The **aggregate** construction fold: a list / dict / record built from several dep producers —
 /// the shape the object family folds with shipped verbs only (no new substrate primitive). The
 /// accumulator is `yoke`d empty over the dest frame's region; each foreign dep's
-/// `Sealed` carrier is folded in with [`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into),
-/// which re-anchors it at the shared brand, binds it into the cells, and re-seals under the union of
+/// `Delivered` envelope is folded in with
+/// [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into), which re-anchors it at
+/// the shared brand, binds it into the cells, and re-seals under the union of
 /// every reached region (a `FrameSet` set witness — the multi-foreign case a single-region witness
 /// cannot represent); a final [`map`](Witnessed::map) allocates the list node into the carried region.
 /// After every producer handle drops, the folded witness is the sole owner of all three regions the

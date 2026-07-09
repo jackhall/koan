@@ -249,7 +249,7 @@ impl<'a> FinishCtx<'a> {
 /// [`DeliveredCarried`] envelope — a [`duplicate`](crate::witnessed::Delivered::duplicate), so the
 /// producer keeps its terminal for other consumers. A **construction finish** folds the dep
 /// *witnessed* via the envelope's cell
-/// ([`Sealed::transfer_into`](crate::witnessed::Sealed::transfer_into)), its reach named on the
+/// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)), its reach named on the
 /// result by construction; a finish that parks the carrier on the working expression across steps
 /// (the working-copy splice) duplicates the whole envelope into the
 /// [`Spliced`](crate::machine::model::ast::ExpressionPart::Spliced) cell, keeping the value's backing

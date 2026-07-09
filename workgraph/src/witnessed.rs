@@ -325,8 +325,8 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// value and witness arrive independently, so this is the crate-private substrate primitive, never
     /// a production construction path. Every production carrier is born co-located instead — via
     /// [`yoke`](Self::yoke) (sourced from the witness's region), [`resident`](Self::resident) (a
-    /// region-pure value under the empty witness), or [`merge`](Self::merge) (folding two co-located
-    /// carriers) — so no site pairs an arbitrary value with an arbitrary witness.
+    /// region-pure value under the empty witness), or [`merge_pinned`](Self::merge_pinned) (folding
+    /// two co-located carriers) — so no site pairs an arbitrary value with an arbitrary witness.
     pub fn from_erased(value: Erased<T>, witness: W) -> Self {
         Witnessed { value, witness }
     }
@@ -342,7 +342,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// read: the active frame pins its region during the producing step, and once stored on a node the
     /// scheduler's retention hold (the delivery envelope's host) carries that pin — reads open under
     /// it, never bare. A value that *references* another region is the [`yoke`](Self::yoke) /
-    /// [`merge`](Self::merge) path, which sources or folds that region's pin instead.
+    /// [`merge_pinned`](Self::merge_pinned) path, which sources or folds that region's pin instead.
     ///
     /// Safe because the erase cannot fabricate a lifetime, and `W::default()` is the pins-nothing
     /// element of the witness type (the empty set).
@@ -446,9 +446,10 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         }
     }
 
-    /// [`Self::merge`] under an **externally supplied pin** instead of bundled pinning witnesses —
-    /// the pinned-merge verb for reference-only-witnessed carriers (the collapsed [`Carrier`]),
-    /// mirroring [`Sealed::open_with`]'s relationship to [`Sealed::open`]. The composed witness
+    /// Combine two witnessed carriers under an **externally supplied pin** rather than bundled
+    /// pinning witnesses — the pinned-merge verb for reference-only-witnessed carriers (the
+    /// collapsed [`Carrier`]), mirroring [`Sealed::open_with`]'s relationship to [`Sealed::open`].
+    /// The composed witness
     /// still comes from [`ComposeWitness::compose`], so a caller cannot forge coverage; what the
     /// caller supplies is liveness: `pin` covers the *source* (`self`) carrier's backing for the
     /// whole call — the delivery envelope's retained host, the retention hold — while `other` (the
