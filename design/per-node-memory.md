@@ -51,7 +51,7 @@ its carrier, witnessed by the value's *foreign* reach (the active frame folded i
 at close), so a region-resident value is born inside the Witnessed/Sealed abstraction
 rather than handed out as a bare `&'a` and re-wrapped downstream.
 
-## Construction: `yoke`, `merge`, `map`, and one wrapper per node
+## Construction: `yoke`, `merge_pinned`, `map`, and one wrapper per node
 
 The carrier `Witnessed<T, W>` bundles `Erased<T>` with the witness `W` that pins it,
 so "the witness keeps the value alive" is a type invariant, not a co-stored pair
@@ -91,15 +91,17 @@ lifts to the **reference-only** carrier the aggregate stores through a distinct
 [`into_reference_only`](../workgraph/src/witnessed.rs) lift — its own region kept alive externally,
 by containment or the retention hold, so the carrier holds no pin — kept separate from `yoke` so
 minting stays a one-region act and combining regions (minting the reach set into the destination
-arena) stays `merge`'s job. What `yoke` cannot mint composes through `merge`: an aggregate folds its *element carriers* (deps
-arriving witnessed from the lift); a closure folds the captured-scope operand minted from its frame
-`Rc`. The object family's region-pure leaves and aggregates are built this way — a single-part
+arena) stays `merge_pinned`'s job. What `yoke` cannot mint composes through `merge_pinned` (or the
+`transfer_into` it shares its `ComposeWitness::compose` engine with, for a dep-delivered operand): an
+aggregate folds its *element carriers* (deps arriving witnessed from the lift) via `transfer_into`; a
+closure folds the captured-scope operand minted from its frame `Rc` via `merge_pinned` directly. The
+object family's region-pure leaves and aggregates are built this way — a single-part
 literal and a static aggregate cell `yoke` their owned data, and a list / dict / record folds its
 dep carriers via `transfer_into` ([dispatch/literal.rs](../src/machine/execute/dispatch/literal.rs)
 / [single_poll.rs](../src/machine/execute/dispatch/single_poll.rs)) — co-location the `for<'b>`
 brand enforces, never asserted. The carrier-self-building object constructions are built the same way:
 the newtype / tagged-union [`constructors`](../src/machine/execute/dispatch/constructors.rs)
-and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge`, and FN
+and [`catch`](../src/builtins/catch.rs) fold their dep carriers via `transfer_into` / `merge_pinned`, and FN
 def [`finalize`](../src/builtins/fn_def/finalize.rs) `yoke`s its co-located `KObject::KFunction` onto a
 carrier witnessed by the defining scope's frame. The value-embedding sites that take a *bare arg* —
 [`attr`](../src/builtins/attr.rs)'s `Wrapped`, [`FROM`](../src/builtins/record_projection.rs)'s
@@ -128,9 +130,9 @@ folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/mac
 the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the
 producing frame into that carrier's own reach at close rather than asserting a separately-computed
 witness set; an error carries no value and finalizes bare. The type / region construction operands are
-computed carriers too — the newtype / tagged-union / `CATCH` build `merge`s a delivered type-identity
+computed carriers too — the newtype / tagged-union / `CATCH` build `merge_pinned`s a delivered type-identity
 carrier under the binding's stored reach ([`build_type_operand`](../src/machine/execute/dispatch/constructors.rs)),
-the contract-home operand is born region-pure via `resident` and folded by `merge`, and the relocate
+the contract-home operand is born region-pure via `resident` and folded by `merge_pinned`, and the relocate
 destination rides a `yoke`d-or-`resident` carrier — so no site pairs an already-built value with a
 separately-asserted witness. A read of an
 *already-built* region-resident value — a bound name, an `ATTR` value member, a defined FN object —
@@ -140,10 +142,11 @@ does **not** rebuild a witness: it pre-exists its carrier, so the read bundles i
 reach stored on its binding (see [Storage and access](#storage-and-access-seal-open-transfer_into)), so
 `Witnessed::resident` is never reached from a builtin and no read walks a value to recover its reach.
 
-**`merge` — fold many region-resident values into one.** Generic: a value built
+**`merge_pinned` — fold many region-resident values into one.** Generic: a value built
 from references into *two* regions cannot be bundled with one witness by `yoke`
-alone. `merge` re-anchors two carriers at one shared brand, runs a projection that
-binds one into the other, and re-seals under the **combined** witness — the union of
+alone. `merge_pinned` re-anchors two carriers at one shared brand under an **externally
+supplied pin** covering the source (`self`) operand's backing, runs a projection that
+binds one into the other, and re-seals under the **composed** witness — the union of
 the two operands' regions, with `outer`-chain subsumption dropping a region another
 already pins. The composition is `ComposeWitness::compose`, run inside the shared
 brand with the destination in scope: an owned region *set* composes by plain union
@@ -154,12 +157,12 @@ elements would nest `Witnessed<…Witnessed<…>>` wrappers with the data and be
 unstorable as a single node carrier. With it, the invariant holds:
 
 > **One wrapper per node.** A node stores exactly one carrier, regardless of value
-> complexity. `yoke` mints leaves into a region; `merge` folds region-resident
+> complexity. `yoke` mints leaves into a region; `merge_pinned` folds region-resident
 > values — same-region or cross-region — into one aggregate under the single witness
 > that pins them all; the result seals as one unit. Wrapper count is O(1) per node,
 > not O(data size).
 
-In Koan, `merge`'s trigger is *referencing a pre-existing region-resident value* — the
+In Koan, `merge_pinned`'s trigger is *referencing a pre-existing region-resident value* — the
 foreign borrow a `yoke` closure would reject — and it is the **same-region** case almost
 always: a list assembled in one call's arena, or a closure capturing its defining scope (a
 `KFunction` is allocated *into that scope's region*, so the capture is co-located), where
@@ -167,7 +170,7 @@ subsumption trivially collapses the union to a single `Rc`. The genuinely
 cross-region merges are *ancestry-related* — a scope or function in a per-call frame
 referencing the run-global root (or a lexical-ancestor scope) — where the descendant frame
 `Rc`'s `outer` chain already pins the ancestor region, so subsumption keeps the frame witness
-and drops the ancestor's. The case `merge` *cannot* collapse — a value whose backing reaches an
+and drops the ancestor's. The case `merge_pinned` *cannot* collapse — a value whose backing reaches an
 **independent, dying** region — is `transfer_into` (below) instead: there the source is a dying
 *descendant*, so subsumption would collapse onto the backing about to drop; the union must be held
 *whole* as the set of both.
@@ -211,12 +214,12 @@ frame `Rc` — *is* the externally-witnessed sealed carrier, and collapses into 
 one substrate rather than a scope-specialized erasure.
 
 This split is what keeps self-witnessing cycle-free. A self-witnessed carrier's strong frame
-`Rc` rides the *carrier*, which a node holds *outside* the region it witnesses; `merge` folds
+`Rc` rides the *carrier*, which a node holds *outside* the region it witnesses; `merge_pinned` folds
 every intermediate into that one carrier (the *one wrapper per node* invariant above), so no
 region-resident value strong-owns its own frame — the value in-region holds only non-owning
 pointers (a plain `&Scope`, a `Weak` `region_owner`). The per-call scope is the one value held
 *inside* the frame, which is exactly why it stays externally-witnessed. A value that *captures*
-the scope therefore has no bundled scope witness to `merge` against: it mints its merge operand
+the scope therefore has no bundled scope witness to `merge_pinned` against: it mints its merge operand
 from the frame `Rc` the builder already holds — co-located, since the scope lives in that frame's
 region — so the capturing carrier's witness set gains that `Rc` and the escaping closure pins the
 frame exactly as a node result does.
@@ -241,7 +244,7 @@ rebuilt. The carrier is therefore witnessed by the **set** of regions the value
 reaches — the destination it was relocated into, plus each source region a retained
 closure still borrows. These regions form a tree, not a chain — a closure capturing
 closures branches into independent lineages — flattened into the set; a value with no
-cross-region reference is the degenerate singleton (the destination alone). This is **not** a `merge`: the source is a dying
+cross-region reference is the degenerate singleton (the destination alone). This is **not** a `merge_pinned`: the source is a dying
 *descendant* of the destination (its ancestry pins the destination, not the reverse),
 so no single dominating witness exists — the set is held whole and composed by union,
 since splicing the source into the destination's `outer` chain to collapse it risks
@@ -255,7 +258,7 @@ own `Sealed` carrier (a `duplicate`): a finish that embeds or binds a value fold
 reach is named on the carrier and never reconstructed. Every object construction does this — the
 aggregate and region-pure inversions, the newtype / tagged-union constructors, and `catch` fold their
 dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
-Resolved arm) `merge` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
+Resolved arm) `transfer_into` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
 they project; and a `let` or user-fn arg bind mints the bound value's carrier into the scope's own arena
 (below). The **type** channel rides the same construction: a region-pure or owned `KType` seals via
 the step context's [`alloc_type_with`](../src/machine/core/arena.rs), which folds its own region (the
@@ -292,7 +295,7 @@ carries no storage `outer` link, so the storage walk stops at its own region whi
 still pins its defining (lexical-ancestor) scope. Minting such an ancestor into the arena — paired with
 a sibling bind of the call's result — would close a `region → scope → arena → frame` cycle and defeat
 the `Rc::get_mut` TCO frame-reuse gate; omitting it realizes
-[`fold_omitting`](#construction-yoke-merge-map-and-one-wrapper-per-node)'s "omit ancestors" intent while
+[`fold_omitting`](#construction-yoke-merge_pinned-map-and-one-wrapper-per-node)'s "omit ancestors" intent while
 keeping a region-pure or ancestor-bound value pinning nothing (the mint returns `None`). A value
 adopted into a scope arrives as its delivery envelope; the bind mints its reach — and, at
 `Residence::Kept`, the producer's host frame — into the scope's own arena
@@ -374,7 +377,7 @@ tail-call chain reuses one node across a sequence of fresh frames. The substrate
 imposes none of this — it is the workload's call, which is why "per-node memory" is
 the carrier a node holds, not an arena the node owns.
 
-The construction surface (`yoke` / `merge` / `with` / `map`, the witness-borrow
+The construction surface (`yoke` / `merge_pinned` / `with` / `map`, the witness-borrow
 reattaches) is shipped, as is the relocation of the generic `Region<P>` allocator
 beside its carrier in the `witnessed` module and the opaque [`Sealed`](../workgraph/src/witnessed.rs)
 storage form (`seal` / `open`), with the node result slot rerouted onto it. Its **value reads** now

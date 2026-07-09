@@ -78,9 +78,6 @@ data wearing a trait type
 
 **Requires:**
 
-- [Workgraph contract-surface sweep](contract-surface-sweep.md) — the
-  `take_for_run` fusion rewrites the protocol seam this item extends; land it
-  once.
 
 **Unblocks:**
 

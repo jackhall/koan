@@ -36,8 +36,8 @@ impl<W: Workload> Scheduler<W> {
 
     /// Splice `slot` out as an alias of `producer`: move the consumers already parked on `slot`
     /// onto `producer`'s notify list and mark `slot` an alias. `producer` is resolved first so
-    /// aliases never chain. Late parkers are handled by [`Self::add_owned_edge`] /
-    /// [`Self::add_park_edge`] resolving the alias when they wire in.
+    /// aliases never chain. Late parkers are handled by [`Self::add_owned_edge`] / `add_park_edge`
+    /// resolving the alias when they wire in.
     pub fn splice_forward(&mut self, slot: NodeId, producer: NodeId) {
         let producer = self.resolve_alias(producer);
         self.deps.splice_notify(slot.index(), producer.index());

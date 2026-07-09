@@ -189,18 +189,21 @@ the bundled witness pins, not a free `'b` the caller could widen. Two build-time
 co-location gap `new` leaves to caller assertion: `yoke` *sources* a carrier from the witness's own
 region behind a `for<'b>` brand (over the `WitnessRegion` trait), so the only references the carrier
 can hold are region-derived — the witness-pins-the-value invariant holds by construction rather than
-asserted; and `merge` combines two carriers under one shared brand, runs a binding projection, and
-re-seals under the *combined* witness — the union of both operands' regions, with `outer`-chain
-subsumption dropping a region another already pins. The composition is `ComposeWitness::compose`, run
-inside the brand with the destination in scope: an owned region set composes by plain union (total,
-since a set can always represent the combined pin), while a hosted carrier mints the combined reach
-into the destination's own arena. All keep their `unsafe` retype inside the module, so callers carry none; `yoke`
-in fact routes only the safe `erase`, carrying no retype of its own.
+asserted; and `merge_pinned` combines two carriers under one shared brand, runs a binding projection,
+and re-seals under the *composed* witness — the union of both operands' regions, with `outer`-chain
+subsumption dropping a region another already pins. Unlike `yoke` / `map` / `with`, `merge_pinned`
+takes an **externally supplied pin** covering the source (`self`) operand's backing for the call,
+rather than relying only on its own bundled witness — the destination operand is covered by the live
+destination the caller already holds to compose into. The composition is `ComposeWitness::compose`,
+run inside the brand with the destination in scope: an owned region set composes by plain union
+(total, since a set can always represent the combined pin), while a hosted carrier mints the combined
+reach into the destination's own arena. All keep their `unsafe` retype inside the module, so callers
+carry none; `yoke` in fact routes only the safe `erase`, carrying no retype of its own.
 
 The value channel is borrow-checked end to end. The scheduler stores a finalized terminal as a single
 `SealedTerminal<W>` = `Sealed<W::Value, Carrier<W::Frame>>`
 ([`node_store.rs`](../workgraph/src/scheduler/node_store.rs)) — the opaque dormant form of a
-`Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / `merge`) and re-anchors
+`Witnessed` carrier, which hides every transform (`with` / `map` / `yoke` / `merge_pinned`) and re-anchors
 only through a rank-2 destination verb. `finalize` bundles the erased value under a
 [`CarrierWitness`](../src/machine/core/carrier_witness.rs) — the **reference-only** carrier, a
 `borrows_host` bit plus a reference to the value's foreign reach set, pinning nothing itself — and,
@@ -246,7 +249,7 @@ reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-op
 **closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
 child scope's home frame and binding-entry reaches the same way (via
 [`Scope::reach_of_child`](../src/machine/core/scope.rs)). The embedding or binding site mints that
-carrier's reach into its own arena (`merge` at an `attr` / `FROM` projection,
+carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
 [`Scope::host_reach_of`](../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind), and the
 root drain mints the rehomed terminal's full witness set into the run-root scope's own arena — so a
 multi-region value keeps *every* region it reaches, read straight off its carrier rather than

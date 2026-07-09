@@ -43,8 +43,6 @@ the surface being documented and frozen is the final one.
 
 **Requires:**
 
-- [Workgraph contract-surface sweep](contract-surface-sweep.md) — the frozen
-  surface should not include dead API.
 - [Consumer mints ride the delivery envelope](consumer-envelope-mint.md) —
   mint-surface visibility settles before the API freezes.
 - [Scheduler-owned frame storage](scheduler-owned-frame-storage.md) — moves

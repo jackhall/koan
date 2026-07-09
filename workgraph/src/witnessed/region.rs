@@ -30,7 +30,7 @@ use typed_arena::Arena;
 
 use super::{erase_to_static, with_branded_ref, Reattachable, RegionOwner};
 
-/// One family's typed sub-arena — the library-owned storage cell a [`FamilyList`] bundle is built
+/// One family's typed sub-arena — the library-owned storage cell a `FamilyList` bundle is built
 /// from. The inner arena is private to the crate: holding a `&FamilyArena` grants no allocation
 /// surface of its own; the only path in is the engine's single [`Region::store`] path.
 pub struct FamilyArena<K: Reattachable + 'static> {
@@ -84,7 +84,7 @@ use family_list::FamilyList;
 /// The arena bundle a profile's family list derives.
 pub type StorageOf<W> = <<W as StorageProfile>::Families as FamilyList>::Arenas;
 
-/// A workload's declaration of what a [`Region`] stores for it: a [`FamilyList`] cons-list of the
+/// A workload's declaration of what a [`Region`] stores for it: a `FamilyList` cons-list of the
 /// families it stores. The library derives the bundle of library-owned [`FamilyArena`] cells from
 /// it; the workload's [`Stored`] impls project each family's cell out by tuple path.
 pub trait StorageProfile: Sized {

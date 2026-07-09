@@ -267,6 +267,13 @@ the deps' sealed carriers (for policy: binding results into scopes,
 threading argument carriers onward). Views cannot escape; carriers can,
 safely.
 
+The bare `alloc`/`alloc_with` above are the doctest-bearing conceptual
+surface. Koan itself allocates through the profile-typed `_handle` veneers —
+[`alloc_handle`/`alloc_with_handle`](../workgraph/src/witnessed/step_ctx.rs),
+called from [arena.rs](../src/machine/core/arena.rs) — which thread the
+`RegionHandle` capability the same way; both forms stay `pub` as distinct
+layers, not a naming inconsistency to resolve.
+
 **Two allocation modes, one substrate.** The step context is the
 maximally-checked path. Outside a step, an embedder allocates through a held
 [`RegionHandle`](../workgraph/src/witnessed/region.rs) — the `yoke` /
@@ -298,8 +305,6 @@ picture:
 
 ## Open work
 
-- [Workgraph contract-surface sweep](../roadmap/scheduler_library/contract-surface-sweep.md)
-  — retires the dead relocation path and shrinks the exported surface.
 - [Consumer mints ride the delivery envelope](../roadmap/scheduler_library/consumer-envelope-mint.md)
   — makes the envelope the sole consumer-side mint verb.
 - [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)

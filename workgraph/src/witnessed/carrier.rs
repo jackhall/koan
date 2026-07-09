@@ -206,7 +206,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// home-omission (`dest`'s own region is never a member), the caller's `omit` policy
     /// predicate, and outer-chain subsumption.
     ///
-    /// `host` doubles as the pin for the source-set read ([`Self::with_reach`]); `None` asserts
+    /// `host` doubles as the pin for the source-set read (`with_reach`); `None` asserts
     /// the source arena is ambiently covered (a resident value's own region, a held step pin) —
     /// and also that there is no residence to materialize, so `mode` only gates a `Some` host.
     /// Returns the minted set (`None` == empty, no allocation) and the borrows-into-dest bit:
