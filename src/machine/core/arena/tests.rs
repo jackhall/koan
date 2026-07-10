@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
+use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
@@ -11,6 +12,7 @@ use crate::machine::model::Record;
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
+use crate::machine::KFunction;
 use crate::witnessed::{Delivered, Erased, Residence, Witnessed};
 use std::marker::PhantomData;
 
@@ -592,33 +594,38 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
 /// that function's captured scope) touches the region's memory. Both the function and its wrapping
 /// object land in `home`'s region; the body is never run. Mirrors `alloc_local_kf` in the lift slate.
 fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
-    use crate::machine::core::kfunction::action::Action;
-    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
-    use crate::machine::{Body, KFunction};
     // Capture `home`'s child scope (read at the brand), alloc the closure into `home`'s own region —
     // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
     // `&KObject` reaches exactly that region.
     home.with_scope(|child| {
-        let kf = KFunction::new(
-            ExpressionSignature {
-                return_type: ReturnType::Resolved(KType::Null),
-                elements: vec![SignatureElement::Keyword("__INNER__".into())],
-            },
-            Body::Builtin(|ctx| {
-                Action::done_resident(Carried::Object(
-                    ctx.scope.brand().alloc_object(KObject::Null),
-                ))
-            }),
-            child,
-            None,
-            None,
-            false,
-        );
-        let kf_ref = home.brand().alloc_function(kf);
+        let kf_ref = home.brand().alloc_function(no_op_closure(child));
         home.brand()
             .alloc_object_checked(KObject::KFunction(kf_ref))
             .expect("f was just allocated into region\'s own region")
     })
+}
+
+/// A no-op `KFunction` capturing `scope` — the closure value the multi-region shapes fold; the body
+/// is never run.
+fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
+    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
+    use crate::machine::Body;
+    KFunction::new(
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Null),
+            elements: vec![SignatureElement::Keyword("__INNER__".into())],
+        },
+        Body::Builtin(|ctx| {
+            Action::done_resident(Carried::Object(
+                ctx.scope.brand().alloc_object(KObject::Null),
+            ))
+        }),
+        captured,
+        None,
+        None,
+        false,
+    )
 }
 
 /// A closure carrier in its delivery envelope — the value reference-only (region-pure in its home
@@ -636,49 +643,88 @@ fn delivered_closure(home: &Rc<CallFrame>) -> DeliveredCarried {
     )
 }
 
+/// A closure element as the LET-bind → entry-re-read pipeline delivers it: the closure lives whole in
+/// `home` (its captured scope co-located, `alloc_function`'s invariant), and a *reader* scope in a
+/// different region binds it — `host_reach_of` mints `home` into the reader's arena as the entry's
+/// stored reach, the re-read seal (`resident_value_carrier`) rides that reach, and the element's
+/// envelope host is the reader's frame. The closure's captured scope is thus foreign to both the
+/// element's host and any destination the element folds into: its region rides the element's *reach*,
+/// never its residence host — the pin `host_reach_of` documents for a closure's captured scope (a
+/// per-call frame carries no storage `outer` under TCO).
+fn delivered_reread_closure<'run>(
+    home: &'run Rc<FrameStorage>,
+    reader: &'run Rc<FrameStorage>,
+    reader_scope: &'run Scope<'run>,
+) -> DeliveredCarried {
+    let home_scope = run_root_bare(home);
+    let kf_ref = home.brand().alloc_function(no_op_closure(home_scope));
+    let obj = home
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kf_ref))
+        .expect("closure co-located with its captured scope");
+    // The bind-time mint: `home` materializes into the reader's arena as the entry's stored reach.
+    let bind_cell = delivered_with_host(Carried::Object(obj), Rc::clone(home));
+    let stored = reader_scope.host_reach_of(&bind_cell);
+    drop(bind_cell);
+    Delivered::seal(
+        reader_scope.resident_value_carrier(obj, stored.foreign, stored.borrows_into_home),
+        Rc::clone(reader),
+    )
+}
+
 /// Record-fold accumulator family: the dest region plus the named field cells built so far — the record
 /// twin of [`AggBuildFamily`]. Each closure cell `transfer_into`s (a `merge`) its value and reach onto
 /// the accumulator; the final `map` builds the record from the region.
 struct RecordCellFamily;
 crate::witnessed::reattachable!(RecordCellFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(String, Held<'r>)>));
 
-/// **Multi-region shape 1 — a list of closures over distinct, independently-dying per-call regions.**
-/// Each closure is `transfer_into`d into a list accumulator, relocating the value into the dest region
-/// and *unioning its reach* onto the carrier; the source carrier drops at the end of its statement, so
-/// after the fold only the aggregate's own witness set keeps the closure regions alive. Every producing
+/// **Multi-region shape 1 — a list of closures whose captured scopes are foreign to every element
+/// host.** Each element rides the LET-bind → entry-re-read pipeline ([`delivered_reread_closure`]):
+/// the closure lives in its own home region, a reader frame's arena holds the minted entry reach
+/// naming that home, and the element's envelope host is the reader — so the closure regions ride the
+/// elements' *reach sets*, never their residence hosts. Each `transfer_into` must union that reach
+/// onto the accumulator (host materialization alone covers only the readers). Every home and reader
 /// frame is then freed and each closure's captured scope read back — a use-after-free the instant the
-/// witness under-counts (a single frame witnessing the whole list would free the others' regions).
-/// Fails on UB, not values.
+/// fold drops a reach member (residence-only folding would free both closure regions). Fails on UB,
+/// not values.
 #[test]
 fn multi_region_list_of_closures_survives_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    // Three independent per-call frames — distinct regions, no shared ancestry, each dying on its own.
-    let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let frame_b: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    // Two closure homes and two reader frames — four distinct regions, no shared ancestry, each
+    // dying on its own — plus the dest the list node lands in.
+    let home_a = run_root_storage();
+    let home_b = run_root_storage();
+    let reader_a = run_root_storage();
+    let reader_a_scope = run_root_bare(&reader_a);
+    let reader_b = run_root_storage();
+    let reader_b_scope = run_root_bare(&reader_b);
     let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None); // the list node lands here.
 
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
         (region.handle(), Vec::new())
     });
-    // Fold each closure terminal (born witnessed by its own frame) into the accumulator; the temporary
-    // source carrier drops after each statement, leaving only the aggregate witness holding the region.
-    let acc1 = delivered_closure(&frame_a).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-        acc0,
-        Residence::Kept,
-        |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
-        },
-    );
-    let acc2 = delivered_closure(&frame_b).transfer_into::<AggBuildFamily, AggBuildFamily, _>(
-        acc1,
-        Residence::Kept,
-        |dep, (region, mut cells), _brand| {
-            cells.push(Held::from_carried(dep));
-            (region, cells)
-        },
-    );
+    // Fold each re-read element into the accumulator; the temporary source carrier drops after each
+    // statement, leaving only the aggregate witness (reach union + materialized reader hosts)
+    // holding the four regions.
+    let acc1 = delivered_reread_closure(&home_a, &reader_a, reader_a_scope)
+        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+            acc0,
+            Residence::Kept,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        );
+    let acc2 = delivered_reread_closure(&home_b, &reader_b, reader_b_scope)
+        .transfer_into::<AggBuildFamily, AggBuildFamily, _>(
+            acc1,
+            Residence::Kept,
+            |dep, (region, mut cells), _brand| {
+                cells.push(Held::from_carried(dep));
+                (region, cells)
+            },
+        );
     // The retention stand-in: the dest frame's storage, held past the shell drops below — the hold
     // the scheduler seeds at finalize.
     let dest_storage = dest_frame.storage_rc();
@@ -688,11 +734,13 @@ fn multi_region_list_of_closures_survives_frame_free() {
             Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
         });
 
-    // Free every producing frame shell: the dest arena's minted set (frame_a ∪ frame_b) plus the
-    // retained dest storage are now the sole owners of all three regions. Under-count any one and
-    // the read below touches freed memory.
-    drop(frame_a);
-    drop(frame_b);
+    // Free every home and reader shell: the dest arena's minted set (the unioned closure homes plus
+    // the materialized readers) and the retained dest storage are now the sole owners of all five
+    // regions. Drop any one member and the read below touches freed memory.
+    drop(home_a);
+    drop(home_b);
+    drop(reader_a);
+    drop(reader_b);
     drop(dest_frame);
 
     // Read every closure's captured scope back — each deref rides a `&KFunction` in its (now

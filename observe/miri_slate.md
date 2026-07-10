@@ -1,7 +1,6 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/scope.rs: 1
 src/machine/model/types/ktype_predicates.rs: 1
 -->
 
@@ -110,7 +109,7 @@ group just to silence the stale-anchor check.
 ## The slate
 
 40 tests, grouped by the unsafe site each pins down. Names below are the exact
-test identifiers; pass them after `--` in the Miri command. A further 14 tests
+test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
 
@@ -163,16 +162,22 @@ envelope's pinned open).
 
 **Multi-region union — envelope folds over independently-dying regions** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — these tests hand-build genuinely multi-region carriers — a value reaching several
-*independently-dying* per-call regions — through the delivery verbs only (each element travels as its
-envelope, host = its producer frame; `Delivered::transfer_into` folds it onto a `yoke_branded`
-accumulator, minting the producer into the destination arena and unioning its reach; `map_pinned`
-under the destination's retained storage builds the final value — never a hand-assembled witness),
-free every producing frame, then read a reached closure's captured scope back: a use-after-free under
-tree borrows the instant the minted set under-counts (a single frame witnessing the whole aggregate
-frees the others' regions). The three shapes are the design's multi-region cases — a list of closures,
-a closure capturing closures (the reach tree), and a record whose fields reach distinct regions. The
-only `unsafe` routed is the shared `retype` in `witnessed.rs` (through `yoke_branded` /
-`transfer_into` / `map_pinned`).
+*independently-dying* per-call regions — through the delivery verbs only (`Delivered::transfer_into`
+folds each element onto a `yoke_branded` accumulator, minting its regions into the destination arena;
+`map_pinned` under the destination's retained storage builds the final value — never a hand-assembled
+witness), free every producing frame, then read a reached closure's captured scope back: a
+use-after-free under tree borrows the instant the minted set under-counts (a single frame witnessing
+the whole aggregate frees the others' regions). The three shapes split the fold's two liveness
+channels across the design's multi-region cases. The **list** elements ride the LET-bind →
+entry-re-read pipeline (closure whole in its own home region, envelope host = the *reader* frame
+whose arena holds the minted entry reach), so the closure regions arrive as element **reach** the
+fold must union — host materialization alone covers only the readers. The **record** fields and the
+closure-capturing-closures **reach tree** travel producer-hosted (host = the closure's own frame,
+carrier empty), so their regions arrive as **residence** the `Residence::Kept` fold must
+materialize; the reach-tree shape further folds its outer closure at a host that *is* the
+destination frame, minting the aggregate's `borrows_into_home` bit set where the list's and
+record's stay unset. The only `unsafe` routed is the shared `retype` in `witnessed.rs` (through
+`yoke_branded` / `transfer_into` / `map_pinned`).
 
 - `multi_region_list_of_closures_survives_frame_free`
 - `multi_region_closure_capturing_closures_survives_frame_free`
@@ -536,9 +541,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-09: 298s — 40 tests, 0 leaks, 0 UB
+- 2026-07-09: 284s — 40 tests, 0 leaks, 0 UB
 - 2026-07-09: 452s — 40 tests, 0 leaks, 0 UB
 - 2026-07-09: 275s — 40 tests, 0 leaks, 0 UB
 - 2026-07-09: 272s — 40 tests, 0 leaks, 0 UB
-- 2026-07-09: 274s — 40 tests, 0 leaks, 0 UB
-- 2026-07-09: 375s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
