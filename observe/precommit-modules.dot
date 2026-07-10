@@ -651,6 +651,7 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::ambient" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::dispatch::operator_chain" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::nodes" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];

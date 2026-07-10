@@ -218,9 +218,9 @@ fn register_group_under_all_subsets<'a>(
 /// allocated once and registered under every nonempty subset of its member set, so any chain
 /// probe drawn from that set resolves to the same shared record.
 ///
-/// The comparison group's pairwise mode has no reducer yet — seeding it now is inert and safe,
-/// since a `1 < 2 < 3` chain resolves to this group and then reaches the still-unimplemented
-/// pairwise seam, which is the correct state until the pairwise finish lands.
+/// A comparison chain (`1 < 2 < 3`, `1 <= x < 10`) resolves to this group and reduces through the
+/// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
+/// own operator's body above, and the pair results fold left through `AND`.
 pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
     let region = scope.brand();
 

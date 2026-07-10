@@ -11,10 +11,12 @@
 //! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
 //! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
 //! (see [`reduce_fold_left`]), [`ReductionMode::FoldRight`] mirrors it right-associated (see
-//! [`reduce_fold_right`]), and [`ReductionMode::Unary`] rewrites it into one keyword-first call
-//! over a list literal (see [`reduce_unary`]); all three hand control back to dispatch. The
-//! remaining mode ([`ReductionMode::Pairwise`]) still terminates at the explicit "not yet
-//! implemented" seam.
+//! [`reduce_fold_right`]), [`ReductionMode::Unary`] rewrites it into one keyword-first call over
+//! a list literal (see [`reduce_unary`]), and [`ReductionMode::Pairwise`] stages every operand as
+//! its own dispatch and, once they all resolve, splices each result into the up-to-two adjacent
+//! pairs it feeds before folding the pairs left through the group's combiner keyword (see
+//! [`reduce_pairwise`]) — the one mode that actually runs sub-dispatches itself rather than
+//! purely rewriting syntax, since a shared middle operand must evaluate exactly once.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -59,11 +61,8 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
                 ReductionMode::FoldRight => reduce_fold_right(ctx, expr),
                 ReductionMode::Unary => reduce_unary(ctx, expr),
-                ReductionMode::Pairwise { .. } => {
-                    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: "operator-chain folding not yet implemented".to_string(),
-                    })))
+                ReductionMode::Pairwise { combiner } => {
+                    reduce_pairwise(ctx, expr, combiner.clone())
                 }
             }
         }
@@ -103,8 +102,9 @@ fn split_chain_parts<'step>(
 }
 
 /// Wraps a built-up accumulator as the next level's leading operand, carrying its own span
-/// forward rather than inventing a fresh one.
-fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
+/// forward rather than inventing a fresh one. `pub(super)` — `SchedulerView::install_pairwise_fold`
+/// (`ctx.rs`) reuses it to nest its combiner-fold accumulator the same way.
+pub(super) fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
     let span = acc.span;
     Spanned {
         value: ExpressionPart::Expression(Box::new(acc)),
@@ -215,6 +215,34 @@ fn reduce_unary<'step>(
         span: expr.span,
     };
     become_dispatch(ctx, KExpression::new(vec![kw_part, list_part]))
+}
+
+/// Reduces a `Pairwise`-mode run: `f x < g y < h z` must evaluate `g y` **once**, its value
+/// feeding both the `x<y` and `y<z` pairs, so — unlike the three modes above — this cannot be a
+/// pure syntactic rewrite (each operand there appears exactly once in the output tree; here a
+/// middle operand appears in two places). Every operand is staged as its own owned dep
+/// (whatever its part kind — a bare identifier, a literal, or a parenthesized sub-expression all
+/// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
+/// once every operand resolves, the finish splices each resolved cell into the up-to-two pair
+/// expressions it feeds (a `.duplicate()` per embed site) and folds the pairs left through the
+/// group's combiner keyword. See [`SchedulerView::install_pairwise_fold`] for the staging +
+/// finish mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices into a fresh
+/// pair-tree rather than back into the original expression's own slots).
+fn reduce_pairwise<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: &KExpression<'step>,
+    combiner: String,
+) -> Outcome<'step> {
+    let (operands, operators) = split_chain_parts(expr);
+    debug_assert!(
+        operands.len() >= 3 && operators.len() == operands.len() - 1,
+        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
+    );
+    let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
+        "<operator-chain>",
+        expr,
+    ));
+    ctx.install_pairwise_fold(operands, operators, combiner, expr.span, dep_error_frame)
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

@@ -2,7 +2,9 @@
 //! no chain, no group, no reducer. `1 + (2 * 3)` exercises only the existing eager-subs
 //! nesting (the parenthesized operand stages as its own sub-dispatch) plus these bodies.
 
-use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
+use crate::builtins::test_support::{
+    parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
+};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
@@ -123,4 +125,65 @@ fn additive_multiplicative_mix_is_registry_miss() {
     let scope = run_root_silent(&region);
     let err = run_one_err(scope, parse_one("1 + 2 * 3"));
     assert!(matches!(&err.kind, KErrorKind::DispatchFailed { .. }));
+}
+
+// =====================================================================
+// Builtin-seeded comparison group reaching the `Pairwise` reducer — no test-local group
+// registration, only `default_scope`'s own `register_builtin_operator_groups` seeding.
+// =====================================================================
+
+/// `1 < 2 < 3` — the comparison group is seeded `Pairwise { combiner: "AND" }`, so the chain
+/// stages `1`, `2`, and `3` as three independent dispatches, splices `2`'s resolved cell into
+/// both the `1 < 2` and `2 < 3` pairs, and folds the two Bool results through `AND`.
+#[test]
+fn comparison_chain_reduces_pairwise_through_seeded_group() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let result = run_one(scope, parse_one("1 < 2 < 3"));
+    assert!(matches!(result, KObject::Bool(true)));
+}
+
+/// `1 <= 1 < 10` mixes two operators from the same comparison group in one pairwise run — the
+/// probe `"< <="` still resolves to the single seeded group (seeding registers every nonempty
+/// subset of the group's members, not just singletons).
+#[test]
+fn mixed_comparison_operators_reduce_pairwise_through_seeded_group() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let result = run_one(scope, parse_one("1 <= 1 < 10"));
+    assert!(matches!(result, KObject::Bool(true)));
+}
+
+/// `1 < 5 < 2` — the second pair (`5 < 2`) is false, so the strict `AND` fold is false even
+/// though the first pair (`1 < 5`) is true; both pairs evaluate (no short-circuit).
+#[test]
+fn comparison_chain_pairwise_false_when_any_pair_fails() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let result = run_one(scope, parse_one("1 < 5 < 2"));
+    assert!(matches!(result, KObject::Bool(false)));
+}
+
+/// Once-evaluation proof: the shared middle operand feeds both the `1 < 2` and `2 < 3` pairs,
+/// but it must dispatch — and its `PRINT` side effect must run — exactly once. `PRINT` returns
+/// its rendered argument as a `Str` (see `src/builtins/print.rs`), which would fail the
+/// surrounding `:Number` pairs' dispatch, so the shared operand here is `LOUD`, a tiny
+/// test-registered `FN` whose leading (non-tail) statement prints its argument and whose tail
+/// returns the same `Number` unchanged — a `:Number`-typed stand-in for a plain operand that
+/// still leaves an observable trace of how many times it actually ran. The pairwise result is
+/// unaffected (still `1 < 2 < 3` = true); the load-bearing assertion is on the captured output,
+/// which must contain exactly one `"2\n"` line rather than two.
+#[test]
+fn pairwise_shared_middle_operand_evaluates_exactly_once() {
+    let region = run_root_storage();
+    let (scope, captured) = run_root_with_buf(&region);
+    run(scope, "FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
+    let result = run_one(scope, parse_one("1 < (LOUD 2) < 3"));
+    assert!(matches!(result, KObject::Bool(true)));
+    let bytes = captured.borrow().clone();
+    assert_eq!(
+        bytes, b"2\n",
+        "the shared middle operand must dispatch exactly once (printing \"2\" exactly once); got {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
 }

@@ -17,7 +17,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::FrameStorage;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
-use crate::source::Spanned;
+use crate::source::{Span, Spanned};
 use crate::witnessed::StepContext;
 
 use super::super::ambient::AmbientContext;
@@ -266,6 +266,85 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                 };
             }
             finish_eager_subs(ctx, working_expr, picked)
+        });
+        Await::on(Deps::from_owned(deps))
+            .error_frame(dep_error_frame)
+            .finish_terminal(finish)
+    }
+
+    /// Stage every `Pairwise`-mode operand as its own owned dep, then — once all of them
+    /// resolve — build the run's pair-tree and dispatch it. Unlike [`Self::install_eager_subs`]
+    /// (which splices each resolved cell back into the *original* expression's own slot, one
+    /// destination apiece), a pairwise run's shared middle operands each feed **two** adjacent
+    /// pairs (`f x < g y < h z` evaluates `g y` once, its cell duplicated into both the `x<y`
+    /// and `y<z` pairs), so this finish builds an entirely fresh pair-tree rather than routing
+    /// back through `finish_eager_subs`.
+    ///
+    /// `operands`/`operators` are the chain's own parts in source order
+    /// (`operators.len() == operands.len() - 1`); `is_operator_chain_shape` guarantees at least
+    /// 5 parts, so there are always at least 3 operands / 2 operators / 2 pairs — the
+    /// combiner-fold loop below always runs at least once. `combiner` is the group's declared
+    /// fold keyword; `chain_span` labels the synthesized combiner-keyword parts, which have no
+    /// single source token of their own.
+    pub(super) fn install_pairwise_fold(
+        &self,
+        operands: Vec<Spanned<ExpressionPart<'step>>>,
+        operators: Vec<Spanned<ExpressionPart<'step>>>,
+        combiner: String,
+        chain_span: Option<Span>,
+        dep_error_frame: Option<crate::machine::TraceFrame>,
+    ) -> Outcome<'step> {
+        use super::super::TerminalDepFinish;
+        use super::operator_chain::wrap_as_operand;
+
+        let operand_spans: Vec<Option<Span>> =
+            operands.iter().map(|operand| operand.span).collect();
+        let deps: Vec<DepRequest<'step>> = operands
+            .into_iter()
+            .map(|operand| DepRequest::Dispatch {
+                expr: KExpression::new(vec![operand]),
+                placement: DepPlacement::OwnScope,
+            })
+            .collect();
+        let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
+            // Every operand resolved. Build one pair per operator, duplicating each shared
+            // middle operand's resolved cell into both of the adjacent pairs it feeds — the
+            // splice that makes evaluation once-only.
+            let cells = terminals.owned_slice();
+            let mut pairs = Vec::with_capacity(operators.len());
+            for (i, operator) in operators.into_iter().enumerate() {
+                let left = Spanned {
+                    value: ExpressionPart::Spliced {
+                        cell: cells[i].delivered.duplicate(),
+                    },
+                    span: operand_spans[i],
+                };
+                let right = Spanned {
+                    value: ExpressionPart::Spliced {
+                        cell: cells[i + 1].delivered.duplicate(),
+                    },
+                    span: operand_spans[i + 1],
+                };
+                pairs.push(KExpression::new(vec![left, operator, right]));
+            }
+            // Fold the pairs left through the combiner keyword, nesting exactly like
+            // `reduce_fold_left`'s accumulator loop.
+            let mut pairs = pairs.into_iter();
+            let mut acc = pairs
+                .next()
+                .expect("pairwise always has ≥2 pairs (chain shape guarantees ≥2 operators)");
+            for pair in pairs {
+                let combiner_kw = Spanned {
+                    value: ExpressionPart::Keyword(combiner.clone()),
+                    span: chain_span,
+                };
+                acc = KExpression::new(vec![
+                    wrap_as_operand(acc),
+                    combiner_kw,
+                    wrap_as_operand(pair),
+                ]);
+            }
+            super::become_dispatch(ctx, acc)
         });
         Await::on(Deps::from_owned(deps))
             .error_frame(dep_error_frame)
