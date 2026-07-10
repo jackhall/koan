@@ -24,9 +24,13 @@ implemented"` error — because nothing yet reduces a recognized run to a value.
   single boolean result.
 - A run spanning two groups (`a + b * c`) resolves as a registry miss, and the
   parenthesized form `a + (b * c)` evaluates.
-- A `|` run over [anonymous structural
-  unions](../type_language/anonymous-unions.md) produces a union value, with a
-  unary-mode `|` building the whole union in one pass.
+- A unary-mode group hands its body the whole operand run as one list
+  operand, and a registered unary group evaluates end-to-end. (The `|`
+  instance of this mode — building a union value in one pass — ships with
+  [anonymous structural unions](anonymous-unions.md).)
+- The reducer builds each reduced value at the store's fold brand from the
+  run's operand views; no ambient-lifetime value is captured into a folded
+  placement anywhere on the reduction path.
 
 **Directions.**
 
@@ -41,7 +45,7 @@ implemented"` error — because nothing yet reduces a recognized run to a value.
   These are four peer modes, not a hierarchy — unary hands the body the raw
   operand list, while fold and pairwise build the reduction from a binary body.
   The surface that declares each is owned by
-  [user-defined operator modules](user-defined-operator-modules.md).
+  [user-defined operator modules](../operator_chaining/user-defined-operator-modules.md).
 - *Registry representation — decided.* A registry entry resolves to an
   [`OperatorGroup`](../../src/machine/model/operators.rs) carrying the member
   keyword set and a reduction mode — unary, fold-left, fold-right, or pairwise. A
@@ -76,7 +80,7 @@ implemented"` error — because nothing yet reduces a recognized run to a value.
 
 **Unblocks:**
 
-- [Anonymous structural unions](../type_language/anonymous-unions.md) — the `|`
+- [Anonymous structural unions](anonymous-unions.md) — the `|`
   chaining surface rides this machinery.
-- [User-defined operator modules](user-defined-operator-modules.md) — the
+- [User-defined operator modules](../operator_chaining/user-defined-operator-modules.md) — the
   declaration surface and `OP`/`GROUP` binders ride this mechanism.

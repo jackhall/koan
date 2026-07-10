@@ -56,4 +56,8 @@ surface this item retypes.
 
 **Requires:** none — operates on the current veneer layer.
 
-**Unblocks:** none tracked.
+**Unblocks:**
+
+- [Eliminating the workgraph escape hatch](escape-hatch-elimination.md) —
+  the typed frame parenting is what the frame-child door's replacement rests
+  on.

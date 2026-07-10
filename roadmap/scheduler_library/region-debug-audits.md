@@ -41,7 +41,7 @@ bindings.
 ## Dependencies
 
 Bind-side reach over-approximation closes by construction in
-[Witness-derived binding](witness-derived-binding.md); this item's tightness
+[Witness-derived binding](../compile_safety/witness-derived-binding.md); this item's tightness
 report covers the fold side and the cycle case.
 
 **Requires:** none — additive diagnostics.

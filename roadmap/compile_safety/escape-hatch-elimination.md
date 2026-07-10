@@ -46,9 +46,16 @@ bypassing every veneer; eleven reaches exist across `src/machine`.
 
 ## Dependencies
 
-**Requires:** none — operates on the current library boundary.
+**Requires:**
+
+- [Fold-closure capture provenance](fold-closure-provenance.md) — the
+  folded-tier retype that replaces the two always-true fold doors.
+- [Witness-derived binding](witness-derived-binding.md) — the fused bind
+  doors that replace the evidence-tier audits.
+- [Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) — types
+  the frame parenting the frame-child door's replacement rests on.
 
 **Unblocks:**
 
-- [Publishing the workgraph crate](workgraph-extraction.md) — the API freeze
-  publishes the hatch-free surface.
+- [Publishing the workgraph crate](../scheduler_library/workgraph-extraction.md)
+  — the API freeze publishes the hatch-free surface.

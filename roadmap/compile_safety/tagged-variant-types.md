@@ -29,6 +29,10 @@ form, so recursive variant references inside a schema are unsupported (external
 - A schema field can be typed as a variant of the type currently being sealed:
   a `KType::Variant` inside a schema folds to its `SetLocal` form at seal and
   resolves back at projection, like `SetRef`.
+- The converged `MATCH` path carries no MATCH-specific value-bind site: the
+  scrutinee reaches the selected arm through the ordinary dispatch bind leg,
+  retiring [branch_walk](../../src/builtins/branch_walk.rs)'s MATCH
+  deep-clone paired with caller-supplied reach evidence.
 
 **Directions.**
 
@@ -62,14 +66,15 @@ form, so recursive variant references inside a schema are unsupported (external
 
 ## Dependencies
 
-Cross-link (not a dependency edge): [anonymous structural
-unions](anonymous-unions.md) shares the type-dispatch elimination model — that item
-handles *untagged* unions, this one supplies the variant `KType` so *tagged* unions
-eliminate the same way — but neither blocks the other.
-
 **Requires:**
 
 - [Branch-arm return contract](../../design/execution/calls-and-values.md#arms-as-own-blocks)
   — the `MATCH` arm machinery the remaining work lowers into type-dispatch.
+- [Anonymous structural unions](anonymous-unions.md) — owns the match-by-type
+  lowering this item's `MATCH` convergence criterion completes through.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Witness-derived binding](witness-derived-binding.md) — retiring
+  `branch_walk`'s MATCH bind shrinks the bind-leg surface the fused door
+  covers.

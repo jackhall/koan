@@ -48,9 +48,18 @@ borrowed from passes every audit.
 
 ## Dependencies
 
-**Requires:** none — operates on the current veneer layer.
-
-**Unblocks:** none tracked — soft ordering with
+Soft ordering with
 [Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) and
 [Fold-closure capture provenance](fold-closure-provenance.md) is noted in
 those items.
+
+**Requires:**
+
+- [Tagged-union variants as dispatchable types](tagged-variant-types.md) —
+  converging `MATCH` onto type-dispatch first retires `branch_walk`'s MATCH
+  bind, shrinking the bind-leg surface the fused door covers.
+
+**Unblocks:**
+
+- [Eliminating the workgraph escape hatch](escape-hatch-elimination.md) —
+  the fused bind doors replace the evidence-tier audits.

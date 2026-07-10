@@ -8,7 +8,7 @@ populating the n-ary dispatch registry.
 [`operators.rs`](../../src/parse/operators.rs) table (`.`/`?`/`!`), each wired to
 a builtin builder. A user has no way to declare an operator — to bind a new
 keyword to a body, place it in a group, or choose how a run of it reduces — from
-their own module. The [n-ary mechanism](n-ary-operators.md) reduces a recognized
+their own module. The [n-ary mechanism](../compile_safety/n-ary-operators.md) reduces a recognized
 run and provides a per-scope operator registry, but nothing populates that
 registry from user code: it has no declaration surface and no binder to write
 into it.
@@ -53,7 +53,7 @@ into it.
   ordinary function bucket under the operator keyword (a binary body for `a + b`,
   a list body for a unary op), and a single size-1 entry, keyed on its own
   keyword, into the per-scope operator registry the
-  [n-ary mechanism](n-ary-operators.md) walks. That registry entry — not a
+  [n-ary mechanism](../compile_safety/n-ary-operators.md) walks. That registry entry — not a
   function-bucket fallback — is what lets a bare `OP` self-chain: a bare binary
   op's entry records the fold-left default, a unary op's records unary. A `GROUP`
   additionally writes the size-≥2 powerset of its member keys, all resolving to
@@ -79,7 +79,7 @@ groups ride `FUNCTOR`.
 
 **Requires:**
 
-- [User-definable n-ary operators](n-ary-operators.md) — the recognition,
+- [User-definable n-ary operators](../compile_safety/n-ary-operators.md) — the recognition,
   registry, and reduction mechanism this surface populates.
 
 **Unblocks:** none yet.

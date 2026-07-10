@@ -152,7 +152,7 @@ values report a `Variant`. See [error-handling.md](../error-handling.md). Routin
 `MATCH` itself through ordinary type-dispatch (instead of its current distinct
 fast-track form) and recursive variant references inside a schema are open work,
 tracked under
-[tagged-union variants as dispatchable types](../../roadmap/type_language/tagged-variant-types.md).
+[tagged-union variants as dispatchable types](../../roadmap/compile_safety/tagged-variant-types.md).
 
 ## Type-only nominal install
 

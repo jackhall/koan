@@ -27,11 +27,20 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   the value's runtime type.
 - A dedicated union-value constructor builtin constructs union values,
   separate from MATCH.
+- A `|` run (`Number | Str | Bool`) reduces through a unary-mode operator
+  group to that constructor, building the whole union in one pass.
 - A tagged union is expressible as the anonymous-union join of per-variant
   `Newtype`s (with [tagged-union variants as dispatchable
   types](tagged-variant-types.md)), so `NominalKind::Tagged` dissolves into
   `Newtype` — the sum-side counterpart of the shipped struct → record-repr
   `NEWTYPE` collapse.
+- The nominal-finalize paths the dissolution rewrites
+  ([newtype_def.rs](../../src/builtins/newtype_def.rs),
+  [union.rs](../../src/builtins/union.rs)) cross their seal identities into
+  folded placements as declared operands (the `RegionTypeFamily` pattern of
+  [constructors.rs](../../src/machine/execute/dispatch/constructors.rs));
+  no ambient-lifetime `KType` is captured into a folded placement on the
+  finalize path.
 
 **Directions.**
 
@@ -45,7 +54,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   [execution/calls-and-values.md § Arms as own blocks](../../design/execution/calls-and-values.md#arms-as-own-blocks)).
 - *Surface `|` — open; rides n-ary operators.* The `:(A | B | C)` infix
   surface rides the dispatched-operator machinery from
-  [user-definable n-ary operators](../operator_chaining/n-ary-operators.md): `|`
+  [user-definable n-ary operators](n-ary-operators.md): `|`
   desugars (the parse→dispatch bridge) to a dispatched, associative-flattening
   union builtin, so arbitrary arity falls out of associativity rather than new
   parse arity. Precedence inside `:(...)` (e.g. `List A | B`) is settled there.
@@ -65,7 +74,14 @@ the nominal-`UNION` path before the `|` surface lands.
 
 **Requires:**
 
-- [User-definable n-ary operators](../operator_chaining/n-ary-operators.md) — the `|`
+- [User-definable n-ary operators](n-ary-operators.md) — the `|`
   chaining surface rides its dispatched-operator machinery.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Fold-closure capture provenance](fold-closure-provenance.md) — the
+  dissolution's rewrite of the nominal finalize carries the seal-identity
+  operand-crossing.
+- [Tagged-union variants as dispatchable types](tagged-variant-types.md) —
+  its `MATCH`-lowering criterion completes through the match-by-type
+  mechanism owned here.

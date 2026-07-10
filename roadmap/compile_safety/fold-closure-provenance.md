@@ -40,6 +40,18 @@ dispatch.
 Soft ordering: [Witness-derived binding](witness-derived-binding.md) may
 shrink what fold closures build, so it lands first when both are in flight.
 
-**Requires:** none — operates on the current fold surface.
+**Requires:**
 
-**Unblocks:** none tracked.
+- [Field-list re-walk type provenance](field-list-rewalk-provenance.md) —
+  the record/function-carrier finalizes must build from declared operands
+  before the fold surface can reject captures.
+- [Sparse-carrier correlation in parameterized-type constructors](sparse-carrier-correlation.md)
+  — the constructor sites must correlate views to args before their captures
+  can move inside the brand.
+- [Anonymous structural unions](anonymous-unions.md) — its nominal-finalize
+  rewrite carries the seal-identity operand-crossing off the fold.
+
+**Unblocks:**
+
+- [Eliminating the workgraph escape hatch](escape-hatch-elimination.md) —
+  the folded-tier retype is the first tier of deleting the audited move-in.
