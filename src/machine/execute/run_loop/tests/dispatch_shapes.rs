@@ -822,45 +822,11 @@ fn operator_chain_undeclared_errors_cleanly() {
     );
 }
 
-/// The run reduces into nested binary dispatches and evaluates — not just reaching the seam.
-/// The test's own `+` registration is actually dead: `resolve_operator_group_with_chain`
-/// resolves builtin-first, so `default_scope`'s root-seeded additive group always wins the
-/// `+` probe over any registration a descendant scope makes, at any `BindingIndex`. Both
-/// groups are `FoldLeft` over `+`, so the result is the same either way; this test exercises
-/// the real builtin-seeded group, not its own registration (see
-/// `operator_chain_registered_group_folds_right`, below, for a case where this distinction
-/// is load-bearing rather than harmless).
-#[test]
-fn operator_chain_registered_group_folds_left() {
-    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
-    use std::collections::HashSet;
-
-    let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let members: HashSet<String> = ["+"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldLeft));
-    scope
-        .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)
-        .expect("register operator group");
-
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("1 + 2 + 3"), scope);
-    runtime
-        .execute()
-        .expect("scheduler drains without deadlock");
-    let result = runtime
-        .read_result_with(id, |v| v.summarize())
-        .unwrap_or_else(|e| panic!("a registered FoldLeft group must evaluate; got error {e}"));
-    assert_eq!(result, "6", "1 + 2 + 3 must fold left to 6; got {result}");
-}
-
 /// A fixture-registered `FoldRight` group resolves the chain's probe and reduces the run
 /// right-associated, observably distinct from `FoldLeft`'s `10 - 3 - 2` = 5: right-association
 /// gives `10 - (3 - 2)` = `10 - 1` = 9.
 ///
-/// Unlike [`operator_chain_registered_group_folds_left`], this fixture cannot ride
+/// This fixture cannot ride
 /// `default_scope`: `default_scope`'s root seeds `-` into the builtin additive `FoldLeft` group,
 /// and [`crate::machine::core::Scope::resolve_operator_group_with_chain`] resolves
 /// builtin-first — a probe the run-global root has already claimed as a builtin operator
