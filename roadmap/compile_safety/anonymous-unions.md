@@ -54,7 +54,7 @@ construct a tagged value in every arm, or coarsen the slot to `Any`.
   [execution/calls-and-values.md § Arms as own blocks](../../design/execution/calls-and-values.md#arms-as-own-blocks)).
 - *Surface `|` — open; rides n-ary operators.* The `:(A | B | C)` infix
   surface rides the dispatched-operator machinery from
-  [user-definable n-ary operators](n-ary-operators.md): `|`
+  [the operator-chain reducer](../../design/expressions-and-parsing.md): `|`
   desugars (the parse→dispatch bridge) to a dispatched, associative-flattening
   union builtin, so arbitrary arity falls out of associativity rather than new
   parse arity. Precedence inside `:(...)` (e.g. `List A | B`) is settled there.
@@ -74,8 +74,6 @@ the nominal-`UNION` path before the `|` surface lands.
 
 **Requires:**
 
-- [User-definable n-ary operators](n-ary-operators.md) — the `|`
-  chaining surface rides its dispatched-operator machinery.
 
 **Unblocks:**
 

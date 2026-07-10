@@ -1,14 +1,18 @@
-//! Operator-group registry record. A user module declares a set of chainable
-//! operators together and registers one shared [`OperatorGroup`] under every
-//! size-≥2 subset of the group's operators (the per-group powerset). A chain's
-//! operator probe (the sorted-joined unique operators of a `Slot (Keyword Slot)+`
-//! expression) looks the group up in one hashmap hit; a cross-group mix — which
-//! nothing registers — simply misses.
+//! Operator-group registry record. A set of chainable operators is declared
+//! together and registered — one shared [`OperatorGroup`], pointer-shared — under
+//! every nonempty subset of the group's operators (the per-group powerset,
+//! singletons included, so a same-operator run like `a + b + c`, whose deduped probe
+//! is just `+`, still resolves). A chain's operator probe (the sorted-joined unique
+//! operators of a `Slot (Keyword Slot)+` expression) looks the group up in one
+//! hashmap hit; a cross-group mix — which nothing registers — simply misses.
 //!
 //! A group's record is its member set plus one [`ReductionMode`] describing how a
-//! recognized run of its operators reduces. Populating the registry is the `OP`
-//! binder (declaration surface, owned by the user-defined-operator-modules roadmap
-//! item); this module is the record and lookup key only.
+//! recognized run of its operators reduces. The builtin comparison / additive /
+//! multiplicative groups are seeded by `register_builtin_operator_groups`
+//! (`src/builtins/arithmetic.rs`); the `OP` / `GROUP` binder that lets user modules
+//! populate the registry is the declaration surface owned by the
+//! user-defined-operator-modules roadmap item. This module is the record and lookup
+//! key only.
 
 use std::collections::HashSet;
 

@@ -123,9 +123,40 @@ The chain shape is a refinement of `Keyworded`: a slot-led `Slot (Keyword Slot)+
 run with two or more keyword positions, which nothing else produces (no builtin
 reaches two keywords behind a leading argument). It carves the track for chainable
 user operators — the operator probe caches the sorted-joined unique operators that
-the per-scope operator registry is looked up by. Folding a recognized chain into
-nested binary dispatches is future work owned by
-[user-definable n-ary operators](../roadmap/compile_safety/n-ary-operators.md).
+the per-scope operator registry is looked up by.
+
+A recognized chain reduces in
+[`dispatch/operator_chain.rs`](../src/machine/execute/dispatch/operator_chain.rs)
+by the mode its resolved [`OperatorGroup`](../src/machine/model/operators.rs)
+declares. The reducer allocates no result values: three of the four modes are
+pure syntactic rewrites handed back to ordinary dispatch, and the fourth stages
+sub-dispatches the scheduler already knows how to run.
+
+- **Fold-left / fold-right** rewrite the run into nested binary dispatches —
+  `a + b + c` ⇒ `[ [a + b] + c ]` (left) or `[ a + [b + c] ]` (right) — where
+  each inner 3-part expression resolves through the existing eager-subs
+  sub-dispatch track before the outer keyword runs as an ordinary binary call.
+  Every operand appears exactly once, so no evaluation-order question arises.
+- **Unary** lowers the whole run to one keyword-first call over a list literal:
+  both the infix chain `x1 sym x2 sym x3` and the prefix form `sym [x1 x2 x3]`
+  become `[ Keyword(sym), ListLiteral([x1 x2 x3]) ]` — the same shape
+  `HEAD [1 2 3]` dispatches through — so prefix and infix coincide on one body.
+- **Pairwise** dispatches each adjacent pair through its own operator's binary
+  body and folds the pair results left through the group's named combiner
+  keyword (`AND` for the comparisons). A shared middle operand evaluates
+  **once**: every operand is staged as its own sub-dispatch, and each resolved
+  cell is spliced into the up-to-two adjacent pairs it feeds — so `f x < g y < h z`
+  runs `g y` a single time. This is the one mode that runs sub-dispatches itself
+  rather than purely rewriting syntax.
+
+A run whose probe spans two groups, or names an operator no group declares, is a
+registry miss surfaced as a structured `DispatchFailed`; the user resolves a
+cross-group mix (`a + b * c`) with explicit parentheses (`a + (b * c)`). The
+builtin comparison (pairwise), additive, and multiplicative (both fold-left)
+groups and their binary bodies are seeded by `register_builtin_operator_groups`
+in [`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs); the `OP`/`GROUP`
+declaration surface that lets user modules populate the registry is owned by
+[user-defined operator modules](../roadmap/operator_chaining/user-defined-operator-modules.md).
 
 The four call-shape lanes that resolve a head to a callable —
 `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` — converge on

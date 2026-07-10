@@ -822,11 +822,14 @@ fn operator_chain_undeclared_errors_cleanly() {
     );
 }
 
-/// A fixture-registered `FoldLeft` group resolves the chain's probe, so the arm reduces the
-/// run into nested binary dispatches and evaluates — not just reaching the seam. The fixture
-/// registration is independent of `default_scope`'s own builtin-seeded additive group (a
-/// separate per-test group, kept for fixture isolation); both are `FoldLeft` over `+`, so
-/// either resolving would reduce the same way.
+/// The run reduces into nested binary dispatches and evaluates — not just reaching the seam.
+/// The test's own `+` registration is actually dead: `resolve_operator_group_with_chain`
+/// resolves builtin-first, so `default_scope`'s root-seeded additive group always wins the
+/// `+` probe over any registration a descendant scope makes, at any `BindingIndex`. Both
+/// groups are `FoldLeft` over `+`, so the result is the same either way; this test exercises
+/// the real builtin-seeded group, not its own registration (see
+/// `operator_chain_registered_group_folds_right`, below, for a case where this distinction
+/// is load-bearing rather than harmless).
 #[test]
 fn operator_chain_registered_group_folds_left() {
     use crate::machine::model::operators::{OperatorGroup, ReductionMode};
