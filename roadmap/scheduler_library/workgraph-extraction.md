@@ -45,5 +45,7 @@ the surface being documented and frozen is the final one.
 
 - [Carving the workcell crate](workcell-extraction.md) — the published
   boundary is the layered pair.
+- [Eliminating the workgraph escape hatch](escape-hatch-elimination.md) —
+  the published surface must not carry the audit-closure hatch.
 
 **Unblocks:** none tracked — the project's terminal item.
