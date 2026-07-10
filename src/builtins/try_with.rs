@@ -15,7 +15,7 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
-use super::branch_walk::find_branch_body;
+use super::branch_walk::find_branch_body_by_tag;
 use super::{arg, kw, sig};
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
@@ -58,7 +58,7 @@ pub fn body<'a>(
                 )
             }
         };
-        let body_expr = match find_branch_body(&branches_expr, &tag, true) {
+        let body_expr = match find_branch_body_by_tag(&branches_expr, &tag, true) {
             Ok(Some(body)) => body,
             // On no match: re-raise the original `KError`, or `ShapeError` on the success path
             // without an `Ok` or `_` arm.

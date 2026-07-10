@@ -265,7 +265,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
         parse_one(
             "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
-                 Zero -> \"unused\"\
+                 Zero -> (\"unused\")\
              )",
         ),
     );
@@ -299,7 +299,7 @@ fn deep_tail_chain_violates_arm_return_contract() {
         parse_one(
             "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
-                 Zero -> \"unused\"\
+                 Zero -> (\"unused\")\
              )",
         ),
     );

@@ -1,14 +1,18 @@
-//! Shared `<tag> -> <body>` branch walker for `MATCH` and `TRY-WITH`. Shape-only: picks the
-//! body whose tag matches a dispatched value's tag without knowing what tags mean.
+//! Branch walkers for `MATCH` and `TRY-WITH`, plus the shared arm-tail machinery.
 //!
-//! `TRY` opts into wildcard `_` matching for dispatcher-internal error kinds; `MATCH`'s
-//! exhaustiveness check is enforced by the caller. [`resolve_arm_contract`] builds
-//! the `-> :T` return contract both arms enforce on their result.
+//! `TRY` selects an arm by **string tag** — [`find_branch_body_by_tag`] matches a
+//! dispatched value's error/success tag and opts into wildcard `_` matching for
+//! dispatcher-internal error kinds. `MATCH` selects an arm by **type** —
+//! [`find_branch_body_by_type`] resolves each arm head to a `KType`, admits the arms
+//! whose type matches the scrutinee value, and runs the most-specific-wins tournament
+//! (ruling F1). [`resolve_arm_contract`] builds the `-> :T` return contract both arms
+//! enforce on their result.
 
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::TypeResolution;
-use crate::machine::model::KType;
+use crate::machine::core::LexicalFrame;
+use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::types::{KKind, RecursiveSet, TypeResolution};
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
@@ -135,10 +139,10 @@ pub(crate) fn arm_tail<'a>(
     )
 }
 
-/// Returns the body for the first triple whose tag matches `target_tag`, or — when
-/// `allow_wildcard` is true and no exact match was found — the first `_` body. Exact-tag
-/// matches always win over `_`, regardless of source order.
-pub(crate) fn find_branch_body<'a>(
+/// `TRY`'s arm selector: returns the body for the first triple whose tag matches
+/// `target_tag`, or — when `allow_wildcard` is true and no exact match was found — the
+/// first `_` body. Exact-tag matches always win over `_`, regardless of source order.
+pub(crate) fn find_branch_body_by_tag<'a>(
     branches: &KExpression<'a>,
     target_tag: &str,
     allow_wildcard: bool,
@@ -204,4 +208,256 @@ pub(crate) fn find_branch_body<'a>(
         i += 3;
     }
     Ok(wildcard_body)
+}
+
+/// A `<head> -> <body>` arm the by-type walker selected for `MATCH`: the body to run and
+/// the value bound to `it` under ruling F3 — the wrapped payload for a variant arm, the
+/// scrutinee unchanged for a general type arm, `Null` for a boolean arm.
+pub(crate) struct SelectedArm<'a> {
+    pub body: KExpression<'a>,
+    pub it_value: KObject<'a>,
+}
+
+/// A resolved, admitting arm head classified for the F1 specificity tournament.
+enum ArmType<'a> {
+    /// An exact value/tag match (a `true` / `false` literal head, or a tag head over a
+    /// `TypeConstructor` value) — no subtype relation to refine.
+    Exact,
+    /// A type head that admits the scrutinee, carrying its resolved `KType`.
+    Typed(KType<'a>),
+}
+
+/// Strict specificity between two admitting arm heads. An exact value/tag match outranks any
+/// type head; two type heads compare via [`KType::is_more_specific_than`]. Reflexive / equal
+/// pairs return `false`, so a duplicate head yields no strict winner (surfaced as ambiguity by
+/// the caller).
+fn arm_more_specific<'a>(a: &ArmType<'a>, b: &ArmType<'a>) -> bool {
+    match (a, b) {
+        (ArmType::Exact, ArmType::Exact) => false,
+        (ArmType::Exact, ArmType::Typed(_)) => true,
+        (ArmType::Typed(_), ArmType::Exact) => false,
+        (ArmType::Typed(x), ArmType::Typed(y)) => x.is_more_specific_than(y),
+    }
+}
+
+/// How a `MATCH` scrutinee resolves its type-name arm heads.
+enum HeadMode<'a> {
+    /// A tagged-union value (`KKind::Tagged`): a variant head builds a `KType::Variant`
+    /// against the value's own set, so admission reduces to `(set, index, tag)` identity — a
+    /// tag match — and `it` binds the wrapped payload (F3).
+    TaggedVariant {
+        set: Rc<RecursiveSet<'a>>,
+        index: usize,
+    },
+    /// A `TypeConstructor` value (`Result`): a head admits by tag-name equality against the
+    /// value's own tag, and `it` binds the wrapped payload (F3).
+    TaggedByTag { value_tag: String },
+    /// Any other value: a head resolves through the scope and admits via
+    /// [`KType::matches_value`]; `it` binds the scrutinee unchanged (F3).
+    Scope,
+}
+
+/// Resolve a bare arm-head type token against the call-site scope — the same
+/// [`Scope::resolve_type_identifier`] call [`resolve_arm_contract`] makes. A non-`Done`
+/// resolution (parked or unbound) is not a synchronously-known type.
+fn resolve_head_type<'a>(
+    scope: &Scope<'a>,
+    token: &TypeIdentifier,
+    chain: Option<Rc<LexicalFrame>>,
+) -> Result<KType<'a>, String> {
+    match scope.resolve_type_identifier(token, chain) {
+        TypeResolution::Done(hit) => Ok(hit.kt.clone()),
+        _ => Err(format!(
+            "match arm type `{}` is not a known type",
+            token.render()
+        )),
+    }
+}
+
+/// `MATCH`'s arm selector (ruling F1 + F3). Classifies each `<head> -> <body>` triple, admits
+/// the arms that match `scrutinee`, and returns the strictly most-specific admitting arm.
+///
+/// Head classification depends on the scrutinee ([`HeadMode`]):
+/// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
+/// - `Type(token)` heads over a tagged-union value (`KObject::Tagged` of a `KKind::Tagged`
+///   member) build a `KType::Variant` against the value's own set and admit via
+///   [`KType::matches_value`] `(set, index, tag)` identity — a tag match.
+/// - `Type(token)` heads over a `TypeConstructor` value (`Result`) admit by tag-name equality.
+/// - `Type(token)` heads over any other value resolve through `scope` and admit via
+///   [`KType::matches_value`].
+///
+/// `Ok(Some(arm))` selects an arm; `Ok(None)` means no arm admits (the caller raises the
+/// inexhaustive error naming the runtime type); `Err` covers a malformed shape, an
+/// unresolved head, or an F1 ambiguity (two admitting arms with no strict winner).
+pub(crate) fn find_branch_body_by_type<'a>(
+    branches: &KExpression<'a>,
+    scrutinee: &KObject<'a>,
+    scope: &Scope<'a>,
+    chain: Option<Rc<LexicalFrame>>,
+) -> Result<Option<SelectedArm<'a>>, String> {
+    let parts = &branches.parts;
+    if !parts.len().is_multiple_of(3) {
+        return Err(format!(
+            "branches must be `<head> -> <body>` triples; got {} parts (not a multiple of 3)",
+            parts.len()
+        ));
+    }
+    // A tagged value resolves its variant heads against its own set; any other value resolves
+    // heads against the scope.
+    let mode = match scrutinee {
+        KObject::Tagged {
+            set, index, tag, ..
+        } => match set.member(*index).kind {
+            KKind::Tagged => HeadMode::TaggedVariant {
+                set: Rc::clone(set),
+                index: *index,
+            },
+            _ => HeadMode::TaggedByTag {
+                value_tag: tag.clone(),
+            },
+        },
+        _ => HeadMode::Scope,
+    };
+
+    struct Candidate<'a> {
+        head_label: String,
+        arm_type: ArmType<'a>,
+        body: KExpression<'a>,
+        /// A variant head binds the wrapped payload to `it` (F3); every other admitting head
+        /// binds the scrutinee (or `Null`, for a boolean head).
+        binds_payload: bool,
+    }
+    let mut candidates: Vec<Candidate<'a>> = Vec::new();
+
+    let mut i = 0;
+    while i < parts.len() {
+        let head_part = &parts[i];
+        let arrow_part = &parts[i + 1];
+        let body_part = &parts[i + 2];
+
+        match &arrow_part.value {
+            ExpressionPart::Keyword(k) if k == "->" => {}
+            other => {
+                return Err(format!(
+                    "branch separator must be `->`, got {}",
+                    other.summarize()
+                ));
+            }
+        }
+        let body_expr = match &body_part.value {
+            ExpressionPart::Expression(e) => (**e).clone(),
+            other => {
+                return Err(format!(
+                    "branch body must be a parenthesized expression, got {}",
+                    other.summarize()
+                ));
+            }
+        };
+
+        match &head_part.value {
+            // Booleans parse as `KLiteral::Boolean`; a head admits a `Bool` scrutinee of the
+            // same value, binding `Null` to `it` (a boolean carries no payload).
+            ExpressionPart::Literal(KLiteral::Boolean(b)) => {
+                if matches!(scrutinee, KObject::Bool(sb) if sb == b) {
+                    candidates.push(Candidate {
+                        head_label: if *b { "true" } else { "false" }.to_string(),
+                        arm_type: ArmType::Exact,
+                        body: body_expr,
+                        binds_payload: false,
+                    });
+                }
+            }
+            // A capitalized type name: a tag match for a tagged scrutinee, else scope resolution.
+            ExpressionPart::Type(token) => {
+                let label = token.render();
+                let admitting = match &mode {
+                    HeadMode::TaggedVariant { set, index } => {
+                        // Admission is `(set, index, tag)` identity against the value — a tag
+                        // match — without consulting the schema (a synthesized error carrier
+                        // carries a real tag over an empty schema).
+                        let variant = KType::Variant {
+                            set: Rc::clone(set),
+                            index: *index,
+                            tag: label.clone(),
+                        };
+                        variant
+                            .matches_value(scrutinee)
+                            .then_some((ArmType::Typed(variant), true))
+                    }
+                    HeadMode::TaggedByTag { value_tag } => {
+                        (&label == value_tag).then_some((ArmType::Exact, true))
+                    }
+                    HeadMode::Scope => {
+                        let kt = resolve_head_type(scope, token, chain.clone())?;
+                        kt.matches_value(scrutinee)
+                            .then_some((ArmType::Typed(kt), false))
+                    }
+                };
+                if let Some((arm_type, binds_payload)) = admitting {
+                    candidates.push(Candidate {
+                        head_label: label,
+                        arm_type,
+                        body: body_expr,
+                        binds_payload,
+                    });
+                }
+            }
+            other => {
+                return Err(format!(
+                    "branch head must be a capitalized type name or boolean literal, got {}",
+                    other.summarize()
+                ));
+            }
+        }
+        i += 3;
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    // F1 tournament: the winner is strictly more specific than every peer. `is_more_specific_than`
+    // is a strict order, so at most one arm dominates all others; none dominating → ambiguity.
+    let winner = candidates
+        .iter()
+        .enumerate()
+        .find(|(i, cand)| {
+            candidates
+                .iter()
+                .enumerate()
+                .all(|(j, peer)| *i == j || arm_more_specific(&cand.arm_type, &peer.arm_type))
+        })
+        .map(|(i, _)| i);
+
+    let Some(winner) = winner else {
+        let heads: Vec<String> = candidates
+            .iter()
+            .map(|c| format!("`{}`", c.head_label))
+            .collect();
+        return Err(format!(
+            "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
+            scrutinee.ktype().name(),
+            heads.join(", ")
+        ));
+    };
+
+    let chosen = candidates
+        .into_iter()
+        .nth(winner)
+        .expect("winner index valid");
+    let it_value = if chosen.binds_payload {
+        match scrutinee {
+            KObject::Tagged { value, .. } => (**value).deep_clone(),
+            _ => scrutinee.deep_clone(),
+        }
+    } else {
+        match &chosen.arm_type {
+            ArmType::Exact => KObject::Null,
+            ArmType::Typed(_) => scrutinee.deep_clone(),
+        }
+    };
+    Ok(Some(SelectedArm {
+        body: chosen.body,
+        it_value,
+    }))
 }
