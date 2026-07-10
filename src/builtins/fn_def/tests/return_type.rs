@@ -140,3 +140,113 @@ fn user_fn_with_any_return_type_accepts_anything() {
     let result = run_one(scope, parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if s == "a string"));
 }
+
+/// Keep-first across a cross-function tail chain: `OUTER`'s declared `-> Number` governs the whole
+/// chain, so a violation introduced only by the chain's *final* tail value still errors against
+/// `OUTER`'s contract — and the error's trace label names `OUTER` (the first call), not the inner
+/// callee that produced the offending value. `MIDDLE` and `INNER` declare `-> Any` (FN registration
+/// requires a `-> Type`), so their own contracts would *accept* the `Str`; the mismatch fires only
+/// because keep-first keeps `OUTER`'s `-> Number` across both hops (`OUTER -> MIDDLE -> INNER`) and
+/// carries its precomputed label. This exercises the invoke-continue/redispatch keep-first over a
+/// two-deep cross-function chain, not self-recursion.
+#[test]
+fn keep_first_across_tail_chain_errors_against_outer_contract() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, "FN (INNER) -> Any = (\"nope\")");
+    run(scope, "FN (MIDDLE) -> Any = (INNER)");
+    run(scope, "FN (OUTER) -> Number = (MIDDLE)");
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("OUTER"), scope);
+    runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    let err = match runtime.result_error(id) {
+        Err(e) => e,
+        Ok(()) => {
+            panic!(
+                "OUTER should fail: the chain's final tail returns a Str against OUTER's -> Number"
+            )
+        }
+    };
+    match &err.kind {
+        KErrorKind::TypeMismatch { arg, expected, got } => {
+            assert_eq!(arg, "<return>");
+            assert_eq!(
+                expected, "Number",
+                "the kept-first contract is OUTER's -> Number, not the callees' -> Any",
+            );
+            assert_eq!(got, "Str");
+        }
+        _ => panic!("expected TypeMismatch on <return>, got {err}"),
+    }
+    assert!(
+        err.frames.iter().any(|f| f.function.contains("OUTER")),
+        "the kept-first contract's precomputed trace label names OUTER (the first call), got {:?}",
+        err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+    );
+}
+
+/// A tail-spliced declared-return obligation is discharged before any consumer reads the rehomed
+/// terminal. `WRAP`'s body tail is a bare name (`x`) that forward-references a name defined lexically
+/// later, so `x` is still a submit-time placeholder when the body decides: the slot splices out via
+/// `Outcome::Forward` (an already-*bound* name would read as a plain `Done`, never a forward) rather
+/// than parking a continuation. `WRAP`'s `-> Number` obligation rides the splice, so before the
+/// forwarded terminal reaches the `out` consumer the checker discharges the declared return against
+/// the producer's value — here through the parked-checker micro-step, since a forward-referenced
+/// producer is unresolved when the consumer decides. A non-matching `Str` fires the mismatch at the
+/// splice check; a matching `Number` forwards through intact.
+#[test]
+fn spliced_bare_name_tail_checks_declared_return() {
+    // Non-matching: the bare-name tail forwards a Str; the splice check rejects it against -> Number.
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let mut runtime = KoanRuntime::new();
+    let bad_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"")
+        .expect("parse succeeds")
+        .into_iter()
+        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .collect();
+    runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    let err = match runtime.result_error(bad_ids[1]) {
+        Err(e) => e,
+        Ok(()) => panic!("the spliced Str tail must fail WRAP's -> Number check"),
+    };
+    match &err.kind {
+        KErrorKind::TypeMismatch { arg, expected, got } => {
+            assert_eq!(arg, "<return>");
+            assert_eq!(expected, "Number");
+            assert_eq!(got, "Str");
+        }
+        _ => panic!("expected TypeMismatch on <return> from the splice check, got {err}"),
+    }
+    assert!(
+        err.frames.iter().any(|f| f.function.contains("WRAP")),
+        "the splice check labels the mismatch with the obligation's FN (WRAP), got {:?}",
+        err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+    );
+
+    // Matching: the bare-name tail forwards a Number; the splice check passes and the value arrives.
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let mut runtime = KoanRuntime::new();
+    let ok_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7")
+        .expect("parse succeeds")
+        .into_iter()
+        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .collect();
+    runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    assert!(
+        runtime.result_error(ok_ids[1]).is_ok(),
+        "the matching spliced value passes the splice check: {:?}",
+        runtime.result_error(ok_ids[1]).err(),
+    );
+    assert!(
+        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
+        "the matching spliced value forwards through intact to out",
+    );
+}

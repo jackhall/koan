@@ -4,11 +4,12 @@ use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{FoldingBrand, KoanStorageProfile};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
+use crate::machine::{CallFrame, CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
 use crate::witnessed::{
     reattachable, Delivered, RegionHandle, Residence, Sealed, SealedExtern, Witnessed,
 };
 
+use super::obligation::ReturnObligation;
 use super::runtime::KoanRuntime;
 
 /// `Reattachable` carrier family for a declared-return re-stamp's two home-region operands: the
@@ -23,12 +24,11 @@ struct ContractHomeFamily;
 reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
 
 /// Seal a finished node's **value** terminal against its declared return contract, returning the
-/// slot's final terminal. The driver opens the slot's contract at the step brand (via
-/// [`SealedExtern::open`](crate::witnessed::SealedExtern::open)) and hands this hook the live
-/// [`ReturnContract`] plus the optional per-call frame. The scheduler decides *when* (the Done
-/// boundary); this hook owns the `ReturnContract`/`KType` *how*, so the generic scheduler
-/// ([`crate::scheduler`]) names no Koan type. Errors carry no value and finalize bare through
-/// [`finalize_error`], which never reaches this hook.
+/// slot's final terminal. This hook receives the step's [`ReturnObligation`] and opens its
+/// self-pinning cell to recover the live [`ReturnContract`], plus the optional per-call frame. The
+/// scheduler decides *when* (the Done boundary); this hook owns the `ReturnContract`/`KType` *how*,
+/// so the generic scheduler ([`crate::scheduler`]) names no Koan type. Errors carry no value and
+/// finalize bare through [`finalize_error`], which never reaches this hook.
 ///
 /// Peer of [`copy_carried`](super::lift::copy_carried): both are Done-boundary workload hooks.
 ///
@@ -44,118 +44,108 @@ pub(in crate::machine::execute) trait NodeFinalize {
     /// producer, that producer — is minted into the home arena); a **type** value is checked at a
     /// shared brand and passes through un-relocated. A `None` frame (frameless / run producer)
     /// seals as-is.
-    fn finalize_terminal<'o>(
+    fn finalize_terminal(
         &self,
         carrier: Witnessed<CarriedFamily, CarrierWitness>,
         frame: Option<&Rc<CallFrame>>,
-        contract: Option<ReturnContract<'o>>,
+        contract: Option<&ReturnObligation>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
 }
 
 impl NodeFinalize for KoanRuntime<'_> {
-    fn finalize_terminal<'o>(
+    fn finalize_terminal(
         &self,
         carrier: Witnessed<CarriedFamily, CarrierWitness>,
         frame: Option<&Rc<CallFrame>>,
-        contract: Option<ReturnContract<'o>>,
+        contract: Option<&ReturnObligation>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        // A frameless / run producer has no per-call return obligation (the contract is gated to
-        // `None`); a framed producer with no declared return seals as-is too — retention owns the
-        // frame's lifetime, so the Done boundary makes no memory decision.
+        // A frameless / run producer has no per-call return obligation (the obligation is gated to
+        // `None`); a framed producer with no obligation seals as-is too — retention owns the frame's
+        // lifetime, so the Done boundary makes no memory decision.
         let Some(producer) = frame else {
             return Ok(carrier);
         };
-        let Some((declared, label, per_call)) = pull_declared_return(contract) else {
+        let Some(obligation) = contract else {
             return Ok(carrier);
         };
-        // Declared-return path. The producer frame's storage is the pin the value is read (and
-        // relocated) under — the same owner the run loop seeds as the slot's retention host.
-        let producer_pin = producer.storage_rc();
-        let home = contract
-            .expect("a declared return type implies a contract")
-            .home_region();
-        let envelope: Delivered<CarriedFamily, CarrierWitness, _> =
-            Delivered::seal(carrier, Rc::clone(&producer_pin));
-        let is_object = envelope.open(|carried| matches!(carried, Carried::Object(_)));
-        let mut mismatch: Option<KError> = None;
-        if is_object {
-            // The **object** channel coarsens/re-stamps into the home region: a genuine relocation,
-            // run through the envelope transfer at `Residence::Copied` — the value's reach is minted
-            // into the home arena, and the dying producer materializes as a member only when the
-            // value's borrows genuinely reach it (`borrows_host`); a region-pure result leaves the
-            // producer to retention alone, releasing it at pull-count zero. The home-region operand
-            // rides `resident` (the empty carrier): its backing — the home region and the declared
-            // type in it — stays live across the call via the step's contract pin. Accepted
-            // residual: a failed type check still leaves its minted set in the home arena — the
-            // value was genuinely relocated before the check failed, and the path returns the `Err`
-            // terminal.
-            let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
-                Witnessed::resident((home.handle(), declared));
-            let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
-                home_operand,
-                Residence::Copied,
-                |value, (home_region, declared_type), _brand| {
-                    let home_region = FoldingBrand::in_fold_closure(home_region);
-                    let object = value.object();
-                    if !declared_type.matches_value(object) {
-                        mismatch = Some(return_type_mismatch(
-                            declared_type,
-                            per_call,
-                            &label,
-                            object.ktype().name(),
-                        ));
-                        return Carried::Object(
-                            home_region.alloc_object_folded(object.deep_clone()),
-                        );
-                    }
-                    Carried::Object(
-                        home_region
-                            .alloc_object_folded(object.deep_clone().stamp_type(declared_type)),
-                    )
-                },
-            );
-            return match mismatch {
-                Some(error) => Err(error),
-                None => Ok(checked),
+        // Open the obligation's self-pinning cell to recover the live contract: its own `FrameSet`
+        // witness pins the home-region owner, so no external pin is needed. The whole declared-return
+        // check runs inside this brand; nothing branded by it escapes into the returned terminal.
+        obligation.open_cell(|live| {
+            let Some((declared, per_call)) = pull_declared_return(live) else {
+                return Ok(carrier);
             };
-        }
-        // The **type** channel checks but never relocates: the value keeps its residence and its
-        // carrier verbatim. `KType` is invariant in its lifetime, so the free-`'o` declared type and
-        // the lifetime-free carrier can only be compared under one shared brand: both are erased and
-        // zip-opened together, pinned by the producer (the value's backing) unioned with the
-        // contract's home owner (the declared type's backing). A failed check is captured and raised
-        // after the open.
-        let sealed = Sealed::seal(envelope.into_cell().unseal());
-        let value_cell: SealedExtern<CarriedFamily> = SealedExtern::seal(*sealed.erased());
-        let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home.handle(), declared));
-        let pin = match contract.and_then(ReturnContract::home_owner) {
-            Some(owner) => FrameSet::union(
-                &FrameSet::singleton(producer_pin),
-                &FrameSet::singleton(owner),
-            ),
-            // A released home owner (the capture's `Weak` already dropped): the home region is still
-            // live for this synchronous check — the contract itself was opened at the step brand
-            // under the step's own pins — so the producer pin alone rides the open.
-            None => FrameSet::singleton(producer_pin),
-        };
-        value_cell
-            .zip(contract_operand)
-            .open(&pin, |(value, (_home_region, declared_type))| {
-                if let Carried::Type(t) = value {
-                    if !declared_type.matches_type(t) {
-                        mismatch = Some(return_type_mismatch(
-                            declared_type,
-                            per_call,
-                            &label,
-                            t.name(),
-                        ));
-                    }
-                }
-            });
-        match mismatch {
-            Some(error) => Err(error),
-            None => Ok(sealed.unseal()),
-        }
+            let label = obligation.label();
+            // Declared-return path. The producer frame's storage is the pin the value is read (and
+            // relocated) under — the same owner the run loop seeds as the slot's retention host.
+            let producer_pin = producer.storage_rc();
+            let home = live.home_region();
+            let envelope: Delivered<CarriedFamily, CarrierWitness, _> =
+                Delivered::seal(carrier, Rc::clone(&producer_pin));
+            let is_object = envelope.open(|carried| matches!(carried, Carried::Object(_)));
+            if is_object {
+                let mut mismatch: Option<KError> = None;
+                // The **object** channel coarsens/re-stamps into the home region: a genuine
+                // relocation, run through the envelope transfer at `Residence::Copied` — the value's
+                // reach is minted into the home arena, and the dying producer materializes as a
+                // member only when the value's borrows genuinely reach it (`borrows_host`); a
+                // region-pure result leaves the producer to retention alone, releasing it at
+                // pull-count zero. The home-region operand rides `resident` (the empty carrier): its
+                // backing — the home region and the declared type in it — stays live across the call
+                // via the obligation's cell pin. Accepted residual: a failed type check still leaves
+                // its minted set in the home arena — the value was genuinely relocated before the
+                // check failed, and the path returns the `Err` terminal.
+                let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
+                    Witnessed::resident((home.handle(), declared));
+                let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
+                    home_operand,
+                    Residence::Copied,
+                    |value, (home_region, declared_type), _brand| {
+                        let home_region = FoldingBrand::in_fold_closure(home_region);
+                        let object = value.object();
+                        if !declared_type.matches_value(object) {
+                            mismatch = Some(return_type_mismatch(
+                                declared_type,
+                                per_call,
+                                label,
+                                object.ktype().name(),
+                            ));
+                            return Carried::Object(
+                                home_region.alloc_object_folded(object.deep_clone()),
+                            );
+                        }
+                        Carried::Object(
+                            home_region
+                                .alloc_object_folded(object.deep_clone().stamp_type(declared_type)),
+                        )
+                    },
+                );
+                return match mismatch {
+                    Some(error) => Err(error),
+                    None => Ok(checked),
+                };
+            }
+            // The **type** channel checks but never relocates: the value keeps its residence and its
+            // carrier verbatim. The value passes through on a match; a mismatch raises. The
+            // brand-unifying comparison lives in the shared [`match_declared_return`].
+            let sealed = Sealed::seal(envelope.into_cell().unseal());
+            let value_cell: SealedExtern<CarriedFamily> = SealedExtern::seal(*sealed.erased());
+            let pin = match live.home_owner() {
+                Some(owner) => FrameSet::union(
+                    &FrameSet::singleton(producer_pin),
+                    &FrameSet::singleton(owner),
+                ),
+                // A released home owner (the capture's `Weak` already dropped): the home region is
+                // still live for this synchronous check — the contract's own cell pins it across
+                // this open — so the producer pin alone rides the zip open.
+                None => FrameSet::singleton(producer_pin),
+            };
+            match match_declared_return(value_cell, home.handle(), declared, &pin, per_call, label)
+            {
+                Some(error) => Err(error),
+                None => Ok(sealed.unseal()),
+            }
+        })
     }
 }
 
@@ -166,38 +156,105 @@ impl NodeFinalize for KoanRuntime<'_> {
 pub(in crate::machine::execute) fn finalize_error(
     error: KError,
     frame: Option<&Rc<CallFrame>>,
-    contract: Option<ReturnContract<'_>>,
+    contract: Option<&ReturnObligation>,
 ) -> KError {
     match (frame, contract) {
-        (Some(_), Some(contract)) => {
-            let label = match contract {
-                ReturnContract::Function(f) => f.summarize(),
-                ReturnContract::Arm { kind, .. } => kind.to_string(),
-                ReturnContract::PerCall { func, .. } => func.summarize(),
-            };
-            error.with_frame(crate::machine::TraceFrame::bare(label.clone(), label))
+        (Some(_), Some(obligation)) => {
+            let label = obligation.label();
+            error.with_frame(crate::machine::TraceFrame::bare(
+                label.to_string(),
+                label.to_string(),
+            ))
         }
         _ => error,
     }
 }
 
-/// Pull the declared return type off `contract` plus its diagnostic label and the `per_call` flag, or
-/// `None` when nothing is declared — no contract, or a `Function` whose signature return is
-/// non-`Resolved` (a `Deferred` carrier still in its FN-def signature).
-fn pull_declared_return<'o>(
-    contract: Option<ReturnContract<'o>>,
-) -> Option<(&'o KType<'o>, String, bool)> {
+/// Pull the declared return type off the live `contract` plus its `per_call` flag, or `None` when
+/// nothing is declared — a `Function` whose signature return is non-`Resolved` (a `Deferred` carrier
+/// still in its FN-def signature). The diagnostic label rides the [`ReturnObligation`] instead, read
+/// via [`ReturnObligation::label`].
+fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType<'o>, bool)> {
     match contract {
-        Some(ReturnContract::Function(f)) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => {
-                Some((d, f.summarize(), false))
-            }
+        ReturnContract::Function(f) => match &f.signature.return_type {
+            crate::machine::model::types::ReturnType::Resolved(d) => Some((d, false)),
             _ => None,
         },
-        Some(ReturnContract::Arm { ret, kind, .. }) => Some((ret, kind.to_string(), false)),
-        Some(ReturnContract::PerCall { func, ret }) => Some((ret, func.summarize(), true)),
-        None => None,
+        ReturnContract::Arm { ret, .. } => Some((ret, false)),
+        ReturnContract::PerCall { ret, .. } => Some((ret, true)),
     }
+}
+
+/// Zip-open a value carrier against the declared return type under `pin` — the shared brand where
+/// the invariant `KType` and the lifetime-free value meet — and match by channel: an object against
+/// [`matches_value`](KType::matches_value), a type against [`matches_type`](KType::matches_type). No
+/// relocation; the value keeps its residence. Returns the labelled mismatch, or `None` on a pass.
+/// `KType` is invariant in its lifetime, so the branded declared type and the erased carrier can
+/// only be compared under one shared brand, pinned by `pin` (the value's backing unioned with the
+/// contract's home owner). Shared by [`finalize_terminal`](NodeFinalize::finalize_terminal)'s type
+/// channel and the tail-splice checker micro-step ([`check_spliced_return`]).
+fn match_declared_return<'c>(
+    value_cell: SealedExtern<CarriedFamily>,
+    home_handle: RegionHandle<'c, KoanStorageProfile>,
+    declared: &'c KType<'c>,
+    pin: &FrameSet,
+    per_call: bool,
+    label: &str,
+) -> Option<KError> {
+    let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home_handle, declared));
+    let mut mismatch: Option<KError> = None;
+    value_cell
+        .zip(contract_operand)
+        .open(pin, |(value, (_home_region, declared_type))| {
+            let matched = match value {
+                Carried::Object(object) => declared_type.matches_value(object),
+                Carried::Type(t) => declared_type.matches_type(t),
+            };
+            if !matched {
+                let got = match value {
+                    Carried::Object(object) => object.ktype().name(),
+                    Carried::Type(t) => t.name(),
+                };
+                mismatch = Some(return_type_mismatch(declared_type, per_call, label, got));
+            }
+        });
+    mismatch
+}
+
+/// Discharge a tail-spliced slot's residual declared-return obligation against the spliced producer's
+/// terminal, WITHOUT relocating it — the checker micro-step's check. Opens the obligation's
+/// self-pinning cell, pulls the declared return, and runs the shared [`match_declared_return`] against
+/// the producer's delivered value; the value stays the producer's, relocated only later when the
+/// re-emitted `Forward` finalizes through [`NodeStep::ForwardReady`](super::nodes::NodeStep). Returns
+/// the labelled mismatch or `Ok(())`.
+pub(in crate::machine::execute) fn check_spliced_return(
+    obligation: &ReturnObligation,
+    delivered: &DeliveredCarried,
+) -> Result<(), KError> {
+    obligation.open_cell(|live| {
+        let Some((declared, per_call)) = pull_declared_return(live) else {
+            return Ok(());
+        };
+        let label = obligation.label();
+        let home = live.home_region();
+        // The value carrier and its liveness pin come from the producer's delivery envelope
+        // (duplicated — the producer keeps its terminal for the re-emitted `Forward`): the pin is the
+        // retained producer host, unioned with the contract's home owner (a released home owner
+        // stays live for this synchronous check via the obligation's own cell pin).
+        let sealed = Sealed::seal(delivered.duplicate().into_cell().unseal());
+        let value_cell: SealedExtern<CarriedFamily> = SealedExtern::seal(*sealed.erased());
+        let pin = match live.home_owner() {
+            Some(owner) => FrameSet::union(
+                &FrameSet::singleton(Rc::clone(delivered.host())),
+                &FrameSet::singleton(owner),
+            ),
+            None => FrameSet::singleton(Rc::clone(delivered.host())),
+        };
+        match match_declared_return(value_cell, home.handle(), declared, &pin, per_call, label) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })
 }
 
 #[cfg(test)]

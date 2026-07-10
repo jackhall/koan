@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use super::{Erased, Reattachable, ResolvedDeps, Sealed, Workload};
+use super::{Erased, Reattachable, ResolvedDeps, Workload};
 
 /// What a scheduler node will run: wait on `deps`, then run `cont` over their resolved terminals.
 /// `deps` is a [`ResolvedDeps`] — a `[park_producers..., owned_subs...]` layout the scheduler owns
@@ -48,21 +48,13 @@ impl<W: Workload> NodeWork<W> {
     }
 }
 
-/// A node's per-call frame state: the execution cart and the opaque return contract. Lifetime-free —
-/// the cart `Rc` pins everything its members point at, and the contract is stored opaquely as
-/// `W::Contract` (the workload re-anchors it at the Done boundary witnessed by `cart`). Every node
-/// owns a `NodeFrame`: the cart is the per-node memory the slot's step runs against. `contract` is
-/// sparse.
+/// A node's per-call frame state: the execution cart. Lifetime-free — the cart `Rc` pins everything
+/// its members point at. Every node owns a `NodeFrame`: the cart is the per-node memory the slot's
+/// step runs against.
 pub struct NodeFrame<W: Workload> {
     /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
     /// step; the scheduler stores and hands it back but calls no method on it.
     pub cart: Rc<W::Cart>,
-    /// Return contract enforced at the Done boundary, dormant between steps as a [`Sealed`] carrier
-    /// — pinned by its own carried witness, a [`RegionSet`](crate::witnessed::RegionSet) holding
-    /// the contract's home region owner, independent of `cart` (and a genuine pinning witness,
-    /// unlike the reference-only value carrier). The workload re-anchors it at the step brand.
-    /// `None` for slots with no declared-return obligation.
-    pub contract: Option<Sealed<W::Contract, crate::witnessed::RegionSet<W::Frame>>>,
 }
 
 pub struct Node<W: Workload> {
@@ -70,6 +62,6 @@ pub struct Node<W: Workload> {
     /// The slot's opaque workload payload, stored and handed back but never inspected by the
     /// scheduler.
     pub payload: W::Payload,
-    /// The slot's per-call frame state (cart + opaque contract) — never absent, see [`NodeFrame`].
+    /// The slot's per-call frame state (the execution cart) — never absent, see [`NodeFrame`].
     pub frame: NodeFrame<W>,
 }

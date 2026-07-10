@@ -37,10 +37,7 @@ impl<W: Workload> Scheduler<W> {
         let id = self.store.alloc_slot(Node {
             work,
             payload,
-            frame: NodeFrame {
-                cart,
-                contract: None,
-            },
+            frame: NodeFrame { cart },
         });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         for p in &pending_park {

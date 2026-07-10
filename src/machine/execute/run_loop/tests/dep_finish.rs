@@ -70,7 +70,8 @@ fn dep_finish_short_circuits_on_dep_error() {
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
-    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
+    let mk_dispatch =
+        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
     let dep_ok = runtime.add(mk_dispatch(), scope);
     let dep_err = runtime.add(mk_dispatch(), scope);
     let store = runtime.scheduler_mut();

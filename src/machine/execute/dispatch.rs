@@ -28,7 +28,8 @@ use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::ignore_results;
-use super::nodes::NodeWork;
+use super::nodes::{ChainOp, NodeWork};
+use super::obligation::{with_obligation, ReturnObligation};
 use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
@@ -241,16 +242,19 @@ pub(in crate::machine::execute) fn forward_to_producer<'step>(producer: NodeId) 
 }
 
 /// Replace the slot with a fresh frameless `Dispatch` of `inner` — the decide reduced its
-/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap).
+/// expression to a nested one to re-classify (`(inner)`, `:(...)` unwrap). A re-classification that
+/// carries an established tail-chain obligation wraps the successor continuation with it (via
+/// [`decide_tail`]), so the re-classified step re-deposits the checker rather than dropping it —
+/// this slot holds no contract of its own, so the ambient obligation is the whole winner.
 pub(in crate::machine::execute) fn become_dispatch<'step>(
+    view: &SchedulerView<'step, '_>,
     inner: KExpression<'step>,
 ) -> Outcome<'step> {
     Outcome::Continue {
-        work: decide(inner),
+        work: decide_tail(inner, view.current_obligation_duplicate()),
         frame: FramePlacement::Inherit,
-        contract: None,
+        chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
-        body_index: 0,
     }
 }
 
@@ -335,30 +339,38 @@ pub(in crate::machine::execute) type ResumeFn<'step> =
 
 // ---------- Cross-shape driver ----------
 
-/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs` — the dispatch-layer
-/// constructor every tail-replace / re-dispatch site uses instead of a raw work literal. The
-/// captured closure classifies `expr` on first poll; `carrier` is its deadlock-summary.
-pub(in crate::machine::execute) fn decide<'step>(
+/// Build a birth dispatch [`NodeWork`](super::nodes::NodeWork) for `expr` with empty `pre_subs`, wrapping the
+/// birth-dispatch continuation with the tail chain's declared-return `obligation` when one is
+/// present (via [`with_obligation`], so the replacement step re-deposits the checker into the
+/// ambient slot-step state before classifying — the keep-first capture that carries the first
+/// caller's declared return down the chain). Pass `None` for a plain birth dispatch that carries no
+/// inherited obligation.
+pub(in crate::machine::execute) fn decide_tail<'step>(
     expr: KExpression<'step>,
+    obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
-    decide_with_presubs(expr, Vec::new())
+    decide_with_presubs(expr, Vec::new(), obligation)
 }
 
 /// Birth dispatch [`NodeWork`](super::nodes::NodeWork) carrying the dispatch layer's pre-submitted nested sub-Dispatches
-/// (computed by [`submit_expression`]).
+/// (computed by [`submit_expression`]). `obligation` wraps the birth-dispatch continuation before it
+/// is boxed (the live wrap that must precede the [`NodeWork::new`] erase) so a tail replacement
+/// carries its declared-return checker.
 pub(in crate::machine::execute) fn decide_with_presubs<'step>(
     expr: KExpression<'step>,
     pre_subs: Vec<(usize, NodeId)>,
+    obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = expr.summarize();
     // A birth decide waits on no deps: it runs on first poll, classifies, and routes.
-    NodeWork::new(
-        ResolvedDeps::new(),
-        ignore_results(Box::new(move |view, idx| {
-            classify_dispatch(view, expr, pre_subs, idx)
-        })),
-        Some(carrier),
-    )
+    let continuation = ignore_results(Box::new(move |view, idx| {
+        classify_dispatch(view, expr, pre_subs, idx)
+    }));
+    let continuation = match obligation {
+        Some(obligation) => with_obligation(obligation, continuation),
+        None => continuation,
+    };
+    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
 }
 
 /// Classify a freshly-born dispatch expression's shape and route to the matching per-shape decide,
@@ -425,7 +437,7 @@ fn classify_dispatch<'step>(
         DispatchShape::Keyworded => keyworded::initial(view, expr, pre_subs, idx),
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(pre_subs.is_empty());
-            single_poll::sigiled_type_expr(expr)
+            single_poll::sigiled_type_expr(view, expr)
         }
         DispatchShape::RecordType => {
             debug_assert!(pre_subs.is_empty());

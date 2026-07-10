@@ -10,7 +10,8 @@ use crate::machine::{
 };
 
 use super::super::ignore_results;
-use super::super::nodes::NodeWork;
+use super::super::nodes::{ChainOp, NodeWork};
+use super::super::obligation::with_obligation;
 use super::ctx::SchedulerView;
 use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
 use crate::scheduler::{ProducerDisposition, ResolvedDeps};
@@ -112,7 +113,7 @@ pub(super) fn initial<'step>(
         // `resolved.function` is already at the cart `'step` (resolved against the cart scope), so it
         // rides straight into the invoke. Each inline-resolved bound-name arg is already a spliced
         // cell on `new_expr`, so the invoke reads its reach off the cell.
-        return super::exec::invoke_continue(resolved.function, new_expr);
+        return super::exec::invoke_continue(ctx, resolved.function, new_expr);
     }
     let _ = resolved; // discard the speculative pick.
     install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
@@ -132,7 +133,7 @@ pub(super) fn finish<'step>(
         // The post-eager-subs re-dispatch lands resolved calls here — fold the resolved call into
         // the `Continue` that installs its frame and runs `invoke`, which reads each arg's reach off
         // the spliced cells on `working_expr`.
-        DispatchOutcome::Resolved(r) => super::exec::invoke_continue(r.function, working_expr),
+        DispatchOutcome::Resolved(r) => super::exec::invoke_continue(ctx, r.function, working_expr),
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         DispatchOutcome::Ambiguous(n) => {
@@ -158,20 +159,25 @@ pub(super) fn finish<'step>(
 
 /// Fold the post-eager-subs re-resolve into a [`Outcome::Continue`]: a dep-free decide that re-runs
 /// [`finish`] against the fully-spliced `working_expr` on the next pop, with no committed function
-/// pick. `Inherit` — a re-resolve runs in the slot's current frame.
-pub(super) fn redispatch_continue<'step>(working_expr: KExpression<'step>) -> Outcome<'step> {
+/// pick. `Inherit` — a re-resolve runs in the slot's current frame. A re-resolve inside an
+/// established chain wraps the re-resolve continuation with the ambient obligation (this slot holds
+/// no contract of its own), so the checker survives the hop.
+pub(super) fn redispatch_continue<'step>(
+    view: &SchedulerView<'step, '_>,
+    working_expr: KExpression<'step>,
+) -> Outcome<'step> {
     let carrier = working_expr.summarize();
-    let work = NodeWork::new(
-        ResolvedDeps::new(),
-        ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx))),
-        Some(carrier),
-    );
+    let continuation = ignore_results(Box::new(move |ctx, idx| finish(ctx, working_expr, idx)));
+    let continuation = match view.current_obligation_duplicate() {
+        Some(obligation) => with_obligation(obligation, continuation),
+        None => continuation,
+    };
+    let work = NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier));
     Outcome::Continue {
         work,
         frame: FramePlacement::Inherit,
-        contract: None,
+        chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
-        body_index: 0,
     }
 }
 

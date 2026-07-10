@@ -16,6 +16,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{
     run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope,
 };
+use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::values::Module;
@@ -426,13 +427,13 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
         false,
     );
     let kf_ref = home_storage.brand().alloc_function(kfunc);
-    let contract = Some(ReturnContract::Function(kf_ref));
+    let obligation = ReturnObligation::seal(ReturnContract::Function(kf_ref));
 
     let foreign_count_before = Rc::strong_count(&foreign_storage);
 
     let runtime = KoanRuntime::new();
     let checked = runtime
-        .finalize_terminal(carrier, Some(&producer), contract)
+        .finalize_terminal(carrier, Some(&producer), Some(&obligation))
         .expect("declared type Any matches the carried Module -- no mismatch");
 
     assert_eq!(

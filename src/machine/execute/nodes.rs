@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::runtime::KoanWorkload;
-use crate::machine::core::kfunction::body::{ReturnContract, SealedContract};
+use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::{CallFrame, CarrierWitness, KError, LexicalFrame, NodeId};
@@ -16,16 +16,15 @@ pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
 /// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
 /// slot's scope and its `region()` owns per-call allocations; `None` keeps the existing
-/// frame and scope. `contract`, when set, is the sealed return contract the replacement is
-/// entering — kept-first against the slot's prior contract by the reinstall site; any error
-/// landing on this slot is checked against it. `chain` is the pre-decided lexical-chain reshape
-/// (see [`ChainOp`]).
+/// frame and scope. `chain` is the pre-decided lexical-chain reshape (see [`ChainOp`]). The
+/// slot's declared-return obligation rides the replacement's continuation as a capture (wrapped
+/// at the construction site), not a slot field.
 ///
 /// Every arm is lifetime-free — a value terminal is a
 /// [`Witnessed`](crate::witnessed::Witnessed) carrier (already `'step`-erased) and an error
 /// carries no value — so the enum needs no `'step`.
-// `Replace` is intrinsically the large variant (`NodeWork` plus the frame/contract/chain
-// tail-call payload); boxing the hot tail-call path to balance the variants is the wrong trade.
+// `Replace` is intrinsically the large variant (`NodeWork` plus the frame/chain tail-call
+// payload); boxing the hot tail-call path to balance the variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum NodeStep {
     /// The finalized value terminal — a [`Witnessed`](crate::witnessed::Witnessed) carrier naming
@@ -44,7 +43,6 @@ pub(super) enum NodeStep {
     Replace {
         work: NodeWork<KoanWorkload>,
         frame: Option<Rc<CallFrame>>,
-        contract: Option<SealedContract>,
         chain: ChainOp,
         /// A block overlay the tail slot runs in, erased to a cart-witnessed carrier (lifetime-free,
         /// so `Replace` stays `'run`-free). `Some` only for a frameless tail entering a
@@ -60,11 +58,13 @@ pub(super) enum NodeStep {
     Alias(NodeId),
 }
 
-/// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided in `apply_outcome` from the
-/// `Continue`'s `block_entry` annotation and the contract *variant* (while still live), then
-/// assembled in the run loop against the post-step frame. Splitting the decision (contract-reading,
-/// at apply) from the assembly (frame-reading, in the run loop) is what lets `Replace` shed its
-/// `'run`: the variant is read before erasure and frozen into this lifetime-free tag.
+/// The lexical-chain reshape a [`NodeStep::Replace`] applies, decided at the
+/// [`Outcome::Continue`](super::outcome::Outcome::Continue) construction site from the tail's
+/// `block_entry` and the contract *variant* (while still live),
+/// then assembled in the run loop against the post-step frame. Splitting the decision
+/// (contract-reading, at the construction site) from the assembly (frame-reading, in the run loop) is
+/// what lets `Replace` shed its `'run`: the variant is read before erasure and frozen into this
+/// lifetime-free tag, which then rides [`Outcome::Continue`] to the harness.
 pub(super) enum ChainOp {
     /// TCO in the same lexical block — chain unchanged.
     Unchanged,

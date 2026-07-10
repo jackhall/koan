@@ -11,6 +11,7 @@ mod dispatch;
 mod finalize;
 mod lift;
 mod nodes;
+mod obligation;
 mod outcome;
 // The write harness (KoanRuntime, sole &mut Scheduler) + the shared action harness and the
 // program entry points (interpret submodule). See runtime.rs.

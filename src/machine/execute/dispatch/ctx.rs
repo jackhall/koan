@@ -22,6 +22,7 @@ use crate::witnessed::StepContext;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
+use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
 use super::{resolve_name_part, Await, DepRequest, Outcome, PendingSub};
 use crate::scheduler::{Deps, ProducerDisposition, Scheduler};
@@ -155,6 +156,21 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         self.ambient.in_contract_chain()
     }
 
+    /// Deposit the slot's declared-return obligation into the ambient slot-step state — the reach
+    /// the [`with_obligation`](super::super::obligation::with_obligation) wrapper closure runs to
+    /// carry the checker down the tail chain.
+    pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
+        self.ambient.deposit_obligation(obligation)
+    }
+
+    /// Duplicate the chain's established obligation without removing it — keep-first and park
+    /// propagation read it to wrap the replacement continuation.
+    pub(in crate::machine::execute) fn current_obligation_duplicate(
+        &self,
+    ) -> Option<ReturnObligation> {
+        self.ambient.current_obligation_duplicate()
+    }
+
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.sched.would_create_cycle(producer, consumer)
     }
@@ -229,13 +245,13 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         }
         if deps.is_empty() {
             // Nothing to resolve — `working_expr` is already fully spliced, so route now not park.
-            return finish_eager_subs(working_expr, picked);
+            return finish_eager_subs(self, working_expr, picked);
         }
         let dep_error_frame = Some(crate::machine::TraceFrame::from_expr(
             "<bind>",
             &working_expr,
         ));
-        let finish: TerminalDepFinish<'step> = Box::new(move |_ctx, terminals| {
+        let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
             // Every dep resolved. Splice each value into its staged slot as the producer's own sealed
             // carrier — value and reach as one unit, adopted by the consuming bind at its own step
             // brand; `invoke` reads each cell back for the body-facing reach. Owned deps land in the
@@ -249,7 +265,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                     cell: terminal.delivered.duplicate(),
                 };
             }
-            finish_eager_subs(working_expr, picked)
+            finish_eager_subs(ctx, working_expr, picked)
         });
         Await::on(Deps::from_owned(deps))
             .error_frame(dep_error_frame)
@@ -264,11 +280,12 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 /// [`keyworded::finish`](super::keyworded::finish) — there an element-typed `Spliced(_)` revealed by
 /// a sub surfaces as a slot-terminal `DispatchFailed`. Pure data — no `&mut`.
 fn finish_eager_subs<'step>(
+    view: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
     picked: Option<&'step KFunction<'step>>,
 ) -> Outcome<'step> {
     match picked {
-        Some(f) => super::exec::invoke_continue(f, working_expr),
-        None => super::keyworded::redispatch_continue(working_expr),
+        Some(f) => super::exec::invoke_continue(view, f, working_expr),
+        None => super::keyworded::redispatch_continue(view, working_expr),
     }
 }

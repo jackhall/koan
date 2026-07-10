@@ -8,7 +8,8 @@
 //! stays thin; pure body semantics live one layer down in [`crate::machine::core::kfunction::exec`].
 
 use super::super::ignore_results;
-use super::super::nodes::NodeWork;
+use super::super::nodes::{ChainOp, NodeWork};
+use super::super::obligation::{with_obligation, ReturnObligation};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
 use super::SchedulerView;
@@ -28,6 +29,7 @@ use crate::scheduler::ResolvedDeps;
 /// carries [`FramePlacement::Inherit`] (it runs in the current frame). The decide handler owns
 /// `picked`, so the builtin-vs-user-fn frame decision is made here, not in the harness.
 pub(super) fn invoke_continue<'step>(
+    view: &SchedulerView<'step, '_>,
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
 ) -> Outcome<'step> {
@@ -37,29 +39,36 @@ pub(super) fn invoke_continue<'step>(
             outer: picked.captured_scope(),
         },
     };
+    // The invoke step carries no contract of its own — `picked`'s return is resolved inside `invoke`
+    // (or skipped when this is a nested tail). So a fresh-tail invoke that lands inside an established
+    // chain wraps the invoke continuation with the ambient obligation, keeping the first caller's
+    // declared return alive across the frame-installing hop; the nested tail's own contract loses.
     Outcome::Continue {
-        work: invoke_work(picked, working_expr),
+        work: invoke_work(picked, working_expr, view.current_obligation_duplicate()),
         frame,
-        contract: None,
+        chain: ChainOp::Unchanged,
         block_entry: BlockEntry::None,
-        body_index: 0,
     }
 }
 
 /// A dep-free decide [`NodeWork`] whose closure runs the folded [`invoke`] against the cart the
-/// producer's `Continue` installed. `carrier` is the call's deadlock-summary sample.
+/// producer's `Continue` installed. `carrier` is the call's deadlock-summary sample. `obligation`
+/// wraps the invoke continuation (before the [`NodeWork::new`] erase) so a nested tail's invoke step
+/// re-deposits the established declared-return checker.
 fn invoke_work<'step>(
     picked: &'step KFunction<'step>,
     working_expr: KExpression<'step>,
+    obligation: Option<ReturnObligation>,
 ) -> NodeWork<KoanWorkload> {
     let carrier = working_expr.summarize();
-    NodeWork::new(
-        ResolvedDeps::new(),
-        ignore_results(Box::new(move |view, _idx| {
-            invoke(view, picked, working_expr)
-        })),
-        Some(carrier),
-    )
+    let continuation = ignore_results(Box::new(move |view, _idx| {
+        invoke(view, picked, working_expr)
+    }));
+    let continuation = match obligation {
+        Some(obligation) => with_obligation(obligation, continuation),
+        None => continuation,
+    };
+    NodeWork::new(ResolvedDeps::new(), continuation, Some(carrier))
 }
 
 /// The single invoke entry for the dispatcher's bind sites — run a resolved call:
@@ -142,13 +151,16 @@ pub(super) fn invoke<'step>(
             // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already
             // holding the bound params — and the block entry carries it so the lowering fans any
             // leading statements into it.
-            super::super::runtime::run_action(Action::Tail {
-                leading: leading.into_iter().map(|e| (*e).clone()).collect(),
-                tail: tail.clone(),
-                contract: TailContract::Eager(Some(contract)),
-                frame_placement: FramePlacement::Inherit,
-                block_entry: BlockEntry::FrameScope(frame),
-            })
+            super::super::runtime::run_action(
+                view,
+                Action::Tail {
+                    leading: leading.into_iter().map(|e| (*e).clone()).collect(),
+                    tail: tail.clone(),
+                    contract: TailContract::Eager(Some(contract)),
+                    frame_placement: FramePlacement::Inherit,
+                    block_entry: BlockEntry::FrameScope(frame),
+                },
+            )
         }
         ExecOutcome::DeferredExprTail {
             type_expr,
@@ -163,13 +175,16 @@ pub(super) fn invoke<'step>(
             let mut statements: Vec<KExpression<'step>> =
                 leading.into_iter().map(|e| (*e).clone()).collect();
             statements.push(type_expr.clone());
-            super::super::runtime::run_action(Action::Tail {
-                leading: statements,
-                tail: tail.clone(),
-                contract: TailContract::FromLastResult { func: picked },
-                frame_placement: FramePlacement::Inherit,
-                block_entry: BlockEntry::FrameScope(frame),
-            })
+            super::super::runtime::run_action(
+                view,
+                Action::Tail {
+                    leading: statements,
+                    tail: tail.clone(),
+                    contract: TailContract::FromLastResult { func: picked },
+                    frame_placement: FramePlacement::Inherit,
+                    block_entry: BlockEntry::FrameScope(frame),
+                },
+            )
         }
         ExecOutcome::Errored(e) => Outcome::Done(Err(e)),
     }
@@ -257,8 +272,9 @@ fn run_action_builtin<'step>(
         };
         f(&body_ctx)
     };
-    // `run_action` is a pure `Action -> Outcome` lowering; the harness applies the result.
-    super::super::runtime::run_action(action)
+    // `run_action` lowers the `Action` to an `Outcome`; the harness applies the result. The step
+    // view carries the ambient obligation a tail action keep-firsts against.
+    super::super::runtime::run_action(view, action)
 }
 
 /// Extract the call's resolved value arguments from `working_expr`'s parts, in order: a `Spliced`

@@ -141,7 +141,7 @@ impl<'run> KoanRuntime<'run> {
         };
         let (cart, framed) = self.submission_cart();
         let id = self.sched.alloc_node(
-            super::decide_with_presubs(expr, pre_subs),
+            super::decide_with_presubs(expr, pre_subs, None),
             NodePayload {
                 scope: node_scope,
                 chain: chain.clone(),

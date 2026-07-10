@@ -16,11 +16,13 @@ use std::rc::Rc;
 
 use super::nodes::{Node, NodeWork};
 use super::{Live, NodeId, SealedTerminal, Terminal, Workload};
-use crate::witnessed::{Carrier, Sealed, Witnessed};
-// `Erased` re-anchors a test-only result through `set_result`; the production store path takes a
-// pre-built `Witnessed`, so the import is test-scoped.
+use crate::witnessed::Sealed;
+// `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
+// production store path takes a pre-built `Witnessed`, so these imports are test-scoped.
 #[cfg(any(test, feature = "test-hooks"))]
 use super::Erased;
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::witnessed::{Carrier, Witnessed};
 
 /// `Vec`-backed slot store keyed by [`NodeId`]. `NodeId`s are minted only
 /// by [`NodeStore::alloc_slot`].
@@ -369,7 +371,6 @@ mod tests {
         // A trivial `PinsRegion` frame owner — the retention hold's `Rc<Frame>` type, which these
         // white-box tests never construct.
         type Frame = crate::witnessed::doctest_fixture::Cart;
-        type Contract = UnitCarrier;
         type Continuation = UnitCarrier;
     }
 

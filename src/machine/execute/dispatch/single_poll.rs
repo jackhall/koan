@@ -134,7 +134,10 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     }
 }
 
-pub(super) fn sigiled_type_expr<'step>(expr: KExpression<'step>) -> Outcome<'step> {
+pub(super) fn sigiled_type_expr<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: KExpression<'step>,
+) -> Outcome<'step> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned {
             value: ExpressionPart::SigiledTypeExpr(boxed),
@@ -142,7 +145,7 @@ pub(super) fn sigiled_type_expr<'step>(expr: KExpression<'step>) -> Outcome<'ste
         }) => *boxed,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
-    become_dispatch(inner)
+    become_dispatch(ctx, inner)
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
@@ -193,7 +196,7 @@ pub(super) fn literal_pass_through<'step>(
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
         ExpressionPart::Spliced { cell } => Outcome::Done(Ok(cell.into_cell().unseal())),
-        ExpressionPart::Expression(boxed) => become_dispatch(*boxed),
+        ExpressionPart::Expression(boxed) => become_dispatch(ctx, *boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
         ExpressionPart::RecordLiteral(fields) => park_on_literal(DepRequest::RecordLit(fields)),

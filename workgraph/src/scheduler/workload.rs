@@ -36,11 +36,6 @@ pub trait Workload {
     /// the reach-set member contract; the scheduler retains and drops the `Rc` but calls no method on
     /// it. The Koan instantiation is `FrameStorage`.
     type Frame: PinsRegion + 'static;
-    /// The per-node return contract: a one-lifetime [`Reattachable`] family the scheduler stores
-    /// erased (`Erased<Self::Contract>`) on a slot's frame and hands back at the Done boundary; the
-    /// workload re-anchors it, witnessed by the frame `Rc`. Never inspected. `At<'static>: Copy` lets
-    /// a tail chain keep-first the erased contract by copy.
-    type Contract: Reattachable<At<'static>: Copy>;
     /// The per-node continuation: a one-lifetime [`Reattachable`] family the scheduler stores erased
     /// (`Erased<Self::Continuation>`) on the node and hands back once per step; the workload
     /// re-anchors it, witnessed by the node's cart `Rc`, then runs it once. Never inspected. Not

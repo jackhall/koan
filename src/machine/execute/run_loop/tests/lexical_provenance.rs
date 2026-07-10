@@ -152,9 +152,12 @@ fn add_with_chain_without_chain_panics() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     runtime.add_with_chain(
-        crate::machine::execute::dispatch::decide(KExpression::new(vec![Spanned::bare(
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        )])),
+        crate::machine::execute::dispatch::decide_tail(
+            KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
+                KLiteral::Number(1.0),
+            ))]),
+            None,
+        ),
         scope,
         None,
     );

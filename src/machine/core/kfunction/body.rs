@@ -20,10 +20,11 @@ use super::KFunction;
 /// declared type directly, `Function` reads it off the callee's signature.
 ///
 /// `Arm`'s / `PerCall`'s `ret` is region-borrowed so the whole contract stays `Copy`, matching the
-/// `&KFunction` it sits beside. Stored sealed as [`SealedContract`] on the node's `NodeFrame`, pinned
-/// by its own carried witness. A tail chain keeps the **first** contract (the `next_contract` rule in
-/// `execute::run_loop`), so the check fires against the original caller's declared return, not the
-/// tail-most callee's.
+/// `&KFunction` it sits beside. Sealed as [`SealedContract`] into a `ReturnObligation` that rides the
+/// tail chain as a continuation capture, pinned by its own carried witness. A tail chain keeps the
+/// **first** contract
+/// (the `next_contract` rule in `execute::run_loop`), so the check fires against the original caller's
+/// declared return, not the tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
@@ -85,8 +86,9 @@ pub struct ContractFamily;
 // for all `'r`; the shared `reattachable!` macro discharges that obligation once.
 reattachable!(ContractFamily => ReturnContract<'r>);
 
-/// A [`ReturnContract`] sealed into its dormant, `'static`-storage form for a node's lifetime-free
-/// `NodeFrame`. Pinned by its own carried witness — [`ReturnContract::home_owner`]'s
+/// A [`ReturnContract`] sealed into its dormant, `'static`-storage form for a `ReturnObligation`
+/// riding a tail chain as a continuation capture. Pinned by its own carried witness —
+/// [`ReturnContract::home_owner`]'s
 /// `Rc<FrameStorage>`, folded into a [`FrameSet`](crate::machine::FrameSet) singleton at seal time
 /// (a genuine pinning witness; the reference-only value carrier pins nothing) — not by the cart's
 /// `outer` chain, so the contract's home region stays live across every hop of a tail chain

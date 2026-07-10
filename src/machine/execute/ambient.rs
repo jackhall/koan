@@ -10,11 +10,13 @@
 //!
 //! See design/per-call-region/README.md and design/execution/README.md.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::CallFrame;
 
 use super::nodes::NodePayload;
+use super::obligation::ReturnObligation;
 use super::runtime::KoanRuntime;
 
 /// The ambient per-step context the driver carries while realizing a decided
@@ -34,13 +36,16 @@ pub(in crate::machine::execute) struct AmbientContext {
     /// step. A body that re-dispatches *against its own scope*, or that needs the ambient chain,
     /// reads it back through [`KoanRuntime::active_payload`]. `None` between slot steps.
     active_payload: Option<NodePayload>,
-    /// Whether the slot currently executing already carries a kept return contract — i.e. it is a
-    /// tail call *within* an established chain. A deferred-return FN dispatched here is a subsequent
-    /// tail call whose own contract would be discarded by the keep-first rule, so it skips resolving
-    /// its (possibly async `Expression`-form) return type and just tail-replaces its body. Installed
-    /// per step by [`KoanRuntime::with_slot_step`]; read via
+    /// The declared-return obligation the executing slot carries — the continuation capture the
+    /// slot-step wrapper deposits at the top of the step (`None` when the slot has no obligation, so
+    /// it is a tail call *within* an established chain exactly when this is `Some`). A deferred-return
+    /// FN dispatched into an established chain is a subsequent tail call whose own contract loses to
+    /// the kept-first one, so it skips resolving its (possibly async `Expression`-form) return type
+    /// and just tail-replaces its body. Held behind a `RefCell` because the depositor reaches it
+    /// through `&AmbientContext` (via [`SchedulerView`](super::dispatch::SchedulerView)). Read for the
+    /// tail-chain flag via
     /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
-    active_in_contract_chain: bool,
+    active_obligation: RefCell<Option<ReturnObligation>>,
 }
 
 /// The previous ambient values a slot step displaces — restored by
@@ -48,7 +53,7 @@ pub(in crate::machine::execute) struct AmbientContext {
 struct SlotStepSave {
     prev_frame: Option<Rc<CallFrame>>,
     prev_payload: Option<NodePayload>,
-    prev_in_contract_chain: bool,
+    prev_obligation: Option<ReturnObligation>,
 }
 
 /// The frame of a just-finished step, returned by [`KoanRuntime::with_slot_step`]: the slot's cart
@@ -60,6 +65,10 @@ pub(in crate::machine::execute) struct PostStep {
     /// `CallFrame::new`, never touching the live active cart — so the slot's own cart rides
     /// through. The Replace arm reinstalls with it.
     pub(in crate::machine::execute) prev_frame: Rc<CallFrame>,
+    /// The obligation deposited during the step, surfaced back out of the bracket so the run loop's
+    /// Done/Error arms discharge the declared-return check after the step's dynamic extent closes.
+    /// `None` when the step deposited nothing (a slot with no return obligation).
+    pub(in crate::machine::execute) obligation: Option<ReturnObligation>,
 }
 
 impl AmbientContext {
@@ -73,38 +82,62 @@ impl AmbientContext {
         self.active_payload.as_ref()
     }
 
-    /// Whether the executing slot already carries a kept return contract — set only by the
-    /// slot-step bracket. Read via
+    /// Whether the executing slot carries a declared-return obligation — i.e. it is a tail call
+    /// within an established chain. The obligation is deposited by the slot-step wrapper at the top
+    /// of the step. Read via
     /// [`SchedulerView::in_contract_chain`](super::dispatch::SchedulerView::in_contract_chain).
     pub(in crate::machine::execute) fn in_contract_chain(&self) -> bool {
-        self.active_in_contract_chain
+        self.active_obligation.borrow().is_some()
     }
 
-    /// Install the slot's frame/payload and contract-chain flag for one step, returning the
-    /// displaced values.
+    /// Deposit `obligation` as the executing slot's active obligation — the whole body of the
+    /// slot-step wrapper closure, run through `&AmbientContext`.
+    pub(in crate::machine::execute) fn deposit_obligation(&self, obligation: ReturnObligation) {
+        *self.active_obligation.borrow_mut() = Some(obligation);
+    }
+
+    /// Take the active obligation out, leaving the slot obligation-free.
+    pub(in crate::machine::execute) fn take_obligation(&self) -> Option<ReturnObligation> {
+        self.active_obligation.borrow_mut().take()
+    }
+
+    /// Duplicate the active obligation without removing it — keep-first and park propagation hand
+    /// copies onward while the current step keeps its own.
+    pub(in crate::machine::execute) fn current_obligation_duplicate(
+        &self,
+    ) -> Option<ReturnObligation> {
+        self.active_obligation
+            .borrow()
+            .as_ref()
+            .map(ReturnObligation::duplicate)
+    }
+
+    /// Install the slot's frame/payload for one step and reset the obligation slot to empty (the
+    /// step's wrapper deposits its own), returning the displaced values.
     fn install_slot_step(
         &mut self,
         node_frame: Rc<CallFrame>,
         node_payload: NodePayload,
-        in_contract_chain: bool,
     ) -> SlotStepSave {
         SlotStepSave {
             prev_frame: self.active_frame.replace(node_frame),
             prev_payload: self.active_payload.replace(node_payload),
-            prev_in_contract_chain: std::mem::replace(
-                &mut self.active_in_contract_chain,
-                in_contract_chain,
-            ),
+            prev_obligation: self.active_obligation.get_mut().take(),
         }
     }
 
-    /// Swap the saved values back in, returning the step-end frame — the raw material for a
-    /// [`PostStep`]. Never panics: the unwind backstop runs it mid-panic.
-    fn restore_slot_step(&mut self, save: SlotStepSave) -> Option<Rc<CallFrame>> {
+    /// Swap the saved values back in, returning the step-end frame and the obligation deposited
+    /// during the step — the raw material for a [`PostStep`]. Never panics: the unwind backstop runs
+    /// it mid-panic.
+    fn restore_slot_step(
+        &mut self,
+        save: SlotStepSave,
+    ) -> (Option<Rc<CallFrame>>, Option<ReturnObligation>) {
         let step_end_frame = std::mem::replace(&mut self.active_frame, save.prev_frame);
         self.active_payload = save.prev_payload;
-        self.active_in_contract_chain = save.prev_in_contract_chain;
-        step_end_frame
+        let step_end_obligation =
+            std::mem::replace(self.active_obligation.get_mut(), save.prev_obligation);
+        (step_end_frame, step_end_obligation)
     }
 }
 
@@ -140,11 +173,11 @@ impl Drop for ActiveFrameBracket<'_, '_> {
 }
 
 impl<'run> KoanRuntime<'run> {
-    /// Bracket one slot step: install `node_frame` / `node_payload` and the contract-chain flag as
-    /// the ambient values, run `body`, restore the previous values, and return `body`'s result
-    /// alongside the [`PostStep`] the Replace arm consumes. Restore is a bracket by construction —
-    /// an early return restores on the way out, and an unwind restores through the backstop's
-    /// `Drop` (which discards the `PostStep` data).
+    /// Bracket one slot step: install `node_frame` / `node_payload` as the ambient values (resetting
+    /// the obligation slot, which the step's wrapper deposits into), run `body`, restore the previous
+    /// values, and return `body`'s result alongside the [`PostStep`] the Replace / Done / Error arms
+    /// consume. Restore is a bracket by construction — an early return restores on the way out, and an
+    /// unwind restores through the backstop's `Drop` (which discards the `PostStep` data).
     ///
     /// The `expect` asserts the "every step runs against a cart" invariant: the bracket installs
     /// the node's non-optional cart and an invoke never empties `active_frame` — a `FreshTail`
@@ -155,12 +188,9 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         node_frame: Rc<CallFrame>,
         node_payload: NodePayload,
-        in_contract_chain: bool,
         body: impl FnOnce(&mut Self) -> R,
     ) -> (R, PostStep) {
-        let save = self
-            .ambient
-            .install_slot_step(node_frame, node_payload, in_contract_chain);
+        let save = self.ambient.install_slot_step(node_frame, node_payload);
         let mut bracket = SlotStepBracket {
             runtime: self,
             save: Some(save),
@@ -170,12 +200,13 @@ impl<'run> KoanRuntime<'run> {
             .save
             .take()
             .expect("the save is consumed exactly once, here");
-        let step_end_frame = bracket.runtime.ambient.restore_slot_step(save);
+        let (step_end_frame, obligation) = bracket.runtime.ambient.restore_slot_step(save);
         (
             result,
             PostStep {
                 prev_frame: step_end_frame
                     .expect("a step always runs against a cart, installed at bracket entry"),
+                obligation,
             },
         )
     }

@@ -14,7 +14,8 @@ fn free_reclaims_owned_subtree() {
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let value: &KObject = region.brand().alloc_object(KObject::Number(42.0));
-    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
+    let mk_dispatch =
+        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
     let s0 = runtime.add(mk_dispatch(), root);
     let s1 = runtime.add(mk_dispatch(), root);
     let s2 = runtime.add(mk_dispatch(), root);
@@ -69,7 +70,8 @@ fn free_skips_live_slot_and_is_idempotent() {
     let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
-    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
+    let mk_dispatch =
+        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
     let s = runtime.add(mk_dispatch(), root);
     // Live slot: free must be a no-op.
     runtime.free(s.index());
@@ -99,7 +101,8 @@ fn free_does_not_recurse_through_notify_edges() {
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     let value: &KObject = region.brand().alloc_object(KObject::Number(7.0));
-    let mk_dispatch = || crate::machine::execute::dispatch::decide(KExpression::new(Vec::new()));
+    let mk_dispatch =
+        || crate::machine::execute::dispatch::decide_tail(KExpression::new(Vec::new()), None);
     let s_owner = runtime.add(mk_dispatch(), root);
     let s_owned = runtime.add(mk_dispatch(), root);
     let s_sibling = runtime.add(mk_dispatch(), root);

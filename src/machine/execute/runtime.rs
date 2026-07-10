@@ -22,19 +22,19 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::action::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
-use crate::machine::core::kfunction::body::{
-    split_body_statements, ContractFamily, ReturnContract,
-};
+use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
 use crate::machine::core::kfunction::exec::home_return_type;
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
-use crate::witnessed::{Erased, Sealed, SealedExtern};
+use crate::witnessed::SealedExtern;
 
-use super::dispatch::{BodyPlacement, DepRequest};
+use super::dispatch::{BodyPlacement, DepRequest, SchedulerView};
+use super::finalize::check_spliced_return;
 use super::lift::copy_carried;
 use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
+use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
 use super::run_loop::DestHandleFamily;
 use super::{
@@ -50,7 +50,7 @@ mod submit;
 
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 
-/// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the four
+/// The Koan instantiation of the scheduler's [`Workload`] interface — the marker that binds the
 /// opaque scheduler types to their concrete Koan forms. The scheduler is generic over `W: Workload`
 /// and names none of these directly; the workload side (this module, `dispatch/**`) supplies them.
 pub(in crate::machine::execute) struct KoanWorkload;
@@ -61,7 +61,6 @@ impl Workload for KoanWorkload {
     type Error = KError;
     type Cart = CallFrame;
     type Frame = crate::machine::FrameStorage;
-    type Contract = ContractFamily;
     type Continuation = ContinuationFamily;
 }
 
@@ -198,12 +197,30 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Lower an [`Action`] into the scheduler's [`Outcome`] currency — a pure `Action -> Outcome`
-/// transform that reads nothing: a `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
+/// Lower an [`Action`] into the scheduler's [`Outcome`] currency — an `Action -> Outcome` transform
+/// that issues no graph write: a `AwaitDeps`/`Catch` declares its deps (and a wrapped finish that
 /// recurses `run_action` on the `AwaitContinue`/`CatchContinue` it produces) as a [`Outcome::ParkThenContinue`],
 /// and the harness submits and applies. Every scheduler read the body needs is deferred into the
 /// finish, which sees a read-only [`SchedulerView`](super::dispatch::SchedulerView) at wake.
-pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> Outcome<'step> {
+///
+/// `view` is the executing step's read view: a tail `Action` reads its established
+/// declared-return obligation off it (the ambient slot-step state) to decide keep-first and wrap the
+/// replacement continuation. A finish that emits its `Continue` later reads its own wake-time view
+/// instead, so the obligation it sees is the one its park deposit re-installed.
+/// The block scope id a [`BlockEntry`] names — the input the chain reshape ([`ChainOp::decide`])
+/// reads alongside the contract variant. `None` for a blockless (frameless) tail.
+fn block_entry_scope(block_entry: &BlockEntry<'_>) -> Option<crate::machine::core::ScopeId> {
+    match block_entry {
+        BlockEntry::None => None,
+        BlockEntry::FrameScope(frame) => Some(frame.scope_id()),
+        BlockEntry::Overlay(overlay) => Some(overlay.id),
+    }
+}
+
+pub(in crate::machine::execute) fn run_action<'step>(
+    view: &SchedulerView<'step, '_>,
+    action: Action<'step>,
+) -> Outcome<'step> {
     match action {
         // Already a witnessed carrier (or error): `finalize` seals it as-is, no co-location bundle.
         Action::Done(result) => Outcome::Done(result),
@@ -232,12 +249,24 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                         )
                     }
                 };
-                return Outcome::Continue {
-                    work: super::dispatch::decide(tail),
-                    frame: frame_placement,
-                    contract,
-                    block_entry,
+                // Decide the chain reshape from this call's still-live contract variant, then
+                // keep-first the obligation: the chain's established obligation (deposited on the
+                // step view) wins over this call's own contract, which is sealed only when no chain
+                // is yet established. The winner is wrapped onto the replacement continuation so the
+                // next step re-deposits it (see [`with_obligation`](super::obligation)).
+                let chain = ChainOp::decide(
+                    block_entry_scope(&block_entry),
+                    contract.as_ref(),
                     body_index,
+                );
+                let winner = view
+                    .current_obligation_duplicate()
+                    .or_else(|| contract.map(ReturnObligation::seal));
+                return Outcome::Continue {
+                    work: super::dispatch::decide_tail(tail, winner),
+                    frame: frame_placement,
+                    chain,
+                    block_entry,
                 };
             }
             // Leading statements become owned siblings in the block (one `BodyBlock` dep); the slot
@@ -256,7 +285,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                 !matches!(frame_placement, FramePlacement::FreshTail { .. }),
                 "a leading-carrying tail is a FreshChild frame, an Inherit cart, or an overlay"
             );
-            let finish: TerminalDepFinish<'step> = Box::new(move |_view, terminals| {
+            let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
                 let contract = match contract {
                     TailContract::Eager(contract) => contract,
                     // The return-type expression is the last leading statement (all owned), so its
@@ -284,12 +313,23 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                         Some(ReturnContract::PerCall { func, ret })
                     }
                 };
-                Outcome::Continue {
-                    work: super::dispatch::decide(tail),
-                    frame: frame_placement,
-                    contract,
-                    block_entry,
+                // Decide the chain reshape and keep-first the obligation as on the leading-free
+                // path, but against this finish's own wake-time view: the park that carried the
+                // leading statements re-deposited the established obligation, so a chain checks its
+                // first caller's declared return rather than this resolving tail's.
+                let chain = ChainOp::decide(
+                    block_entry_scope(&block_entry),
+                    contract.as_ref(),
                     body_index,
+                );
+                let winner = view
+                    .current_obligation_duplicate()
+                    .or_else(|| contract.map(ReturnObligation::seal));
+                Outcome::Continue {
+                    work: super::dispatch::decide_tail(tail, winner),
+                    frame: frame_placement,
+                    chain,
+                    block_entry,
                 }
             });
             Await::on(Deps::from_owned([DepRequest::BodyBlock {
@@ -322,7 +362,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     scope: view.current_scope(),
                     ctx: view.step_ctx(),
                 };
-                run_action(finish(&fctx, results))
+                run_action(view, finish(&fctx, results))
             });
             Await::on(built)
                 .error_frame(dep_error_frame())
@@ -337,7 +377,7 @@ pub(in crate::machine::execute) fn run_action<'step>(action: Action<'step>) -> O
                     scope: view.current_scope(),
                     ctx: view.step_ctx(),
                 };
-                run_action(finish(&fctx, result))
+                run_action(view, finish(&fctx, result))
             });
             Outcome::ParkThenContinue {
                 deps: Deps::new(),
@@ -440,9 +480,8 @@ impl<'run> KoanRuntime<'run> {
             Outcome::Continue {
                 work,
                 frame,
-                contract,
+                chain,
                 block_entry,
-                body_index,
             } => {
                 // The body's leading statements are never dispatched here — a producer with leading
                 // statements parks on them as owned `BodyBlock` deps and emits this `Continue` only
@@ -457,40 +496,21 @@ impl<'run> KoanRuntime<'run> {
                 if let Some(installed) = frame.as_ref() {
                     installed.set_owner(NodeId(idx));
                 }
-                // Decide the chain reshape from the block scope id + the still-live contract variant,
-                // then erase the contract — so the `Replace` step carries no `'run` (the variant is
-                // frozen into the lifetime-free [`ChainOp`]). The run loop assembles the chain against
-                // the post-step frame and keeps the slot's prior contract first over `contract`. An
-                // `Overlay` block entry also rides the tail slot's scope: erased to a cart-witnessed
-                // carrier here (where the overlay is still live) so the frameless `Replace` installs
-                // it as the slot's `YokedChild` — the frameless analogue of the `Yoked` a framed tail
-                // re-projects from its own cart.
-                let (block_scope_id, overlay_scope) = match block_entry {
-                    BlockEntry::None => (None, None),
-                    BlockEntry::FrameScope(frame) => (Some(frame.scope_id()), None),
-                    BlockEntry::Overlay(overlay) => (
-                        Some(overlay.id),
-                        Some(SealedExtern::<ScopeRefFamily>::erase(overlay)),
-                    ),
+                // The chain reshape was decided at the `Continue` construction site while the
+                // contract variant was live (see [`ChainOp`]); the run loop assembles it against the
+                // post-step frame. An `Overlay` block entry also rides the tail slot's scope: erased
+                // to a cart-witnessed carrier here (where the overlay is still live) so the frameless
+                // `Replace` installs it as the slot's `YokedChild` — the frameless analogue of the
+                // `Yoked` a framed tail re-projects from its own cart.
+                let overlay_scope = match block_entry {
+                    BlockEntry::Overlay(overlay) => {
+                        Some(SealedExtern::<ScopeRefFamily>::erase(overlay))
+                    }
+                    BlockEntry::None | BlockEntry::FrameScope(_) => None,
                 };
-                let chain = ChainOp::decide(block_scope_id, contract.as_ref(), body_index);
-                // Seal against the contract's own carried witness — its home owner's `Rc`, folded
-                // into a `FrameSet` singleton (a genuine pinning witness) — rather than the cart's
-                // `outer` chain, so the kept-first contract's home region stays pinned across every
-                // hop of a tail chain independent of which cart the slot currently carries.
-                let sealed_contract = contract.map(|c| {
-                    Sealed::seal(Witnessed::from_erased(
-                        Erased::erase(c),
-                        c.home_owner()
-                            .map_or_else(crate::machine::FrameSet::empty, |o| {
-                                crate::machine::FrameSet::singleton(o)
-                            }),
-                    ))
-                });
                 NodeStep::Replace {
                     work,
                     frame,
-                    contract: sealed_contract,
                     chain,
                     overlay_scope,
                 }
@@ -564,7 +584,9 @@ impl<'run> KoanRuntime<'run> {
                 // declares no deps here, so `resolved` is empty — it realizes and owns its single
                 // watched dep in the `cont` match below.)
                 self.sched.install_edges(&resolved, NodeId(idx));
-                let work = match continuation {
+                // Lower each variant to its outermost live `NodeContinuation` alongside the deps it
+                // waits on and its deadlock-summary carrier, then wrap once below before erasing.
+                let (deps, continuation, carrier) = match continuation {
                     // A dispatch finish carries its own dep-error frame (the consuming call's, or
                     // `None` frameless); an action/literal dep-finish carries the `dep_error_frame()`
                     // label. Both install the same `Wait` over the realized deps (edges already
@@ -572,12 +594,12 @@ impl<'run> KoanRuntime<'run> {
                     // `short_circuit` — the one loop the terminal delivery runs through. A finish whose
                     // value must outlive the resolving step folds the dep's carrier (`transfer_into`).
                     Continuation::FinishTerminal(finish) => {
-                        NodeWork::new(resolved, short_circuit(dep_error_frame, finish), None)
+                        (resolved, short_circuit(dep_error_frame, finish), None)
                     }
                     // The construction-inversion sibling: same realized deps and edges, but the
                     // `seal_witnessed` projection folds the resolved terminals (value + reach) into
                     // one witnessed carrier and seals as `Done(Ok)`.
-                    Continuation::FinishWitnessed(finish) => NodeWork::new(
+                    Continuation::FinishWitnessed(finish) => (
                         resolved,
                         short_circuit(dep_error_frame, seal_witnessed(finish)),
                         None,
@@ -590,19 +612,27 @@ impl<'run> KoanRuntime<'run> {
                         self.sched.add_owned_edge(from, NodeId(idx));
                         let mut watched_deps = ResolvedDeps::new();
                         watched_deps.own(from);
-                        NodeWork::new(watched_deps, catch_continuation(finish), None)
+                        (watched_deps, catch_continuation(finish), None)
                     }
                     // The resume closure carries the evolving `working_expr` from here on; the
                     // `carrier` it travels with is only the deadlock-summary sample. A decide takes
                     // no dep values, so `ignore_results` drops the (park-only) results view.
                     Continuation::Resume { carrier, resume } => {
-                        NodeWork::new(resolved, ignore_results(resume), carrier)
+                        (resolved, ignore_results(resume), carrier)
                     }
                 };
+                // Carry the ambient obligation across the park: the resumed step re-deposits it so
+                // the chain's declared-return check still fires. The wrap sits on the outermost
+                // closure, so every variant — including the dep-error short-circuit inside
+                // `short_circuit` — runs under it and its Error arm still gets the trace label.
+                let continuation = match self.ambient.current_obligation_duplicate() {
+                    Some(obligation) => with_obligation(obligation, continuation),
+                    None => continuation,
+                };
+                let work = NodeWork::new(deps, continuation, carrier);
                 NodeStep::Replace {
                     work,
                     frame: None,
-                    contract: None,
                     chain: ChainOp::Unchanged,
                     overlay_scope: None,
                 }
@@ -612,10 +642,52 @@ impl<'run> KoanRuntime<'run> {
                 // frame (the consumer-pull lift — the producer keeps its value in its frame, which
                 // would free out from under a bare copy), and consumers pull from here. Not ready:
                 // `Alias` drives `splice_forward` — move consumers onto `producer` and alias the slot.
+                let Some(obligation) = self.ambient.current_obligation_duplicate() else {
+                    if self.sched.is_result_ready(producer) {
+                        return NodeStep::ForwardReady(producer);
+                    }
+                    return NodeStep::Alias(producer);
+                };
+                // A residual declared-return obligation on this splice must be discharged before the
+                // rehomed terminal reaches any consumer. Take it out of the ambient so neither this
+                // step's finalize (the obligation is spent here) nor the not-ready micro-step's
+                // continuation re-observes it; `obligation` is captured (never re-deposited), so the
+                // check runs obligation-free.
+                self.ambient.take_obligation();
                 if self.sched.is_result_ready(producer) {
-                    NodeStep::ForwardReady(producer)
+                    // The producer resolved: run the declared-return check inline against its
+                    // terminal, then behave as the obligation-free ready path. An errored producer
+                    // carries no value to check — `ForwardReady` relocates its error as the
+                    // obligation-free path would.
+                    let checked = match self.sched.dep_delivered(producer) {
+                        Ok(delivered) => check_spliced_return(&obligation, &delivered),
+                        Err(_) => Ok(()),
+                    };
+                    match checked {
+                        Ok(()) => NodeStep::ForwardReady(producer),
+                        Err(error) => self.apply_outcome(Outcome::Done(Err(error)), idx),
+                    }
                 } else {
-                    NodeStep::Alias(producer)
+                    // The producer is not yet resolved: park a checker micro-step on it (an
+                    // already-terminal producer never re-notifies, so a park is sound only here). Its
+                    // finish runs the declared-return check un-relocated and re-emits `Forward` on a
+                    // pass — which re-enters this arm with no ambient obligation (the micro-step ran
+                    // obligation-free) and, the producer now resolved, takes the plain `ForwardReady`
+                    // path. No re-check, no loop.
+                    let finish: TerminalDepFinish<'step> = Box::new(move |_view, terminals| {
+                        // The single parked dep is `producer`, delivered un-relocated at index 0.
+                        let producer_terminal = terminals.all()[0];
+                        match check_spliced_return(&obligation, &producer_terminal.delivered) {
+                            Ok(()) => Outcome::Forward(producer),
+                            Err(error) => Outcome::Done(Err(error)),
+                        }
+                    });
+                    let park = Outcome::ParkThenContinue {
+                        deps: Deps::from_parks([producer]),
+                        continuation: Continuation::FinishTerminal(finish),
+                        dep_error_frame: Some(dep_error_frame()),
+                    };
+                    self.apply_outcome(park, idx)
                 }
             }
         }

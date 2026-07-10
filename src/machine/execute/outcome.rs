@@ -15,7 +15,6 @@
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
-use crate::machine::core::kfunction::body::ReturnContract;
 #[cfg(test)]
 use crate::machine::model::values::Carried;
 use crate::machine::model::values::CarriedFamily;
@@ -27,7 +26,7 @@ use crate::witnessed::reattachable;
 use crate::witnessed::Witnessed;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
-use super::nodes::NodeWork;
+use super::nodes::{ChainOp, NodeWork};
 use super::runtime::KoanWorkload;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
@@ -43,17 +42,19 @@ pub(in crate::machine::execute) enum Outcome<'step> {
     /// lifetime-free, so this arm carries no `'step`.
     Done(Result<Witnessed<CarriedFamily, CarrierWitness>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
-    /// per-call cart; `contract` / `block_entry` / `body_index` carry the tail-call chain payload.
-    /// A body's non-tail (leading) statements are NOT carried here — a producer with leading
-    /// statements parks on them as owned deps (a [`DepRequest::BodyBlock`]) and emits this `Continue`
-    /// only from the resolving finish, restoring frame uniqueness for TCO reuse. `body_index` already
-    /// accounts for their count.
+    /// per-call cart; `chain` is the pre-decided lexical-chain reshape (decided at the construction
+    /// site while the contract variant is still live) and `block_entry` names any overlay scope the
+    /// tail installs. A body's non-tail (leading) statements are NOT carried here — a producer with
+    /// leading statements parks on them as owned deps (a [`DepRequest::BodyBlock`]) and emits this
+    /// `Continue` only from the resolving finish, restoring frame uniqueness for TCO reuse. The
+    /// slot's declared-return obligation does not ride here — it is wrapped onto `work`'s
+    /// continuation at the construction site (see
+    /// [`with_obligation`](super::obligation::with_obligation)).
     Continue {
         work: NodeWork<KoanWorkload>,
         frame: FramePlacement<'step>,
-        contract: Option<ReturnContract<'step>>,
+        chain: ChainOp,
         block_entry: BlockEntry<'step>,
-        body_index: usize,
     },
     /// Park the slot on `deps` and run `continuation` when they resolve. A dep is either a park
     /// (`Notify` edge, kept alive) or an owned entry (realizes to a harness-owned sub-slot,
