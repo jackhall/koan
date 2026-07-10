@@ -11,8 +11,18 @@
 //! reach, no folded placement. The `:Number`/`:Bool` parameter types are dispatch's own
 //! admission gate: a non-matching operand is a bucket miss before any body runs, so no
 //! body re-checks operand types beyond the pattern match that reads the scalar out.
+//!
+//! [`register_builtin_operator_groups`] seeds the three builtin operator groups these
+//! bodies serve: comparison (pairwise, combined by `AND`), additive, and multiplicative
+//! (both fold-left). The registry record is member set + mode only — see
+//! [`crate::machine::model::operators`] — so seeding is a separate step from registering
+//! the per-operator bodies above.
+
+use std::collections::HashSet;
 
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
+use crate::machine::core::BindingIndex;
+use crate::machine::model::operators::{probe_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -176,6 +186,74 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ],
     );
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and);
+}
+
+/// Registers `group` under every nonempty subset of `members` — the powerset-key story
+/// [`OperatorGroup`]'s module doc describes. `members.len()` stays small (≤4 for the builtin
+/// seeds below), so the `2^n - 1` bitmask walk over subsets is cheap; each subset's key is
+/// derived through [`probe_key`] rather than hand-enumerated, so a registration key always
+/// agrees with a real chain's probe.
+fn register_group_under_all_subsets<'a>(
+    scope: &'a Scope<'a>,
+    members: &[&str],
+    group: &'a OperatorGroup,
+) {
+    let subset_count = 1usize << members.len();
+    for mask in 1..subset_count {
+        let subset: Vec<&str> = members
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .map(|(_, op)| *op)
+            .collect();
+        let key = probe_key(&subset);
+        scope
+            .register_operator_group(key, group, BindingIndex::BUILTIN)
+            .expect("builtin operator-group seeding must not collide");
+    }
+}
+
+/// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
+/// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group is
+/// allocated once and registered under every nonempty subset of its member set, so any chain
+/// probe drawn from that set resolves to the same shared record.
+///
+/// The comparison group's pairwise mode has no reducer yet — seeding it now is inert and safe,
+/// since a `1 < 2 < 3` chain resolves to this group and then reaches the still-unimplemented
+/// pairwise seam, which is the correct state until the pairwise finish lands.
+pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
+    let region = scope.brand();
+
+    let comparison_operators = ["<", "<=", ">", ">="];
+    let comparison_members: HashSet<String> =
+        comparison_operators.iter().map(|s| s.to_string()).collect();
+    let comparison_group = region.alloc_operator_group(OperatorGroup::new(
+        comparison_members,
+        ReductionMode::Pairwise {
+            combiner: "AND".to_string(),
+        },
+    ));
+    register_group_under_all_subsets(scope, &comparison_operators, comparison_group);
+
+    let additive_operators = ["+", "-"];
+    let additive_members: HashSet<String> =
+        additive_operators.iter().map(|s| s.to_string()).collect();
+    let additive_group = region.alloc_operator_group(OperatorGroup::new(
+        additive_members,
+        ReductionMode::FoldLeft,
+    ));
+    register_group_under_all_subsets(scope, &additive_operators, additive_group);
+
+    let multiplicative_operators = ["*", "/"];
+    let multiplicative_members: HashSet<String> = multiplicative_operators
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let multiplicative_group = region.alloc_operator_group(OperatorGroup::new(
+        multiplicative_members,
+        ReductionMode::FoldLeft,
+    ));
+    register_group_under_all_subsets(scope, &multiplicative_operators, multiplicative_group);
 }
 
 #[cfg(test)]

@@ -86,3 +86,41 @@ fn add_over_non_number_is_dispatch_miss() {
     let err = run_one_err(scope, parse_one("true + 1"));
     assert!(matches!(&err.kind, KErrorKind::DispatchFailed { .. }));
 }
+
+// =====================================================================
+// Builtin-seeded operator groups reaching the `FoldLeft` reducer — no test-local group
+// registration, only `default_scope`'s own `register_builtin_operator_groups` seeding.
+// =====================================================================
+
+/// `1 + 2 + 3` — the additive group is seeded `FoldLeft`, so the chain rewrites to
+/// `[ Expression([1, +, 2]), +, 3 ]` and evaluates left-to-right.
+#[test]
+fn additive_chain_folds_left_through_seeded_group() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let result = run_one(scope, parse_one("1 + 2 + 3"));
+    assert!(matches!(result, KObject::Number(n) if *n == 6.0));
+}
+
+/// `10 - 3 - 2` — left-association is observable here: a right-fold would give
+/// `10 - (3 - 2)` = 9, but `FoldLeft` gives `(10 - 3) - 2` = 5.
+#[test]
+fn subtractive_chain_left_associates_through_seeded_group() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let result = run_one(scope, parse_one("10 - 3 - 2"));
+    assert!(matches!(result, KObject::Number(n) if *n == 5.0));
+}
+
+/// `1 + 2 * 3` mixes the additive and multiplicative groups — two separate seeded groups,
+/// so the chain's probe (`"* +"`) is a genuine cross-group miss (nothing registers that
+/// key), surfacing the ordinary registry-miss `DispatchFailed` rather than evaluating.
+/// The parenthesized form (`nested_parenthesized_binary_evaluates`, above) is how this
+/// mix is written when the multiplication should bind first.
+#[test]
+fn additive_multiplicative_mix_is_registry_miss() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let err = run_one_err(scope, parse_one("1 + 2 * 3"));
+    assert!(matches!(&err.kind, KErrorKind::DispatchFailed { .. }));
+}

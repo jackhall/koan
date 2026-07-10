@@ -239,6 +239,7 @@ digraph {
     "koan::builtins::arithmetic" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::arithmetic" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -727,6 +728,8 @@ digraph {
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model::operators" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::operator_chain" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];

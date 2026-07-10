@@ -8,17 +8,20 @@
 //! [the lookup protocol](../../../../design/typing/lookup-protocol.md)).
 //!
 //! A miss — a cross-group operator mix, or an operator no module declared — surfaces a
-//! structured [`KErrorKind::DispatchFailed`]. A hit reaches the fold seam (precedence
-//! climb + nested binary sub-dispatch), which is not yet implemented, so it terminates
-//! with an explicit error rather than a silent fallthrough.
+//! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
+//! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
+//! (see [`reduce_fold_left`]) and hands control back to dispatch; the other modes still
+//! terminate at the explicit "not yet implemented" seam.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::operators::ReductionMode;
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
+use crate::source::Spanned;
 
 use super::ctx::SchedulerView;
-use super::Outcome;
+use super::{become_dispatch, Outcome};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
@@ -49,10 +52,17 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                     reason: cross_group_reason(probe),
                 })));
             }
-            Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
-                reason: "operator-chain folding not yet implemented".to_string(),
-            })))
+            match group.mode() {
+                ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
+                ReductionMode::Unary
+                | ReductionMode::FoldRight
+                | ReductionMode::Pairwise { .. } => {
+                    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+                        expr: expr.summarize(),
+                        reason: "operator-chain folding not yet implemented".to_string(),
+                    })))
+                }
+            }
         }
     }
 }
@@ -66,6 +76,71 @@ fn chain_operators<'b>(expr: &'b KExpression<'_>) -> Vec<&'b str> {
             _ => None,
         })
         .collect()
+}
+
+/// Splits `expr.parts` into operands (even indices) and operator keywords (odd indices),
+/// cloning each `Spanned` wrapper whole — not just the inner value — so source spans survive
+/// into any error message the inner dispatch produces.
+fn split_chain_parts<'step>(
+    expr: &KExpression<'step>,
+) -> (
+    Vec<Spanned<ExpressionPart<'step>>>,
+    Vec<Spanned<ExpressionPart<'step>>>,
+) {
+    let mut operands = Vec::with_capacity(expr.parts.len() / 2 + 1);
+    let mut operator_keywords = Vec::with_capacity(expr.parts.len() / 2);
+    for (i, part) in expr.parts.iter().enumerate() {
+        if i % 2 == 0 {
+            operands.push(part.clone());
+        } else {
+            operator_keywords.push(part.clone());
+        }
+    }
+    (operands, operator_keywords)
+}
+
+/// Wraps a built-up accumulator as the next level's leading operand, carrying its own span
+/// forward rather than inventing a fresh one.
+fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
+    let span = acc.span;
+    Spanned {
+        value: ExpressionPart::Expression(Box::new(acc)),
+        span,
+    }
+}
+
+/// Rewrites a `FoldLeft`-mode run into nested binary dispatches — a pure syntactic rewrite,
+/// since every operand appears exactly once there is no evaluation-order question:
+///
+/// `a + b + c` ⇒ `[ Expression([a, +, b]), +, c ]`, a bare 3-part expression whose nested
+/// `Expression` operand resolves through the existing eager-subs sub-dispatch track before the
+/// outer `+` runs as ordinary binary keyworded dispatch (the bodies `arithmetic::register`
+/// installs). The outermost expression stays a bare 3-part expression — never itself wrapped in
+/// `Expression(..)` — so [`become_dispatch`] re-enters ordinary dispatch on it directly.
+fn reduce_fold_left<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
+    let (operands, operators) = split_chain_parts(expr);
+    debug_assert!(
+        operands.len() >= 3 && operators.len() == operands.len() - 1,
+        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
+    );
+    let mut operands = operands.into_iter();
+    let mut operators = operators.into_iter();
+
+    let first_operand = operands.next().expect("chain shape guarantees ≥3 operands");
+    let second_operand = operands.next().expect("chain shape guarantees ≥3 operands");
+    let first_operator = operators
+        .next()
+        .expect("chain shape guarantees ≥2 operators");
+
+    let mut acc = KExpression::new(vec![first_operand, first_operator, second_operand]);
+    for (operator, operand) in operators.zip(operands) {
+        acc = KExpression::new(vec![wrap_as_operand(acc), operator, operand]);
+    }
+
+    become_dispatch(ctx, acc)
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

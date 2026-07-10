@@ -796,14 +796,17 @@ fn classifier_single_operator_stays_keyworded() {
     );
 }
 
-/// An undeclared operator chain misses the (empty) registry and surfaces a
-/// structured `DispatchFailed` naming the undeclared operators.
+/// An undeclared operator chain misses the registry and surfaces a structured
+/// `DispatchFailed` naming the undeclared operators. `%` is not a member of any builtin
+/// group (`default_scope` seeds only comparison/additive/multiplicative), so the probe
+/// misses cleanly before any operand is touched — the bare unbound identifiers never
+/// need to resolve.
 #[test]
 fn operator_chain_undeclared_errors_cleanly() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("a % b % c"), scope);
     runtime
         .execute()
         .expect("scheduler drains without deadlock");
@@ -819,11 +822,13 @@ fn operator_chain_undeclared_errors_cleanly() {
     );
 }
 
-/// A fixture-registered operator group resolves the chain's probe, so the arm reaches
-/// the fold seam — surfaced as the explicit "not yet implemented" terminal rather than
-/// a silent fallthrough.
+/// A fixture-registered `FoldLeft` group resolves the chain's probe, so the arm reduces the
+/// run into nested binary dispatches and evaluates — not just reaching the seam. The fixture
+/// registration is independent of `default_scope`'s own builtin-seeded additive group (a
+/// separate per-test group, kept for fixture isolation); both are `FoldLeft` over `+`, so
+/// either resolving would reduce the same way.
 #[test]
-fn operator_chain_registered_reaches_fold_seam() {
+fn operator_chain_registered_group_folds_left() {
     use crate::machine::model::operators::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
 
@@ -838,18 +843,14 @@ fn operator_chain_registered_reaches_fold_seam() {
         .expect("register operator group");
 
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("a + b + c"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("1 + 2 + 3"), scope);
     runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let msg = match runtime.read_result_with(id, |v| v.summarize()) {
-        Err(e) => e.to_string(),
-        Ok(summary) => panic!("a registered chain reaches the fold seam (an error); got {summary}"),
-    };
-    assert!(
-        msg.contains("not yet implemented"),
-        "a registry hit must reach the explicit fold seam; got: {msg}",
-    );
+    let result = runtime
+        .read_result_with(id, |v| v.summarize())
+        .unwrap_or_else(|e| panic!("a registered FoldLeft group must evaluate; got error {e}"));
+    assert_eq!(result, "6", "1 + 2 + 3 must fold left to 6; got {result}");
 }
 
 // =====================================================================

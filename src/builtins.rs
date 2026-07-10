@@ -248,6 +248,7 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     parameterized_types::register(scope);
     arithmetic::register(scope);
+    arithmetic::register_builtin_operator_groups(scope);
 
     run_storage.brand().alloc_scope(Scope::run_child(scope))
 }
