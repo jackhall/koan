@@ -824,22 +824,15 @@ fn operator_chain_undeclared_errors_cleanly() {
 /// a silent fallthrough.
 #[test]
 fn operator_chain_registered_reaches_fold_seam() {
-    use crate::machine::model::operators::{Associativity, OperatorEntry, OperatorGroup};
-    use std::collections::HashMap;
+    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
+    use std::collections::HashSet;
 
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut members = HashMap::new();
-    members.insert(
-        "+".to_string(),
-        OperatorEntry {
-            tier: 10,
-            associativity: Associativity::Left,
-        },
-    );
+    let members: HashSet<String> = ["+"].iter().map(|s| s.to_string()).collect();
     let group = scope
         .brand()
-        .alloc_operator_group(OperatorGroup::new(members));
+        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldLeft));
     scope
         .register_operator_group("+".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");

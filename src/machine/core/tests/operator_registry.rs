@@ -4,30 +4,16 @@
 //! parallels the function/type lookup layers: innermost visible registration wins,
 //! a cross-group or undeclared probe misses.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt};
-use crate::machine::model::operators::{Associativity, OperatorEntry, OperatorGroup};
+use crate::machine::model::operators::{probe_key, OperatorGroup, ReductionMode};
 
-/// Arithmetic-shaped group: `+` and `-` both left-associative at one tier.
+/// Arithmetic-shaped group: `+` and `-` fold left.
 fn arithmetic_group() -> OperatorGroup {
-    let mut members = HashMap::new();
-    members.insert(
-        "+".to_string(),
-        OperatorEntry {
-            tier: 10,
-            associativity: Associativity::Left,
-        },
-    );
-    members.insert(
-        "-".to_string(),
-        OperatorEntry {
-            tier: 10,
-            associativity: Associativity::Left,
-        },
-    );
-    OperatorGroup::new(members)
+    let members: HashSet<String> = ["+", "-"].iter().map(|s| s.to_string()).collect();
+    OperatorGroup::new(members, ReductionMode::FoldLeft)
 }
 
 #[test]
@@ -35,17 +21,19 @@ fn register_then_resolve_group_by_probe() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let group = region.brand().alloc_operator_group(arithmetic_group());
-    // A module registers the powerset; "- +" is the sorted-joined probe for a chain
-    // mixing both operators.
+    // A module registers the powerset; `probe_key` is the sorted-joined probe for a
+    // chain mixing both operators — byte order sorts `+` before `-`.
+    let key = probe_key(&["+", "-"]);
+    assert_eq!(key, "+ -");
     scope
-        .register_operator_group("- +".to_string(), group, BindingIndex::value(1))
+        .register_operator_group(key.clone(), group, BindingIndex::value(1))
         .unwrap();
     let resolved = scope
-        .resolve_operator_group_with_chain("- +", None)
+        .resolve_operator_group_with_chain(&key, None)
         .expect("registered probe resolves");
-    assert!(resolved.entry("+").is_some());
-    assert!(resolved.entry("-").is_some());
-    assert_eq!(resolved.entry("+").unwrap().tier, 10);
+    assert!(resolved.covers(&["+"]));
+    assert!(resolved.covers(&["-"]));
+    assert_eq!(resolved.mode(), &ReductionMode::FoldLeft);
 }
 
 #[test]
@@ -73,7 +61,7 @@ fn cross_group_probe_misses() {
         .register_operator_group("-".to_string(), group, BindingIndex::value(1))
         .unwrap();
     scope
-        .register_operator_group("- +".to_string(), group, BindingIndex::value(1))
+        .register_operator_group(probe_key(&["+", "-"]), group, BindingIndex::value(1))
         .unwrap();
     // A chain mixing `+` with an operator from a different (unregistered) group
     // produces the probe "+ |", which nothing registered — a clean miss.
@@ -89,17 +77,10 @@ fn innermost_scope_shadows_outer() {
     let inner = region.brand().alloc_scope(outer.child_for_call());
 
     let outer_group = region.brand().alloc_operator_group(arithmetic_group());
-    let mut inner_members = HashMap::new();
-    inner_members.insert(
-        "+".to_string(),
-        OperatorEntry {
-            tier: 99,
-            associativity: Associativity::Right,
-        },
-    );
+    let inner_members: HashSet<String> = ["+"].iter().map(|s| s.to_string()).collect();
     let inner_group = region
         .brand()
-        .alloc_operator_group(OperatorGroup::new(inner_members));
+        .alloc_operator_group(OperatorGroup::new(inner_members, ReductionMode::FoldRight));
 
     outer
         .register_operator_group("+".to_string(), outer_group, BindingIndex::value(1))
@@ -112,17 +93,13 @@ fn innermost_scope_shadows_outer() {
     let resolved = inner
         .resolve_operator_group_with_chain("+", None)
         .expect("inner registration resolves");
-    assert_eq!(resolved.entry("+").unwrap().tier, 99);
-    assert_eq!(
-        resolved.entry("+").unwrap().associativity,
-        Associativity::Right
-    );
+    assert_eq!(resolved.mode(), &ReductionMode::FoldRight);
 
     // From the outer scope, only the outer registration is visible.
     let outer_resolved = outer
         .resolve_operator_group_with_chain("+", None)
         .expect("outer registration resolves");
-    assert_eq!(outer_resolved.entry("+").unwrap().tier, 10);
+    assert_eq!(outer_resolved.mode(), &ReductionMode::FoldLeft);
 }
 
 #[test]
