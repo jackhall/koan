@@ -133,7 +133,6 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
         | KType::KFunctor { .. }
         | KType::DeferredReturn(_)
         | KType::SetLocal(_)
-        | KType::Variant { .. }
         | KType::Union(_)
         | KType::RecursiveRef(_)
         | KType::RecursiveGroup(_)

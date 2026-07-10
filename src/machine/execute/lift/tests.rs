@@ -177,7 +177,10 @@ fn tagged_relocation_shares_value_and_set_rc() {
     let set = RecursiveSet::singleton(
         "Maybe".into(),
         ScopeId::next(),
-        NominalSchema::Tagged(std::collections::HashMap::new()),
+        NominalSchema::TypeConstructor {
+            schema: std::collections::HashMap::new(),
+            param_names: Vec::new(),
+        },
     );
     let tagged: &KObject = source
         .brand()

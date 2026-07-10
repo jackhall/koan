@@ -65,8 +65,8 @@ impl<'a> KType<'a> {
     /// Strict specificity ordering. Concrete types outrank `Any` and the
     /// unconstrained-name slot types (`Identifier`, `ProperType`), so an overload
     /// like `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit.
-    /// A nominal-family kind out-specifies `OfKind(Proper)` (`OfKind(Tagged) ≺
-    /// OfKind(Proper)`), and a sealed `SetRef` / `Variant` member out-specifies the
+    /// A nominal-family kind out-specifies `OfKind(Proper)` (`OfKind(NewType) ≺
+    /// OfKind(Proper)`), and a sealed `SetRef` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
     /// inner slots. Returns `false` for equal types.
     pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
@@ -147,22 +147,13 @@ impl<'a> KType<'a> {
                 }
                 true
             }
-            // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(Tagged) ≺
+            // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(NewType) ≺
             // OfKind(Proper)`. (Against `Identifier` / `OfKind(Proper)` the generic rule
             // above already fires; this covers a nominal-vs-nominal-supertype tie.)
             (OfKind(a), OfKind(b)) if a.strictly_below(*b) => true,
             // A sealed nominal member is more specific than the `OfKind` wildcard of the
             // same surface family — read the member's `kind` off its set, by index.
             (SetRef { set, index }, OfKind(b)) if set.member(*index).kind == *b => true,
-            // A variant refines its union: `:(Maybe Some)` is strictly more specific than
-            // `:Maybe` and than the `OfKind(Tagged)` kind, so a variant-typed overload wins
-            // over a union-typed sibling that also admits the value.
-            (Variant { set, index, .. }, SetRef { set: us, index: ui })
-                if Rc::ptr_eq(set, us) && index == ui =>
-            {
-                true
-            }
-            (Variant { set, index, .. }, OfKind(b)) if set.member(*index).kind == *b => true,
             (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
                 if ca == cb && aa.len() == ab.len() =>
             {
@@ -270,11 +261,7 @@ impl<'a> KType<'a> {
             // ride the type channel) and the nominal families — admits no runtime instance.
             KType::OfKind(k) => match k {
                 KKind::ProperType | KKind::AnyType => *self == obj.ktype(),
-                KKind::Module
-                | KKind::Signature
-                | KKind::Tagged
-                | KKind::NewType
-                | KKind::TypeConstructor => false,
+                KKind::Module | KKind::Signature | KKind::NewType | KKind::TypeConstructor => false,
             },
             // A stamped `type_args` carrier (from ascription) takes precedence and is
             // checked structurally per-arg; an erased carrier falls back to checking the
@@ -313,17 +300,10 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            // A user-`UNION` value's `ktype()` is a `Variant`, but a union-typed slot admits
-            // every variant. A `TypeConstructor` (`Result`) value reports a `SetRef` /
-            // `ConstructorApply`, handled by the identity fallback below.
-            KType::SetRef { set, index } => match obj {
-                KObject::Tagged {
-                    set: s2, index: i2, ..
-                } if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
-                _ => *self == obj.ktype(),
-            },
-            // A variant slot admits exactly the tagged values of that one variant.
-            KType::Variant { .. } => *self == obj.ktype(),
+            // A sealed nominal slot admits a value whose `ktype()` reports the same
+            // `(set ptr, index)` identity — a per-variant newtype `Wrapped` value or a
+            // `TypeConstructor` (`Result`) value.
+            KType::SetRef { .. } => *self == obj.ktype(),
             // A union slot admits a value any of its members admits.
             KType::Union(members) => members.iter().any(|m| m.matches_value(obj)),
             _ => *self == obj.ktype(),
@@ -436,16 +416,9 @@ impl<'a> KType<'a> {
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a sealed
             // nominal type — `ktype()` yields a `SetRef` whose `PartialEq` keys on the shared
-            // allocation and index. A user-`UNION` value reports a `Variant`, so a union-typed slot
-            // admits any variant of that union via the `ktype()` fallback.
-            KType::SetRef { set, index } => match c {
-                Carried::Object(KObject::Tagged {
-                    set: s2, index: i2, ..
-                }) if s2.member(*i2).kind == KKind::Tagged => Rc::ptr_eq(set, s2) && index == i2,
-                _ => &c.ktype() == self,
-            },
-            // A variant slot admits exactly its own tagged values via `(set, index, tag)` identity.
-            KType::Variant { .. } => &c.ktype() == self,
+            // allocation and index. A per-variant newtype value carries that member `SetRef`, so a
+            // union-typed slot admits each variant via the member delegation below.
+            KType::SetRef { .. } => &c.ktype() == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
             KType::Union(members) => members.iter().any(|m| m.accepts_carried(c)),
@@ -560,7 +533,6 @@ impl<'a> KType<'a> {
             // for `Number` / `Str` / `Bool` / `Null`.
             KType::Union(members) => members.iter().any(|m| m.accepts_part(part)),
             KType::SetRef { .. }
-            | KType::Variant { .. }
             | KType::Module { .. }
             | KType::AbstractType { .. }
             | KType::Signature { .. }

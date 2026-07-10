@@ -127,10 +127,8 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(kt) = self.stack.pop() {
             match kt {
-                // A variant references its union member — same `(scope_id, name)` a bare
-                // `SetRef` to that member yields; the `tag` selects within it and adds no
-                // further user-type reference.
-                KType::SetRef { set, index } | KType::Variant { set, index, .. } => {
+                // A sealed nominal member yields its declaring `(scope_id, name)`.
+                KType::SetRef { set, index } => {
                     let member = set.member(*index);
                     return Some((member.scope_id, member.name.as_str()));
                 }

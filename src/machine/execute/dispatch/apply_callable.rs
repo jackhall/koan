@@ -112,48 +112,6 @@ fn apply_constructor<'step>(
                 constructors::dispatch_construct_newtype(identity, reach, expr.parts[1..].to_vec())
             }
         },
-        // A bare variant-tag token with no payload (`Maybe Some`) names the variant
-        // *type*, reached through its union — distinct from construction `Maybe (Some v)`,
-        // which wraps the tag in a paren group. Yielded as a first-class type value.
-        ProjectedSchema::Tagged(schema) => {
-            if let [Spanned {
-                value: ExpressionPart::Type(t),
-                ..
-            }] = expr.parts[1..].as_ref()
-            {
-                let tag = t.render();
-                if !schema.contains_key(&tag) {
-                    return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                        "`{tag}` is not a variant of `{}` (variants: {})",
-                        set.member(*index).name,
-                        sorted_variant_names(&schema),
-                    )))));
-                }
-                let variant = KType::Variant {
-                    set: Rc::clone(set),
-                    index: *index,
-                    tag,
-                };
-                // A freshly-built union `Variant` — owned data (a `SetRef` via `Rc`) reaching no
-                // foreign region — sealed under the home frame alone, structural via the brand.
-                return match ctx.step_ctx().alloc_type_pure(variant) {
-                    Ok(sealed) => Outcome::Done(Ok(sealed)),
-                    Err(e) => Outcome::Done(Err(e)),
-                };
-            }
-            // Positional construction: `Outcome (Error "x")` (paren-group body).
-            match extract_call_body(expr) {
-                Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                    Rc::clone(set),
-                    *index,
-                    Rc::new(schema),
-                    reach,
-                    parts,
-                ),
-                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => Outcome::Done(Err(e)),
-            }
-        }
         ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
                 Rc::clone(set),
@@ -240,14 +198,6 @@ fn union_member_names(members: &[KType<'_>]) -> String {
             _ => None,
         })
         .collect();
-    names.sort_unstable();
-    names.join(", ")
-}
-
-/// Sorted, comma-joined variant tags of a projected tagged schema — for the
-/// "not a variant of …" diagnostic.
-fn sorted_variant_names(schema: &std::collections::HashMap<String, KType<'_>>) -> String {
-    let mut names: Vec<&str> = schema.keys().map(|s| s.as_str()).collect();
     names.sort_unstable();
     names.join(", ")
 }

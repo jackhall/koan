@@ -10,7 +10,7 @@
 /// form one subsumption lattice:
 ///
 /// ```text
-/// AnyType > { Module, Signature, ProperType > { Tagged, NewType, TypeConstructor } }
+/// AnyType > { Module, Signature, ProperType > { NewType, TypeConstructor } }
 /// ```
 ///
 /// [`AnyType`](KKind::AnyType) is a *slot* expectation only ("accepts any proper type value"),
@@ -37,10 +37,8 @@ pub enum KKind {
     /// design pins the module/sig seam to the narrower `:Module` / `:Signature` slots. More
     /// specific than `ProperType` for tie-breaking; subsumes the proper subtree.
     AnyType,
-    /// A tagged-union type — the family a user-`UNION` declares. Strictly below `ProperType`.
-    Tagged,
-    /// A newtype (record-repr or scalar) — the family a `NEWTYPE` declares. Strictly below
-    /// `ProperType`.
+    /// A newtype (record-repr or scalar) — the family a `NEWTYPE` or a user-`UNION` variant
+    /// declares. Strictly below `ProperType`.
     NewType,
     /// A higher-kinded type constructor (`Result`). Strictly below `ProperType`.
     TypeConstructor,
@@ -58,25 +56,21 @@ impl KKind {
         use KKind::*;
         match self {
             ProperType | AnyType => {
-                matches!(other, ProperType | Tagged | NewType | TypeConstructor)
+                matches!(other, ProperType | NewType | TypeConstructor)
             }
             Module => other == Module,
             Signature => other == Signature,
-            Tagged => other == Tagged,
             NewType => other == NewType,
             TypeConstructor => other == TypeConstructor,
         }
     }
 
     /// Strict subsumption for specificity: `self` is a strictly-narrower kind than `other` in
-    /// the lattice. The three nominal families sit strictly below `ProperType`, so an
-    /// `OfKind(Tagged)` slot out-specifies an `OfKind(ProperType)` sibling.
+    /// the lattice. The nominal families sit strictly below `ProperType`, so an
+    /// `OfKind(NewType)` slot out-specifies an `OfKind(ProperType)` sibling.
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!(
-            (self, other),
-            (Tagged | NewType | TypeConstructor, ProperType)
-        )
+        matches!((self, other), (NewType | TypeConstructor, ProperType))
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.
@@ -86,7 +80,6 @@ impl KKind {
             KKind::Module => "Module",
             KKind::Signature => "Signature",
             KKind::AnyType => "Type",
-            KKind::Tagged => "Tagged",
             KKind::NewType => "NewType",
             KKind::TypeConstructor => "TypeConstructor",
         }

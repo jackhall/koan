@@ -60,8 +60,7 @@ fn discover_members(body: &KExpression<'_>) -> Result<Vec<(String, KKind)>, KErr
     let mut seen: HashSet<String> = HashSet::new();
     for decl in decls {
         let kind = match leading_keyword(decl) {
-            Some("UNION") => KKind::Tagged,
-            Some("NEWTYPE") => KKind::NewType,
+            Some("UNION") | Some("NEWTYPE") => KKind::NewType,
             other => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "RECURSIVE TYPES body admits only UNION / NEWTYPE declarations, \

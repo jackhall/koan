@@ -4,11 +4,6 @@ use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::values::KKey;
 use std::collections::HashMap;
 
-/// A singleton tagged-set `Rc` named `name` at `scope_id`.
-fn tagged_singleton<'a>(name: &str, scope_id: ScopeId) -> std::rc::Rc<RecursiveSet<'a>> {
-    RecursiveSet::singleton(name.into(), scope_id, NominalSchema::Tagged(HashMap::new()))
-}
-
 /// A singleton newtype-set `Rc` named `name` over `repr`.
 fn newtype_singleton<'a>(
     name: &str,
@@ -109,30 +104,7 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
     assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
 }
 
-/// A user-`UNION` (`Tagged` kind) value reports its *variant* refinement, keyed on the
-/// inhabited tag, so a `:(Maybe Some)` slot can dispatch on it.
-#[test]
-fn tagged_value_ktype_reports_variant() {
-    use std::rc::Rc;
-    let sid = ScopeId::from_raw(0, 0x55);
-    let set = tagged_singleton("Maybe", sid);
-    let value = KObject::Tagged {
-        tag: "Some".into(),
-        value: Rc::new(KObject::Number(1.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(vec![]),
-    };
-    match value.ktype() {
-        KType::Variant { set: s, index, tag } => {
-            assert_eq!(s.member(index).name, "Maybe");
-            assert_eq!(tag, "Some");
-        }
-        other => panic!("expected Variant, got {other:?}"),
-    }
-}
-
-/// A `TypeConstructor` (`Result`) value keeps the union identity: erased `type_args`
+/// A `TypeConstructor` (`Result`) value keeps the ctor identity: erased `type_args`
 /// reports the bare `SetRef`, a populated carrier the applied `ConstructorApply`.
 #[test]
 fn type_constructor_ktype_erased_vs_applied() {

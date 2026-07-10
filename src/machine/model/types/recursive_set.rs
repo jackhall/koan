@@ -34,8 +34,6 @@ use super::ktype::KType;
 /// `KType`s are [`KType::SetLocal`] indices into the enclosing [`RecursiveSet`].
 #[derive(Debug)]
 pub enum NominalSchema<'a> {
-    /// Tagged-union schema keyed by tag.
-    Tagged(HashMap<String, KType<'a>>),
     /// Fresh nominal over a transparent representation; `repr` is not part of identity.
     NewType(Box<KType<'a>>),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names.
@@ -273,7 +271,6 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
 impl<'a> NominalSchema<'a> {
     pub fn kind(&self) -> KKind {
         match self {
-            NominalSchema::Tagged(_) => KKind::Tagged,
             NominalSchema::NewType(_) => KKind::NewType,
             NominalSchema::TypeConstructor { .. } => KKind::TypeConstructor,
         }
@@ -284,7 +281,6 @@ impl<'a> NominalSchema<'a> {
 /// resolved to external [`KType::SetRef`] handles, so each field/variant type matches and
 /// navigates directly. Produced by [`RecursiveSet::projected_schema`].
 pub enum ProjectedSchema<'a> {
-    Tagged(HashMap<String, KType<'a>>),
     NewType(KType<'a>),
     TypeConstructor {
         schema: HashMap<String, KType<'a>>,
@@ -303,11 +299,6 @@ impl<'a> RecursiveSet<'a> {
             .as_ref()
             .expect("projected_schema on an unfilled member — finalize must run first");
         match schema {
-            NominalSchema::Tagged(map) => ProjectedSchema::Tagged(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), resolve_set_locals(set, v)))
-                    .collect(),
-            ),
             NominalSchema::NewType(repr) => ProjectedSchema::NewType(resolve_set_locals(set, repr)),
             NominalSchema::TypeConstructor {
                 schema,

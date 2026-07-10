@@ -212,7 +212,7 @@ impl KError {
         KObject::Tagged {
             tag: name,
             value: Rc::new(payload),
-            set: synthetic_singleton("KError".to_string(), KKind::Tagged),
+            set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
             index: 0,
             type_args: Rc::new(vec![]),
         }
@@ -227,18 +227,21 @@ fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
     let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
     member.fill(match kind {
         KKind::NewType => NominalSchema::NewType(Box::new(KType::Any)),
-        _ => NominalSchema::Tagged(std::collections::HashMap::new()),
+        _ => NominalSchema::TypeConstructor {
+            schema: std::collections::HashMap::new(),
+            param_names: Vec::new(),
+        },
     });
     Rc::new(RecursiveSet::new(vec![member]))
 }
 
-/// The `KError` carrier type — the `Tagged`-kind `SetRef` a `to_tagged` value reports its
-/// family from. Used as the `Error` arm of `CATCH`'s declared `:(Result Any KError)` return
+/// The `KError` carrier type — the `TypeConstructor`-kind `SetRef` a `to_tagged` value reports
+/// its family from. Used as the `Error` arm of `CATCH`'s declared `:(Result Any KError)` return
 /// (a documentary contract — `KError` is not a registered prelude type, and the synthetic set
 /// is identity-throwaway, but `CATCH`'s return is never validated against the runtime value).
 pub(crate) fn kerror_ktype<'a>() -> KType<'a> {
     KType::SetRef {
-        set: synthetic_singleton("KError".to_string(), KKind::Tagged),
+        set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
         index: 0,
     }
 }

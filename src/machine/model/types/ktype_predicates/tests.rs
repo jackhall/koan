@@ -261,7 +261,6 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::{Module, ModuleSignature};
-    use std::collections::HashMap;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::AnyType);
@@ -273,21 +272,21 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str))));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool))));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_null))));
-    // NewType / union type tokens flow as `SetRef { .. }` in the type channel — a `:Type`
-    // slot admits them when the spliced cell opens to a `Carried::Type`.
-    let tagged_set = RecursiveSet::singleton(
-        "Maybe".into(),
+    // NewType / union-variant type tokens flow as `SetRef { .. }` in the type channel — a
+    // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
+    let newtype_set = RecursiveSet::singleton(
+        "Some".into(),
         ScopeId::SENTINEL,
-        NominalSchema::Tagged(HashMap::new()),
+        NominalSchema::NewType(Box::new(KType::Number)),
     );
-    let tagged_token: &KType<'_> = region.brand().alloc_ktype(KType::SetRef {
-        set: tagged_set,
+    let newtype_token: &KType<'_> = region.brand().alloc_ktype(KType::SetRef {
+        set: newtype_set,
         index: 0,
     });
     let struct_token: &KType<'_> = region
         .brand()
         .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(tagged_token))));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token))));
     assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token))));
     let child = region
         .brand()
@@ -322,8 +321,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
 /// `kind_of`, and never matches a runtime instance (a value is matched by a type, not a kind).
-/// `OfKind(NewType)` admits a NewType *type* value, declines a Tagged type value, and declines
-/// the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
+/// `OfKind(NewType)` admits a NewType *type* value, declines a `TypeConstructor` type value, and
+/// declines the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
@@ -338,16 +337,19 @@ fn of_kind_nominal_is_type_channel_only() {
         KType::OfKind(KKind::ProperType).accepts_part(&spliced_part(Carried::Type(&newtype_tv)))
     );
 
-    // A Tagged type value is the wrong family — declined.
-    let tagged_tv = KType::SetRef {
+    // A `TypeConstructor` type value is the wrong family — declined.
+    let ctor_tv = KType::SetRef {
         set: RecursiveSet::singleton(
-            "Maybe".into(),
+            "Result".into(),
             ScopeId::SENTINEL,
-            NominalSchema::Tagged(std::collections::HashMap::new()),
+            NominalSchema::TypeConstructor {
+                schema: std::collections::HashMap::new(),
+                param_names: Vec::new(),
+            },
         ),
         index: 0,
     };
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(&tagged_tv))));
+    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(&ctor_tv))));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
@@ -365,16 +367,16 @@ fn of_kind_nominal_is_type_channel_only() {
 }
 
 /// Pins the kind refinement: a `NewType`-kind `SetRef` is strictly more specific than
-/// `OfKind(NewType)`, and incomparable with `OfKind(Tagged)` (a sibling family).
+/// `OfKind(NewType)`, and incomparable with `OfKind(TypeConstructor)` (a sibling family).
 #[test]
 fn user_type_newtype_specificity_lattice() {
     let newtype_kind = KType::OfKind(KKind::NewType);
-    let tagged_kind = KType::OfKind(KKind::Tagged);
+    let ctor_kind = KType::OfKind(KKind::TypeConstructor);
     let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     assert!(dist.is_more_specific_than(&newtype_kind));
     assert!(!newtype_kind.is_more_specific_than(&dist));
-    assert!(!dist.is_more_specific_than(&tagged_kind));
-    assert!(!tagged_kind.is_more_specific_than(&dist));
+    assert!(!dist.is_more_specific_than(&ctor_kind));
+    assert!(!ctor_kind.is_more_specific_than(&dist));
 }
 
 /// Specificity ordering for `SetRef` against the `OfKind` kind lattice:
@@ -384,7 +386,7 @@ fn user_type_newtype_specificity_lattice() {
 #[test]
 fn user_type_specificity_lattice() {
     let newtype_kind = KType::OfKind(KKind::NewType);
-    let tagged_kind = KType::OfKind(KKind::Tagged);
+    let ctor_kind = KType::OfKind(KKind::TypeConstructor);
     let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
     // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
     assert!(newtype_kind.is_more_specific_than(&KType::Any));
@@ -395,8 +397,8 @@ fn user_type_specificity_lattice() {
     assert!(point.is_more_specific_than(&newtype_kind));
     assert!(!newtype_kind.is_more_specific_than(&point));
     // Different-kind pairs incomparable.
-    assert!(!point.is_more_specific_than(&tagged_kind));
-    assert!(!tagged_kind.is_more_specific_than(&point));
+    assert!(!point.is_more_specific_than(&ctor_kind));
+    assert!(!ctor_kind.is_more_specific_than(&point));
 }
 
 /// `is_type_denoting` admission table: variants whose declared `KType` makes
@@ -428,7 +430,6 @@ fn is_type_denoting_table() {
     // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
     // the value carries no nominal identity the caller hasn't already named.
     assert!(!KType::OfKind(KKind::NewType).is_type_denoting());
-    assert!(!KType::OfKind(KKind::Tagged).is_type_denoting());
     assert!(!KType::OfKind(KKind::TypeConstructor).is_type_denoting());
     // Per-declaration `SetRef`: nominal identity already lives in the declaring
     // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
@@ -563,12 +564,15 @@ fn error_carrier<'a>(set: &Rc<RecursiveSet<'a>>) -> KObject<'a> {
     }
 }
 
-/// A singleton tagged set named `name`, for an error-type identity.
-fn tagged_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+/// A singleton `TypeConstructor`-kind set named `name`, for an error-type identity.
+fn error_type_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::Tagged(std::collections::HashMap::new()),
+        NominalSchema::TypeConstructor {
+            schema: std::collections::HashMap::new(),
+            param_names: Vec::new(),
+        },
     )
 }
 
@@ -588,8 +592,8 @@ fn constructor_apply_result_checks_inhabited_error_param() {
         set: Rc::clone(&r_set),
         index: 0,
     });
-    let kerror_set = tagged_set("KError", kerror_sid);
-    let myerr_set = tagged_set("MyErr", myerr_sid);
+    let kerror_set = error_type_set("KError", kerror_sid);
+    let myerr_set = error_type_set("MyErr", myerr_sid);
     let myerr_ty = KType::SetRef {
         set: Rc::clone(&myerr_set),
         index: 0,
@@ -629,7 +633,7 @@ fn constructor_apply_result_ok_admits_any_error_param() {
         index: 0,
     });
     let myerr_ty = KType::SetRef {
-        set: tagged_set("MyErr", myerr_sid),
+        set: error_type_set("MyErr", myerr_sid),
         index: 0,
     };
     let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
@@ -669,7 +673,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
         index: 0,
     });
     let myerr = KType::SetRef {
-        set: tagged_set("MyErr", myerr_sid),
+        set: error_type_set("MyErr", myerr_sid),
         index: 0,
     };
     let stamped = KObject::Tagged {

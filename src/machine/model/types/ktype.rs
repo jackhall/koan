@@ -125,19 +125,6 @@ pub enum KType<'a> {
         set: Rc<RecursiveSet<'a>>,
         index: usize,
     },
-    /// A single variant of a tagged-union member, reached *through* its union. `(set, index)`
-    /// names the `KKind::Tagged` member; `tag` selects one variant within it. A
-    /// refinement of the union: `Variant` is strictly more specific than the union's
-    /// `SetRef` and than the `OfKind(Tagged)` kind, so a slot typed `:(Maybe Some)`
-    /// admits only `Some` values while a `:Maybe` slot admits any variant. A Tagged-kind
-    /// `KObject::Tagged` value reports its `Variant` from `ktype()`. Identity is
-    /// `(set ptr, index, tag)`; the whole set rides every `Variant`, so lift shares it by
-    /// `Rc::clone`, like [`KType::SetRef`].
-    Variant {
-        set: Rc<RecursiveSet<'a>>,
-        index: usize,
-        tag: String,
-    },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, always two or more (a single-member union is that
     /// member — [`union_of`](KType::union_of) collapses it). Identity is order-blind, so
@@ -242,12 +229,10 @@ impl<'a> KType<'a> {
             KType::SigiledTypeExpr => "SigiledTypeExpr".into(),
             KType::RecordType => "RecordType".into(),
             KType::OfKind(k) => k.surface_keyword().into(),
+            // A sealed nominal member renders by its own member name — a bare newtype
+            // (`:Wrapper`) or a per-variant member reached through its union (`:(Maybe Some)`
+            // yields the `Some` member, printed as `Some`).
             KType::SetRef { set, index } => set.member(*index).name.clone(),
-            // `:(Maybe Some)` — the variant reached through its union. Round-trips through
-            // the union-qualified type sigil.
-            KType::Variant { set, index, tag } => {
-                format!(":({} {})", set.member(*index).name, tag)
-            }
             // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
             KType::Union(members) => {
@@ -294,7 +279,7 @@ impl<'a> KType<'a> {
     /// possible without a region borrow and without re-minting a shared set:
     /// - `Module` / `Signature` / `AbstractType { source: Module(_) }` /
     ///   `KFunctor { body: Some(_) }` hold region pointers -> `None`.
-    /// - `SetRef` / `Variant` / `RecursiveGroup` share their set by `Rc` and
+    /// - `SetRef` / `RecursiveGroup` share their set by `Rc` and
     ///   compare by `Rc::ptr_eq`; a rebuilt set is a different identity -> `None`
     ///   (such values take the runtime-checked resident path instead).
     /// - every other variant rebuilds recursively.
@@ -333,7 +318,6 @@ impl<'a> KType<'a> {
             KType::OfKind(k) => Some(KType::OfKind(*k)),
             // `Rc`-shared set: rebuilding would mint a new `Rc` and break identity.
             KType::SetRef { .. } => None,
-            KType::Variant { .. } => None,
             // A union's identity is its owned member set; rebuild each member and rewrap. A
             // member holding a region pointer (e.g. a `SetRef`) declines, and the union with it.
             KType::Union(members) => {
@@ -447,7 +431,7 @@ impl<'a> KType<'a> {
                     && record_resident_in(params, residence, visited)
                     && ret.resident_in_visiting(residence, visited)
             }
-            KType::SetRef { set, .. } | KType::Variant { set, .. } | KType::RecursiveGroup(set) => {
+            KType::SetRef { set, .. } | KType::RecursiveGroup(set) => {
                 set_resident_in(set, residence, visited)
             }
             KType::Union(members) => members
@@ -487,11 +471,9 @@ impl<'a> KType<'a> {
         match self {
             KType::Module { .. } => KKind::Module,
             KType::Signature { .. } => KKind::Signature,
-            // A nominal carries its family on the set member. A `Variant` is always a
-            // `Tagged` member; a `ConstructorApply` defers to its `ctor` (a
-            // `TypeConstructor`-kind `SetRef`).
+            // A nominal carries its family on the set member; a `ConstructorApply` defers to
+            // its `ctor` (a `TypeConstructor`-kind `SetRef`).
             KType::SetRef { set, index } => set.member(*index).kind,
-            KType::Variant { set, index, .. } => set.member(*index).kind,
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
             // A union is a proper type value — it classifies against `OfKind(Proper)` slots
             // and never against a nominal-family kind.
@@ -525,7 +507,7 @@ fn record_resident_in(
 }
 
 /// Residence audit of every member schema in a [`RecursiveSet`] shared by [`KType::SetRef`] /
-/// [`KType::Variant`] / [`KType::RecursiveGroup`] — the checked path those variants take since
+/// [`KType::RecursiveGroup`] — the checked path those variants take, as
 /// [`KType::to_static`] declines them (rebuilding the set would mint a new `Rc` and break
 /// identity). `visited` guards a set reachable via more than one member from being walked twice —
 /// a `Vec` linear scan is fine since sets are small and this is not a hot path. An unfilled
@@ -545,9 +527,6 @@ fn set_resident_in(
         .iter()
         .all(|member| match member.schema().as_ref() {
             None => true,
-            Some(NominalSchema::Tagged(members)) => members
-                .values()
-                .all(|kt| kt.resident_in_visiting(residence, visited)),
             Some(NominalSchema::NewType(kt)) => kt.resident_in_visiting(residence, visited),
             Some(NominalSchema::TypeConstructor { schema, .. }) => schema
                 .values()
@@ -625,20 +604,6 @@ impl<'a> PartialEq for KType<'a> {
             (SetRef { set: s1, index: i1 }, SetRef { set: s2, index: i2 }) => {
                 Rc::ptr_eq(s1, s2) && i1 == i2
             }
-            // Variant identity is `(set ptr, index, tag)` — the union member plus the
-            // selected tag, never the (cyclic) schema.
-            (
-                Variant {
-                    set: s1,
-                    index: i1,
-                    tag: t1,
-                },
-                Variant {
-                    set: s2,
-                    index: i2,
-                    tag: t2,
-                },
-            ) => Rc::ptr_eq(s1, s2) && i1 == i2 && t1 == t2,
             (SetLocal(a), SetLocal(b)) => a == b,
             (
                 Signature {
@@ -711,12 +676,6 @@ impl<'a> std::hash::Hash for KType<'a> {
             SetRef { set, index } => {
                 (Rc::as_ptr(set) as *const ()).hash(state);
                 index.hash(state);
-            }
-            // Set-pointer + index + tag — matching `PartialEq`, never the cyclic schema.
-            Variant { set, index, tag } => {
-                (Rc::as_ptr(set) as *const ()).hash(state);
-                index.hash(state);
-                tag.hash(state);
             }
             SetLocal(i) => i.hash(state),
             Signature { sig, pinned_slots } => {

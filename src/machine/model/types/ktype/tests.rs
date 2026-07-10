@@ -157,7 +157,6 @@ fn name_renders_recursive_ref_as_name() {
 
 #[test]
 fn nominal_kind_surface_keywords() {
-    assert_eq!(KKind::Tagged.surface_keyword(), "Tagged");
     assert_eq!(KKind::NewType.surface_keyword(), "NewType");
     assert_eq!(KKind::TypeConstructor.surface_keyword(), "TypeConstructor",);
 }
@@ -165,7 +164,6 @@ fn nominal_kind_surface_keywords() {
 #[test]
 fn nominal_of_kind_name_renders_family_keyword() {
     assert_eq!(KType::OfKind(KKind::NewType).name(), "NewType");
-    assert_eq!(KType::OfKind(KKind::Tagged).name(), "Tagged");
     assert_eq!(
         KType::OfKind(KKind::TypeConstructor).name(),
         "TypeConstructor"
@@ -291,7 +289,7 @@ fn hash_agrees_with_eq_for_region_free_variants() {
                 body: None,
             },
         ),
-        (KType::OfKind(KKind::Tagged), KType::OfKind(KKind::Tagged)),
+        (KType::OfKind(KKind::NewType), KType::OfKind(KKind::NewType)),
         (
             KType::RecursiveRef("Tree".into()),
             KType::RecursiveRef("Tree".into()),
@@ -397,7 +395,7 @@ fn to_static_rebuilds_owned_leaves() {
         KType::SetLocal(3),
         KType::RecursiveRef("Tree".into()),
         KType::Unresolved(TypeIdentifier::leaf("Foo".into())),
-        KType::OfKind(KKind::Tagged),
+        KType::OfKind(KKind::NewType),
         KType::DeferredReturn(DeferredReturnSurface::Expression("expr".into())),
     ];
     for leaf in &leaves {
