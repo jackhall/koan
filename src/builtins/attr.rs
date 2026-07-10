@@ -17,7 +17,7 @@ use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::values::{Carried, CarriedFamily, Module, NonWrappedRef};
+use crate::machine::model::values::{Carried, CarriedFamily, Module, WrappedPayload};
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{
     CarrierWitness, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
@@ -343,7 +343,7 @@ fn access_module_member<'a>(
                     ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {
                         Carried::Object(o) => {
                             Carried::Object(b.alloc_object_folded(KObject::Wrapped {
-                                inner: NonWrappedRef::peel(o),
+                                inner: WrappedPayload::peel(o),
                                 type_id: b.alloc_ktype_folded(tag),
                             }))
                         }

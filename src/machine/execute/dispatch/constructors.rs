@@ -14,7 +14,7 @@ use crate::machine::core::kfunction::action::DepPlacement;
 use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
+use crate::machine::model::values::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
@@ -96,11 +96,14 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     )
 }
 
-/// Type-check `value` against the newtype member's projected `repr`. The check runs **before** the
-/// witness-closure build (read out of the value carrier), so the build inside the brand is infallible
-/// — it only `peel`s the value and wraps it with the identity (the single-layer collapse invariant
-/// `peel` enforces).
-fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<(), KError> {
+/// Type-check `value` against the newtype member's projected `repr` and decide how the wrap folds
+/// its payload. The check runs **before** the witness-closure build (read out of the value carrier),
+/// so the build inside the brand is infallible. Returns whether to **collapse** one wrapper layer:
+/// a transparent re-tag (`NEWTYPE Bar = Foo` over a `Foo` value — the payload's identity is exactly
+/// this repr) collapses so identities never stack; a union-repr variant (`Succ :Nat`) wraps a
+/// *member* of the union, whose identity differs from the union repr, so it preserves the nested
+/// payload — the recursion the dissolved-union model needs.
+fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<bool, KError> {
     let (set, index) = match identity {
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
@@ -116,7 +119,8 @@ fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<(
             got: value.ktype().name(),
         }));
     }
-    Ok(())
+    let collapse = matches!(value, KObject::Wrapped { .. }) && repr == value.ktype();
+    Ok(collapse)
 }
 
 /// Direct-construct a tagged-union value from the projected schema of its sealed
@@ -227,17 +231,22 @@ fn finish_witnessed<'step>(
     match kind {
         CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
-            check_newtype_repr(identity, terminals[0].value.object())?;
+            let collapse = check_newtype_repr(identity, terminals[0].value.object())?;
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             Ok(terminals[0]
                 .delivered
                 .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     Residence::Copied,
-                    |value, (region, identity_ty), _brand| {
+                    move |value, (region, identity_ty), _brand| {
                         let region = FoldingBrand::in_fold_closure(region);
+                        let inner = if collapse {
+                            WrappedPayload::peel(value.object())
+                        } else {
+                            WrappedPayload::hold(value.object())
+                        };
                         Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner: NonWrappedRef::peel(value.object()),
+                            inner,
                             type_id: identity_ty,
                         }))
                     },
@@ -256,6 +265,7 @@ fn finish_witnessed<'step>(
                     .cloned()
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
+            // A record probe is never a `Wrapped`, so the repr check never asks to collapse.
             check_newtype_repr(identity, &KObject::record(probe))?;
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
@@ -289,7 +299,7 @@ fn finish_witnessed<'step>(
                     let region = FoldingBrand::in_fold_closure(region);
                     let record = Record::from_pairs(fields);
                     Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                        inner: NonWrappedRef::peel(&KObject::record(record)),
+                        inner: WrappedPayload::hold(&KObject::record(record)),
                         type_id: identity_ty,
                     }))
                 },

@@ -230,21 +230,29 @@ fn union_field_accepts_keyworded_map_sigil() {
         &region,
         "UNION Maybe = (Some :(MAP Str -> Number), None :Null)",
     );
-    // UNION is type-only — its variant schema rides the sealed `SetRef` member in `types`.
-    let schema = match scope.resolve_type("Maybe") {
-        Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::Tagged(schema) => schema,
-            _ => panic!("Maybe must project a Tagged schema"),
-        },
-        other => panic!("Maybe must be a Tagged SetRef in types, got {other:?}"),
+    // UNION is type-only — it binds an anonymous union of per-variant newtypes; the `Some`
+    // variant's newtype repr is the keyworded `MAP` sigil that sub-Dispatched.
+    let some_repr = match scope.resolve_type("Maybe") {
+        Some(KType::Union(members)) => members
+            .iter()
+            .find_map(|m| match m {
+                KType::SetRef { set, index } if set.member(*index).name == "Some" => {
+                    match RecursiveSet::projected_schema(set, *index) {
+                        ProjectedSchema::NewType(repr) => Some(repr),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("Some variant must project a NewType repr"),
+        other => panic!("Maybe must be a Union in types, got {other:?}"),
     };
-    let some_kt = schema.get("Some").expect("Some tag");
-    match some_kt {
+    match some_repr {
         KType::Dict(k, v) => {
-            assert_eq!(**k, KType::Str);
-            assert_eq!(**v, KType::Number);
+            assert_eq!(*k, KType::Str);
+            assert_eq!(*v, KType::Number);
         }
-        other => panic!("Some must be KType::Dict(Str, Number), got {other:?}"),
+        other => panic!("Some repr must be KType::Dict(Str, Number), got {other:?}"),
     }
 }
 

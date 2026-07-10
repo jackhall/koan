@@ -356,7 +356,7 @@ fn of_kind_nominal_is_type_channel_only() {
         .expect("a freshly-cloned SetRef is always resident-in-self");
     let w: &KObject<'_> = region
         .alloc_object_checked(KObject::Wrapped {
-            inner: crate::machine::model::values::NonWrappedRef::peel(inner),
+            inner: crate::machine::model::values::WrappedPayload::peel(inner),
             type_id,
         })
         .expect("type_id was just allocated into region's own region");

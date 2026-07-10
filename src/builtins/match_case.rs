@@ -137,10 +137,10 @@ mod tests {
             scope,
             parse_one("MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\"))"),
         );
-        // The no-arm error names the scrutinee's runtime type — a `None` value reports the
-        // variant `:(Maybe None)`.
+        // The no-arm error names the scrutinee's runtime type — a `None` value is a per-variant
+        // newtype, so it reports the member name `None`.
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains(":(Maybe None)")),
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("None")),
             "expected inexhaustive ShapeError naming the runtime type, got {err}",
         );
     }

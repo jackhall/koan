@@ -7,7 +7,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
 };
-use crate::machine::model::values::{KObject, NonWrappedRef};
+use crate::machine::model::values::{KObject, WrappedPayload};
 use crate::machine::RegionBrand;
 use crate::source::{self, FileId, SourceLoc, Span};
 
@@ -206,7 +206,7 @@ impl KError {
             })
             .expect("a freshly synthesized KError SetRef is always region-pure");
         let payload = KObject::Wrapped {
-            inner: NonWrappedRef::peel(&record),
+            inner: WrappedPayload::peel(&record),
             type_id,
         };
         KObject::Tagged {

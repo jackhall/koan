@@ -13,6 +13,6 @@ mod named_pairs;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use kkey::KKey;
-pub use kobject::{KObject, NonWrappedRef};
+pub use kobject::{KObject, WrappedPayload};
 pub use module::{Module, ModuleSignature};
 pub use named_pairs::NamedPairs;

@@ -11,7 +11,7 @@
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
-use crate::machine::model::types::{KKind, RecursiveSet, TypeResolution};
+use crate::machine::model::types::{RecursiveSet, TypeResolution};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
@@ -242,10 +242,11 @@ fn arm_more_specific<'a>(a: &ArmType<'a>, b: &ArmType<'a>) -> bool {
 
 /// How a `MATCH` scrutinee resolves its type-name arm heads.
 enum HeadMode<'a> {
-    /// A tagged-union value (`KKind::Tagged`): a variant head builds a `KType::Variant`
-    /// against the value's own set, so admission reduces to `(set, index, tag)` identity — a
-    /// tag match — and `it` binds the wrapped payload (F3).
-    TaggedVariant {
+    /// A union-variant value (`KObject::Wrapped` over a member `SetRef`): a head naming one of
+    /// the scrutinee's own set members admits by member `SetRef` identity — the value is a
+    /// specific variant, so only its own member name matches — and `it` binds the wrapped
+    /// payload (`inner`, F3). A head that is not a member name falls back to scope resolution.
+    WrappedMember {
         set: Rc<RecursiveSet<'a>>,
         index: usize,
     },
@@ -279,9 +280,9 @@ fn resolve_head_type<'a>(
 ///
 /// Head classification depends on the scrutinee ([`HeadMode`]):
 /// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
-/// - `Type(token)` heads over a tagged-union value (`KObject::Tagged` of a `KKind::Tagged`
-///   member) build a `KType::Variant` against the value's own set and admit via
-///   [`KType::matches_value`] `(set, index, tag)` identity — a tag match.
+/// - `Type(token)` heads over a union-variant value (`KObject::Wrapped` over a member `SetRef`)
+///   naming one of the scrutinee's own set members admit by member `SetRef` identity (only the
+///   value's own variant matches) and bind the payload; a non-member head resolves through `scope`.
 /// - `Type(token)` heads over a `TypeConstructor` value (`Result`) admit by tag-name equality.
 /// - `Type(token)` heads over any other value resolve through `scope` and admit via
 ///   [`KType::matches_value`].
@@ -302,19 +303,19 @@ pub(crate) fn find_branch_body_by_type<'a>(
             parts.len()
         ));
     }
-    // A tagged value resolves its variant heads against its own set; any other value resolves
-    // heads against the scope.
+    // A union-variant value (`Wrapped` over a member `SetRef`) resolves member-name heads against
+    // its own set; a `TypeConstructor` value (`Result`) resolves them by tag string; any other
+    // value resolves heads against the scope.
     let mode = match scrutinee {
-        KObject::Tagged {
-            set, index, tag, ..
-        } => match set.member(*index).kind {
-            KKind::Tagged => HeadMode::TaggedVariant {
-                set: Rc::clone(set),
-                index: *index,
-            },
-            _ => HeadMode::TaggedByTag {
-                value_tag: tag.clone(),
-            },
+        KObject::Wrapped {
+            type_id: KType::SetRef { set, index },
+            ..
+        } => HeadMode::WrappedMember {
+            set: Rc::clone(set),
+            index: *index,
+        },
+        KObject::Tagged { tag, .. } => HeadMode::TaggedByTag {
+            value_tag: tag.clone(),
         },
         _ => HeadMode::Scope,
     };
@@ -367,23 +368,31 @@ pub(crate) fn find_branch_body_by_type<'a>(
                     });
                 }
             }
-            // A capitalized type name: a tag match for a tagged scrutinee, else scope resolution.
+            // A capitalized type name: a variant/tag match for a union-variant or tagged
+            // scrutinee, else scope resolution.
             ExpressionPart::Type(token) => {
                 let label = token.render();
                 let admitting = match &mode {
-                    HeadMode::TaggedVariant { set, index } => {
-                        // Admission is `(set, index, tag)` identity against the value — a tag
-                        // match — without consulting the schema (a synthesized error carrier
-                        // carries a real tag over an empty schema).
-                        let variant = KType::Variant {
-                            set: Rc::clone(set),
-                            index: *index,
-                            tag: label.clone(),
-                        };
-                        variant
-                            .matches_value(scrutinee)
-                            .then_some((ArmType::Typed(variant), true))
-                    }
+                    // A head naming one of the scrutinee's own set members admits by member
+                    // `SetRef` identity (only the value's own variant matches); `it` binds the
+                    // payload. A non-member head resolves through the scope like any type arm.
+                    HeadMode::WrappedMember { set, index } => match set.index_of(&label) {
+                        Some(member_index) => {
+                            // The value is a specific variant, so only its own member admits.
+                            (member_index == *index).then(|| {
+                                let member = KType::SetRef {
+                                    set: Rc::clone(set),
+                                    index: member_index,
+                                };
+                                (ArmType::Typed(member), true)
+                            })
+                        }
+                        None => {
+                            let kt = resolve_head_type(scope, token, chain.clone())?;
+                            kt.matches_value(scrutinee)
+                                .then_some((ArmType::Typed(kt), false))
+                        }
+                    },
                     HeadMode::TaggedByTag { value_tag } => {
                         (&label == value_tag).then_some((ArmType::Exact, true))
                     }
@@ -448,6 +457,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     let it_value = if chosen.binds_payload {
         match scrutinee {
             KObject::Tagged { value, .. } => (**value).deep_clone(),
+            KObject::Wrapped { inner, .. } => inner.get().deep_clone(),
             _ => scrutinee.deep_clone(),
         }
     } else {

@@ -100,19 +100,24 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 }
 
 /// Value-cell sub-expression `(x)` rides the `BareIdentifier` fast lane to resolve
-/// `x` before the synthesized TAG call sees the typed-slot bind.
+/// `x` before the newtype construction sees the value bind. A user-union variant value is an
+/// ordinary `KObject::Wrapped` over the member `SetRef`, not a `KObject::Tagged`.
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
+    use crate::machine::model::types::KType;
     let region = run_root_storage();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&region, captured);
     run(scope, "UNION Maybe = (Some :Number None :Null)\nLET x = 7");
     let result = run_one(scope, parse_one("Maybe (Some (x))"));
     match result {
-        KObject::Tagged { tag, value, .. } => {
-            assert_eq!(tag, "Some");
-            assert!(matches!(&**value, KObject::Number(n) if *n == 7.0));
+        KObject::Wrapped { inner, type_id } => {
+            assert!(matches!(inner.get(), KObject::Number(n) if *n == 7.0));
+            match type_id {
+                KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Some"),
+                other => panic!("expected a member SetRef type_id, got {other:?}"),
+            }
         }
-        other => panic!("expected Tagged, got {:?}", other.ktype()),
+        other => panic!("expected Wrapped, got {:?}", other.ktype()),
     }
 }

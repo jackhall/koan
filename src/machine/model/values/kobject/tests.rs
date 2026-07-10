@@ -206,7 +206,7 @@ fn wrapped_ktype_reports_clone_of_type_id() {
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     let type_id: &KType = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
-        inner: NonWrappedRef::peel(inner),
+        inner: WrappedPayload::peel(inner),
         type_id,
     };
     match w.ktype() {
@@ -228,7 +228,7 @@ fn wrapped_summarize_renders_surface_form() {
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
-        inner: NonWrappedRef::peel(inner),
+        inner: WrappedPayload::peel(inner),
         type_id,
     };
     assert_eq!(w.summarize(), "Distance(3)");
@@ -245,7 +245,7 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
     let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
     let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let original = KObject::Wrapped {
-        inner: NonWrappedRef::peel(inner),
+        inner: WrappedPayload::peel(inner),
         type_id,
     };
     // `peel` `Rc`-boxes a fresh deep_clone, so the source's inner is its own allocation;

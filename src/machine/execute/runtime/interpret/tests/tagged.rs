@@ -104,10 +104,10 @@ fn union_typed_slot_admits_any_variant() {
     assert_eq!(captured.borrow().as_slice(), b"any-variant\n");
 }
 
-/// `:(Maybe Some)` is a first-class type value reached through its union; it renders
-/// back to its union-qualified surface.
+/// `:(Maybe Some)` is a first-class type value reached through its union — the `Some` variant's
+/// per-tag newtype `SetRef`, which renders by its own member name.
 #[test]
-fn variant_type_value_renders_union_qualified() {
+fn variant_type_value_renders_member_name() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
@@ -116,7 +116,7 @@ fn variant_type_value_renders_union_qualified() {
         &region,
         captured.clone(),
     );
-    assert_eq!(captured.borrow().as_slice(), b":(Maybe Some)\n");
+    assert_eq!(captured.borrow().as_slice(), b"Some\n");
 }
 
 /// A bare token that is not a variant of the union is rejected at the variant-reference

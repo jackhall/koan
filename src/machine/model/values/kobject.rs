@@ -13,23 +13,31 @@ use super::Held;
 #[cfg(test)]
 mod tests;
 
-/// An [`Rc`]-shared [`KObject`] statically guaranteed not to be a [`KObject::Wrapped`].
-/// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction peeling
-/// one level suffices. Encodes the newtype-over-newtype collapse invariant in the type
-/// rather than caller discipline. The payload rides an `Rc` (not a region `&'a` reference)
-/// so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the lift-stability a
-/// carrier needs to outlive the frame it was born in.
+/// An [`Rc`]-shared [`KObject::Wrapped`] payload. Two constructors record the wrapper's intent:
+/// [`Self::peel`] collapses one `Wrapped` layer (a re-tag replaces the value's identity, so
+/// identities never stack), while [`Self::hold`] preserves the value as-is (genuine
+/// construction — a union variant nesting another variant carries a `Wrapped` payload, so
+/// `Succ(Zero(null))` keeps both layers). The payload rides an `Rc` (not a region `&'a`
+/// reference) so a `Wrapped` carrier lifts across a dying frame by `Rc::clone` — the
+/// lift-stability a carrier needs to outlive the frame it was born in.
 #[derive(Clone)]
-pub struct NonWrappedRef<'a>(Rc<KObject<'a>>);
+pub struct WrappedPayload<'a>(Rc<KObject<'a>>);
 
-impl<'a> NonWrappedRef<'a> {
-    /// Wrap `value`, collapsing one `Wrapped` layer: a `Wrapped` shares its inner `Rc`
-    /// (single-layer invariant), anything else is `Rc`-boxed via an independent `deep_clone`.
+impl<'a> WrappedPayload<'a> {
+    /// Wrap `value` for a **re-tag**, collapsing one `Wrapped` layer: a `Wrapped` shares its
+    /// inner `Rc` (the new identity replaces the old), anything else is `Rc`-boxed via an
+    /// independent `deep_clone`.
     pub fn peel(value: &KObject<'a>) -> Self {
         match value {
             KObject::Wrapped { inner, .. } => inner.clone(),
             _ => Self(Rc::new(value.deep_clone())),
         }
+    }
+
+    /// Wrap `value` for a **construction**, preserving it verbatim — including a nested
+    /// `Wrapped` payload, so a union variant over another variant keeps every layer.
+    pub fn hold(value: &KObject<'a>) -> Self {
+        Self(Rc::new(value.deep_clone()))
     }
 
     pub fn get(&self) -> &KObject<'a> {
@@ -91,10 +99,11 @@ pub enum KObject<'a> {
     /// `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
     /// Each field value is a [`Held`] (an object or a first-class type).
     Record(Rc<Record<Held<'a>>>, Box<Record<KType<'a>>>),
-    /// NEWTYPE carrier (and the ATTR abstract-type re-tag carrier): tags a representation
-    /// value with a type identity. `inner` is invariantly *not* a `Wrapped` — the
-    /// [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
-    /// construction path. `type_id` is a declaration-stable `&'a KType` — for a NEWTYPE it
+    /// NEWTYPE / union-variant carrier (and the ATTR abstract-type re-tag carrier): tags a
+    /// representation value with a type identity. A re-tag collapses one wrapper layer
+    /// ([`WrappedPayload::peel`]); a genuine construction preserves the payload verbatim
+    /// ([`WrappedPayload::hold`]), so a union variant nesting another variant keeps every
+    /// layer. `type_id` is a declaration-stable `&'a KType` — for a NEWTYPE / union variant it
     /// is a `KType::SetRef` into the sealed singleton set `bindings.types[name]` holds
     /// (so the shared `Rc<RecursiveSet>` travels with it); for an opaque-ascription
     /// abstract-type re-tag it is the per-call `AbstractType` identity.
@@ -103,7 +112,7 @@ pub enum KObject<'a> {
     /// `Wrapped` falls through to `inner`, so wrapping a struct in a NEWTYPE doesn't force
     /// every field accessor to redo.
     Wrapped {
-        inner: NonWrappedRef<'a>,
+        inner: WrappedPayload<'a>,
         type_id: &'a KType<'a>,
     },
     Null,

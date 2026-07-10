@@ -86,6 +86,11 @@ fn apply_constructor<'step>(
     reach: FrameSet,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
+    // A user `UNION` binds an anonymous union of per-variant newtype `SetRef`s. `Maybe Some`
+    // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
+    if let KType::Union(members) = identity {
+        return apply_union_construct(ctx, members, reach, expr);
+    }
     let KType::SetRef { set, index } = identity else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
@@ -161,6 +166,82 @@ fn apply_constructor<'step>(
             Err(e) => Outcome::Done(Err(e)),
         },
     }
+}
+
+/// Construct from an anonymous union of per-variant newtype `SetRef`s (a user `UNION`). `Maybe Some`
+/// (a bare `Type` token body) yields the variant member's type value, reached through its union;
+/// `Maybe (Some v)` (a paren-group body) newtype-constructs the named member — an ordinary
+/// `KObject::Wrapped` over the member `SetRef`, never a `KObject::Tagged`. An unknown variant name in
+/// either form is a schema error listing the union's members.
+fn apply_union_construct<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    members: &'step [KType<'step>],
+    reach: FrameSet,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
+    // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
+    // through its union — yielded as a first-class type value.
+    if let [Spanned {
+        value: ExpressionPart::Type(t),
+        ..
+    }] = expr.parts[1..].as_ref()
+    {
+        let name = t.render();
+        return match union_member(members, &name) {
+            Some(member) => match ctx.step_ctx().alloc_type_pure(member.clone()) {
+                Ok(sealed) => Outcome::Done(Ok(sealed)),
+                Err(e) => Outcome::Done(Err(e)),
+            },
+            None => Outcome::Done(Err(unknown_variant_error(members, &name))),
+        };
+    }
+    // Payload construction: `Maybe (Some v)` (paren-group body) newtype-constructs the member.
+    match extract_call_body(expr) {
+        Ok(CallBody::Positional(parts)) => {
+            let (tag, value_part) = match constructors::tagged_union::prepare_args(parts) {
+                Ok(v) => v,
+                Err(e) => return Outcome::Done(Err(e)),
+            };
+            match union_member(members, &tag) {
+                Some(member) => constructors::dispatch_construct_newtype(
+                    member,
+                    reach,
+                    vec![Spanned::bare(value_part)],
+                ),
+                None => Outcome::Done(Err(unknown_variant_error(members, &tag))),
+            }
+        }
+        Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+        Err(e) => Outcome::Done(Err(e)),
+    }
+}
+
+/// The union member whose newtype `SetRef` is named `name`, if any.
+fn union_member<'step>(members: &'step [KType<'step>], name: &str) -> Option<&'step KType<'step>> {
+    members
+        .iter()
+        .find(|m| matches!(m, KType::SetRef { set, index } if set.member(*index).name == name))
+}
+
+/// A schema error for a name that is not one of the union's variants, listing the members.
+fn unknown_variant_error(members: &[KType<'_>], name: &str) -> KError {
+    KError::new(KErrorKind::ShapeError(format!(
+        "`{name}` is not a variant of the union (variants: {})",
+        union_member_names(members),
+    )))
+}
+
+/// Sorted, comma-joined member names of an anonymous union of newtype `SetRef`s.
+fn union_member_names(members: &[KType<'_>]) -> String {
+    let mut names: Vec<&str> = members
+        .iter()
+        .filter_map(|m| match m {
+            KType::SetRef { set, index } => Some(set.member(*index).name.as_str()),
+            _ => None,
+        })
+        .collect();
+    names.sort_unstable();
+    names.join(", ")
 }
 
 /// Sorted, comma-joined variant tags of a projected tagged schema — for the

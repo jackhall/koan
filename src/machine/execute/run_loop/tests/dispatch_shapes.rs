@@ -368,12 +368,18 @@ fn fast_lane_on_tagged_union_constructs() {
          entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
+    // A user-union variant value is an ordinary `Wrapped` over the member `SetRef`.
     match result {
-        KObject::Tagged { tag, value, .. } => {
-            assert_eq!(tag, "Some");
-            assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
+        KObject::Wrapped { inner, type_id } => {
+            assert!(matches!(inner.get(), KObject::Number(n) if *n == 42.0));
+            match type_id {
+                crate::machine::model::types::KType::SetRef { set, index } => {
+                    assert_eq!(set.member(*index).name, "Some");
+                }
+                other => panic!("expected a member SetRef type_id, got {other:?}"),
+            }
         }
-        other => panic!("expected Tagged, got {:?}", other.ktype()),
+        other => panic!("expected Wrapped, got {:?}", other.ktype()),
     }
 }
 

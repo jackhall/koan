@@ -155,31 +155,65 @@ pub fn seal_recursive_refs<'a>(
     kt: &KType<'a>,
     missing: &RefCell<Vec<String>>,
 ) -> KType<'a> {
-    let recurse = |inner: &KType<'a>| seal_recursive_refs(set, inner, missing);
+    seal_refs_inner(set, None, kt, missing)
+}
+
+/// [`seal_recursive_refs`] with an extra binder rule: a [`KType::RecursiveRef`] naming
+/// `binder.0` — the declaring name, which is *not* itself a set member — seals to a clone of
+/// `binder.1`. A `UNION` uses this so a variant payload referencing the union's own name
+/// (`Node :Tree` in `UNION Tree = (Leaf … Node :Tree)`) seals to the union of the set's
+/// variant members (ruling F2), while variant-sibling references keep the `index_of` mapping.
+pub fn seal_union_refs<'a>(
+    set: &Rc<RecursiveSet<'a>>,
+    binder_name: &str,
+    binder_union: &KType<'a>,
+    kt: &KType<'a>,
+    missing: &RefCell<Vec<String>>,
+) -> KType<'a> {
+    seal_refs_inner(set, Some((binder_name, binder_union)), kt, missing)
+}
+
+/// Deep-seal core shared by [`seal_recursive_refs`] and [`seal_union_refs`]. `binder`, when
+/// present, maps the declaring name to a replacement `KType` before the `index_of` lookup —
+/// the name→`KType` widening ruling F2 needs.
+fn seal_refs_inner<'a>(
+    set: &Rc<RecursiveSet<'a>>,
+    binder: Option<(&str, &KType<'a>)>,
+    kt: &KType<'a>,
+    missing: &RefCell<Vec<String>>,
+) -> KType<'a> {
+    let recurse = |inner: &KType<'a>| seal_refs_inner(set, binder, inner, missing);
     match kt {
-        KType::RecursiveRef(name) => match set.index_of(name) {
-            Some(i) => KType::SetLocal(i),
-            None => {
-                missing.borrow_mut().push(name.clone());
-                // Leave the transient in place; the caller records the miss and aborts
-                // before this survives into a sealed type.
-                kt.clone()
+        KType::RecursiveRef(name) => {
+            if let Some((binder_name, binder_union)) = binder {
+                if name == binder_name {
+                    return binder_union.clone();
+                }
             }
-        },
+            match set.index_of(name) {
+                Some(i) => KType::SetLocal(i),
+                None => {
+                    missing.borrow_mut().push(name.clone());
+                    // Leave the transient in place; the caller records the miss and aborts
+                    // before this survives into a sealed type.
+                    kt.clone()
+                }
+            }
+        }
         // A `SetRef` into *this* set (cross-sibling, resolved post-seal) folds to `SetLocal`;
         // a `SetRef` into another set is an external handle and passes through.
         KType::SetRef { set: other, index } if Rc::ptr_eq(other, set) => KType::SetLocal(*index),
         KType::List(inner) => KType::List(Box::new(recurse(inner))),
         KType::Dict(k, v) => KType::Dict(Box::new(recurse(k)), Box::new(recurse(v))),
         KType::Record(fields) => KType::Record(Box::new(
-            fields.map(|t| seal_recursive_refs(set, t, missing)),
+            fields.map(|t| seal_refs_inner(set, binder, t, missing)),
         )),
         KType::KFunction { params, ret } => KType::KFunction {
-            params: params.map(|t| seal_recursive_refs(set, t, missing)),
+            params: params.map(|t| seal_refs_inner(set, binder, t, missing)),
             ret: Box::new(recurse(ret)),
         },
         KType::KFunctor { params, ret, body } => KType::KFunctor {
-            params: params.map(|t| seal_recursive_refs(set, t, missing)),
+            params: params.map(|t| seal_refs_inner(set, binder, t, missing)),
             ret: Box::new(recurse(ret)),
             body: *body,
         },

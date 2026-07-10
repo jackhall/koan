@@ -653,6 +653,7 @@ digraph {
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::source" [label="uses", style="dashed"];
