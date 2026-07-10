@@ -31,6 +31,7 @@ mod result;
 mod sig_def;
 mod try_with;
 mod type_ops;
+mod type_union;
 mod union;
 mod using_scope;
 mod val_decl;
@@ -247,6 +248,7 @@ pub fn default_scope<'a>(
     record_projection::register(scope);
     type_ops::register(scope);
     parameterized_types::register(scope);
+    type_union::register(scope);
     arithmetic::register(scope);
     arithmetic::register_builtin_operator_groups(scope);
 

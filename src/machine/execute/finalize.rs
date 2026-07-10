@@ -112,6 +112,14 @@ impl NodeFinalize for KoanRuntime<'_> {
                                 home_region.alloc_object_folded(object.deep_clone()),
                             );
                         }
+                        // A declared union return checks (above) but never re-tags: the value keeps
+                        // its own runtime type, which is what union elimination dispatches on. Every
+                        // other declared return re-stamps the value into the declared type.
+                        if matches!(declared_type, KType::Union(_)) {
+                            return Carried::Object(
+                                home_region.alloc_object_folded(object.deep_clone()),
+                            );
+                        }
                         Carried::Object(
                             home_region
                                 .alloc_object_folded(object.deep_clone().stamp_type(declared_type)),

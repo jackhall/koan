@@ -539,7 +539,13 @@ impl<'a> KType<'a> {
             // above by `accepts_carried`.
             KType::KFunction { .. } | KType::KFunctor { .. } => false,
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-            KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
+            // A `:KExpression` slot captures a parenthesized expression raw; it also captures a
+            // bare list literal raw — the shape a `Unary`-mode operator run reduces to
+            // (`[Keyword, ListLiteral]`) — so the receiving builtin owns the operand run.
+            KType::KExpression => matches!(
+                part,
+                ExpressionPart::Expression(_) | ExpressionPart::ListLiteral(_)
+            ),
             KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
             KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),
             // A raw parser type token is a proper type name, admitted only for `Proper` / `Any`; a

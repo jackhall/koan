@@ -51,6 +51,12 @@ impl<'a> KFunction<'a> {
                     (KType::KExpression, ExpressionPart::Expression(_)) => {
                         has_lazy_slot = true;
                     }
+                    // A `Unary`-mode operator run reduces to `[Keyword, ListLiteral]`; the list
+                    // literal rides a `:KExpression` slot raw (`resolve_for`) so the receiving
+                    // builtin owns the operand run rather than eager-evaluating it.
+                    (KType::KExpression, ExpressionPart::ListLiteral(_)) => {
+                        has_lazy_slot = true;
+                    }
                     (KType::KExpression, _) => return None,
                     // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
                     // part — captured raw (`resolve_for`), never sub-dispatched here.
