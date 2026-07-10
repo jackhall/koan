@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use super::{NodeId, Scheduler, Terminal, Workload};
+use super::{Anchor, NodeId, Scheduler, Terminal, Workload};
 
 impl<W: Workload> Scheduler<W> {
     /// Invariant: every consumer drained here is parked with a non-zero counter;
@@ -15,24 +15,23 @@ impl<W: Workload> Scheduler<W> {
     /// slot must observe the prior transition. The terminal arrives already bundled with its witness
     /// set (the producer frame ∪ the regions it reaches), built by the workload's finalize hook.
     ///
-    /// `host` is the producer's per-call frame owner when it carries one (`None` for a frameless /
-    /// run-region producer, whose backing already outlives the terminal). It seeds the slot's
-    /// **frame-retention hold**: the frame stays retained until every destination — the consumers
+    /// Seeds the slot's **frame-retention hold** unconditionally by projecting the region owner from
+    /// the slot's own anchor: the region stays retained until every destination — the consumers
     /// parked here at finalize, plus any late parker — has pulled, released at pull-count zero.
-    pub fn finalize(
-        &mut self,
-        idx: usize,
-        output: Result<Terminal<W>, W::Error>,
-        host: Option<Rc<W::Frame>>,
-    ) {
+    pub fn finalize(&mut self, idx: usize, output: Result<Terminal<W>, W::Error>) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
         let drained = self.deps.drain_notify(idx);
         // The consumers parked on this producer at finalize are its known destinations; a late parker
-        // (wiring after this point) bumps the count through the ready-branch increment.
-        if let Some(owner) = host {
-            self.deps.seed_retain(idx, owner, drained.len());
-        }
+        // (wiring after this point) bumps the count through the ready-branch increment. Project the
+        // retention owner from the slot's own anchor, then drop the anchor — its cart/chain are dead
+        // weight once the slot is terminal; only the region survives, held by the retention hold.
+        let anchor = self
+            .deps
+            .take_anchor(idx)
+            .expect("a finalizing slot still holds its anchor");
+        self.deps
+            .seed_retain(idx, Rc::clone(anchor.owner()), drained.len());
         let mut woken: Vec<usize> = Vec::new();
         for (consumer, hit_zero) in drained {
             if hit_zero {
@@ -61,11 +60,13 @@ impl<W: Workload> Scheduler<W> {
             }
             // This slot is dying: its last possible pull on every producer it still depends on is
             // now, so discharge each (its backward edges plus any late-park debt). Then release its
-            // own retention hold — an owned producer's owner is done with it, so its frame dies here
-            // regardless of the remaining count. Both run before `owned_children` drains the edges.
+            // own retention hold — an owned producer's owner is done with it, so its region dies here
+            // regardless of the remaining count — and release its memory anchor. All run before
+            // `owned_children` drains the edges.
             self.deps.discharge_edges(id.index());
             self.deps.discharge_owed(id.index());
             self.deps.drop_retain(id.index());
+            self.deps.clear_anchor(id.index());
             for child in self.deps.owned_children(id.index()) {
                 stack.push(child);
             }

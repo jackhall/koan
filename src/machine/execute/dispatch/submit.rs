@@ -17,7 +17,7 @@ use crate::machine::{
     BindKind, BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope,
 };
 
-use super::super::nodes::{NodePayload, NodeScope};
+use super::super::nodes::{NodeScope, SlotFrame};
 use super::super::runtime::KoanRuntime;
 
 /// Submission-time binder-install info — see the module docs for the per-bucket eager-slot mask
@@ -140,13 +140,10 @@ impl<'run> KoanRuntime<'run> {
             None => Vec::new(),
         };
         let (cart, framed) = self.submission_cart();
+        let anchor = SlotFrame::new(cart, node_scope, chain.clone());
         let id = self.sched.alloc_node(
             super::decide_with_presubs(expr, pre_subs, None),
-            NodePayload {
-                scope: node_scope,
-                chain: chain.clone(),
-            },
-            cart,
+            anchor,
             framed,
         );
         if let Some(install) = install {

@@ -65,7 +65,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
-        .finalize_terminal(carrier, Some(&producer), None)
+        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
     // it to the scheduler at finalize.
@@ -104,7 +104,7 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
-        .finalize_terminal(carrier, Some(&producer), None)
+        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     assert!(
         sealed.witness().borrows_host(),
@@ -230,7 +230,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let (carrier, weak) = resident_scalar(&producer, false);
     let runtime = KoanRuntime::new();
     let sealed = runtime
-        .finalize_terminal(carrier, Some(&producer), None)
+        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     let cell = Delivered::seal(sealed, producer.storage_rc());
 
@@ -296,7 +296,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
-        .finalize_terminal(carrier, Some(&producer), None)
+        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     let cell = Delivered::seal(sealed, producer.storage_rc());
     drop(producer);
@@ -346,7 +346,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
 
     let runtime = KoanRuntime::new();
     let sealed = runtime
-        .finalize_terminal(carrier, Some(&producer), None)
+        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     assert_eq!(
         Rc::strong_count(&storage),
@@ -433,7 +433,10 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
 
     let runtime = KoanRuntime::new();
     let checked = runtime
-        .finalize_terminal(carrier, Some(&producer), Some(&obligation))
+        .finalize_terminal(
+            Delivered::seal(carrier, producer.storage_rc()),
+            Some(&obligation),
+        )
         .expect("declared type Any matches the carried Module -- no mismatch");
 
     assert_eq!(

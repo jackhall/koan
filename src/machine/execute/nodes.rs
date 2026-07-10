@@ -7,10 +7,41 @@ use crate::machine::model::values::CarriedFamily;
 use crate::machine::{CallFrame, CarrierWitness, KError, LexicalFrame, NodeId};
 use crate::witnessed::{SealedExtern, Witnessed};
 
-/// The generic per-node state lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
-/// execute tree has a single `nodes` surface combining them with the Koan-side [`NodeStep`] /
-/// [`NodePayload`] / [`NodeScope`].
-pub(super) use crate::scheduler::nodes::{Node, NodeFrame, NodeWork};
+/// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
+/// execute tree has a single `nodes` surface combining it with the Koan-side [`NodeStep`] /
+/// [`NodePayload`] / [`NodeScope`] / [`SlotFrame`].
+pub(super) use crate::scheduler::nodes::NodeWork;
+
+/// Koan's `Workload::Frame` — the scheduler-held per-slot memory anchor. Wraps the shared
+/// per-call cart with the slot's own [`NodeScope`] handle and lexical [`chain`]. The scheduler
+/// holds one `Rc<SlotFrame>` per slot and projects the region owner (`FrameStorage`) through
+/// [`Anchor::owner`] where retention and delivery need it.
+pub(super) struct SlotFrame {
+    pub(super) cart: Rc<CallFrame>,
+    pub(super) payload: NodePayload,
+}
+
+impl crate::scheduler::Anchor for SlotFrame {
+    type Owner = crate::machine::FrameStorage;
+    fn owner(&self) -> &Rc<crate::machine::FrameStorage> {
+        self.cart.storage()
+    }
+}
+
+impl SlotFrame {
+    /// Mint a slot anchor from the cart plus the slot's scope handle and chain — the one
+    /// constructor, so submission/replace mint sites stay one-liners.
+    pub(super) fn new(
+        cart: Rc<CallFrame>,
+        scope: NodeScope,
+        chain: Rc<LexicalFrame>,
+    ) -> Rc<SlotFrame> {
+        Rc::new(SlotFrame {
+            cart,
+            payload: NodePayload { scope, chain },
+        })
+    }
+}
 
 /// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
 /// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant

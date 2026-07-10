@@ -143,7 +143,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
     /// White-box reach introspection: production code ([`Self::mint_into`] / [`Self::compose_into`])
     /// reads the `borrows_host` field directly, so this accessor has no library-internal caller and
     /// is gated entirely behind `test-hooks` for an embedder's white-box tests (mirroring
-    /// `Scheduler::payload_of`'s gate) rather than split into a `pub(crate)` core.
+    /// `Scheduler::anchor_of`'s gate) rather than split into a `pub(crate)` core.
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn borrows_host(&self) -> bool {
         self.borrows_host
@@ -182,7 +182,7 @@ impl<F: PinsRegion + 'static> Carrier<F> {
 
     /// White-box reach introspection: kept ungated `pub(crate)` for [`Self::mint_into`] /
     /// [`Self::compose_into`]'s own use, and re-exposed `pub` only under `test-hooks` for an
-    /// embedder's white-box tests (mirroring `Scheduler::payload_of`'s gate).
+    /// embedder's white-box tests (mirroring `Scheduler::anchor_of`'s gate).
     #[cfg(not(any(test, feature = "test-hooks")))]
     pub(crate) fn with_reach<R>(
         &self,

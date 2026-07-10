@@ -1,10 +1,6 @@
-//! The generic per-node state the scheduler stores: a node's [`work`](self::NodeWork) (its deps and
-//! the one-shot continuation that runs over them), its opaque workload [`payload`](self::Node), and
-//! its [`frame`](self::NodeFrame) (the per-call memory cart it runs against). All three are
-//! parametric over the [`Workload`](super::Workload) — the scheduler stores and hands them back but
-//! inspects no field beyond the dep wiring.
-
-use std::rc::Rc;
+//! The generic per-node work the scheduler stores: a node's [`NodeWork`] — its deps and the
+//! one-shot continuation that runs over them. Parametric over the [`Workload`]; the scheduler stores
+//! it and hands it back but inspects no field beyond the dep wiring.
 
 use super::{Erased, Reattachable, ResolvedDeps, Workload};
 
@@ -20,7 +16,7 @@ pub struct NodeWork<W: Workload> {
     /// The slot's continuation, stored erased to `'static` (`Erased<W::Continuation>`) so the node it
     /// sits on pins no borrow. Handed back to run once; never inspected — the workload re-anchors it
     /// once per step via the consuming externally-witnessed
-    /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open), against the held cart `Rc`.
+    /// [`SealedExtern::open`](crate::witnessed::SealedExtern::open), against the held anchor `Rc`.
     pub continuation: Erased<W::Continuation>,
     pub carrier: Option<String>,
 }
@@ -46,22 +42,4 @@ impl<W: Workload> NodeWork<W> {
     pub fn into_run_parts(self) -> (ResolvedDeps, Erased<W::Continuation>, Option<String>) {
         (self.deps, self.continuation, self.carrier)
     }
-}
-
-/// A node's per-call frame state: the execution cart. Lifetime-free — the cart `Rc` pins everything
-/// its members point at. Every node owns a `NodeFrame`: the cart is the per-node memory the slot's
-/// step runs against.
-pub struct NodeFrame<W: Workload> {
-    /// The cart this slot's step runs against. The workload mints it and the `Rc` pins it for the
-    /// step; the scheduler stores and hands it back but calls no method on it.
-    pub cart: Rc<W::Cart>,
-}
-
-pub struct Node<W: Workload> {
-    pub work: NodeWork<W>,
-    /// The slot's opaque workload payload, stored and handed back but never inspected by the
-    /// scheduler.
-    pub payload: W::Payload,
-    /// The slot's per-call frame state (the execution cart) — never absent, see [`NodeFrame`].
-    pub frame: NodeFrame<W>,
 }

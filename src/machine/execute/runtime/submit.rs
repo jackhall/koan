@@ -22,9 +22,7 @@ fn scopes_eq(a: &Scope<'_>, b: &Scope<'_>) -> bool {
     )
 }
 
-#[cfg(test)]
-use super::super::nodes::NodePayload;
-use super::super::nodes::{NodeScope, NodeWork};
+use super::super::nodes::{NodeScope, NodeWork, SlotFrame};
 use super::super::outcome::dep_error_frame;
 #[cfg(test)]
 use super::super::TerminalDepFinish;
@@ -117,7 +115,8 @@ impl<'run> KoanRuntime<'run> {
             .expect("a slot step installs the ambient payload before the body submits")
             .clone();
         let (cart, framed) = self.submission_cart();
-        self.sched.alloc_node(work, payload, cart, framed)
+        let anchor = SlotFrame::new(cart, payload.scope, payload.chain);
+        self.sched.alloc_node(work, anchor, framed)
     }
 
     /// Submit each `statement` as a fresh lexical block over `scope`, minting a frame `(scope_id,
@@ -255,7 +254,7 @@ impl<'run> KoanRuntime<'run> {
     }
 }
 
-/// Test-fixture submission prims that build a run-lifetime [`NodePayload`] from a raw `scope`, so
+/// Test-fixture submission prims that mint a run-lifetime [`SlotFrame`] anchor from a raw `scope`, so
 /// scheduler tests stand up raw `NodeWork` slots through the harness. The run path routes a
 /// `Dispatch` through [`KoanRuntime::submit_expression`] instead.
 #[cfg(test)]
@@ -272,7 +271,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     /// Run-lifetime submission funnel: establish the run frame, decide the slot's [`NodeScope`]
-    /// handle, default the chain to the ambient one, and submit the assembled [`NodePayload`].
+    /// handle, default the chain to the ambient one, and submit the assembled [`SlotFrame`] anchor.
     pub(in crate::machine::execute) fn add_with_chain(
         &mut self,
         work: NodeWork<KoanWorkload>,
@@ -285,15 +284,8 @@ impl<'run> KoanRuntime<'run> {
             .or_else(|| self.active_payload().map(|p| p.chain.clone()))
             .expect("every dispatched node has a chain — submission outside enter_block / ambient payload is a bug");
         let (cart, framed) = self.submission_cart();
-        self.sched.alloc_node(
-            work,
-            NodePayload {
-                scope: scope_handle,
-                chain,
-            },
-            cart,
-            framed,
-        )
+        let anchor = SlotFrame::new(cart, scope_handle, chain);
+        self.sched.alloc_node(work, anchor, framed)
     }
 
     /// Schedule a dep-finish slot against an explicit `scope`. `deps` carries the owned sub-Dispatches

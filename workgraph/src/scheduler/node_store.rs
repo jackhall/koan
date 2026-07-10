@@ -14,7 +14,8 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use super::nodes::{Node, NodeWork};
+use super::nodes::NodeWork;
+use super::workload::OwnerOf;
 use super::{Live, NodeId, SealedTerminal, Terminal, Workload};
 use crate::witnessed::Sealed;
 // `Erased` / `Carrier` / `Witnessed` re-anchor a test-only result through `set_result`; the
@@ -63,8 +64,8 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
 }
 
 enum SlotState<W: Workload> {
-    PreRun(Node<W>),
-    /// Node payload has been moved out by `take_for_run`. A matching
+    PreRun(NodeWork<W>),
+    /// Node work has been moved out by `take_for_run`. A matching
     /// `reinstall` / `finalize` / `free_one` exits this state.
     Running,
     /// A finalized terminal: a [`Sealed`] carrier bundling the value (erased to `'static`) with its
@@ -123,31 +124,31 @@ impl<W: Workload> NodeStore<W> {
     /// The only path that picks an index. `DepGraph::install_for_slot`
     /// mirrors the recycle-vs.-extend choice via
     /// `consumer.index() < notify_list.len()`.
-    pub(super) fn alloc_slot(&mut self, node: Node<W>) -> NodeId {
+    pub(super) fn alloc_slot(&mut self, work: NodeWork<W>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
-                self.slots[id] = SlotState::PreRun(node);
+                self.slots[id] = SlotState::PreRun(work);
                 id
             }
             None => {
                 let id = NodeId(self.slots.len());
-                self.slots.push(SlotState::PreRun(node));
+                self.slots.push(SlotState::PreRun(work));
                 id
             }
         }
     }
 
     /// Panics if the slot wasn't `PreRun`.
-    pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<W> {
+    pub(super) fn take_for_run(&mut self, id: NodeId) -> NodeWork<W> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
-            SlotState::PreRun(node) => node,
+            SlotState::PreRun(work) => work,
             _ => panic!("scheduler must not revisit a completed node"),
         }
     }
 
-    /// Tail-call path: reuse the slot index for a new node. The workload built the slot's `payload`.
-    pub(super) fn reinstall(&mut self, id: NodeId, node: Node<W>) {
-        self.slots[id] = SlotState::PreRun(node);
+    /// Tail-call path: reuse the slot index for a new node's work.
+    pub(super) fn reinstall(&mut self, id: NodeId, work: NodeWork<W>) {
+        self.slots[id] = SlotState::PreRun(work);
     }
 
     /// Replace a finalized terminal in place, dropping any pinned producer frame. The drain
@@ -217,16 +218,16 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn read_result_with<R>(
         &self,
         id: NodeId,
-        pin: Option<&Rc<W::Frame>>,
+        pin: Option<&Rc<OwnerOf<W>>>,
         f: impl for<'b> FnOnce(Live<'b, W>) -> R,
     ) -> Result<R, &W::Error> {
         match &self.slots[id] {
-            // Re-anchor under the retained frame owner (`open_with`) — the carrier's own witness is
+            // Re-anchor under the retained region owner (`open_with`) — the carrier's own witness is
             // reference-only and pins nothing. A slot with no retained owner (a drained root re-homed
             // into the run region) is externally pinned, so the read opens under the empty pin.
             SlotState::Done(Ok(w), ..) => Ok(match pin {
                 Some(p) => w.open_with(p, f),
-                None => w.open_with(&crate::witnessed::RegionSet::<W::Frame>::empty(), f),
+                None => w.open_with(&crate::witnessed::RegionSet::<OwnerOf<W>>::empty(), f),
             }),
             SlotState::Done(Err(e), ..) => Err(e),
             _ => panic!("result must be ready by the time it's read"),
@@ -253,9 +254,9 @@ impl<W: Workload> NodeStore<W> {
         let mut expr_sample: Option<String> = None;
         let mut fallback_sample: Option<String> = None;
         for slot in self.slots.iter() {
-            if let SlotState::PreRun(node) = slot {
+            if let SlotState::PreRun(work) = slot {
                 count += 1;
-                match work_deadlock_sample(&node.work) {
+                match work_deadlock_sample(work) {
                     DeadlockSample::Preferred(s) if expr_sample.is_none() => expr_sample = Some(s),
                     DeadlockSample::Fallback(s) if fallback_sample.is_none() => {
                         fallback_sample = Some(s.to_string());
@@ -331,16 +332,6 @@ impl<W: Workload> NodeStore<W> {
     pub(super) fn free_list_len(&self) -> usize {
         self.free_list.len()
     }
-
-    /// The live slot's opaque payload, or `None` once it has terminalized. The workload extracts
-    /// the field it wants (e.g. the lexical chain). Test-only.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn payload_of(&self, id: NodeId) -> Option<&W::Payload> {
-        match self.slots.get(id) {
-            Some(SlotState::PreRun(node)) => Some(&node.payload),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -360,17 +351,23 @@ mod tests {
         UnitCarrier => (),
     }
 
+    /// A minimal memory anchor projecting a trivial `PinsRegion` owner — purely a type binding, the
+    /// white-box store tests never construct it.
+    struct TestAnchor(std::rc::Rc<crate::witnessed::doctest_fixture::Cart>);
+    impl crate::scheduler::Anchor for TestAnchor {
+        type Owner = crate::witnessed::doctest_fixture::Cart;
+        fn owner(&self) -> &std::rc::Rc<Self::Owner> {
+            &self.0
+        }
+    }
+
     /// A minimal workload for the white-box store tests: every associated type is trivial, so the
     /// generic store can be exercised without naming any Koan type.
     struct TestWorkload;
     impl Workload for TestWorkload {
-        type Payload = ();
         type Value = U32Value;
         type Error = ();
-        type Cart = ();
-        // A trivial `PinsRegion` frame owner — the retention hold's `Rc<Frame>` type, which these
-        // white-box tests never construct.
-        type Frame = crate::witnessed::doctest_fixture::Cart;
+        type Frame = TestAnchor;
         type Continuation = UnitCarrier;
     }
 

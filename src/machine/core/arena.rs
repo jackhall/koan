@@ -1147,7 +1147,7 @@ impl CallFrame {
 
     /// This frame's own `FrameStorage` — the envelope's retained host, which every constructor
     /// pairs with the child scope.
-    fn storage(&self) -> &Rc<FrameStorage> {
+    pub(crate) fn storage(&self) -> &Rc<FrameStorage> {
         self.envelope.host()
     }
 

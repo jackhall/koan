@@ -19,9 +19,10 @@ use crate::witnessed::{
 
 use super::dispatch::SchedulerView;
 use super::finalize::{finalize_error, NodeFinalize};
-use super::nodes::{Node, NodeFrame, NodePayload, NodeScope, NodeStep};
+use super::nodes::{ChainOp, NodePayload, NodeScope, NodeStep, NodeWork};
 use super::outcome::DepTerminal;
 use super::runtime::{KoanRuntime, KoanWorkload};
+use crate::scheduler::Anchor;
 
 #[cfg(test)]
 mod run_tests;
@@ -73,8 +74,8 @@ impl<'run> KoanRuntime<'run> {
             // step orders the retiring region's free after the adoption (`None` for any non-reinstalled
             // step, or a frameless replace). Redundant while the loop-carried carriers still pin the
             // region; load-bearing once the carrier collapses.
-            let (node, _handoff) = self.sched.take_for_run(id);
-            self.run_step(id, node);
+            let (work, anchor, _handoff) = self.sched.take_for_run(id);
+            self.run_step(id, work, anchor);
         }
         // Slots still parked after drain are on a dependency that can never fire —
         // surface the cycle rather than panic on the top-level result read.
@@ -103,14 +104,20 @@ impl<'run> KoanRuntime<'run> {
     /// launder to `'run` to cross the bracket exit, and nothing branded escapes. The step's cart clone
     /// is confined to this call and dropped at return; a `FreshTail` placement for the next iteration
     /// mints an entirely fresh cart, so nothing aliases across the boundary.
-    fn run_step(&mut self, id: NodeId, node: Node<KoanWorkload>) {
+    fn run_step(
+        &mut self,
+        id: NodeId,
+        work: NodeWork<KoanWorkload>,
+        anchor: Rc<super::nodes::SlotFrame>,
+    ) {
         let idx = id.index();
-        // Read the scope as a value up front: nothing holds a scope borrow across the step's
-        // `&mut self` work or a tail hop's frame swap.
-        let node_scope = node.payload.scope;
-        let NodeFrame { cart } = node.frame;
-        let prev_chain_carrier = node.payload.chain;
-        let (deps, erased_continuation, _carrier) = node.work.into_run_parts();
+        // Source the step's context off the scheduler-held anchor: the cart, the slot's scope
+        // handle, and its lexical chain. Read as values up front so nothing holds a scope borrow
+        // across the step's `&mut self` work or a tail hop's frame swap.
+        let cart = Rc::clone(&anchor.cart);
+        let node_scope = anchor.payload.scope;
+        let prev_chain_carrier = anchor.payload.chain.clone();
+        let (deps, erased_continuation, _carrier) = work.into_run_parts();
         // The step's open witness: a step-confined cart clone, dropped at return. The tail open
         // re-anchors the step's carriers to the brand `'b` this witness pins, and owns that reattach.
         let continuation_witness = Rc::clone(&cart);
@@ -153,16 +160,16 @@ impl<'run> KoanRuntime<'run> {
                 Ok(t) => FrameSet::union(&acc, &t.delivered.liveness_frameset()),
                 Err(_) => acc,
             });
-        // The open witness: the start cart (pinning the continuation and dest region — plus their
-        // ancestor backings via its `outer` chain) unioned with `pin` (every dep source). Held across
-        // the open, so re-anchoring the zipped carriers to `'b` cannot dangle. A plain `FrameSet`
-        // (§ the run-loop step-open witness is a plain frame set): every member is a frame owner —
-        // each dep contributes its envelope's host ∪ reach through `pin`, redundantly with the
-        // duplicated envelope held across the whole open in `dep_sources` (see the struct doc above).
-        let combined: FrameSet = FrameSet::union(
-            &FrameSet::singleton(continuation_witness.storage_rc()),
-            &pin,
-        );
+        // The open witness: the anchor's projected region owner (pinning the continuation and dest
+        // region — plus their ancestor backings via the storage `outer` chain) unioned with `pin`
+        // (every dep source). Held across the open, so re-anchoring the zipped carriers to `'b`
+        // cannot dangle. A plain `FrameSet` (§ the run-loop step-open witness is a plain frame set):
+        // every member is a frame owner — each dep contributes its envelope's host ∪ reach through
+        // `pin`, redundantly with the duplicated envelope held across the whole open in `dep_sources`
+        // (see the struct doc above). Sourced off the scheduler-returned anchor, not a `storage_rc()`
+        // of the cart the scheduler already holds.
+        let combined: FrameSet =
+            FrameSet::union(&FrameSet::singleton(Rc::clone(anchor.owner())), &pin);
         // Open the three externally-witnessed carriers — continuation, active scope, dep slice —
         // together at one rank-2 `for<'b>` brand witnessed by `combined` (see the doc comment for why
         // nothing branded escapes).
@@ -205,55 +212,47 @@ impl<'run> KoanRuntime<'run> {
                 // Drain re-entrant writes against the step scope (unchanged by the step).
                 scope.drain_pending();
                 // The producer's per-call frame, gated to a *dying* producer (a frameless / run-frame
-                // producer folds in nothing): folded into a value terminal's witness and the
-                // destination pin for a `ForwardReady` relocation.
+                // producer folds in nothing): it gates the per-call return obligation (the contract
+                // label and the finalize fold) and selects a `ForwardReady` relocation's destination
+                // pin. Retention seeds independently — the scheduler reads the slot's own anchor owner
+                // at finalize, so `non_dying` makes no memory decision.
                 let frame = (!post.prev_frame.non_dying()).then_some(&post.prev_frame);
-                // The producer frame's owner `Rc`, handed to the scheduler as the retention host
-                // for a finalized value: the frame stays retained until every destination pulls.
-                // Seeded **unconditionally**, decoupled from the `frame` (dying-ness) gate: even the
-                // run frame's storage owns a real region (the run region, via `CallFrame::adopting`),
-                // so `storage_rc()` is well-defined at every step. A hold on run-region storage is
-                // sound over-retention — an `Rc` clone that outlives the run anyway, released at
-                // pull-zero / node free. Retention is a pure delivery fact; `non_dying` makes no
-                // memory decision — its sole reader, the `frame` gate above, carries only the
-                // per-call return-obligation semantics (the contract label and the finalize fold).
-                let host = Some(post.prev_frame.storage_rc());
                 match step {
                     NodeStep::DoneWitnessed(carrier) => {
-                        // The value terminal arrives already witnessed, naming its reach. The
-                        // obligation the step deposited (`post.obligation`) is the slot's declared
-                        // return; the `frame` gate drops it for a frameless / run-frame producer
-                        // (no per-call return obligation). `finalize_terminal` folds the producing
-                        // frame into the witness and re-stamps an obligation-coarsened value into
-                        // the obligation's home region.
-                        let result = self.finalize_terminal(
-                            carrier,
-                            frame,
-                            frame.and(post.obligation.as_ref()),
-                        );
+                        // Seal the value terminal into a delivery envelope pinned by the anchor's own
+                        // region owner — the same owner the scheduler seeds as the slot's retention
+                        // host — before the Done-boundary hook runs. The already-witnessed carrier
+                        // names its reach; the obligation the step deposited (`post.obligation`) is
+                        // the slot's declared return, dropped by the `frame` gate for a frameless /
+                        // run-frame producer. `finalize_terminal` re-stamps an obligation-coarsened
+                        // value into the obligation's home region through the received envelope.
+                        let envelope =
+                            crate::witnessed::Delivered::seal(carrier, Rc::clone(anchor.owner()));
+                        let result =
+                            self.finalize_terminal(envelope, frame.and(post.obligation.as_ref()));
                         if result.is_err() {
                             scope.clear_placeholders_for_producer(id);
                         }
-                        self.sched.finalize(idx, result, host);
+                        self.sched.finalize(idx, result);
                     }
                     NodeStep::Error(error) => {
                         // An error finalizes bare (no value, no witness); the frame-gated
                         // obligation still labels it with the callee's trace frame.
-                        let error =
-                            finalize_error(error, frame, frame.and(post.obligation.as_ref()));
+                        let error = finalize_error(error, frame.and(post.obligation.as_ref()));
                         scope.clear_placeholders_for_producer(id);
                         // A terminal error carries no value and no witness, but the producer frame
                         // still retains until its (short-circuiting) destinations pull.
-                        self.sched.finalize(idx, Err(error), host);
+                        self.sched.finalize(idx, Err(error));
                     }
                     NodeStep::ForwardReady(producer) => {
                         // Relocate `producer`'s terminal into this slot's region via merge-transfer;
                         // no contract re-check (the producer enforced its own). Framed: the dest
-                        // brand is `yoke`d into its owning frame, witnessed by it. Frameless: the
-                        // dest region is externally pinned for the step, so a confined empty-set
-                        // `resident` carries it. A ready-but-errored producer relocates to an `Err`.
+                        // brand is `yoke`d into the anchor's own region owner, witnessed by it.
+                        // Frameless: the dest region is externally pinned for the step, so a confined
+                        // empty-set `resident` carries it. A ready-but-errored producer relocates to
+                        // an `Err`.
                         let dest = match frame {
-                            Some(f) => dest_brand(f.storage_rc()),
+                            Some(_) => dest_brand(Rc::clone(anchor.owner())),
                             None => Witnessed::<DestHandleFamily, CarrierWitness>::resident(
                                 scope.brand().handle(),
                             ),
@@ -262,7 +261,7 @@ impl<'run> KoanRuntime<'run> {
                         if result.is_err() {
                             scope.clear_placeholders_for_producer(id);
                         }
-                        self.sched.finalize(idx, result, host);
+                        self.sched.finalize(idx, result);
                     }
                     NodeStep::Replace {
                         work: new_work,
@@ -276,6 +275,11 @@ impl<'run> KoanRuntime<'run> {
                         // `Continue` installed). The `ChainOp` reads it to walk the body's lexical chain.
                         let body_frame: &crate::machine::core::CallFrame =
                             new_frame.as_deref().unwrap_or(&prev_frame);
+                        // Read the chain-reshape variant before `apply` consumes it: a frameless
+                        // re-entry mints a fresh anchor iff the chain (or the overlay scope) changed —
+                        // an `Inherit` FN-body re-entry is frameless yet reshapes the chain
+                        // (`AssembleBody`), so the gate keys on the variant, not on `frame.is_some()`.
+                        let chain_changed = !matches!(chain, ChainOp::Unchanged);
                         let new_chain = chain.apply(prev_chain_carrier, body_frame);
                         match new_frame {
                             Some(f) => {
@@ -285,50 +289,43 @@ impl<'run> KoanRuntime<'run> {
                                     overlay_scope.is_none(),
                                     "a framed tail-replace carries no overlay scope"
                                 );
-                                // The slot's scope is always this `f` cart's own child, so store a
+                                // The slot's scope is always this `f` cart's own child, so mint a
                                 // payload-less `NodeScope::Yoked` re-projected at the read boundary —
-                                // no persisted `&'run` to dangle across the tail hop. `prev_frame`
-                                // (the retiring cart) drops here, at the end of this arm: its storage
-                                // stays pinned by `combined` until the step open above exits, and by
-                                // the loop-carried argument carriers beyond that.
-                                // A framed tail turns over the region: the retiring cart's
-                                // storage is handed to the scheduler as the reinstalled slot's
-                                // retention host, so the retiring region outlives the adoption of
-                                // the carried arguments (wired by the TCO handoff).
-                                let retiring = Some(prev_frame.storage_rc());
+                                // no persisted `&'run` to dangle across the tail hop. The scheduler
+                                // parks the displaced incarnation as the reinstalled slot's handoff, so
+                                // the retiring region outlives the adoption of the carried arguments
+                                // (wired by the TCO handoff). `prev_frame` (the retiring cart) drops at
+                                // the end of this arm: its storage stays pinned by `combined` until the
+                                // step open above exits, and by the loop-carried argument carriers
+                                // beyond that.
                                 self.sched.replace(
                                     id,
-                                    Node {
-                                        work: new_work,
-                                        payload: NodePayload {
-                                            scope: NodeScope::Yoked,
-                                            chain: new_chain,
-                                        },
-                                        frame: NodeFrame { cart: f },
-                                    },
-                                    retiring,
+                                    new_work,
+                                    Some(super::nodes::SlotFrame::new(
+                                        f,
+                                        NodeScope::Yoked,
+                                        new_chain,
+                                    )),
                                 );
                             }
                             None => {
                                 // A frameless Replace keeps the prior cart. A tail entering an overlay
                                 // without a fresh frame (USING) installs the overlay as the slot's
                                 // scope — a `YokedChild` whose `outer` chain pins the overlay's
-                                // cart-ancestor region — otherwise the slot keeps its scope.
+                                // cart-ancestor region — otherwise the slot keeps its scope. Mint a
+                                // fresh anchor only when the overlay scope or the chain changed; a pure
+                                // `ParkThenContinue` (same cart, scope, and chain) keeps the anchor.
                                 let scope = overlay_scope.map_or(node_scope, NodeScope::YokedChild);
-                                // A frameless `Inherit` replace reuses the prior cart — no region
-                                // turnover, so no retiring host to retain.
-                                self.sched.replace(
-                                    id,
-                                    Node {
-                                        work: new_work,
-                                        payload: NodePayload {
-                                            scope,
-                                            chain: new_chain,
-                                        },
-                                        frame: NodeFrame { cart: prev_frame },
-                                    },
-                                    None,
-                                );
+                                let anchor_arg = if overlay_scope.is_some() || chain_changed {
+                                    Some(super::nodes::SlotFrame::new(
+                                        Rc::clone(&prev_frame),
+                                        scope,
+                                        new_chain,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                self.sched.replace(id, new_work, anchor_arg);
                             }
                         }
                     }

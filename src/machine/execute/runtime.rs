@@ -33,7 +33,7 @@ use crate::witnessed::SealedExtern;
 use super::dispatch::{BodyPlacement, DepRequest, SchedulerView};
 use super::finalize::check_spliced_return;
 use super::lift::copy_carried;
-use super::nodes::{ChainOp, NodePayload, NodeStep, NodeWork};
+use super::nodes::{ChainOp, NodeStep, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::outcome::{dep_error_frame, Await, Continuation, Outcome, TerminalDepFinish};
 use super::run_loop::DestHandleFamily;
@@ -56,11 +56,9 @@ pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path
 pub(in crate::machine::execute) struct KoanWorkload;
 
 impl Workload for KoanWorkload {
-    type Payload = NodePayload;
     type Value = CarriedFamily;
     type Error = KError;
-    type Cart = CallFrame;
-    type Frame = crate::machine::FrameStorage;
+    type Frame = super::nodes::SlotFrame;
     type Continuation = ContinuationFamily;
 }
 
@@ -193,7 +191,7 @@ impl<'run> KoanRuntime<'run> {
     }
 
     pub fn chain_of(&self, id: NodeId) -> Option<Rc<crate::machine::LexicalFrame>> {
-        self.sched.payload_of(id).map(|p| p.chain.clone())
+        self.sched.anchor_of(id).map(|a| a.payload.chain.clone())
     }
 }
 

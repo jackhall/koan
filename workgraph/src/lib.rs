@@ -28,8 +28,8 @@
 //! - [`scheduler::Scheduler`], generic over an embedder's [`scheduler::Workload`] impl.
 //! - [`scheduler::Live`], [`scheduler::Deps`] / [`scheduler::DepResults`] /
 //!   [`scheduler::ResolvedDeps`], [`scheduler::ProducerDisposition`], [`scheduler::NodeId`].
-//! - [`scheduler::nodes`]'s [`scheduler::nodes::Node`], [`scheduler::nodes::NodeFrame`],
-//!   [`scheduler::nodes::NodeWork`] — the generic per-node state the scheduler stores.
+//! - [`scheduler::nodes`]'s [`scheduler::nodes::NodeWork`] — the generic per-node work the scheduler
+//!   stores, paired with the per-slot memory anchor ([`scheduler::Anchor`]) it holds by `Rc`.
 //! - A `test-hooks` cargo feature widens a white-box surface (slot/edge state pokes: e.g.
 //!   `Scheduler::clear_node`, `Scheduler::set_dep_edges`) from `cfg(test)` to
 //!   `cfg(any(test, feature = "test-hooks"))`, so an embedder's own white-box tests — compiled

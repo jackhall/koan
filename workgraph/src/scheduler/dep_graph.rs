@@ -10,6 +10,7 @@
 use std::rc::Rc;
 
 use super::nodes::NodeWork;
+use super::workload::OwnerOf;
 use super::{NodeId, Workload};
 
 /// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
@@ -53,9 +54,11 @@ struct RetentionHold<F> {
     pulls: usize,
 }
 
-/// The three coordinated per-slot fields plus the slot's retention bookkeeping. Mutations go through
-/// the row, so `notify` / `pending` / `edges` cannot desync — Inv-A holds by construction.
-struct DepRow<F> {
+/// The three coordinated per-slot fields plus the slot's retention bookkeeping and its memory
+/// anchor. Mutations go through the row, so `notify` / `pending` / `edges` cannot desync — Inv-A
+/// holds by construction. The row carries both the anchor (`Rc<W::Frame>`) and the projected
+/// retention owner (`Rc<OwnerOf<W>>`); these are distinct types.
+struct DepRow<W: Workload> {
     /// Forward wake edges from this producer to its consumers.
     notify: Vec<usize>,
     /// Not-yet-observed deps for this consumer; zero routes via
@@ -64,29 +67,36 @@ struct DepRow<F> {
     /// Backward edges from this consumer to its producers; `free` recurses
     /// only into `Owned`.
     edges: Vec<DepEdge>,
-    /// The frame-retention hold while this slot is a Done producer whose frame is retained; `None`
-    /// for a live/frameless/released slot. Its owner `Rc` keeps the producer frame alive until every
-    /// destination pulls.
-    retain: Option<RetentionHold<F>>,
+    /// The slot's memory anchor, held from alloc until finalize/free — the scheduler-owned per-slot
+    /// `Rc<W::Frame>` this item makes scheduler-side. `None` for a slot with no anchor installed
+    /// yet (freshly recycled, before `install_anchor`).
+    anchor: Option<Rc<W::Frame>>,
+    /// The frame-retention hold while this slot is a Done producer whose region is retained; `None`
+    /// for a live/frameless/released slot. Its owner `Rc` keeps the producer region alive until
+    /// every destination pulls.
+    retain: Option<RetentionHold<OwnerOf<W>>>,
     /// Producers this consumer wired to **after** they had already finalized (the late-park path,
     /// which installs no `notify` edge). Each entry is a retained producer whose `pulls` this
     /// consumer bumped on wiring and must discharge once — after its read, or at its death.
     owed: Vec<usize>,
-    /// The **TCO handoff hold**: a framed tail replace's *retiring* incarnation frame owner, parked
+    /// The **TCO handoff hold**: a framed tail replace's *displaced* incarnation anchor, parked
     /// here by [`Scheduler::replace`](crate::scheduler::Scheduler::replace) so the retiring region
-    /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried arguments.
-    /// The run loop takes it just before running that step and drops it after, ordering the retiring
-    /// region's free after the adoption. Distinct from `retain`: `retain` holds *this slot's own* Done
-    /// producer frame; `handoff` holds the *previous* incarnation's frame across the reinstall.
-    handoff: Option<Rc<F>>,
+    /// outlives the reinstalled incarnation's first step — where it adopts the loop-carried
+    /// arguments. The displaced anchor pins the retiring region transitively through its projected
+    /// owner. The run loop takes it just before running that step and drops it after, ordering the
+    /// retiring region's free after the adoption. Distinct from `retain`: `retain` holds *this
+    /// slot's own* Done producer region; `handoff` holds the *previous* incarnation's anchor across
+    /// the reinstall.
+    handoff: Option<Rc<W::Frame>>,
 }
 
-impl<F> Default for DepRow<F> {
+impl<W: Workload> Default for DepRow<W> {
     fn default() -> Self {
         DepRow {
             notify: Vec::new(),
             pending: 0,
             edges: Vec::new(),
+            anchor: None,
             retain: None,
             owed: Vec::new(),
             handoff: None,
@@ -95,7 +105,7 @@ impl<F> Default for DepRow<F> {
 }
 
 pub(in crate::scheduler) struct DepGraph<W: Workload> {
-    rows: Vec<DepRow<W::Frame>>,
+    rows: Vec<DepRow<W>>,
 }
 
 impl<W: Workload> DepGraph<W> {
@@ -122,6 +132,7 @@ impl<W: Workload> DepGraph<W> {
             row.notify.clear();
             row.pending = pending;
             row.edges = owned_edges;
+            row.anchor = None;
             row.retain = None;
             row.owed.clear();
             row.handoff = None;
@@ -130,6 +141,7 @@ impl<W: Workload> DepGraph<W> {
                 notify: Vec::new(),
                 pending,
                 edges: owned_edges,
+                anchor: None,
                 retain: None,
                 owed: Vec::new(),
                 handoff: None,
@@ -162,10 +174,10 @@ impl<W: Workload> DepGraph<W> {
         row.edges.push(DepEdge::Notify(producer));
     }
 
-    /// Seed a finalized producer's retention hold with the frame owner and its current
-    /// destination count (the consumers parked on it at finalize). Called once per Done producer that
-    /// carries a per-call frame; a frameless / run-region producer installs no hold.
-    pub(super) fn seed_retain(&mut self, producer: usize, owner: Rc<W::Frame>, pulls: usize) {
+    /// Seed a finalized producer's retention hold with the region owner (projected from the slot's
+    /// anchor) and its current destination count (the consumers parked on it at finalize). Called
+    /// once per Done producer, projecting the owner from the slot's own anchor.
+    pub(super) fn seed_retain(&mut self, producer: usize, owner: Rc<OwnerOf<W>>, pulls: usize) {
         self.rows[producer].retain = Some(RetentionHold { owner, pulls });
     }
 
@@ -218,10 +230,10 @@ impl<W: Workload> DepGraph<W> {
         }
     }
 
-    /// A clone of `producer`'s retained frame owner, or `None` for a frameless / released producer —
+    /// A clone of `producer`'s retained region owner, or `None` for a frameless / released producer —
     /// the liveness pin a retention-pinned read holds live across [`Sealed::open_with`] while it
     /// re-anchors the terminal's value.
-    pub(super) fn retained_owner(&self, producer: usize) -> Option<Rc<W::Frame>> {
+    pub(super) fn retained_owner(&self, producer: usize) -> Option<Rc<OwnerOf<W>>> {
         self.rows[producer]
             .retain
             .as_ref()
@@ -235,13 +247,56 @@ impl<W: Workload> DepGraph<W> {
         self.rows[producer].retain = None;
     }
 
-    /// Park a framed tail replace's retiring incarnation frame owner on the reinstalled `slot` as its
+    /// Install the slot's memory anchor at alloc time (no previous anchor to displace). Every live
+    /// slot holds an anchor from here until `free` clears it.
+    pub(super) fn install_anchor(&mut self, idx: usize, anchor: Rc<W::Frame>) {
+        self.rows[idx].anchor = Some(anchor);
+    }
+
+    /// Swap the slot's memory anchor for `anchor` on a framed replace, returning the DISPLACED one
+    /// (the previous incarnation's anchor, which the caller parks as the TCO handoff). Every live
+    /// slot has an anchor, so the `.expect` is total on the replace path.
+    pub(super) fn set_anchor(&mut self, idx: usize, anchor: Rc<W::Frame>) -> Rc<W::Frame> {
+        self.rows[idx]
+            .anchor
+            .replace(anchor)
+            .expect("a replacing slot still holds its anchor")
+    }
+
+    /// `Rc::clone` of the slot's memory anchor — the run loop keeps a clone across the step while
+    /// the row retains its own. Every live slot has an anchor.
+    pub(super) fn anchor_clone(&self, idx: usize) -> Rc<W::Frame> {
+        Rc::clone(
+            self.rows[idx]
+                .anchor
+                .as_ref()
+                .expect("every live slot has an anchor"),
+        )
+    }
+
+    /// Take the slot's memory anchor by value — `finalize` does this to project the retention owner
+    /// from it, then drops the anchor (its cart/chain are dead weight once the slot is terminal).
+    pub(super) fn take_anchor(&mut self, idx: usize) -> Option<Rc<W::Frame>> {
+        self.rows[idx].anchor.take()
+    }
+
+    /// Clear the slot's memory anchor outright — a dying slot (`free`) releases it.
+    pub(super) fn clear_anchor(&mut self, idx: usize) {
+        self.rows[idx].anchor = None;
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn anchor_of(&self, idx: usize) -> Option<Rc<W::Frame>> {
+        self.rows[idx].anchor.as_ref().map(Rc::clone)
+    }
+
+    /// Park a framed tail replace's displaced incarnation anchor on the reinstalled `slot` as its
     /// TCO handoff hold (`None` clears it — a frameless `Inherit` replace turns over no region). The
     /// run loop [`take_handoff`](Self::take_handoff)s it just before the reinstalled incarnation's
     /// first step and holds it across that step, so the retiring region outlives the adoption of the
     /// carried arguments.
-    pub(super) fn set_handoff(&mut self, slot: usize, retiring: Option<Rc<W::Frame>>) {
-        self.rows[slot].handoff = retiring;
+    pub(super) fn set_handoff(&mut self, slot: usize, displaced: Option<Rc<W::Frame>>) {
+        self.rows[slot].handoff = displaced;
     }
 
     /// Take the reinstalled `slot`'s pending TCO handoff hold (draining it, so a slot that replaces
