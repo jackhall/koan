@@ -53,11 +53,13 @@ with it.
   captures. A sealed carrier is a lifetime-free, self-pinning owned value,
   so a capture that needs a pin independent of the cell's own memory simply
   carries its own sealed cell.
-- **Frame** — the memory anchor. The region owner whose `Rc` the substrate
-  holds per cell so the continuation's captures stay live while the cell is
-  dormant, and the witness under which the continuation is re-anchored. It
-  is a `PinsRegion` region owner; the substrate retains and drops the `Rc`
-  and calls nothing on it.
+- **Frame** — the memory anchor. An embedder value the substrate holds per
+  cell so the continuation's captures stay live while the cell is dormant,
+  and the witness under which the continuation is re-anchored. It *wraps* the
+  cell's region owner rather than being it: through the anchor's single
+  `Anchor::owner` method the substrate projects that owner — a `PinsRegion`
+  type it retains and drops for delivery-driven retention — and it calls
+  nothing else on the anchor.
 - **Value** — what passes between cells. A one-lifetime reattachable family
   carried as a witnessed/sealed carrier: born co-located with its reach set,
   duplicated per reader, re-anchored only under a pin. In-flight, a value
@@ -79,10 +81,11 @@ Each absence is a design statement, not a gap:
 - **No retention protocol.** Delivery-driven frame retention ("a producer's
   frame lives until every consumer has pulled") is defined in terms of dep
   edges and terminals, so it lives with them.
-- **No payload, contract, or shell types.** An embedder detail that the
-  substrate would only store and hand back is a continuation capture, not a
-  contract type. Koan's lexical-position payload, its declared-return
-  checker, and its per-call semantic shell all ride captures.
+- **No payload, contract, or shell types.** An embedder detail the substrate
+  would only store and hand back is never its own contract type — it rides
+  either the cell's memory anchor (`Frame`) or a continuation capture. Koan's
+  lexical-position payload and its per-call semantic shell ride *inside* the
+  anchor; its declared-return checker rides a capture.
 
 ## workgraph above the substrate
 
@@ -98,6 +101,3 @@ holds, and tail splicing. Koan instantiates the combined trait once
 
 - [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
   — the crate split itself.
-- [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
-  — collapses the scheduler's per-cell memory anchors to the single `Frame`
-  type this contract names.

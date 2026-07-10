@@ -9,8 +9,9 @@ The lifecycle pin is a `Rc<FrameStorage>`, not a `Rc<CallFrame>`.
 `CallFrame` is a thin shell over a refcounted [`FrameStorage`](../../src/machine/core/arena.rs)
 — the per-call `KoanRegion` plus the `outer` link that keeps the
 lexical-ancestor frames' storage alive. An escaping value pins the
-*storage*, leaving the shell uniquely owned so TCO reuse can reset it
-(see [§ TCO frame reuse](frames.md#tco-frame-reuse)).
+*storage*, so the region outlives the shell independently — a `FreshTail` tail
+hop drops the shell while the escapee keeps its snapshot
+(see [tail-call-optimization.md](../tail-call-optimization.md)).
 
 A value-side reference into a per-call region is a *bare borrow*: a `KObject::KFunction(&'a
 KFunction<'a>)` reaches the per-call region that owns its captured

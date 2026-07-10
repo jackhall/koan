@@ -73,13 +73,14 @@ a concept, not a final identifier.
   escapes the scheduler.
 - **Finish** — the continuation a consumer runs once its deps resolve.
 - **Workload** — the embedder-facing trait: the cell contract
-  ([workcell.md](workcell.md) — the continuation family, the frame owner
-  `Frame`, and the brand-indexed value family Koan instantiates with
-  `Carried`) plus the terminal error type the DAG layer's `Result`-shaped
-  terminal protocol adds. Embedder details the scheduler would only store
-  and hand back — Koan's lexical-position payload, its declared-return
-  checker, its per-call semantic shell — are continuation captures, not
-  trait types.
+  ([workcell.md](workcell.md) — the continuation family, the memory anchor
+  `Frame` (which projects its region owner through `Anchor::owner`), and the
+  brand-indexed value family Koan instantiates with `Carried`) plus the
+  terminal error type the DAG layer's `Result`-shaped terminal protocol adds.
+  Koan's lexical-position payload and its per-call semantic shell ride *inside*
+  the anchor — the scheduler stores and hands them back but inspects nothing
+  beyond `Anchor::owner`; its declared-return checker is a continuation
+  capture, not a trait type.
 
 ## The boundary
 
@@ -305,9 +306,6 @@ picture:
 
 ## Open work
 
-- [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
-  — moves frame ownership into scheduler slot state; collapses the trait's
-  memory types to `Frame` and folds the payload into continuation captures.
 - [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
   — the crate split beneath the DAG layer.
 - [Publishing the workgraph crate](../roadmap/scheduler_library/workgraph-extraction.md)

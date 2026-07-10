@@ -43,8 +43,6 @@ semantics, and the retention protocol.
 
 **Requires:**
 
-- [Scheduler-owned frame storage](scheduler-owned-frame-storage.md) — the
-  trait's memory types must already be down to the single frame anchor.
 
 **Unblocks:**
 

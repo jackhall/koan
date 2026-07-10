@@ -20,7 +20,7 @@ rather than reconstructing it from five docs and ten source files.
 - [Region lifecycle: allocation and lift](lifecycle.md) — which carriers anchor a
   per-call region, the lift-time anchor decision, consumer-pull node-output lift,
   and the `alloc_object` cycle gate.
-- [Frame management](frames.md) — active-frame propagation, the outer-frame chain
-  for builtin-built frames, TCO frame reuse, and the ping-pong reserve.
+- [Frame management](frames.md) — active-frame propagation and the outer-frame
+  chain for builtin-built frames.
 - [Scope handles and verification](scope-handles.md) — the slot-table scope
   handle, the seed-side re-anchor, cross-doc context, and the verification slate.

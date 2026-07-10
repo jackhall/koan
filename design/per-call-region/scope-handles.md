@@ -8,13 +8,14 @@ verification slate. Part of the [per-call region protocol](README.md).
 A scheduler slot stores its scope as a lifetime-free
 [`NodeScope`](../../src/machine/execute/nodes.rs), not a raw `&'a Scope<'a>`, so the node it sits on
 pins no `'run` through its scope. The handle rides a grouped `NodePayload` (the scope handle plus the
-node's lexical chain) alongside the slot's frame. Both arms are **cart-witnessed** — re-projected
+node's lexical chain) *inside* the slot's memory anchor (`SlotFrame`), which wraps the per-call cart.
+Both arms are **cart-witnessed** — re-projected
 from the slot's live frame at read, never re-anchored at a free `'run`:
 
 - `Yoked` carries no payload at all: the slot's scope *is* its own per-call cart's scope, re-read
-  from the frame at the read boundary. Single-cart, because the slot's own `Frame::cart`
-  `Rc<CallFrame>` is the sole liveness witness, so there is no second `Rc` clone and no contention
-  with `try_reset_for_tail`'s `strong_count == 1` TCO reuse check.
+  from the frame at the read boundary. Single-cart, because the slot's own `SlotFrame.cart`
+  `Rc<CallFrame>` is the liveness witness pinning that scope's region — a `Yoked` slot stores no
+  scope carrier of its own to re-anchor across a tail hop.
 - `YokedChild(SealedExtern<ScopeRefFamily>)` holds a `&'static Scope` carrier to a block scope a
   builtin allocated in a cart *ancestor* region (an `InScope` body — USING / MODULE / SIG / TRY),
   opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand against the slot's frame
@@ -30,7 +31,8 @@ frameless top-level run root routes to `Yoked` via the `run_frame` cart that ado
 cart is that `run_frame`). The two residual fall-throughs are `unreachable!` — an instrumented
 whole-suite spike confirmed every framed submission resolves to `Yoked` / `YokedChild` and every
 frameless one to the run root. Storing an erased handle rather than a live `&'run` keeps the borrow
-honest across a TCO `try_reset_for_tail`: nothing persisted points into the reset region.
+honest across a TCO hop: nothing persisted points into the region the hop retires (see
+[tail-call-optimization.md](../tail-call-optimization.md)).
 
 The read boundary hands a slot's scope to a closure on demand, not as a stored free `&'run`:
 [`with_node_scope`](../../src/machine/execute/dispatch/ctx.rs) opens it per use at a `for<'b>` brand —
@@ -77,7 +79,7 @@ mechanics:
   `KoanRegion` / `CallFrame`, the storage shape, scoping, and
   lifetime erasure that this protocol sits on top of.
 - [execution/README.md](../execution/README.md) — the dispatch / TCO
-  pipeline whose `Tail` rewrite drives `try_reset_for_tail`.
+  pipeline whose `Tail` rewrite reinstalls the slot and turns over the region.
 - [typing/functors.md](../typing/functors.md) — the per-call type-side
   bind and the deferred return-type dep-finish.
 - [typing/modules.md](../typing/modules.md) — `USING … SCOPE` allocating

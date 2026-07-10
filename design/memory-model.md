@@ -133,7 +133,7 @@ builds through the externally-witnessed construction door
 foreign parent at one `for<'b>` (the `zip`-combined [`SealedExtern::open`](../workgraph/src/witnessed.rs) the
 run-loop step also rests on), builds the real invariant `Scope<'b>` coupling them through
 [`Scope::child_for_frame_witnessed`](../src/machine/core/scope.rs), and erases it witness-less — so
-`CallFrame::new` / `try_reset_for_tail` build the per-call child at real (non-`'static`) lifetimes with
+`CallFrame::new` builds the per-call child at real (non-`'static`) lifetimes with
 no construction-time fabrication and no re-anchor outside the witnessed substrate.
 
 `CallFrame`'s per-call child scope (non-generic — it backs `Rc<CallFrame>`) and a scheduler slot's
@@ -283,9 +283,10 @@ A [`CallFrame`](../src/machine/core/arena.rs) is a thin shell over a refcounted
 [`FrameStorage`](../src/machine/core/arena.rs): the shell carries a `Rc<FrameStorage>` and an
 `Option<SealedExtern<ScopeRefFamily>>` (the child scope; `None` only transiently during construction), while
 `FrameStorage` bundles the `KoanRegion` and an `Option<Rc<FrameStorage>>` for the parent-frame
-chain. The shell/storage split lets an escaping value pin only the storage, leaving the shell
-uniquely owned for tail reuse (see
-[per-call-region/frames.md § TCO frame reuse](per-call-region/frames.md#tco-frame-reuse)). Two
+chain. The shell/storage split lets an escaping value pin only the storage (its region), so the
+region outlives the shell independently — a `FreshTail` tail hop drops the shell outright
+while the escapee keeps its region snapshot alive (see
+[tail-call-optimization.md](tail-call-optimization.md)). Two
 invariants make the ownership unit coherent:
 
 - **Heap-pinning via `Rc`.** `CallFrame::new` builds the region inside its own
@@ -353,11 +354,12 @@ release-enforced `ptr::eq` same-region check via `alloc_resident_audited` rather
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
 A per-call frame scope is stored as a payload-less
 [`NodeScope::Yoked`](../src/machine/execute/nodes.rs) marker re-projected from the slot's own
-`Node.frame` cart; a genuinely run-lived scope (a binder body's decl-scope child) is stored
+anchor cart (`SlotFrame.cart`); a genuinely run-lived scope (a binder body's decl-scope child) is stored
 as `NodeScope::YokedChild`, a [`SealedExtern<ScopeRefFamily>`](../workgraph/src/witnessed.rs) carrier (a
 `&'static Scope`) opened at read through the rank-2 `SealedExtern::open` at a `for<'b>` brand,
 witnessed by the slot's cart `Rc`.
-Both arms ride a grouped `NodePayload` (scope handle + lexical chain) alongside the slot's frame. The
+Both arms ride a grouped `NodePayload` (scope handle + lexical chain) *inside* the slot's memory anchor
+(`SlotFrame`), which wraps the per-call cart the scheduler holds. The
 slot-storage scope handle and the seed-side `with_scope` re-anchor are documented in
 [per-call-region/scope-handles.md § Slot-table scope handle](per-call-region/scope-handles.md#slot-table-scope-handle).
 

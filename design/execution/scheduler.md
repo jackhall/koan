@@ -111,7 +111,8 @@ data, and a single harness method applies them. The three pieces:
   by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
   holder of `&mut Scheduler` across the execute tree. The per-step *ambient*
   state — the active per-call frame, the slot reserve, the run frame, the
-  executing slot's opaque payload, and the slot's declared-return obligation
+  executing slot's lexical payload (scope handle + chain, projected from the
+  slot's anchor), and the slot's declared-return obligation
   (the continuation capture a tail chain carries; its presence *is* the
   contract-chain flag) — lives on the
   driver ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
@@ -318,16 +319,15 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 assertions in the test suite. When a body has leading (non-tail) statements,
 they become owned deps the slot parks on (one body-block `DepRequest::BodyBlock`) and
 the `Continue` tail fires only from the resolving finish — so the leading
-siblings run, and cascade-free, before the tail-replace, restoring frame
-uniqueness so [`try_reset_for_tail`](../per-call-region/frames.md#tco-frame-reuse)
-reuses the cart and TCO stays flat even for side-effecting multi-statement
-bodies.
+siblings run, and cascade-free, before the tail-replace, so the tail hop
+[reinstalls the slot](../tail-call-optimization.md#the-design-reinstall-the-slot-turn-over-the-region)
+cleanly and TCO stays flat even for side-effecting multi-statement bodies.
 
-The slot's `Rc<CallFrame>` is held in exactly one place during each step,
-which is what lets the tail-reuse path detect "nothing escaped" and reset
-the frame shell in place across iterations rather than allocating a fresh
-one. See
-[per-call-region/frames.md § TCO frame reuse](../per-call-region/frames.md#tco-frame-reuse).
+Because the reinstall applies after a step returns (never mid-step), the
+retiring incarnation's region is past every borrow into it by the time it is
+retired — the run-then-apply ordering supplies the safety, so a tail hop needs
+no in-place frame reset. See
+[tail-call-optimization.md § Soundness](../tail-call-optimization.md#soundness).
 
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
 model itself, not by `Tail`. Every "recursive call" enters the scheduler's
@@ -366,13 +366,13 @@ Slot-table state lives in a
 [`NodeStore`](../../workgraph/src/scheduler/node_store.rs)
 sub-struct on `Scheduler` that owns a single `slots` vector of `SlotState`
 enums plus a `free_list: Vec<NodeId>` of recyclable indices. One enum encodes
-the per-slot lifecycle — `PreRun(Node)` (an un-run node payload), `Running`
-(payload moved out for its step), `Done(Result)` (terminal result),
+the per-slot lifecycle — `PreRun(NodeWork)` (an un-run node's work), `Running`
+(work moved out for its step), `Done(Result)` (terminal result),
 `Aliased(NodeId)` (a bare-name forward spliced out to its producer), and `Free`
 (reclaimed) — and each index moves through `alloc_slot → take_for_run →
 reinstall* → finalize → free_one`. Each transition is a single atomic mutator
 body, so the recycle-vs-extend choice, the take/reinstall pairing, the terminal
-write, and reclamation are each encapsulated; because payload and result are the
+write, and reclamation are each encapsulated; because work and result are the
 same enum slot, no call site outside `NodeStore` can land a `Done` without the
 node having been taken, nor read a result before it is `Done`.
 Dependency bookkeeping lives alongside it in a single

@@ -73,9 +73,9 @@ for an out-of-bounds index, or a `MissingArg` with a hand-crafted message).
 ## Subtlety: TCO collapses frames
 
 A user-fn whose body tail-calls another user-fn ends up with only the inner
-function in the trace, because the slot's `function` field is replaced at TCO
+function in the trace, because the slot's work is reinstalled at TCO
 time (see [execution/README.md](execution/README.md) and
-[per-call-region/frames.md § TCO frame reuse](per-call-region/frames.md#tco-frame-reuse)).
+[tail-call-optimization.md](tail-call-optimization.md)).
 Non-tail-call positions — e.g., a sub-`Dispatch` inside a parens-wrapped
 sub-expression — preserve the outer frame: the consuming slot parks on the
 sub-`Dispatch` as a dependency, and the dep-finish short-circuit retains the call

@@ -73,13 +73,12 @@ recursive tree-walker can't get cheaply.
 - **Per user-fn call.** The body executor clones each body statement onto
   its own slot (over the parts vector) so the slot has its own
   working copy for [the splice mechanism](scheduler.md#working-copy-splice).
-  Clone cost is O(body size). It also acquires a per-call frame —
-  either reusing the prev-step's `CallFrame` shell via
-  `try_reset_for_tail` (see
-  [per-call-region/frames.md § TCO frame reuse](../per-call-region/frames.md#tco-frame-reuse))
-  or allocating a fresh one. The reuse path is allocation-free; the
-  fresh path heap-allocates one `Rc<CallFrame>` plus six
-  `typed_arena::Region::new()` pools.
+  Clone cost is O(body size). It also acquires a per-call frame for the
+  hop — an allocation-light tail hop mints no region at all (the region is
+  minted lazily on first allocation), while a hop that genuinely allocates
+  mints a fresh `CallFrame` (one `Rc<CallFrame>` plus its six
+  `typed_arena::Region::new()` pools). See
+  [tail-call-optimization.md § Region liveness by node lifetime](../tail-call-optimization.md#region-liveness-by-node-lifetime).
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
   the producer's dependent count, which is typically 1 (the consumer
@@ -99,11 +98,11 @@ recursive tree-walker can't get cheaply.
 - **Tail-call slot rewrite.** An `Action::Tail` (lowered to
   `Outcome::Continue`) rewrites the current slot's work in place rather than
   allocating a new one — one slot for an arbitrarily deep tail-call chain.
-- **Tail-step frame reuse.** When the prev step's `CallFrame` is
-  uniquely owned, `try_reset_for_tail` swaps its inner `KoanRegion`
-  for a fresh one and re-binds — no `Rc<CallFrame>` box allocation,
-  no `Scope` re-anchoring through the heap. See
-  [per-call-region/frames.md § TCO frame reuse](../per-call-region/frames.md#tco-frame-reuse).
+- **Tail-step region turnover.** A tail hop reinstalls the slot and the
+  library turns over its region: an allocation-light hop mints nothing (lazy
+  mint), a genuinely-allocating hop mints one fresh region — no per-hop
+  `Rc<CallFrame>` box churn down a constant-space loop. See
+  [tail-call-optimization.md § The design](../tail-call-optimization.md#the-design-reinstall-the-slot-turn-over-the-region).
 
 ### Vs a tree-walking interpreter
 
