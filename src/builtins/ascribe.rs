@@ -154,7 +154,6 @@ pub fn body_transparent<'a>(
     if let Err(e) = shape_check(s, m.child_scope()) {
         return Action::Done(Err(e));
     }
-    let region = ctx.scope.brand();
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
     // to this frame — so its reach folds that source's region and reach, sealed onto the terminal.
     // Minted *before* the module alloc below: both the module's own placement (its child scope is
@@ -168,17 +167,14 @@ pub fn body_transparent<'a>(
         foreign: reach,
         borrows_into_home: false,
     };
-    let new_module: &'a Module<'a> = region.alloc_module_reaching(
+    let new_module: &'a Module<'a> = ctx.scope.alloc_module_reaching(
         Module::new(format!("{} :! {}", m.path, s.path), m.child_scope()),
         &evidence,
-        ctx.scope,
     );
     new_module.mark_satisfies(s.sig_id());
-    let kt_ref = crate::try_action!(region.alloc_ktype_reaching(
-        KType::Module { module: new_module },
-        &evidence,
-        ctx.scope
-    ));
+    let kt_ref = crate::try_action!(ctx
+        .scope
+        .alloc_ktype_reaching(KType::Module { module: new_module }, &evidence));
     Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, false)))
 }
 

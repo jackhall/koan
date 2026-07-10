@@ -55,8 +55,7 @@ impl<'step> Scope<'step> {
                     borrows_into_home: false,
                 };
                 let kt_ref: &'step KType<'step> = self
-                    .brand()
-                    .alloc_ktype_reaching(kt, &stored, self)
+                    .alloc_ktype_reaching(kt, &stored)
                     .expect("resolve_type_identifier: kt must be covered by its own stored reach");
                 self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, stored);
                 TypeResolution::Done(TypeHit {

@@ -164,9 +164,11 @@ The Koan layers compose the substrate; they hold no witness state of their own.
 - **Module reach** is the union over the child scope's **binding entries'** sets,
   minted once at scope close (the seal point).
 - **Omission policy stays scope-derived.** Which regions a bind may home-omit (the
-  home frame, lexical-ancestor regions the chain already pins) is computed by the
-  scope (`chain_reaches_region`) and passed to the mint as a predicate; the mint
-  mechanism itself is library code.
+  home frame's storage pin chain, lexical-ancestor regions the chain already pins)
+  is computed by the scope (`Scope::covers_region_ambiently`) and passed to the
+  mint as a predicate; the mint mechanism itself is library code. The same
+  predicate is the evidence-tier residence audits' ambient coverage, so what a
+  mint omits an audit still accepts.
 
 ## Retention model
 

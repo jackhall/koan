@@ -240,10 +240,7 @@ fn run_action_builtin<'step>(
         })
         .collect();
     let args_obj: &'step KObject<'step> =
-        match scope
-            .brand()
-            .alloc_object_delivered(KObject::record_of_held(args), &evidence, scope)
-        {
+        match scope.alloc_object_delivered(KObject::record_of_held(args), &evidence) {
             Ok(args_obj) => args_obj,
             Err(e) => return Outcome::Done(Err(e)),
         };

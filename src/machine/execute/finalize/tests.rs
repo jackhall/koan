@@ -284,8 +284,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
             borrows_into_home: false,
         };
         let kt_ref = child
-            .brand()
-            .alloc_ktype_reaching(KType::Module { module }, &evidence, child)
+            .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), false)
     });
@@ -405,8 +404,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
             borrows_into_home: true,
         };
         let kt_ref = child
-            .brand()
-            .alloc_ktype_reaching(KType::Module { module }, &evidence, child)
+            .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), true)
     });

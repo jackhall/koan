@@ -64,9 +64,7 @@ fn finalize_newtype<'a>(
     // `repr`'s foreign borrow — see this fn's doc) can be audited against it: `stored.foreign` is
     // `None` when `carrier` is `None`, which degrades the reaching check to the dest-only case.
     let stored = carrier.map(|c| scope.host_reach_of(c)).unwrap_or_default();
-    let kt_ref: &'a KType = scope
-        .brand()
-        .alloc_ktype_reaching(identity, &stored, scope)?;
+    let kt_ref: &'a KType = scope.alloc_ktype_reaching(identity, &stored)?;
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index, stored)

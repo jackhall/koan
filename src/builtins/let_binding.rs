@@ -86,7 +86,6 @@ pub fn body<'a>(
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
         ))));
     }
-    let region = ctx.scope.brand();
     if let Some(kt) = type_for_types_map {
         let is_type_constructor = matches!(
             &kt,
@@ -118,7 +117,7 @@ pub fn body<'a>(
         }
         // The terminal witnesses the aliased type in place from that stored reach. `stored` was
         // minted into `ctx.scope`'s own region above, so it is dest-relative evidence here.
-        let kt_ref = match region.alloc_ktype_reaching(kt, &stored, ctx.scope) {
+        let kt_ref = match ctx.scope.alloc_ktype_reaching(kt, &stored) {
             Ok(kt_ref) => kt_ref,
             Err(e) => return done_err(e),
         };
@@ -151,11 +150,10 @@ pub fn body<'a>(
             .arg_carrier("value")
             .map(|carrier| ctx.scope.adopted_reach_of(carrier))
             .unwrap_or_default();
-        let allocated: &'a KObject<'a> = match region.alloc_object_delivered(
-            value.deep_clone(),
-            std::slice::from_ref(&stored),
-            ctx.scope,
-        ) {
+        let allocated: &'a KObject<'a> = match ctx
+            .scope
+            .alloc_object_delivered(value.deep_clone(), std::slice::from_ref(&stored))
+        {
             Ok(allocated) => allocated,
             Err(e) => return done_err(e),
         };

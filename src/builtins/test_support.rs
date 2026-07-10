@@ -34,7 +34,6 @@ pub(crate) fn extract_terminal<'a>(
     scope: &'a Scope<'a>,
     id: NodeId,
 ) -> Carried<'a> {
-    let brand = scope.brand();
     // The extraction deep-clones the value into `scope`'s region, so the copied-adoption rule
     // applies: the producer frame materializes into the surviving arena only when the copy's
     // borrows genuinely reach it (a returned closure / module), never for a residence-only scalar.
@@ -48,13 +47,13 @@ pub(crate) fn extract_terminal<'a>(
     runtime
         .read_result_with(id, |live| match live {
             Carried::Object(obj) => Carried::Object(
-                brand
-                    .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach), scope)
+                scope
+                    .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach))
                     .expect("terminal object must be covered by its own stored reach"),
             ),
             Carried::Type(kt) => Carried::Type(
-                brand
-                    .alloc_ktype_reaching(kt.clone(), &reach, scope)
+                scope
+                    .alloc_ktype_reaching(kt.clone(), &reach)
                     .expect("terminal type must be covered by its own stored reach"),
             ),
         })

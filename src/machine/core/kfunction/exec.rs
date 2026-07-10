@@ -146,11 +146,8 @@ where
                 })
             })
             .collect();
-        let args_record = child.brand().alloc_object_delivered(
-            KObject::record_of_held(cells),
-            &evidence,
-            child,
-        )?;
+        let args_record =
+            child.alloc_object_delivered(KObject::record_of_held(cells), &evidence)?;
         if let KObject::Record(cells, _types) = args_record {
             for (name, cell) in cells.iter() {
                 match cell {

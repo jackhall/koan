@@ -140,47 +140,6 @@ impl<'a> RegionBrand<'a> {
         }
     }
 
-    /// The evidence tier: for a `t` whose region borrows may reach a *foreign* region the caller
-    /// has already gathered reach evidence for (a bind-time `register_type`, a read-site's
-    /// materialized `StoredReach`), not just this brand's own region. Widens
-    /// [`Self::alloc_ktype_checked`]'s dest-only audit to "dest, `evidence`'s reach members, or a
-    /// region already covered by `scope`'s own lexical-ancestor chain" — the last disjunct because
-    /// `host_reach_of` / `adopted_reach_of` never materializes a reach member for a region the
-    /// mint's `omit` policy already considers covered (see [`Residence`]'s `ambient` doc), so a
-    /// dest/reach-only audit would under-cover a value legitimately reaching a lexically-ancestral
-    /// region (a module bound at an outer/root scope, read by a nested per-call functor body).
-    /// Exact for `KType`, since its only region pointers (`&Module` / `&ModuleSignature` /
-    /// `&KFunction`) are all side-table-recorded.
-    pub fn alloc_ktype_reaching(
-        self,
-        t: KType<'_>,
-        evidence: &StoredReach<'_>,
-        scope: &Scope<'_>,
-    ) -> Result<&'a KType<'a>, KError> {
-        let name = t.name();
-        let sets: &[&FrameSet] = match &evidence.foreign {
-            Some(fs) => std::slice::from_ref(fs),
-            None => &[],
-        };
-        self.0
-            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
-                // The plain evidence-only check first (cheap, no closure alloc, and directly
-                // unit-testable in isolation); only fall back to the ambient-widened walk when it
-                // declines.
-                value.resident_in_reach(region, evidence) || {
-                    let ambient = |r: &KoanRegion| scope.chain_reaches_region(r);
-                    let residence = Residence::with_reach_and_ambient(region, sets, &ambient);
-                    value.resident_in_visiting(&residence, &mut Vec::new())
-                }
-            })
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination, evidence reach, \
-                     or scope's own lexical-ancestor chain"
-                )))
-            })
-    }
-
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
     /// `'static` (`KObject` has no general `'static` rebuild — see [`KType::to_static`]'s doc):
     /// [`KObject::resident_in`] audits every answerable region borrow `o` carries against this
@@ -196,43 +155,6 @@ impl<'a> RegionBrand<'a> {
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
-                )))
-            })
-    }
-
-    /// The object evidence tier: for an `o` built from (or embedding a projection of) values
-    /// whose reach the caller has already minted as `evidence` — a delivered arg carrier's
-    /// `adopted_reach_of`/`host_reach_of`, or several for a multi-carrier fold (an args record).
-    /// Widens the coverage predicate over every evidence member's hosting arena, same partiality
-    /// as [`Self::alloc_object_checked`] — plus a region already covered by `scope`'s own
-    /// lexical-ancestor chain (see [`Self::alloc_ktype_reaching`]'s doc for why the evidence alone
-    /// under-covers that case). Returns a structured `KError` on rejection — the item's decided
-    /// non-panicking conversion-failure policy — so a bug in the caller's evidence computation
-    /// surfaces as a catchable error rather than crashing the interpreter; a caller with no
-    /// `KError` channel in hand (e.g. a seed closure with no `Result` return) calls `.expect(...)`
-    /// naming the site invariant instead.
-    pub fn alloc_object_delivered(
-        self,
-        o: KObject<'_>,
-        evidence: &[StoredReach<'_>],
-        scope: &Scope<'_>,
-    ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name();
-        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
-        self.0
-            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
-                // The plain evidence-only check first (cheap, directly unit-testable); only fall
-                // back to the ambient-widened walk when it declines.
-                value.resident_in_delivered(region, evidence) || {
-                    let ambient = |r: &KoanRegion| scope.chain_reaches_region(r);
-                    let residence = Residence::with_reach_and_ambient(region, &sets, &ambient);
-                    value.resident_in_visiting(&residence)
-                }
-            })
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region not covered by dest, the supplied evidence, or \
-                     scope's own lexical-ancestor chain"
                 )))
             })
     }
@@ -268,42 +190,13 @@ impl<'a> RegionBrand<'a> {
     /// INVARIANT: a `Module` must be allocated into its own child scope's region — every `Module`
     /// borrows the child scope `MODULE` opened for its body, so it can never be `'static`. The one
     /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) takes
-    /// [`Self::alloc_module_reaching`] instead. See [`Self::alloc_function`].
+    /// [`Scope::alloc_module_reaching`] instead. See [`Self::alloc_function`].
     pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
         self.0
             .alloc_resident_audited::<Module<'static>>(m, |region, value| {
                 std::ptr::eq(region, value.child_scope().region())
             })
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
-    }
-
-    /// Placement for a `Module` whose child scope legitimately lives in a region other than this
-    /// brand's own — transparent-ascribe's re-tagged `Module`, which reuses the foreign source
-    /// module's child scope. `evidence` is the `StoredReach` the caller minted for that child
-    /// scope's region *before* this call (`Scope::host_reach_of` / `adopted_reach_of`), so the
-    /// audit widens [`Self::alloc_module`]'s dest-only check to "dest, `evidence`'s reach, or a
-    /// region covered by `scope`'s own lexical-ancestor chain" (see
-    /// [`Self::alloc_ktype_reaching`]'s doc for why the last disjunct is needed).
-    pub fn alloc_module_reaching(
-        self,
-        m: Module<'_>,
-        evidence: &StoredReach<'_>,
-        scope: &Scope<'_>,
-    ) -> &'a Module<'a> {
-        let sets: &[&FrameSet] = match &evidence.foreign {
-            Some(fs) => std::slice::from_ref(fs),
-            None => &[],
-        };
-        let ambient = |region: &KoanRegion| scope.chain_reaches_region(region);
-        self.0
-            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
-                Residence::with_reach_and_ambient(region, sets, &ambient)
-                    .covers_region(value.child_scope().region())
-            })
-            .expect(
-                "alloc_module_reaching: a Module's child scope must be covered by dest, the \
-                 supplied evidence reach, or scope's own lexical-ancestor chain",
-            )
     }
 
     /// INVARIANT: a `ModuleSignature` must be allocated into its own decl scope's region — every
@@ -402,6 +295,121 @@ impl<'a> RegionBrand<'a> {
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let _ = self.0;
         Witnessed::from_erased(Erased::erase(carried), witness)
+    }
+}
+
+/// The evidence-tier move-ins live on [`Scope`], not [`RegionBrand`]: a [`StoredReach`] is
+/// meaningful only relative to the scope that minted it — the mint materializes no member for a
+/// region [`Scope::covers_region_ambiently`] already covers — so the audit that consumes one must
+/// run against that same scope's region and ambient coverage. Taking the destination from `self`
+/// makes it the minting scope's own region by construction; there is no scope parameter for a
+/// caller to mismatch. (The block lives here, beside the other move-in tiers and [`Residence`],
+/// rather than in `scope.rs`.)
+impl<'a> Scope<'a> {
+    /// The evidence tier for a `t` whose region borrows may reach a *foreign* region this scope
+    /// has already minted reach evidence for (a bind-time `register_type`, a read-site's
+    /// materialized `StoredReach`), not just its own region. Widens
+    /// [`RegionBrand::alloc_ktype_checked`]'s dest-only audit to "this scope's region,
+    /// `evidence`'s reach members, or a region [`Self::covers_region_ambiently`] covers" — the
+    /// last disjunct is the exact complement of the mint's omission policy, which materializes no
+    /// member for an ambiently covered region, so a dest/evidence-only audit would under-cover a
+    /// value legitimately reaching one (a module bound at an outer/root scope, read by a nested
+    /// per-call functor body). Exact for `KType`, since its only region pointers (`&Module` /
+    /// `&ModuleSignature` / `&KFunction`) are all side-table-recorded.
+    pub(crate) fn alloc_ktype_reaching(
+        &self,
+        t: KType<'_>,
+        evidence: &StoredReach<'_>,
+    ) -> Result<&'a KType<'a>, KError> {
+        let name = t.name();
+        let sets: &[&FrameSet] = match &evidence.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        self.brand()
+            .0
+            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
+                // The plain evidence-only check first (cheap, no closure alloc, and directly
+                // unit-testable in isolation); only fall back to the ambient-widened walk when it
+                // declines.
+                value.resident_in_reach(region, evidence) || {
+                    let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
+                    let residence = Residence::with_reach_and_ambient(region, sets, &ambient);
+                    value.resident_in_visiting(&residence, &mut Vec::new())
+                }
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination, evidence reach, \
+                     or the destination scope's ambient coverage"
+                )))
+            })
+    }
+
+    /// The object evidence tier: for an `o` built from (or embedding a projection of) values
+    /// whose reach this scope has already minted as `evidence` — a delivered arg carrier's
+    /// `adopted_reach_of`/`host_reach_of`, or several for a multi-carrier fold (an args record).
+    /// Widens the coverage predicate over every evidence member's hosting arena, same partiality
+    /// as [`RegionBrand::alloc_object_checked`] — plus a region [`Self::covers_region_ambiently`]
+    /// covers (see [`Self::alloc_ktype_reaching`]'s doc for why the evidence alone under-covers
+    /// that case). Returns a structured `KError` on rejection — the item's decided non-panicking
+    /// conversion-failure policy — so a bug in the caller's evidence computation surfaces as a
+    /// catchable error rather than crashing the interpreter; a caller with no `KError` channel in
+    /// hand (e.g. a seed closure with no `Result` return) calls `.expect(...)` naming the site
+    /// invariant instead.
+    pub(crate) fn alloc_object_delivered(
+        &self,
+        o: KObject<'_>,
+        evidence: &[StoredReach<'_>],
+    ) -> Result<&'a KObject<'a>, KError> {
+        let name = o.ktype().name();
+        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
+        self.brand()
+            .0
+            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
+                // The plain evidence-only check first (cheap, directly unit-testable); only fall
+                // back to the ambient-widened walk when it declines.
+                value.resident_in_delivered(region, evidence) || {
+                    let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
+                    let residence = Residence::with_reach_and_ambient(region, &sets, &ambient);
+                    value.resident_in_visiting(&residence)
+                }
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region not covered by dest, the supplied evidence, or \
+                     the destination scope's ambient coverage"
+                )))
+            })
+    }
+
+    /// Placement for a `Module` whose child scope legitimately lives in a region other than this
+    /// scope's own — transparent-ascribe's re-tagged `Module`, which reuses the foreign source
+    /// module's child scope. `evidence` is the `StoredReach` the caller minted for that child
+    /// scope's region *before* this call ([`Scope::reach_of_child`]), so the audit widens
+    /// [`RegionBrand::alloc_module`]'s dest-only check to "this scope's region, `evidence`'s
+    /// reach, or a region [`Self::covers_region_ambiently`] covers" (see
+    /// [`Self::alloc_ktype_reaching`]'s doc for why the last disjunct is needed).
+    pub(crate) fn alloc_module_reaching(
+        &self,
+        m: Module<'_>,
+        evidence: &StoredReach<'_>,
+    ) -> &'a Module<'a> {
+        let sets: &[&FrameSet] = match &evidence.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        let ambient = |region: &KoanRegion| self.covers_region_ambiently(region);
+        self.brand()
+            .0
+            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
+                Residence::with_reach_and_ambient(region, sets, &ambient)
+                    .covers_region(value.child_scope().region())
+            })
+            .expect(
+                "alloc_module_reaching: a Module's child scope must be covered by dest, the \
+                 supplied evidence reach, or the destination scope's ambient coverage",
+            )
     }
 }
 
@@ -673,10 +681,11 @@ impl KoanRegionExt for KoanRegion {
 /// the same scope the audit runs against (`Scope::host_reach_of` / `adopted_reach_of`), so
 /// membership here is dest-relative by construction — no separate "is this evidence dest-relative"
 /// check is needed. `ambient`, when supplied, is the destination scope's own
-/// [`Scope::chain_reaches_region`](super::scope::Scope::chain_reaches_region): a value the mint
-/// omitted from `reach` because it is already covered by the destination's lexical-ancestor chain
-/// (the same omission every `host_reach_of` / `adopted_reach_of` mint applies) is still resident —
-/// omitted from the *reach set*, never from *residence*.
+/// [`Scope::covers_region_ambiently`](super::scope::Scope::covers_region_ambiently) — the exact
+/// predicate every `host_reach_of` / `adopted_reach_of` mint omits by, so a region the mint left
+/// out of `reach` is still resident — omitted from the *reach set*, never from *residence*. Only
+/// [`Scope`]'s own evidence-tier methods construct the `ambient` form, binding the predicate to
+/// the destination scope by construction.
 pub(crate) struct Residence<'d> {
     dest: &'d KoanRegion,
     reach: &'d [&'d FrameSet],
@@ -700,8 +709,8 @@ impl<'d> Residence<'d> {
         }
     }
 
-    /// [`Self::with_reach`] plus the destination scope's own lexical-ancestor coverage — see the
-    /// type doc's `ambient` paragraph.
+    /// [`Self::with_reach`] plus the destination scope's own ambient coverage
+    /// ([`Scope::covers_region_ambiently`]) — see the type doc's `ambient` paragraph.
     pub(crate) fn with_reach_and_ambient(
         dest: &'d KoanRegion,
         reach: &'d [&'d FrameSet],
@@ -715,7 +724,7 @@ impl<'d> Residence<'d> {
     }
 
     /// Whether `region` is `dest` itself, is covered by some `reach` member's own pin chain, or is
-    /// reported covered by `ambient` — [`RegionBrand::alloc_module_reaching`]'s coverage check.
+    /// reported covered by `ambient` — [`Scope::alloc_module_reaching`]'s coverage check.
     /// [`RegionSet::pins_region`] is the library's public reach-coverage query (unlike
     /// [`RegionSet::members`], which is gated to `test`/`test-hooks` — koan cannot enumerate a
     /// set's members in production, only ask it whether a given region is covered).

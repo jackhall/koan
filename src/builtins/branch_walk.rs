@@ -94,8 +94,7 @@ pub(crate) fn arm_tail<'a>(
             } => {
                 let reach = child.adopted_reach_of(&d);
                 let object = child
-                    .brand()
-                    .alloc_object_delivered(value, std::slice::from_ref(&reach), child)
+                    .alloc_object_delivered(value, std::slice::from_ref(&reach))
                     .expect("ItSource::Value's delivered carrier must cover its own reach");
                 (object, reach)
             }
@@ -116,11 +115,9 @@ pub(crate) fn arm_tail<'a>(
                 let reach = child.adopted_reach_of(&carrier);
                 let object = carrier.open(|live| {
                     child
-                        .brand()
                         .alloc_object_delivered(
                             live.object().deep_clone(),
                             std::slice::from_ref(&reach),
-                            child,
                         )
                         .expect("ItSource::Carrier's own reach must cover its deep copy")
                 });

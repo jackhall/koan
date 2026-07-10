@@ -181,15 +181,27 @@ impl<'a> Scope<'a> {
     }
 
     /// Whether any scope on this scope's lexical `outer` chain (including `self`) lives in `region` —
-    /// the lexical-ancestor half of the reach-set omission predicate. Holding a scope keeps its own
-    /// region alive, so a region reached here is one this chain already pins and must be omitted from a
-    /// minted reach (re-pinning it, paired with a sibling bind of a call's result, would close a
-    /// `frame → region → scope → frame` cycle). Composed with `FrameStorage::pins_region` (the storage
-    /// `outer` half) inside [`Self::host_reach_of`]'s omission predicate; used alone at
+    /// the lexical-ancestor half of [`Self::covers_region_ambiently`]. Holding a scope keeps its own
+    /// region alive, so a region reached here is one this chain already pins. Used alone at
     /// `runtime/submit.rs`'s cart check, which needs only the lexical half.
     pub(crate) fn chain_reaches_region(&self, region: &KoanRegion) -> bool {
         self.ancestors()
             .any(|scope| std::ptr::eq(scope.region(), region))
+    }
+
+    /// Whether this scope's context already keeps `region` alive without any reach member: pinned
+    /// by the home frame's storage `outer` chain ([`FrameStorage::pins_region`]) or reached by the
+    /// lexical `outer` chain ([`Self::chain_reaches_region`]). This is the reach-mint omission
+    /// predicate — [`Self::host_reach_of`] / [`Self::adopted_reach_of`] / [`Self::adopt_sealed`]
+    /// materialize no member for a region it covers, because re-pinning one, paired with a sibling
+    /// bind of a call's result, would close a `frame → region → scope → frame` cycle — and
+    /// therefore also the evidence-tier audits' ambient coverage
+    /// ([`Scope::alloc_ktype_reaching`] and siblings): evidence this scope minted is complete
+    /// exactly relative to "destination ∪ evidence members ∪ this predicate", so mint and audit
+    /// stay complements by sharing it.
+    pub(crate) fn covers_region_ambiently(&self, region: &KoanRegion) -> bool {
+        let home = self.region_owner.upgrade();
+        home.as_ref().is_some_and(|h| h.pins_region(region)) || self.chain_reaches_region(region)
     }
 
     /// Mint a delivered value's reach into this scope's own arena and package it as the binding
@@ -199,10 +211,10 @@ impl<'a> Scope<'a> {
     /// residence stays pinned for the scope's life. The minted set is held by the arena for the
     /// region's life — the same schedule the scope itself is held on — and its `&'a` reference is
     /// stored on the entry (the reach). `None` when the value reaches nothing foreign.
-    /// Home-omission: the scope's home frame plus lexical-ancestor regions
-    /// ([`Self::chain_reaches_region`]) — a per-call frame carries no storage `outer` under TCO, so
-    /// the lexical half is what catches a closure's captured (ancestor) scope, keeping a sibling
-    /// bind of the call's result from closing a region cycle.
+    /// Home-omission: everything [`Self::covers_region_ambiently`] covers — a per-call frame
+    /// carries no storage `outer` under TCO, so the lexical half is what catches a closure's
+    /// captured (ancestor) scope, keeping a sibling bind of the call's result from closing a
+    /// region cycle.
     pub(crate) fn host_reach_of(&self, cell: &DeliveredCarried) -> StoredReach<'a> {
         self.envelope_reach_of(cell, Residence::Kept)
     }
@@ -220,13 +232,11 @@ impl<'a> Scope<'a> {
 
     /// Shared mint behind [`Self::host_reach_of`] / [`Self::adopted_reach_of`]: the library
     /// [`Delivered::mint_reach`](crate::witnessed::Delivered::mint_reach) with koan's omission
-    /// policy (home frame + lexical ancestors), taking the envelope itself rather than its
+    /// policy ([`Self::covers_region_ambiently`]), taking the envelope itself rather than its
     /// decomposed witness/host pair.
     fn envelope_reach_of(&self, cell: &DeliveredCarried, mode: Residence) -> StoredReach<'a> {
-        let home = self.region_owner.upgrade();
         let (foreign, borrows_into_home) = cell.mint_reach(self.brand().handle(), mode, |region| {
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self.chain_reaches_region(region)
+            self.covers_region_ambiently(region)
         });
         StoredReach {
             foreign,
@@ -241,11 +251,9 @@ impl<'a> Scope<'a> {
         &self,
         cell: &Witnessed<T, CarrierWitness>,
     ) -> StoredReach<'a> {
-        let home = self.region_owner.upgrade();
-        let (foreign, borrows_into_home) =
-            cell.mint_resident_reach(self.brand().handle(), |region| {
-                home.as_ref().is_some_and(|h| h.pins_region(region))
-                    || self.chain_reaches_region(region)
+        let (foreign, borrows_into_home) = cell
+            .mint_resident_reach(self.brand().handle(), |region| {
+                self.covers_region_ambiently(region)
             });
         StoredReach {
             foreign,
@@ -602,8 +610,7 @@ impl<'a> Scope<'a> {
         // caller that mis-minted its evidence (a programming error, matching this fn's infallible
         // contract).
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self
-            .brand()
-            .alloc_ktype_reaching(ktype, &reach, self)
+            .alloc_ktype_reaching(ktype, &reach)
             .expect("register_type: reach must cover ktype's borrows (mis-minted evidence)");
         match self
             .bindings
@@ -662,7 +669,7 @@ impl<'a> Scope<'a> {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> =
-            self.brand().alloc_ktype_reaching(ktype, &reach, self)?;
+            self.alloc_ktype_reaching(ktype, &reach)?;
         match self
             .bindings
             .get()
@@ -700,8 +707,7 @@ impl<'a> Scope<'a> {
         // reaching no foreign region — so its stored reach is empty (the reaching-tier evidence
         // degrades to the dest-only checked audit, which its pure members always pass).
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self
-            .brand()
-            .alloc_ktype_reaching(ktype, &StoredReach::empty(), self)
+            .alloc_ktype_reaching(ktype, &StoredReach::empty())
             .expect("preinstall_identity: a pre-installed SetRef's members are always owned");
         match self
             .bindings
@@ -916,10 +922,8 @@ impl<'a> Scope<'a> {
     /// resolving step as its carrier rather than as a relocated copy (the head-deferred callable, an
     /// FN signature type slot, a spliced argument).
     pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
-        let home = self.region_owner.upgrade();
         cell.adopt_into(self.brand().handle(), |region| {
-            home.as_ref().is_some_and(|h| h.pins_region(region))
-                || self.chain_reaches_region(region)
+            self.covers_region_ambiently(region)
         })
     }
 
@@ -953,15 +957,11 @@ impl<'a> Scope<'a> {
         let reach = self.adopted_reach_of(cell);
         cell.open(|live| {
             Carried::Object(
-                self.brand()
-                    .alloc_object_delivered(
-                        live.object().deep_clone(),
-                        std::slice::from_ref(&reach),
-                        self,
-                    )
-                    .expect(
-                        "a deep copy's own residence must be covered by its own reach evidence",
-                    ),
+                self.alloc_object_delivered(
+                    live.object().deep_clone(),
+                    std::slice::from_ref(&reach),
+                )
+                .expect("a deep copy's own residence must be covered by its own reach evidence"),
             )
         })
     }

@@ -319,15 +319,19 @@ caller-supplied audit returns true — nothing lands on a decline):
   [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walk the value's own structure and
   confirm every region pointer it carries points into the destination region, checking an `Rc`-shared
   set's members by address rather than rebuilding them.
-- **reaching / delivered** (`alloc_ktype_reaching` / `alloc_module_reaching` / `alloc_object_delivered`)
-  — widens the dest-only check with reach evidence the caller already minted (a bind's
-  `host_reach_of` / `adopted_reach_of`), *plus* the destination scope's own lexical-ancestor coverage
-  (`Scope::chain_reaches_region`): a region already covered by the destination's lexical chain is never
-  materialized as a reach-set member by `host_reach_of` / `adopted_reach_of` — a deliberate omission in
-  the mint's own `omit` policy — so a reach-evidence-only audit would under-cover a value that
-  legitimately reaches a lexically-ancestral region (a module bound at an outer scope, read by a nested
-  per-call functor body). `Residence` ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage
-  predicate all three checked tiers compose from.
+- **reaching / delivered** (`Scope::alloc_ktype_reaching` / `alloc_module_reaching` /
+  `alloc_object_delivered`) — widens the dest-only check with reach evidence the scope already minted
+  (a bind's `host_reach_of` / `adopted_reach_of`), *plus* the regions the mint's own omission policy
+  deliberately never materializes as reach-set members (`Scope::covers_region_ambiently`: the home
+  frame's storage pin chain and the lexical-ancestor chain — re-pinning one would close a
+  `frame → region → scope → frame` cycle), without which the audit would under-cover a value that
+  legitimately reaches a lexically-ancestral region (a module bound at an outer scope, read by a
+  nested per-call functor body). Mint and audit share the one predicate, so they stay exact
+  complements; and unlike the other tiers these live on `Scope`, not `RegionBrand` — a `StoredReach`
+  is meaningful only relative to its minting scope, so taking the destination from `self` binds
+  evidence, ambient coverage, and destination region together by construction. `Residence`
+  ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
+  compose from.
 - **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit, sound
   only because `FoldingBrand` is mintable exactly two ways: inside a library fold combinator's closure
   (`transfer_into` / `merge_pinned` / `map_pinned`, whose enclosing combinator has already composed the
