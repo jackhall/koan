@@ -59,7 +59,13 @@ into it.
   additionally writes the size-≥2 powerset of its member keys, all resolving to
   one shared group record so distinct members mix; together with each member's
   size-1 entry (now carrying the group's declared mode), the full non-empty
-  powerset resolves to the group.
+  powerset resolves to the group. The binder also widens the registry record:
+  today's [`ReductionMode::Pairwise`](../../src/machine/model/operators.rs)
+  carries the combiner as a keyword and always folds the per-pair results left
+  (the reducer synthesizes a keyworded dispatch on it), while the
+  `PAIRWISE FOLD <combiner> <LEFT|RIGHT>` surface names a function *value* and
+  a fold direction — so this item reshapes the record to carry both and teaches
+  the reducer's combiner fold to invoke a function value.
 - *Generics via functor — decided.* A generic group is a
   [`FUNCTOR`](../../design/typing/functors.md) producing the `GROUP` module,
   taking either a bare `:Type` parameter (when the bodies need no operations on

@@ -13,10 +13,13 @@ producer before the carrier lands on a node
 ([arena.rs](../../src/machine/core/arena.rs) doc on
 `alloc_object_witnessed`). Safe code that stashes such a carrier past its
 step, or returns a foreign-borrowing value through a region-pure marker
-path, under-pins with no audit on the path — six sites produce such
-carriers today ([print.rs](../../src/builtins/print.rs), `arena.rs` ×3,
+path, under-pins with no audit on the path — eighteen sites produce such
+carriers today ([arithmetic.rs](../../src/builtins/arithmetic.rs) ×9,
+[print.rs](../../src/builtins/print.rs),
+[quote.rs](../../src/builtins/quote.rs) ×2, `arena.rs` ×3,
 [finalize.rs](../../src/machine/execute/finalize.rs),
-[interpret.rs](../../src/machine/execute/runtime/interpret.rs)). Second,
+[interpret.rs](../../src/machine/execute/runtime/interpret.rs),
+[run_loop.rs](../../src/machine/execute/run_loop.rs)). Second,
 `build_frame_child_witnessed` (`arena.rs`) keeps a per-call child's
 cross-region parent alive via `FrameStorage`'s `outer` `Rc` chain — an
 invariant upheld by one construction door and its callers wiring
