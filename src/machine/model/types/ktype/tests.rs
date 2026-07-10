@@ -180,6 +180,57 @@ fn any_module_and_any_signature_render_surface_keywords() {
     assert_eq!(asg.name(), "Signature");
 }
 
+// --- KType::Union ------------------------------------------------------------------
+
+/// `:(A | B)` renders members joined by ` | ` and wrapped in the type sigil.
+#[test]
+fn name_renders_union() {
+    let u = KType::Union(vec![KType::Number, KType::Str]);
+    assert_eq!(u.name(), ":(Number | Str)");
+}
+
+/// A compound member already opens its own sigil, which nests without a doubled colon.
+#[test]
+fn name_renders_union_with_compound_member() {
+    let u = KType::Union(vec![KType::List(Box::new(KType::Number)), KType::Str]);
+    assert_eq!(u.name(), ":(:(LIST OF Number) | Str)");
+}
+
+/// Union equality is order-blind: the same members in a different order compare equal.
+#[test]
+fn union_equality_order_blind() {
+    let ab = KType::Union(vec![KType::Number, KType::Str]);
+    let ba = KType::Union(vec![KType::Str, KType::Number]);
+    assert_eq!(ab, ba);
+}
+
+/// Two unions of different member sets are unequal.
+#[test]
+fn union_inequality_different_members() {
+    let ns = KType::Union(vec![KType::Number, KType::Str]);
+    let nb = KType::Union(vec![KType::Number, KType::Bool]);
+    assert_ne!(ns, nb);
+}
+
+/// Hash agrees with the order-blind equality: reordered-but-equal unions hash equal.
+#[test]
+fn union_hash_order_blind() {
+    let ab = KType::Union(vec![KType::Number, KType::Str, KType::Bool]);
+    let ba = KType::Union(vec![KType::Bool, KType::Number, KType::Str]);
+    assert_eq!(ab, ba);
+    assert_eq!(hash_of(&ab), hash_of(&ba));
+}
+
+/// A region-free union rebuilds at `'static` member-wise.
+#[test]
+fn to_static_rebuilds_union() {
+    let u = KType::Union(vec![KType::Number, KType::Str]);
+    assert_eq!(
+        u.to_static().expect("union of owned members rebuilds"),
+        KType::Union(vec![KType::Number, KType::Str])
+    );
+}
+
 fn hash_of(t: &KType<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();

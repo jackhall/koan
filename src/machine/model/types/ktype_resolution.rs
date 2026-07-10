@@ -39,6 +39,34 @@ impl<'a> KType<'a> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 
+    /// Canonicalizing constructor for [`KType::Union`] — the single entry point that builds a
+    /// union. Flattens any nested `Union` member into its members, deduplicates by `PartialEq`
+    /// (O(n²) scan; member counts are small), and collapses a single surviving member to that
+    /// member (`:(A | A)` is `:A`). Callers guarantee at least one member.
+    pub fn union_of(members: Vec<KType<'a>>) -> KType<'a> {
+        debug_assert!(!members.is_empty(), "union_of requires at least one member");
+        let mut flat: Vec<KType<'a>> = Vec::with_capacity(members.len());
+        let push_unique = |m: KType<'a>, flat: &mut Vec<KType<'a>>| {
+            if !flat.contains(&m) {
+                flat.push(m);
+            }
+        };
+        for m in members {
+            match m {
+                KType::Union(inner) => {
+                    for i in inner {
+                        push_unique(i, &mut flat);
+                    }
+                }
+                other => push_unique(other, &mut flat),
+            }
+        }
+        if flat.len() == 1 {
+            return flat.pop().unwrap();
+        }
+        KType::Union(flat)
+    }
+
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
     /// `List<Any>`; nested containers join element-wise.
     pub fn join(a: &KType<'a>, b: &KType<'a>) -> KType<'a> {

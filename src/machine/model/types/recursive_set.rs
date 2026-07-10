@@ -187,6 +187,9 @@ pub fn seal_recursive_refs<'a>(
             ctor: Box::new(recurse(ctor)),
             args: args.iter().map(recurse).collect(),
         },
+        // A union inside a schema seals member-wise, so a self / sibling reference among its
+        // members folds to a `SetLocal` like any other.
+        KType::Union(members) => KType::Union(members.iter().map(recurse).collect()),
         // Leaves and external handles pass through.
         other => other.clone(),
     }
@@ -224,6 +227,10 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
             ctor: Box::new(resolve_set_locals(set, ctor)),
             args: args.iter().map(|a| resolve_set_locals(set, a)).collect(),
         },
+        // Projecting a union member-wise binds each member's ambient `SetLocal`s to real handles.
+        KType::Union(members) => {
+            KType::Union(members.iter().map(|m| resolve_set_locals(set, m)).collect())
+        }
         // Leaves and external handles pass through; only the ambient set's `SetLocal`s bind.
         other => other.clone(),
     }

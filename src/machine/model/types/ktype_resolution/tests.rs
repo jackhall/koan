@@ -81,6 +81,48 @@ fn join_iter_mixed_yields_any() {
     assert_eq!(KType::join_iter(v), KType::Any);
 }
 
+// --- union_of ---------------------------------------------------------------------
+
+/// Two distinct members build a two-member `Union`.
+#[test]
+fn union_of_two_distinct_members() {
+    let u = KType::union_of(vec![KType::Number, KType::Str]);
+    assert_eq!(u, KType::Union(vec![KType::Number, KType::Str]));
+}
+
+/// A single member collapses to that member (AC2's `:(A | A)` is `:A`, degenerate case).
+#[test]
+fn union_of_single_member_collapses() {
+    assert_eq!(KType::union_of(vec![KType::Number]), KType::Number);
+}
+
+/// Duplicate members are deduplicated; `:(Number | Number)` collapses to `:Number`.
+#[test]
+fn union_of_dedups_to_single() {
+    assert_eq!(
+        KType::union_of(vec![KType::Number, KType::Number]),
+        KType::Number
+    );
+}
+
+/// Repeated members within a larger set are deduplicated but the union survives.
+#[test]
+fn union_of_dedups_within_set() {
+    let u = KType::union_of(vec![KType::Number, KType::Str, KType::Number]);
+    assert_eq!(u, KType::Union(vec![KType::Number, KType::Str]));
+}
+
+/// A nested `Union` member is flattened into the outer members, then deduplicated.
+#[test]
+fn union_of_flattens_nested_union() {
+    let inner = KType::Union(vec![KType::Str, KType::Bool]);
+    let u = KType::union_of(vec![KType::Number, inner, KType::Bool]);
+    assert_eq!(
+        u,
+        KType::Union(vec![KType::Number, KType::Str, KType::Bool])
+    );
+}
+
 fn function(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'static> {
     KType::KFunction {
         params: Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),

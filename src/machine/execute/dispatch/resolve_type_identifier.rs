@@ -171,6 +171,11 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     }
                     self.stack.push(ctor);
                 }
+                KType::Union(members) => {
+                    for m in members.iter().rev() {
+                        self.stack.push(m);
+                    }
+                }
                 // Leaves: no nested `KType`. `DeferredReturn` carries only a hashable
                 // surface shadow, so it bottoms out here too.
                 KType::Number

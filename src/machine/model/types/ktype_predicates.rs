@@ -176,6 +176,18 @@ impl<'a> KType<'a> {
                     .all(|(x, y)| x == y || x.is_more_specific_than(y));
                 any_more && all_eq_or_more
             }
+            // Union subset: `a` refines `b` iff they are not the same set and every member of
+            // `a` is equal to or more specific than some member of `b`. Set equality (not the
+            // positional `Vec` compare) gates the strictness, matching order-blind identity.
+            (Union(a), Union(b)) => {
+                let same_set = a.len() == b.len() && a.iter().all(|m| b.contains(m));
+                !same_set
+                    && a.iter()
+                        .all(|x| b.iter().any(|y| x == y || x.is_more_specific_than(y)))
+            }
+            // Each member of a union is a subtype of it: a non-union `x` is more specific than
+            // `Union(ms)` iff it equals or refines one of the members.
+            (x, Union(ms)) => ms.iter().any(|m| x == m || x.is_more_specific_than(m)),
             _ => false,
         }
     }
@@ -312,6 +324,8 @@ impl<'a> KType<'a> {
             },
             // A variant slot admits exactly the tagged values of that one variant.
             KType::Variant { .. } => *self == obj.ktype(),
+            // A union slot admits a value any of its members admits.
+            KType::Union(members) => members.iter().any(|m| m.matches_value(obj)),
             _ => *self == obj.ktype(),
         }
     }
@@ -351,6 +365,8 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::OfKind(k) => k.admits(t.kind_of()),
+            // A union slot is satisfied by any type its members are satisfied by.
+            KType::Union(members) => members.iter().any(|m| m.matches_type(t)),
             _ => *self == carrier_ktype,
         }
     }
@@ -430,6 +446,9 @@ impl<'a> KType<'a> {
             },
             // A variant slot admits exactly its own tagged values via `(set, index, tag)` identity.
             KType::Variant { .. } => &c.ktype() == self,
+            // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
+            // so each member reads the same carried value.
+            KType::Union(members) => members.iter().any(|m| m.accepts_carried(c)),
             KType::Module { .. } => c.ktype() == *self,
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot check).
@@ -530,7 +549,10 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             // The nominal / module / signature / constructor slots classify only resolved values
-            // (via `accepts_carried`); no parser part shape satisfies them.
+            // (via `accepts_carried`); no parser part shape satisfies them. A union delegates to
+            // its members, and a member admits a part only for a shape it classifies — a literal
+            // for `Number` / `Str` / `Bool` / `Null`.
+            KType::Union(members) => members.iter().any(|m| m.accepts_part(part)),
             KType::SetRef { .. }
             | KType::Variant { .. }
             | KType::Module { .. }

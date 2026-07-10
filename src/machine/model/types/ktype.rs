@@ -138,6 +138,12 @@ pub enum KType<'a> {
         index: usize,
         tag: String,
     },
+    /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
+    /// deduplicated, no nested `Union`, always two or more (a single-member union is that
+    /// member — [`union_of`](KType::union_of) collapses it). Identity is order-blind, so
+    /// equality and hashing are set-based rather than positional. Each member is a subtype
+    /// of the union; the union admits any value one of its members admits.
+    Union(Vec<KType<'a>>),
     /// Intra-set sibling reference — a bare index resolved against the ambient set during
     /// deep traversal only. Carries no `Rc`, so a set holds no internal refcount cycle and
     /// frees once its last external handle drops. Never reaches the predicates (matching is
@@ -242,6 +248,12 @@ impl<'a> KType<'a> {
             KType::Variant { set, index, tag } => {
                 format!(":({} {})", set.member(*index).name, tag)
             }
+            // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
+            // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
+            KType::Union(members) => {
+                let rendered: Vec<String> = members.iter().map(|m| m.name()).collect();
+                format!(":({})", rendered.join(" | "))
+            }
             // Diagnostic-only: a sibling reference renders against no ambient set here, so
             // report the slot index. Deep traversal resolves it against the set.
             KType::SetLocal(i) => format!("SetLocal({i})"),
@@ -322,6 +334,15 @@ impl<'a> KType<'a> {
             // `Rc`-shared set: rebuilding would mint a new `Rc` and break identity.
             KType::SetRef { .. } => None,
             KType::Variant { .. } => None,
+            // A union's identity is its owned member set; rebuild each member and rewrap. A
+            // member holding a region pointer (e.g. a `SetRef`) declines, and the union with it.
+            KType::Union(members) => {
+                let mut static_members = Vec::with_capacity(members.len());
+                for m in members {
+                    static_members.push(m.to_static()?);
+                }
+                Some(KType::Union(static_members))
+            }
             KType::SetLocal(i) => Some(KType::SetLocal(*i)),
             KType::RecursiveGroup(_) => None,
             // Region pointers.
@@ -429,6 +450,9 @@ impl<'a> KType<'a> {
             KType::SetRef { set, .. } | KType::Variant { set, .. } | KType::RecursiveGroup(set) => {
                 set_resident_in(set, residence, visited)
             }
+            KType::Union(members) => members
+                .iter()
+                .all(|m| m.resident_in_visiting(residence, visited)),
             KType::Signature { sig, pinned_slots } => {
                 residence.owns_signature(sig)
                     && pinned_slots
@@ -469,6 +493,9 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => set.member(*index).kind,
             KType::Variant { set, index, .. } => set.member(*index).kind,
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
+            // A union is a proper type value — it classifies against `OfKind(Proper)` slots
+            // and never against a nominal-family kind.
+            KType::Union(_) => KKind::ProperType,
             _ => KKind::ProperType,
         }
     }
@@ -644,6 +671,9 @@ impl<'a> PartialEq for KType<'a> {
             // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
             (RecursiveGroup(a), RecursiveGroup(b)) => Rc::ptr_eq(a, b),
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
+            // Order-blind set equality. Members are canonically deduplicated, so equal length
+            // plus one-directional containment is sufficient.
+            (Union(a), Union(b)) => a.len() == b.len() && a.iter().all(|m| b.contains(m)),
             _ => false,
         }
     }
@@ -707,6 +737,19 @@ impl<'a> std::hash::Hash for KType<'a> {
             // Set-pointer identity ONLY — never the cyclic schema, matching `PartialEq`.
             RecursiveGroup(set) => (Rc::as_ptr(set) as *const ()).hash(state),
             DeferredReturn(s) => s.hash(state),
+            // Order-independent, matching the set-based `PartialEq`: hash the length, then
+            // combine each member's own hash commutatively by XOR so a reordering hashes equal.
+            Union(members) => {
+                use std::hash::Hasher as _;
+                members.len().hash(state);
+                let mut acc: u64 = 0;
+                for m in members {
+                    let mut member_hasher = std::collections::hash_map::DefaultHasher::new();
+                    m.hash(&mut member_hasher);
+                    acc ^= member_hasher.finish();
+                }
+                state.write_u64(acc);
+            }
         }
     }
 }

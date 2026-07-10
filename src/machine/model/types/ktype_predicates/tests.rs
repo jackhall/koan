@@ -836,3 +836,65 @@ fn deferred_return_surface_eq_and_hash() {
     assert_eq!(h(&a), h(&b));
     assert_ne!(a, c);
 }
+
+// --- KType::Union admissibility and specificity ------------------------------------
+
+/// A union slot admits a value any of its members admits, and refuses one no member
+/// admits — via both `accepts_carried` and `matches_value`.
+#[test]
+fn union_admits_member_typed_value() {
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
+
+    let number_or_str = KType::Union(vec![KType::Number, KType::Str]);
+    let str_or_bool = KType::Union(vec![KType::Str, KType::Bool]);
+
+    assert!(number_or_str.accepts_carried(Carried::Object(n)));
+    assert!(!str_or_bool.accepts_carried(Carried::Object(n)));
+    // `matches_value` agrees with `accepts_carried`.
+    assert!(number_or_str.matches_value(n));
+    assert!(!str_or_bool.matches_value(n));
+}
+
+/// A union honors a container value's memoized carried element type: a `List<Number>`
+/// value is admitted by a union containing `:(LIST OF Number)`, refused by one without it.
+#[test]
+fn union_honors_memoized_list_element_type() {
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let list_value: &KObject<'_> = region.alloc_object(KObject::list_with_type(
+        Rc::new(vec![Held::Object(KObject::Number(1.0))]),
+        KType::Number,
+    ));
+
+    let with_list = KType::Union(vec![KType::List(Box::new(KType::Number)), KType::Str]);
+    let without_list = KType::Union(vec![KType::Number, KType::Str]);
+
+    assert!(with_list.accepts_carried(Carried::Object(list_value)));
+    assert!(!without_list.accepts_carried(Carried::Object(list_value)));
+}
+
+/// Specificity: each member refines its union (AC3); a union refines `Any` and a superset
+/// union; a union is not more specific than a bare member nor than an equal union.
+#[test]
+fn union_specificity_ordering() {
+    let number = KType::Number;
+    let number_or_str = KType::Union(vec![KType::Number, KType::Str]);
+    let number_or_str_or_bool = KType::Union(vec![KType::Number, KType::Str, KType::Bool]);
+
+    // Each member is a subtype of the union.
+    assert!(number.is_more_specific_than(&number_or_str));
+    // A union refines `Any`.
+    assert!(number_or_str.is_more_specific_than(&KType::Any));
+    // A union is not more specific than one of its members.
+    assert!(!number_or_str.is_more_specific_than(&number));
+    // A subset union refines a superset union; the reverse does not hold.
+    assert!(number_or_str.is_more_specific_than(&number_or_str_or_bool));
+    assert!(!number_or_str_or_bool.is_more_specific_than(&number_or_str));
+    // Equal unions (order-blind) are not strictly more specific than each other.
+    let str_or_number = KType::Union(vec![KType::Str, KType::Number]);
+    assert!(!number_or_str.is_more_specific_than(&str_or_number));
+}
