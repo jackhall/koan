@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile, RegionBrand, Scope};
+use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, NonWrappedRef};
@@ -235,8 +235,8 @@ fn finish_witnessed<'step>(
                     home,
                     Residence::Copied,
                     |value, (region, identity_ty), _brand| {
-                        let region = RegionBrand(region);
-                        Carried::Object(region.alloc_object(KObject::Wrapped {
+                        let region = FoldingBrand::in_fold_closure(region);
+                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
                             inner: NonWrappedRef::peel(value.object()),
                             type_id: identity_ty,
                         }))
@@ -286,9 +286,9 @@ fn finish_witnessed<'step>(
                 home,
                 &dest_frame,
                 |(_region, fields), (region, identity_ty), _brand| {
-                    let region = RegionBrand(region);
+                    let region = FoldingBrand::in_fold_closure(region);
                     let record = Record::from_pairs(fields);
-                    Carried::Object(region.alloc_object(KObject::Wrapped {
+                    Carried::Object(region.alloc_object_folded(KObject::Wrapped {
                         inner: NonWrappedRef::peel(&KObject::record(record)),
                         type_id: identity_ty,
                     }))
@@ -320,10 +320,10 @@ fn finish_witnessed<'step>(
             // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
             // its set/index at the brand. Freshly minted in the dest region, so `reach` is empty
             // today; the operand `merge`s it under the dest frame's yoke plus that reach.
-            let identity: &KType<'step> = region.alloc_ktype(KType::SetRef {
+            let identity: &KType<'step> = region.alloc_ktype_pure(KType::SetRef {
                 set: Rc::clone(set),
                 index: *index,
-            });
+            })?;
             let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
             let tag = tag.clone();
             Ok(terminals[0]
@@ -332,12 +332,12 @@ fn finish_witnessed<'step>(
                     home,
                     Residence::Copied,
                     move |value, (region, identity_ty), _brand| {
-                        let region = RegionBrand(region);
+                        let region = FoldingBrand::in_fold_closure(region);
                         let (set, index) = match identity_ty {
                             KType::SetRef { set, index } => (Rc::clone(set), *index),
                             _ => unreachable!("a Tagged identity is always a SetRef"),
                         };
-                        Carried::Object(region.alloc_object(KObject::Tagged {
+                        Carried::Object(region.alloc_object_folded(KObject::Tagged {
                             tag,
                             value: Rc::new(value.object().deep_clone()),
                             set,

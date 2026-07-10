@@ -261,8 +261,10 @@ The per-call frame's seed binds (MATCH / TRY `it`, `KFunction::invoke` params, t
 elaboration) open the child scope at a `for<'b>` brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller value into the
 opened scope's own region through the substrate before binding it — the `it`-bind and param-bind via
-the erasing `alloc_object` (which forgets the caller lifetime and re-homes the value at the frame
-region), the deferred return re-homing its elaborated `KType` into the captured-scope region — so the
+[`RegionBrand::alloc_object_delivered`](../src/machine/core/arena.rs) (which re-homes the value at the
+frame region under a residence audit against the bind's own reach evidence, rather than assuming
+purity — see [§ Move-in residence audits](#move-in-residence-audits)), the deferred return re-homing
+its elaborated `KType` into the captured-scope region — so the
 seed fabricates no free `&'a`. The store
 side carries no `unsafe` at all: forgetting a scope reference's lifetime for storage routes the safe
 `erase_to_static`, and a region-resident holder's embedded `&Scope` re-anchors with the whole value on
@@ -298,6 +300,51 @@ invariants make the ownership unit coherent:
   releasing the parent storage Rc; on the shell, `storage` is declared before `scope_carrier`.
   Inner references die before the outer storage they may reference, ruling out a dangling
   `outer` during drop.
+
+### Move-in residence audits
+
+A bare move-in surface — `RegionBrand::alloc_object` / `alloc_ktype` / `KoanStepContextExt::alloc_type`,
+and the library's own [`RegionHandle::alloc_resident`](../workgraph/src/witnessed/region.rs) it
+routes through — takes `K::At<'static>`: region-purity is compile-enforced there, so a value carrying
+any region borrow is rejected before it ever reaches the pins-nothing empty witness. A value that
+cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines a
+module-family pointer, a bound `KFunctor`'s captured body, or an `Rc`-shared set — `SetRef` / `Variant`
+/ `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three
+runtime-checked tiers instead, all routed through the library's
+[`RegionHandle::alloc_resident_audited`](../workgraph/src/witnessed/region.rs) (store only if the
+caller-supplied audit returns true — nothing lands on a decline):
+
+- **checked** (`alloc_ktype_checked` / `alloc_object_checked`) —
+  [`KType::resident_in`](../src/machine/model/types/ktype.rs) /
+  [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walk the value's own structure and
+  confirm every region pointer it carries points into the destination region, checking an `Rc`-shared
+  set's members by address rather than rebuilding them.
+- **reaching / delivered** (`alloc_ktype_reaching` / `alloc_module_reaching` / `alloc_object_delivered`)
+  — widens the dest-only check with reach evidence the caller already minted (a bind's
+  `host_reach_of` / `adopted_reach_of`), *plus* the destination scope's own lexical-ancestor coverage
+  (`Scope::chain_reaches_region`): a region already covered by the destination's lexical chain is never
+  materialized as a reach-set member by `host_reach_of` / `adopted_reach_of` — a deliberate omission in
+  the mint's own `omit` policy — so a reach-evidence-only audit would under-cover a value that
+  legitimately reaches a lexically-ancestral region (a module bound at an outer scope, read by a nested
+  per-call functor body). `Residence` ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage
+  predicate all three checked tiers compose from.
+- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit, sound
+  only because `FoldingBrand` is mintable exactly two ways: inside a library fold combinator's closure
+  (`transfer_into` / `merge_pinned` / `map_pinned`, whose enclosing combinator has already composed the
+  operands' reach into the result witness) or via `KoanStepContextExt::alloc_carried_with`'s own
+  construction. A value built through a folded veneer must be built only from that closure's own
+  operands — an obligation the type confines *where* folded placement happens, not *what* the closure
+  captures (an open gap — see
+  [scheduler_library's Unplanned work](../roadmap/scheduler_library/README.md#unplanned-work)).
+
+`KObject::resident_in` is honest-partial: a `Wrapped { type_id }`'s raw `&KType` pointer is
+un-answerable (`KType` opts out of the address side-table the `owns_module` / `owns_signature` /
+`owns_function` checks read, by not implementing `Stored::record_local`), so that one field is
+unchecked. Every structural family (`Scope` / `Module` / `ModuleSignature` / `KFunction`) always
+captures a borrow (its parent, its declaring scope), so its bare veneer takes the audited-not-`'static`
+form too — `alloc_scope` / `alloc_module` / `alloc_signature` / `alloc_function` run a
+release-enforced `ptr::eq` same-region check via `alloc_resident_audited` rather than a
+`debug_assert!`.
 
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
 A per-call frame scope is stored as a payload-less

@@ -292,18 +292,60 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
         self.region
     }
 
-    /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs.
+    /// Brand-confined allocation — see [`Region::alloc`]'s (crate-private) docs. Move-in: `value`
+    /// must carry no region borrow (`K::At<'static>`) — `project` only views/wraps the
+    /// freshly-stored value, it does not construct it, so a borrowing value would reach the arena
+    /// unvetted.
     pub fn alloc<K: Stored<W>, R>(
         self,
-        value: K::At<'_>,
+        value: K::At<'static>,
         project: impl for<'b> FnOnce(&'b K::At<'b>) -> R,
     ) -> R {
         self.region.alloc::<K, R>(value, project)
     }
 
-    /// Co-located resident allocation — see [`Region::alloc_resident`].
-    pub fn alloc_resident<K: Stored<W>>(self, value: K::At<'_>) -> &'a K::At<'a> {
+    /// Co-located resident allocation — see [`Region::alloc_resident`]. Move-in: `value` must carry
+    /// no region borrow (`K::At<'static>`), so the store-side lifetime erasure never discards a
+    /// borrow only the caller could vet. A value that legitimately borrows a region takes
+    /// [`Self::alloc_resident_audited`] instead.
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // A `'static` value — here a promoted literal reference — is accepted.
+    /// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
+    /// assert_eq!(*stored, 7);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // A region-borrowing value is rejected: `local`'s borrow is not `'static`, so it cannot
+    /// // satisfy `alloc_resident`'s `K::At<'static>` bound.
+    /// use std::rc::Rc;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+    /// use workgraph::witnessed::RegionHandle;
+    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// let local = 7u32;
+    /// let _: &u32 = handle.alloc_resident::<RefFamily>(&local);
+    /// ```
+    pub fn alloc_resident<K: Stored<W>>(self, value: K::At<'static>) -> &'a K::At<'a> {
         self.region.alloc_resident::<K>(value)
+    }
+
+    /// Resident move-in for a value the embedder can only vet at runtime: `audit` receives the
+    /// destination region and the value before anything is stored; the value is stored only if it
+    /// returns true. The library cannot know an embedder value's borrow structure — the audit is
+    /// the embedder's residence verifier (typically [`Region::owns_addr`] over each borrowed
+    /// payload).
+    pub fn alloc_resident_audited<K: Stored<W>>(
+        self,
+        value: K::At<'_>,
+        audit: impl FnOnce(&Region<W>, &K::At<'_>) -> bool,
+    ) -> Option<&'a K::At<'a>> {
+        audit(self.region, &value).then(|| self.region.alloc_resident::<K>(value))
     }
 }
 

@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::{run_root_storage, KoanRegionExt};
+use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
@@ -52,7 +52,10 @@ fn object_top_node_relocates_into_dest() {
     let dest = CallFrame::new_test(scope, None);
 
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
-    let relocated = copy_carried(Carried::Object(obj), dest.brand());
+    let relocated = copy_carried(
+        Carried::Object(obj),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     match relocated {
         Carried::Object(r) => {
             assert!(dest.region().owns_object(r), "relocated node lives in dest");
@@ -84,10 +87,14 @@ fn list_relocation_shares_inner_rc() {
     ]);
     let list: &KObject = source
         .brand()
-        .alloc_object(KObject::list_with_type(Rc::clone(&items), KType::Any));
+        .alloc_object_checked(KObject::list_with_type(Rc::clone(&items), KType::Any))
+        .expect("a fresh owned List is always resident-in-self");
     let before = Rc::strong_count(&items);
 
-    let relocated = copy_carried(Carried::Object(list), dest.brand());
+    let relocated = copy_carried(
+        Carried::Object(list),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
             assert!(
@@ -126,13 +133,19 @@ fn dict_relocation_shares_inner_rc() {
         Held::Object(KObject::Number(1.0)),
     );
     let entries = Rc::new(map);
-    let dict: &KObject = source.brand().alloc_object(KObject::dict_with_type(
-        Rc::clone(&entries),
-        KType::Any,
-        KType::Any,
-    ));
+    let dict: &KObject = source
+        .brand()
+        .alloc_object_checked(KObject::dict_with_type(
+            Rc::clone(&entries),
+            KType::Any,
+            KType::Any,
+        ))
+        .expect("a fresh owned Dict is always resident-in-self");
 
-    let relocated = copy_carried(Carried::Object(dict), dest.brand());
+    let relocated = copy_carried(
+        Carried::Object(dict),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _, _)) => {
             assert!(
@@ -166,15 +179,21 @@ fn tagged_relocation_shares_value_and_set_rc() {
         ScopeId::next(),
         NominalSchema::Tagged(std::collections::HashMap::new()),
     );
-    let tagged: &KObject = source.brand().alloc_object(KObject::Tagged {
-        tag: "Just".into(),
-        value: Rc::clone(&inner),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(vec![]),
-    });
+    let tagged: &KObject = source
+        .brand()
+        .alloc_object_checked(KObject::Tagged {
+            tag: "Just".into(),
+            value: Rc::clone(&inner),
+            set: Rc::clone(&set),
+            index: 0,
+            type_args: Rc::new(vec![]),
+        })
+        .expect("a fresh owned Tagged is always resident-in-self");
 
-    let relocated = copy_carried(Carried::Object(tagged), dest.brand());
+    let relocated = copy_carried(
+        Carried::Object(tagged),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     match relocated {
         Carried::Object(
             r @ KObject::Tagged {
@@ -208,9 +227,15 @@ fn kfunction_borrow_preserved_verbatim() {
     let dest = CallFrame::new_test(scope, None);
 
     let kf_ref = alloc_local_kf(&source);
-    let obj: &KObject = source.brand().alloc_object(KObject::KFunction(kf_ref));
+    let obj: &KObject = source
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kf_ref))
+        .expect("f was just allocated into region\'s own region");
 
-    let relocated = copy_carried(Carried::Object(obj), dest.brand());
+    let relocated = copy_carried(
+        Carried::Object(obj),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
             assert!(
@@ -255,7 +280,10 @@ fn type_recursive_setref_relocates_and_navigates() {
     };
     let before = Rc::strong_count(&set);
 
-    let relocated = copy_carried(Carried::Type(&type_value), dest.brand());
+    let relocated = copy_carried(
+        Carried::Type(&type_value),
+        FoldingBrand::in_fold_closure(dest.brand().handle()),
+    );
     assert_eq!(
         Rc::strong_count(&set),
         before + 1,

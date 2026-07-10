@@ -597,7 +597,14 @@ impl<'a> Scope<'a> {
             return;
         }
         self.assert_open(&name);
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
+        // `reach` is this call's own reach evidence for `ktype`, minted by the caller into this
+        // same scope's region — dest-relative by construction, so the audit only ever rejects a
+        // caller that mis-minted its evidence (a programming error, matching this fn's infallible
+        // contract).
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self
+            .brand()
+            .alloc_ktype_reaching(ktype, &reach, self)
+            .expect("register_type: reach must cover ktype's borrows (mis-minted evidence)");
         match self
             .bindings
             .get()
@@ -654,7 +661,8 @@ impl<'a> Scope<'a> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> =
+            self.brand().alloc_ktype_reaching(ktype, &reach, self)?;
         match self
             .bindings
             .get()
@@ -688,9 +696,13 @@ impl<'a> Scope<'a> {
             self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.brand().alloc_ktype(ktype);
         // A pre-installed nominal identity is a `KType::SetRef` into the declaring set — owned data
-        // reaching no foreign region — so its stored reach is empty.
+        // reaching no foreign region — so its stored reach is empty (the reaching-tier evidence
+        // degrades to the dest-only checked audit, which its pure members always pass).
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self
+            .brand()
+            .alloc_ktype_reaching(ktype, &StoredReach::empty(), self)
+            .expect("preinstall_identity: a pre-installed SetRef's members are always owned");
         match self
             .bindings
             .get()
@@ -935,9 +947,23 @@ impl<'a> Scope<'a> {
         }
         // Mint FIRST: pin every region the copy still reaches (interior borrows survive
         // `deep_clone`) into this scope's arena before the copy's `&'a` is fabricated. Copied mode:
-        // the producer host materializes only if the value's borrows genuinely reach it.
-        let _ = self.adopted_reach_of(cell);
-        cell.open(|live| Carried::Object(self.brand().alloc_object(live.object().deep_clone())))
+        // the producer host materializes only if the value's borrows genuinely reach it. Also the
+        // deep-cloned copy's own residence evidence — its leaves may still embed the producer's
+        // foreign borrows.
+        let reach = self.adopted_reach_of(cell);
+        cell.open(|live| {
+            Carried::Object(
+                self.brand()
+                    .alloc_object_delivered(
+                        live.object().deep_clone(),
+                        std::slice::from_ref(&reach),
+                        self,
+                    )
+                    .expect(
+                        "a deep copy's own residence must be covered by its own reach evidence",
+                    ),
+            )
+        })
     }
 
     /// Build the terminal carrier for a type living **in this scope's region** from its binding's

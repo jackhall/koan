@@ -83,7 +83,10 @@ a splice-free embed contributes no foreign region: the AST-embedding object is *
 allocs through the witnessed object surface (`alloc_object_witnessed`), born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. Co-location is enforced by the `for<'b>`
 brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
-embed is splice-free — is a `debug_assert` at the `QUOTE` site, not a witness the type encodes.
+embed is splice-free — is a runtime-checked gate at the `QUOTE` site
+([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs), the audited twin of
+`alloc_object_witnessed`): a spliced part rejects with a structured `KError` rather than landing
+unvetted, not a witness the type encodes.
 
 The witness `yoke` takes is a *single-region* type — a lone region owner — so a mint pins exactly one
 region by construction, not by narrowing a set that might be empty or hold several; a minted leaf then
@@ -356,8 +359,10 @@ scalar (an id, a region) where they need no live scope — so no `&Scope` rides 
 seed-side binds fold onto `open` the same way: the MATCH / TRY arm `it`-bind, the user-fn param-bind, and
 the deferred-return-type elaboration each open the child scope at the brand through
 [`CallFrame::with_scope`](../src/machine/core/arena.rs) and **relocate** their caller-`'a` value into the
-opened scope's own region through the substrate (the erasing `alloc_object`, which forgets the caller
-lifetime, for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the
+opened scope's own region through the substrate ([`RegionBrand::alloc_object_delivered`](../src/machine/core/arena.rs),
+which re-homes the value at the frame region under a residence audit against the bind's own reach
+evidence rather than assuming purity — see [memory-model.md § Move-in residence audits](memory-model.md#move-in-residence-audits)
+— for the `it` / param binds; the deferred return re-homing its elaborated `KType` into the
 captured-scope region) before binding it — so the value lands at the brand and the seed fabricates no
 free `&'a`. With every frame-side and
 seed-side read on `open`, the access surface is `open` alone — the borrow-bounded `attach` accessor is

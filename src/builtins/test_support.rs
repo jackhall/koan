@@ -35,21 +35,30 @@ pub(crate) fn extract_terminal<'a>(
     id: NodeId,
 ) -> Carried<'a> {
     let brand = scope.brand();
-    let value = runtime
-        .read_result_with(id, |live| match live {
-            Carried::Object(obj) => Carried::Object(brand.alloc_object(obj.deep_clone())),
-            Carried::Type(kt) => Carried::Type(brand.alloc_ktype(kt.clone())),
-        })
-        .expect("terminal should be a value, not an error");
     // The extraction deep-clones the value into `scope`'s region, so the copied-adoption rule
     // applies: the producer frame materializes into the surviving arena only when the copy's
     // borrows genuinely reach it (a returned closure / module), never for a residence-only scalar.
-    // The witness and its retained host travel together as the delivery envelope.
+    // The witness and its retained host travel together as the delivery envelope. Minted *before*
+    // the read below so the deep-cloned copy's own residence audit can see it — a returned
+    // closure / module's deep clone preserves the bare borrow into its per-call region.
     let delivered = runtime
         .dep_delivered(id)
         .expect("terminal should be a value, not an error");
-    let _ = scope.adopted_reach_of(&delivered);
-    value
+    let reach = scope.adopted_reach_of(&delivered);
+    runtime
+        .read_result_with(id, |live| match live {
+            Carried::Object(obj) => Carried::Object(
+                brand
+                    .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach), scope)
+                    .expect("terminal object must be covered by its own stored reach"),
+            ),
+            Carried::Type(kt) => Carried::Type(
+                brand
+                    .alloc_ktype_reaching(kt.clone(), &reach, scope)
+                    .expect("terminal type must be covered by its own stored reach"),
+            ),
+        })
+        .expect("terminal should be a value, not an error")
 }
 
 /// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.

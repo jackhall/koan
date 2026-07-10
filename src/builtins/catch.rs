@@ -41,7 +41,7 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
-    use crate::machine::core::RegionBrand;
+    use crate::machine::core::FoldingBrand;
     use crate::machine::execute::build_type_operand;
     use crate::machine::model::values::CarriedFamily;
     use crate::machine::model::Carried;
@@ -79,10 +79,10 @@ pub fn body<'a>(
         // plus its stored reach rather than paired with an asserted singleton.
         let region = fctx.scope.brand();
         let frame = fctx.ctx.frame();
-        let identity: &KType<'a> = region.alloc_ktype(KType::SetRef {
+        let identity: &KType<'a> = crate::try_action!(region.alloc_ktype_pure(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
-        });
+        }));
         let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, reach);
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
@@ -91,8 +91,8 @@ pub fn body<'a>(
                 home,
                 Residence::Copied,
                 |value, (region, identity), _brand| {
-                    let region = RegionBrand(region);
-                    Carried::Object(region.alloc_object(build_result(
+                    let region = FoldingBrand::in_fold_closure(region);
+                    Carried::Object(region.alloc_object_folded(build_result(
                         "Ok",
                         identity,
                         value.object().deep_clone(),
@@ -103,7 +103,11 @@ pub fn body<'a>(
             // region); `yoke` it, then `merge` the identity operand to wrap it as `Result::Error`.
             Err(e) => {
                 let payload = KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
-                    Carried::Object(region.alloc_object(e.to_tagged(region)))
+                    Carried::Object(
+                        region
+                            .alloc_object_checked(e.to_tagged(region))
+                            .expect("a freshly-built KError payload is always resident-in-self"),
+                    )
                 });
                 // The pinned merge: `frame` covers the freshly-built payload (it lives in that
                 // frame's own region); the identity operand's backing is the live scope.
@@ -111,8 +115,8 @@ pub fn body<'a>(
                     home,
                     &frame,
                     |payload, (region, identity), _brand| {
-                        let region = RegionBrand(region);
-                        Carried::Object(region.alloc_object(build_result(
+                        let region = FoldingBrand::in_fold_closure(region);
+                        Carried::Object(region.alloc_object_folded(build_result(
                             "Error",
                             identity,
                             payload.object().deep_clone(),

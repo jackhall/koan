@@ -26,7 +26,7 @@ use crate::machine::core::kfunction::body::{
     split_body_statements, ContractFamily, ReturnContract,
 };
 use crate::machine::core::kfunction::exec::home_return_type;
-use crate::machine::core::{RegionBrand, ScopeRefFamily};
+use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
@@ -159,7 +159,7 @@ impl<'run> KoanRuntime<'run> {
             delivered.transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 crate::witnessed::Residence::Copied,
-                |value, region, _brand| copy_carried(value, RegionBrand(region)),
+                |value, region, _brand| copy_carried(value, FoldingBrand::in_fold_closure(region)),
             ),
         )
     }

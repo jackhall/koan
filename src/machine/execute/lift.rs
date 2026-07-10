@@ -1,6 +1,6 @@
 //! The witnessed-transfer copy hook.
 
-use crate::machine::core::RegionBrand;
+use crate::machine::core::FoldingBrand;
 use crate::machine::model::values::Carried;
 
 /// The structural-copy callback a witnessed transfer's fold runs
@@ -10,14 +10,17 @@ use crate::machine::model::values::Carried;
 /// `KFunction` / first-class `Module` rides a bare borrow preserved verbatim — kept alive by the
 /// reach set the transfer mints into the destination, so this hook owns only the copy, never a
 /// region anchor. It is not a delivery channel: dep terminals cross to finishes as sealed
-/// carriers.
+/// carriers. `dest` is a [`FoldingBrand`], not a plain brand: every caller is a `transfer_into`
+/// fold closure, whose enclosing combinator has already minted the value's reach into `dest`'s
+/// arena, so a bare-borrow payload like `KFunction` is covered by the fold rather than an
+/// address-only audit that can't see it.
 pub(in crate::machine::execute) fn copy_carried<'b>(
     value: Carried<'b>,
-    dest: RegionBrand<'b>,
+    dest: FoldingBrand<'b>,
 ) -> Carried<'b> {
     match value {
-        Carried::Object(v) => Carried::Object(dest.alloc_object(v.deep_clone())),
-        Carried::Type(t) => Carried::Type(dest.alloc_ktype(t.clone())),
+        Carried::Object(v) => Carried::Object(dest.alloc_object_folded(v.deep_clone())),
+        Carried::Type(t) => Carried::Type(dest.alloc_ktype_folded(t.clone())),
     }
 }
 

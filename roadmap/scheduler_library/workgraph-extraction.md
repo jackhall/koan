@@ -47,7 +47,5 @@ the surface being documented and frozen is the final one.
   the boundary; the frozen API is the post-move one.
 - [Carving the workcell crate](workcell-extraction.md) — the published
   boundary is the layered pair.
-- [Region-purity typed at the move-in allocs](region-pure-move-in.md) —
-  tightens the published `alloc_resident` surface before the API freezes.
 
 **Unblocks:** none tracked — the project's terminal item.

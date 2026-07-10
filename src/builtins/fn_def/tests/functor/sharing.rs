@@ -39,7 +39,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = region.brand().alloc_ktype(KType::Module { module: m_num });
+    let m_num_obj = region
+        .brand()
+        .alloc_ktype_checked(KType::Module { module: m_num })
+        .expect("m_num was just allocated into region's own region");
 
     let child_b = region
         .brand()
@@ -55,7 +58,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .borrow_mut()
         .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = region.brand().alloc_ktype(KType::Module { module: m_str });
+    let m_str_obj = region
+        .brand()
+        .alloc_ktype_checked(KType::Module { module: m_str })
+        .expect("m_str was just allocated into region's own region");
 
     let child_c = region
         .brand()
@@ -67,7 +73,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .brand()
         .alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = region.brand().alloc_ktype(KType::Module { module: m_none });
+    let m_none_obj = region
+        .brand()
+        .alloc_ktype_checked(KType::Module { module: m_none })
+        .expect("m_none was just allocated into region's own region");
 
     let slot = KType::Signature {
         sig,
@@ -96,9 +105,12 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .insert("Type".into(), KType::Number);
     // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
     // before the pin comparison.
-    let m_unascribed_obj = region.brand().alloc_ktype(KType::Module {
-        module: m_unascribed,
-    });
+    let m_unascribed_obj = region
+        .brand()
+        .alloc_ktype_checked(KType::Module {
+            module: m_unascribed,
+        })
+        .expect("m_unascribed was just allocated into region's own region");
     assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_unascribed_obj))));
 }
 

@@ -131,7 +131,10 @@ pub fn body_opaque<'a>(
     // what the bulk-installed members reach), stored nowhere — the view is a returned value, not a
     // named binding — and sealed onto the terminal carrier, witnessing the module in place.
     let reach = ctx.scope.reach_of_child(new_scope);
-    let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
+    // `new_module` lives in `region`'s own region (it was allocated into `new_scope`, itself
+    // `region`-resident above), so the checked audit passes on the dest-only check alone.
+    let kt_ref =
+        crate::try_action!(region.alloc_ktype_checked(KType::Module { module: new_module }));
     // The opaque view's `new_scope` is a same-region child of this frame, so the module value borrows
     // into home — the home-omitted `reach` drops that fact, so materialize it back via the bit (a
     // downstream copied-mode mint keeps the frame `new_scope` lives in as a reach member).
@@ -152,19 +155,30 @@ pub fn body_transparent<'a>(
         return Action::Done(Err(e));
     }
     let region = ctx.scope.brand();
-    let new_module: &'a Module<'a> = region.alloc_module(Module::new(
-        format!("{} :! {}", m.path, s.path),
-        m.child_scope(),
-    ));
-    new_module.mark_satisfies(s.sig_id());
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
     // to this frame — so its reach folds that source's region and reach, sealed onto the terminal.
+    // Minted *before* the module alloc below: both the module's own placement (its child scope is
+    // this foreign region, not `region`'s own) and the wrapping `KType::Module` need this evidence.
     let reach = ctx.scope.reach_of_child(m.child_scope());
-    let kt_ref = region.alloc_ktype(KType::Module { module: new_module });
     // A transparent view reuses the foreign source module's child scope: it borrows nothing into this
     // home frame (its interior points at the source region, named by `reach`), so the bit is unset —
     // a downstream copied-mode mint materializes no home-frame member, and the dying home frame
     // frees once its retention hold releases.
+    let evidence = crate::machine::core::StoredReach {
+        foreign: reach,
+        borrows_into_home: false,
+    };
+    let new_module: &'a Module<'a> = region.alloc_module_reaching(
+        Module::new(format!("{} :! {}", m.path, s.path), m.child_scope()),
+        &evidence,
+        ctx.scope,
+    );
+    new_module.mark_satisfies(s.sig_id());
+    let kt_ref = crate::try_action!(region.alloc_ktype_reaching(
+        KType::Module { module: new_module },
+        &evidence,
+        ctx.scope
+    ));
     Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, false)))
 }
 

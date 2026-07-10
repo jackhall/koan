@@ -414,7 +414,10 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         None,
         false,
     ));
-    let pick_num_obj = region.brand().alloc_object(KObject::KFunction(pick_num_fn));
+    let pick_num_obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(pick_num_fn))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function(
             "pick_num".to_string(),
@@ -466,7 +469,10 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         None,
         false,
     ));
-    let sibling_obj = region.brand().alloc_object(KObject::KFunction(sibling));
+    let sibling_obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(sibling))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function(
             "pick_str".to_string(),

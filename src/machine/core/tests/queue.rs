@@ -65,7 +65,10 @@ fn drain_debug_asserts_on_invariant_violation() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn1))
+        .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -74,7 +77,10 @@ fn drain_debug_asserts_on_invariant_violation() {
         None,
         false,
     ));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn2))
+        .expect("f was just allocated into region\'s own region");
 
     let snapshot = scope.bindings().data();
     scope
@@ -107,7 +113,10 @@ fn register_function_defers_and_drains_through_function_arm() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(kfn));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn))
+        .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
@@ -163,7 +172,10 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(kfn));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn))
+        .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
@@ -216,7 +228,10 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(kfn1));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn1))
+        .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -225,7 +240,10 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         None,
         false,
     ));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(kfn2));
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(kfn2))
+        .expect("f was just allocated into region\'s own region");
 
     let snapshot = scope.bindings().functions();
     scope

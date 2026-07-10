@@ -13,10 +13,11 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::{CarrierWitness, DeliveredCarried};
+use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
 use std::cell::Cell;
 use std::rc::Rc;
 
+use super::bindings::StoredReach;
 use super::scope::Scope;
 use super::scope_id::ScopeId;
 use super::scope_ptr::ScopeRefFamily;
@@ -98,45 +99,225 @@ impl<'a> RegionBrand<'a> {
         self.0
     }
 
-    /// Store a [`KObject`] into the region; the value lands here (no value holds an owning `Rc` back
-    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident.
-    pub fn alloc_object(self, o: KObject<'_>) -> &'a KObject<'a> {
+    /// Store an owned, region-pure [`KObject`] into the region (no value holds an owning `Rc` back
+    /// to a region, so the store forms no back-edge). Yields a co-located `&'a` resident. A value
+    /// that borrows another region takes [`Self::alloc_object_witnessed_checked`] instead.
+    pub fn alloc_object(self, o: KObject<'static>) -> &'a KObject<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
     }
 
-    /// Store a [`KType`] into the region (a `Module` rides a bare borrow into its child scope's
-    /// region — held alive by the carrier's witness set, not an embedded anchor).
-    pub fn alloc_ktype(self, t: KType<'_>) -> &'a KType<'a> {
+    /// Store an owned, region-pure [`KType`] into the region. A `t` that borrows another region
+    /// (a module-family pointer, or an `Rc`-shared set — see [`KType::to_static`]) cannot satisfy
+    /// this bound; it takes [`Self::alloc_ktype_checked`] instead.
+    pub fn alloc_ktype(self, t: KType<'static>) -> &'a KType<'a> {
         self.0.alloc_resident::<KType<'static>>(t)
+    }
+
+    /// Runtime-checked twin of [`Self::alloc_ktype`] for a `t` that cannot rebuild at `'static`
+    /// (a module-family region pointer, or an `Rc`-shared set — see [`KType::to_static`]):
+    /// [`KType::resident_in`] audits every region borrow `t` carries against this brand's own
+    /// region before anything is stored, so a foreign-region dangle errors loudly instead of
+    /// landing unvetted. Storing nothing on a failed audit.
+    pub fn alloc_ktype_checked(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
+        let name = t.name();
+        self.0
+            .alloc_resident_audited::<KType<'static>>(t, |region, value| value.resident_in(region))
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination"
+                )))
+            })
+    }
+
+    /// Composite entry for a `t` this call site doesn't already know the tier of: the
+    /// compile-enforced `'static` tier when [`KType::to_static`] succeeds, else
+    /// [`Self::alloc_ktype_checked`]. The brand-level twin of
+    /// [`KoanStepContextExt::alloc_type_pure`].
+    pub fn alloc_ktype_pure(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
+        match t.to_static() {
+            Some(owned) => Ok(self.alloc_ktype(owned)),
+            None => self.alloc_ktype_checked(t),
+        }
+    }
+
+    /// The evidence tier: for a `t` whose region borrows may reach a *foreign* region the caller
+    /// has already gathered reach evidence for (a bind-time `register_type`, a read-site's
+    /// materialized `StoredReach`), not just this brand's own region. Widens
+    /// [`Self::alloc_ktype_checked`]'s dest-only audit to "dest, `evidence`'s reach members, or a
+    /// region already covered by `scope`'s own lexical-ancestor chain" — the last disjunct because
+    /// `host_reach_of` / `adopted_reach_of` never materializes a reach member for a region the
+    /// mint's `omit` policy already considers covered (see [`Residence`]'s `ambient` doc), so a
+    /// dest/reach-only audit would under-cover a value legitimately reaching a lexically-ancestral
+    /// region (a module bound at an outer/root scope, read by a nested per-call functor body).
+    /// Exact for `KType`, since its only region pointers (`&Module` / `&ModuleSignature` /
+    /// `&KFunction`) are all side-table-recorded.
+    pub fn alloc_ktype_reaching(
+        self,
+        t: KType<'_>,
+        evidence: &StoredReach<'_>,
+        scope: &Scope<'_>,
+    ) -> Result<&'a KType<'a>, KError> {
+        let name = t.name();
+        let sets: &[&FrameSet] = match &evidence.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        self.0
+            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
+                // The plain evidence-only check first (cheap, no closure alloc, and directly
+                // unit-testable in isolation); only fall back to the ambient-widened walk when it
+                // declines.
+                value.resident_in_reach(region, evidence) || {
+                    let ambient = |r: &KoanRegion| scope.chain_reaches_region(r);
+                    let residence = Residence::with_reach_and_ambient(region, sets, &ambient);
+                    value.resident_in_visiting(&residence, &mut Vec::new())
+                }
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination, evidence reach, \
+                     or scope's own lexical-ancestor chain"
+                )))
+            })
+    }
+
+    /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
+    /// `'static` (`KObject` has no general `'static` rebuild — see [`KType::to_static`]'s doc):
+    /// [`KObject::resident_in`] audits every answerable region borrow `o` carries against this
+    /// brand's own region. Honest-partial — see [`KObject::resident_in`]'s doc for the walk's one
+    /// blind spot (`Wrapped { type_id }`, un-answerable because `KType` opts out of the residence
+    /// side-table).
+    pub fn alloc_object_checked(self, o: KObject<'_>) -> Result<&'a KObject<'a>, KError> {
+        let name = o.ktype().name();
+        self.0
+            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
+                value.resident_in(region)
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination"
+                )))
+            })
+    }
+
+    /// The object evidence tier: for an `o` built from (or embedding a projection of) values
+    /// whose reach the caller has already minted as `evidence` — a delivered arg carrier's
+    /// `adopted_reach_of`/`host_reach_of`, or several for a multi-carrier fold (an args record).
+    /// Widens the coverage predicate over every evidence member's hosting arena, same partiality
+    /// as [`Self::alloc_object_checked`] — plus a region already covered by `scope`'s own
+    /// lexical-ancestor chain (see [`Self::alloc_ktype_reaching`]'s doc for why the evidence alone
+    /// under-covers that case). Returns a structured `KError` on rejection — the item's decided
+    /// non-panicking conversion-failure policy — so a bug in the caller's evidence computation
+    /// surfaces as a catchable error rather than crashing the interpreter; a caller with no
+    /// `KError` channel in hand (e.g. a seed closure with no `Result` return) calls `.expect(...)`
+    /// naming the site invariant instead.
+    pub fn alloc_object_delivered(
+        self,
+        o: KObject<'_>,
+        evidence: &[StoredReach<'_>],
+        scope: &Scope<'_>,
+    ) -> Result<&'a KObject<'a>, KError> {
+        let name = o.ktype().name();
+        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
+        self.0
+            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
+                // The plain evidence-only check first (cheap, directly unit-testable); only fall
+                // back to the ambient-widened walk when it declines.
+                value.resident_in_delivered(region, evidence) || {
+                    let ambient = |r: &KoanRegion| scope.chain_reaches_region(r);
+                    let residence = Residence::with_reach_and_ambient(region, &sets, &ambient);
+                    value.resident_in_visiting(&residence)
+                }
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region not covered by dest, the supplied evidence, or \
+                     scope's own lexical-ancestor chain"
+                )))
+            })
     }
 
     /// INVARIANT: a `KFunction` must be allocated into the same `KoanRegion` that owns its
     /// captured scope — otherwise a `KFunction` could reference a region other than the one
-    /// that allocated it, undermining region-based reasoning about `&KFunction` liveness. The
-    /// `debug_assert!` catches violations at the allocation site rather than later as
-    /// use-after-free.
+    /// that allocated it, undermining region-based reasoning about `&KFunction` liveness. Every
+    /// `KFunction` constructor captures a borrow (its defining scope), so it can never be
+    /// `'static`; the `ptr::eq` audit is release-enforced (not `debug_assert!`) — today's UB on
+    /// a mis-homed value becomes a loud panic instead.
     pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
-        debug_assert!(
-            std::ptr::eq(
-                self.0.region() as *const KoanRegion,
-                f.captured_scope().region() as *const KoanRegion
-            ),
-            "alloc_function invariant :KFunction must be allocated into the same KoanRegion \
-             that owns its captured scope"
-        );
-        self.0.alloc_resident::<KFunction<'static>>(f)
+        self.0
+            .alloc_resident_audited::<KFunction<'static>>(f, |region, value| {
+                std::ptr::eq(region, value.captured_scope().region())
+            })
+            .expect(
+                "alloc_function: a KFunction must be allocated into the same KoanRegion \
+                 that owns its captured scope",
+            )
     }
 
+    /// INVARIANT: a `Scope` must be allocated into the region it names as its own — every `Scope`
+    /// constructor returns a value borrowing its parent, so it can never be `'static`. See
+    /// [`Self::alloc_function`].
     pub fn alloc_scope(self, s: Scope<'_>) -> &'a Scope<'a> {
-        self.0.alloc_resident::<Scope<'static>>(s)
+        self.0
+            .alloc_resident_audited::<Scope<'static>>(s, |region, value| {
+                std::ptr::eq(region, value.region())
+            })
+            .expect("alloc_scope: a Scope must be allocated into its own region")
     }
 
+    /// INVARIANT: a `Module` must be allocated into its own child scope's region — every `Module`
+    /// borrows the child scope `MODULE` opened for its body, so it can never be `'static`. The one
+    /// legitimate cross-region caller (transparent-ascribe's re-tagged `Module`) takes
+    /// [`Self::alloc_module_reaching`] instead. See [`Self::alloc_function`].
     pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
-        self.0.alloc_resident::<Module<'static>>(m)
+        self.0
+            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
+                std::ptr::eq(region, value.child_scope().region())
+            })
+            .expect("alloc_module: a Module must be allocated into its own child scope's region")
     }
 
+    /// Placement for a `Module` whose child scope legitimately lives in a region other than this
+    /// brand's own — transparent-ascribe's re-tagged `Module`, which reuses the foreign source
+    /// module's child scope. `evidence` is the `StoredReach` the caller minted for that child
+    /// scope's region *before* this call (`Scope::host_reach_of` / `adopted_reach_of`), so the
+    /// audit widens [`Self::alloc_module`]'s dest-only check to "dest, `evidence`'s reach, or a
+    /// region covered by `scope`'s own lexical-ancestor chain" (see
+    /// [`Self::alloc_ktype_reaching`]'s doc for why the last disjunct is needed).
+    pub fn alloc_module_reaching(
+        self,
+        m: Module<'_>,
+        evidence: &StoredReach<'_>,
+        scope: &Scope<'_>,
+    ) -> &'a Module<'a> {
+        let sets: &[&FrameSet] = match &evidence.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        let ambient = |region: &KoanRegion| scope.chain_reaches_region(region);
+        self.0
+            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
+                Residence::with_reach_and_ambient(region, sets, &ambient)
+                    .covers_region(value.child_scope().region())
+            })
+            .expect(
+                "alloc_module_reaching: a Module's child scope must be covered by dest, the \
+                 supplied evidence reach, or scope's own lexical-ancestor chain",
+            )
+    }
+
+    /// INVARIANT: a `ModuleSignature` must be allocated into its own decl scope's region — every
+    /// `ModuleSignature` borrows the decl scope `SIG` opened for its body, so it can never be
+    /// `'static`. See [`Self::alloc_function`].
     pub fn alloc_signature(self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
-        self.0.alloc_resident::<ModuleSignature<'static>>(s)
+        self.0
+            .alloc_resident_audited::<ModuleSignature<'static>>(s, |region, value| {
+                std::ptr::eq(region, value.decl_scope().region())
+            })
+            .expect(
+                "alloc_signature: a ModuleSignature must be allocated into its own decl \
+                 scope's region",
+            )
     }
 
     /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
@@ -158,8 +339,8 @@ impl<'a> RegionBrand<'a> {
         RegionSet::mint(self.0, sources, materialize_hosts, omit)
     }
 
-    /// The witnessed-allocation surface for an **owned, region-pure** object — a value referencing no
-    /// other region: born witnessed by the **empty** (foreign-reach-only) set. The brand-confined
+    /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
+    /// witnessed by the **empty** (foreign-reach-only) set. The brand-confined
     /// [`alloc`](Region::alloc) stores `value` and hands the freshly-stored `&'b KObject<'b>` to the
     /// closure at the brand, which bundles it through [`Witnessed::resident`] — the empty-witness
     /// constructor that names the region-pure obligation, so the active frame is deliberately excluded.
@@ -167,18 +348,41 @@ impl<'a> RegionBrand<'a> {
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
     /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
     ///
-    /// Region-pure is this surface's precondition: the object — built fresh inside the brand —
-    /// references nothing foreign, so the empty set is its exact reach. Soundness is the within-step
-    /// transient invariant: the empty-witness carrier pins nothing, sound only because the active frame
-    /// pins the region externally for the construction step and `finalize` folds the producer
-    /// **before** the carrier is stored on a node. A value that *references* another region is the
-    /// `yoke` / `merge` path, not this one.
+    /// Soundness is the within-step transient invariant: the empty-witness carrier pins nothing,
+    /// sound only because the active frame pins the region externally for the construction step and
+    /// `finalize` folds the producer **before** the carrier is stored on a node. `value`'s `'static`
+    /// bound is region-purity, compile-enforced: a value that references another region cannot
+    /// satisfy it — it takes the `yoke` / `merge` path, or
+    /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
+    /// runtime-auditable (e.g. raw AST that is splice-free).
     pub(crate) fn alloc_object_witnessed(
         self,
-        value: KObject<'_>,
+        value: KObject<'static>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.0
             .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
+    }
+
+    /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
+    /// `'static` (e.g. a `KObject::KExpression` — `KExpression<'a>` is invariant and raw AST has no
+    /// `'static` rebuild): `audit` receives this brand's own region and the value before anything is
+    /// stored, and the value is stored — sealed under the same empty (own-region-only) witness
+    /// [`Self::alloc_object_witnessed`] uses — only if `audit` returns true. Storing nothing on a
+    /// failed audit; a foreign-region dangle errors loudly instead of landing unvetted.
+    pub(crate) fn alloc_object_witnessed_checked(
+        self,
+        value: KObject<'_>,
+        audit: impl FnOnce(&KoanRegion, &KObject<'_>) -> bool,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+        let name = value.ktype().name();
+        self.0
+            .alloc_resident_audited::<KObject<'static>>(value, audit)
+            .map(|live| Witnessed::resident(Carried::Object(live)))
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination"
+                )))
+            })
     }
 
     /// Bundle a value **already resident in this brand's region** under `witness` — the terminal
@@ -198,6 +402,52 @@ impl<'a> RegionBrand<'a> {
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         let _ = self.0;
         Witnessed::from_erased(Erased::erase(carried), witness)
+    }
+}
+
+/// The allocation capability inside a reach-folding closure: the enclosing combinator
+/// (`transfer_into` / `merge_pinned` / `map_pinned` / [`KoanStepContextExt::alloc_carried_with`])
+/// composes a witness naming every source operand's reach, so a value built *from the closure's
+/// operands* is covered by the fold without a per-value audit. Carries the folded-placement
+/// methods [`RegionBrand`] deliberately lacks; everything else derefs. Minted only two ways (see
+/// [`Self::in_fold_closure`] and [`KoanStepContextExt::alloc_carried_with`]'s impl) — `grep
+/// FoldingBrand` is the complete list of trust points a value can reach this capability through.
+#[derive(Clone, Copy)]
+pub(crate) struct FoldingBrand<'a>(RegionBrand<'a>);
+
+impl<'a> std::ops::Deref for FoldingBrand<'a> {
+    type Target = RegionBrand<'a>;
+    fn deref(&self) -> &RegionBrand<'a> {
+        &self.0
+    }
+}
+
+impl<'a> FoldingBrand<'a> {
+    /// Named trust point for a closure under a *library* fold combinator (`transfer_into` /
+    /// `merge_pinned` / `map_pinned`), which hands raw handle-headed operands by design and so
+    /// cannot itself mint a `FoldingBrand`. `grep in_fold_closure(` is the complete audit list of
+    /// every such trust point; the caller's obligation is that the value it builds through the
+    /// returned brand is built only from that closure's own operands, whose reach the enclosing
+    /// combinator already folds into the result.
+    pub(crate) fn in_fold_closure(handle: RegionHandle<'a, KoanStorageProfile>) -> Self {
+        FoldingBrand(RegionBrand(handle))
+    }
+
+    /// Store a `t` built from the fold's own operands — the always-true audit is sound only
+    /// because the capability itself is confined to a fold closure (see the type doc).
+    pub(crate) fn alloc_ktype_folded(self, t: KType<'_>) -> &'a KType<'a> {
+        (self.0)
+            .0
+            .alloc_resident_audited::<KType<'static>>(t, |_, _| true)
+            .expect("alloc_resident_audited with an always-true audit never returns None")
+    }
+
+    /// Object twin of [`Self::alloc_ktype_folded`].
+    pub(crate) fn alloc_object_folded(self, o: KObject<'_>) -> &'a KObject<'a> {
+        (self.0)
+            .0
+            .alloc_resident_audited::<KObject<'static>>(o, |_, _| true)
+            .expect("alloc_resident_audited with an always-true audit never returns None")
     }
 }
 
@@ -245,6 +495,9 @@ impl Stored<KoanStorageProfile> for KFunction<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .0
     }
+    fn record_local(frame: &KoanRegion, stored: &KFunction<'static>) {
+        frame.record_addr(stored as *const _ as usize);
+    }
 }
 
 impl Stored<KoanStorageProfile> for Scope<'static> {
@@ -257,11 +510,17 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .1 .1 .0
     }
+    fn record_local(frame: &KoanRegion, stored: &Module<'static>) {
+        frame.record_addr(stored as *const _ as usize);
+    }
 }
 
 impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .1 .1 .1 .0
+    }
+    fn record_local(frame: &KoanRegion, stored: &ModuleSignature<'static>) {
+        frame.record_addr(stored as *const _ as usize);
     }
 }
 
@@ -330,6 +589,19 @@ pub(crate) trait KoanRegionExt {
     /// plain `--lib` build (no `cfg(test)`) can't see its only caller.
     #[allow(dead_code)]
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
+
+    /// Whether `ptr` was returned by a prior `alloc_module` on this region — the
+    /// [`KType::resident_in`](crate::machine::model::types::KType::resident_in) audit's check for
+    /// a `KType::Module` / `AbstractType { source: AbstractSource::Module(_), .. }` payload.
+    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
+
+    /// Whether `ptr` was returned by a prior `alloc_signature` on this region — the residence
+    /// audit's check for a `KType::Signature` payload.
+    fn owns_signature<'a>(&self, ptr: *const ModuleSignature<'a>) -> bool;
+
+    /// Whether `ptr` was returned by a prior `alloc_function` on this region — the residence
+    /// audit's check for a `KType::KFunctor { body: Some(_), .. }` payload.
+    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool;
 }
 
 impl KoanRegionExt for KoanRegion {
@@ -366,6 +638,111 @@ impl KoanRegionExt for KoanRegion {
         let target = ptr as *const KObject<'static> as usize;
         self.owns_addr(target)
     }
+
+    fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool {
+        // `Module` is invariant in `'a`, so the through-`'static` cast is required despite
+        // clippy's complaint.
+        #[allow(clippy::unnecessary_cast)]
+        let target = ptr as *const Module<'static> as usize;
+        self.owns_addr(target)
+    }
+
+    fn owns_signature<'a>(&self, ptr: *const ModuleSignature<'a>) -> bool {
+        // `ModuleSignature` is invariant in `'a`, so the through-`'static` cast is required
+        // despite clippy's complaint.
+        #[allow(clippy::unnecessary_cast)]
+        let target = ptr as *const ModuleSignature<'static> as usize;
+        self.owns_addr(target)
+    }
+
+    fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool {
+        // `KFunction` is invariant in `'a`, so the through-`'static` cast is required despite
+        // clippy's complaint.
+        #[allow(clippy::unnecessary_cast)]
+        let target = ptr as *const KFunction<'static> as usize;
+        self.owns_addr(target)
+    }
+}
+
+/// Ownership predicate for the checked/reaching-tier residence audits: "`dest`, or the hosting
+/// arena of some member of `reach`, or a region `ambient` reports as already covered" —
+/// [`KType::resident_in`](crate::machine::model::types::KType::resident_in) /
+/// [`KObject::resident_in`](KObject::resident_in)'s dest-only check is the `reach: &[]`,
+/// `ambient: None` case; [`KType::resident_in_reach`](crate::machine::model::types::KType::resident_in_reach)
+/// and the object delivered tier widen it. Each `reach` set was minted into `dest`'s own arena by
+/// the same scope the audit runs against (`Scope::host_reach_of` / `adopted_reach_of`), so
+/// membership here is dest-relative by construction — no separate "is this evidence dest-relative"
+/// check is needed. `ambient`, when supplied, is the destination scope's own
+/// [`Scope::chain_reaches_region`](super::scope::Scope::chain_reaches_region): a value the mint
+/// omitted from `reach` because it is already covered by the destination's lexical-ancestor chain
+/// (the same omission every `host_reach_of` / `adopted_reach_of` mint applies) is still resident —
+/// omitted from the *reach set*, never from *residence*.
+pub(crate) struct Residence<'d> {
+    dest: &'d KoanRegion,
+    reach: &'d [&'d FrameSet],
+    ambient: Option<&'d dyn Fn(&KoanRegion) -> bool>,
+}
+
+impl<'d> Residence<'d> {
+    pub(crate) fn dest_only(dest: &'d KoanRegion) -> Self {
+        Residence {
+            dest,
+            reach: &[],
+            ambient: None,
+        }
+    }
+
+    pub(crate) fn with_reach(dest: &'d KoanRegion, reach: &'d [&'d FrameSet]) -> Self {
+        Residence {
+            dest,
+            reach,
+            ambient: None,
+        }
+    }
+
+    /// [`Self::with_reach`] plus the destination scope's own lexical-ancestor coverage — see the
+    /// type doc's `ambient` paragraph.
+    pub(crate) fn with_reach_and_ambient(
+        dest: &'d KoanRegion,
+        reach: &'d [&'d FrameSet],
+        ambient: &'d dyn Fn(&KoanRegion) -> bool,
+    ) -> Self {
+        Residence {
+            dest,
+            reach,
+            ambient: Some(ambient),
+        }
+    }
+
+    /// Whether `region` is `dest` itself, is covered by some `reach` member's own pin chain, or is
+    /// reported covered by `ambient` — [`RegionBrand::alloc_module_reaching`]'s coverage check.
+    /// [`RegionSet::pins_region`] is the library's public reach-coverage query (unlike
+    /// [`RegionSet::members`], which is gated to `test`/`test-hooks` — koan cannot enumerate a
+    /// set's members in production, only ask it whether a given region is covered).
+    pub(crate) fn covers_region(&self, region: &KoanRegion) -> bool {
+        std::ptr::eq(self.dest, region)
+            || self.reach.iter().any(|fs| fs.pins_region(region))
+            || self.ambient.is_some_and(|f| f(region))
+    }
+
+    /// Whether `module`'s own storage is `dest`-resident (the address side-table check) or its
+    /// child scope's region is covered by `reach` — [`Self::covers_region`] over the module's own
+    /// region accessor, since a raw payload pointer's *owning* region cannot be recovered from
+    /// `reach` without enumerating members.
+    pub(crate) fn owns_module(&self, module: &Module<'_>) -> bool {
+        self.dest.owns_module(module as *const Module<'_>)
+            || self.covers_region(module.child_scope().region())
+    }
+
+    pub(crate) fn owns_signature(&self, sig: &ModuleSignature<'_>) -> bool {
+        self.dest.owns_signature(sig as *const ModuleSignature<'_>)
+            || self.covers_region(sig.decl_scope().region())
+    }
+
+    pub(crate) fn owns_function(&self, f: &KFunction<'_>) -> bool {
+        self.dest.owns_function(f as *const KFunction<'_>)
+            || self.covers_region(f.captured_scope().region())
+    }
 }
 
 /// Koan-branded wrappers over [`StepContext::alloc`]/[`StepContext::alloc_with`] — the closure
@@ -384,19 +761,48 @@ pub(crate) trait KoanStepContextExt {
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
-    /// [`StepContext::alloc_with`] with the closure receiving a [`RegionBrand`] and the deps'
+    /// [`StepContext::alloc_with`] with the closure receiving a [`FoldingBrand`] and the deps'
     /// views: the built carrier names every listed dep's reach **and residence host** (each dep
-    /// arrives as its delivery envelope and folds at `Residence::Kept`), by construction.
+    /// arrives as its delivery envelope and folds at `Residence::Kept`), by construction — so a
+    /// value the closure builds from those deps' operands is covered by the fold, and
+    /// [`FoldingBrand`]'s folded-placement methods store it without a per-value audit. Plain
+    /// [`RegionBrand`] methods stay reachable through `Deref`, so a closure building an unrelated
+    /// `'static` value is unaffected.
     fn alloc_carried_with(
         &self,
         deps: &[&DeliveredCarried],
-        build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
     /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
-    /// only. For a `kt` that is region-pure (carries no borrow reaching outside this frame's own
-    /// region) — the common case for a bind-time or synchronously-resolved type.
-    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, CarrierWitness>;
+    /// only. `kt`'s `'static` bound is region-purity, compile-enforced — the common case for a
+    /// bind-time or synchronously-resolved type. A `kt` that borrows another region takes
+    /// [`Self::alloc_type_checked`] instead.
+    fn alloc_type(&self, kt: KType<'static>) -> Witnessed<CarriedFamily, CarrierWitness>;
+
+    /// The step twin of [`RegionBrand::alloc_ktype_checked`]: runtime-audits `kt`'s region
+    /// borrows against this frame's own region and seals the result under the empty (own-region
+    /// only) reach — the same [`Carried::Type`] wrap [`Self::alloc_type`] uses — erroring instead
+    /// of storing an unvetted foreign-region dangle. For a `kt` [`KType::to_static`] declines (a
+    /// module-family pointer or an `Rc`-shared set).
+    fn alloc_type_checked(
+        &self,
+        kt: KType<'_>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
+
+    /// Composite entry a caller reaches for whenever it doesn't already know which tier `kt`
+    /// needs: the compile-enforced `'static` tier when [`KType::to_static`] succeeds, else the
+    /// runtime-checked tier. Always correct — the two tiers agree on every value `to_static`
+    /// accepts (`to_static().is_some()` implies [`KType::resident_in`] for any destination).
+    fn alloc_type_pure(
+        &self,
+        kt: KType<'_>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+        match kt.to_static() {
+            Some(owned) => Ok(self.alloc_type(owned)),
+            None => self.alloc_type_checked(kt),
+        }
+    }
 
     /// [`Self::alloc_carried_with`] specialized to the one-`KType`-carrier shape: reach = own
     /// region unioned with every listed dep's reach. For a `kt` built from a dep terminal's value
@@ -431,16 +837,31 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
     fn alloc_carried_with(
         &self,
         deps: &[&DeliveredCarried],
-        build: impl for<'b> FnOnce(RegionBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
             deps,
-            |handle, views| build(RegionBrand(handle), views),
+            |handle, views| build(FoldingBrand(RegionBrand(handle)), views),
         )
     }
 
-    fn alloc_type(&self, kt: KType<'_>) -> Witnessed<CarriedFamily, CarrierWitness> {
+    fn alloc_type(&self, kt: KType<'static>) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))
+    }
+
+    fn alloc_type_checked(
+        &self,
+        kt: KType<'_>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+        // Unlike `alloc_carried`'s `for<'b>` brand construction, the checked veneer doesn't need
+        // to build `kt` from brand-derived references — `kt` already exists and is audited by
+        // address, so the resident reference it hands back is erased straight into the empty
+        // (own-region-only) witness via `Witnessed::resident`, mirroring
+        // `RegionBrand::alloc_object_witnessed`'s erase-on-store without the brand-closure
+        // indirection `alloc_carried` needs for a from-scratch construction.
+        let frame = self.frame();
+        let stored = frame.brand().alloc_ktype_checked(kt)?;
+        Ok(Witnessed::resident(Carried::Type(stored)))
     }
 
     fn alloc_type_with(
@@ -450,10 +871,15 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         // Scalar gate: a region-free scalar type references none of `deps`, so folding their reach in
         // would only over-retain. Route it to the no-fold path so it seals with an empty reach.
+        // `is_region_free_scalar` is exactly `to_static`'s owned-leaf class, so the rebuild always
+        // succeeds.
         if kt.is_region_free_scalar() {
-            return self.alloc_type(kt);
+            return self.alloc_type(
+                kt.to_static()
+                    .expect("is_region_free_scalar implies to_static() is Some"),
+            );
         }
-        self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype(kt)))
+        self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype_folded(kt)))
     }
 
     fn alloc_object_with(
@@ -465,10 +891,23 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         // pure over-retention. Route it to the no-fold path so an escaped scalar seals with an empty
         // reach and stops pinning its producer arena. Aggregates keep the fold (their reaches are
         // exact, so the residual is only a borrow the value could have embedded but did not).
+        // `is_shallow_scalar`'s four variants hold only owned payloads, so rebuilding fresh (rather
+        // than coercing the `'_`-tagged `value`) is always valid at `'static` — `KObject` has no
+        // general `to_static` (unlike `KType`; see `KType::to_static`'s doc), so this is a
+        // by-hand rebuild scoped to exactly the owned variants `is_shallow_scalar` names.
         if value.is_shallow_scalar() {
+            let value = match value {
+                KObject::Number(n) => KObject::Number(n),
+                KObject::KString(s) => KObject::KString(s),
+                KObject::Bool(b) => KObject::Bool(b),
+                KObject::Null => KObject::Null,
+                _ => unreachable!("is_shallow_scalar guarantees one of the four owned variants"),
+            };
             return self.alloc_carried(|b| Carried::Object(b.alloc_object(value)));
         }
-        self.alloc_carried_with(deps, |b, _views| Carried::Object(b.alloc_object(value)))
+        self.alloc_carried_with(deps, |b, _views| {
+            Carried::Object(b.alloc_object_folded(value))
+        })
     }
 }
 
@@ -580,10 +1019,21 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         // retype of its own). The child scope lives in `storage`'s own region, so it seals under the
         // empty (`resident`) carrier witness — its liveness is the frame storage, paired with it as the
         // envelope host by the `CallFrame` constructor.
+        //
+        // `child.outer` is a genuine cross-region borrow into the lexical parent's (possibly foreign)
+        // region — unlike every other resident move-in in this file, `child` cannot rebuild at
+        // `'static` and its liveness is not the reach-witness system's business to name: it is
+        // guaranteed instead by `FrameStorage`'s own `outer` `Rc` chain (see this fn's doc), a
+        // structural invariant this construction door alone upholds by always chaining `storage`'s
+        // `outer` to the same frame that owns `outer_b`'s region. The audit here is therefore
+        // unconditional — there is no address to check against `handle_b`'s region, only the
+        // caller-side (this function's sole caller, `CallFrame::new`) obligation that `storage`'s
+        // `outer_frame` already pins the ancestor. Storage can't fail here.
         let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
-        handle_b.alloc::<Scope<'static>, _>(child, |live| {
-            Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(live))
-        })
+        let live = handle_b
+            .alloc_resident_audited::<Scope<'static>>(child, |_region, _value| true)
+            .expect("alloc_resident_audited with an always-true audit never returns None");
+        Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(live))
     })
 }
 

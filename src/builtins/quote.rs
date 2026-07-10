@@ -13,21 +13,16 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, Action};
     let expr = crate::try_action!(require_kexpression(ctx.args, "QUOTE", "expr"));
-    // A quoted expression is raw, unevaluated AST — splice-free, so it references no other region.
-    // It is therefore region-pure: the `KObject::KExpression` allocs through the witnessed object
-    // surface born under the empty (foreign-reach-only) set, the active frame folded in at close. A
-    // `Spliced` part is a resolved value, not raw AST, and its cell carries the producer reach the
-    // empty set could not name, so the splice-free precondition is asserted.
-    debug_assert!(
-        expr.is_splice_free(),
-        "QUOTE expr must be splice-free raw AST: a Spliced cell is a resolved value, not raw AST, \
-         and carries a producer reach the region-pure witnessed alloc would mis-witness as empty"
+    // A quoted expression is raw, unevaluated AST, region-pure iff splice-free: a `Spliced` part is
+    // a resolved value, not raw AST, and its cell carries a producer reach the empty (foreign-reach-
+    // only) witnessed set could not name. `KExpression<'a>` is invariant with no `'static` rebuild,
+    // so the audited twin runs the splice-free check as an always-on loud gate (rather than a
+    // debug-only assert) before the value is stored.
+    let carrier = ctx.scope.brand().alloc_object_witnessed_checked(
+        KObject::KExpression(expr),
+        |_region, o| matches!(o, KObject::KExpression(e) if e.is_splice_free()),
     );
-    let carrier = ctx
-        .scope
-        .brand()
-        .alloc_object_witnessed(KObject::KExpression(expr));
-    Action::Done(Ok(carrier))
+    Action::Done(carrier)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -64,5 +59,42 @@ mod tests {
     fn quote_captures_ast_as_value() {
         let bytes = run_program("PRINT #(1)");
         assert_eq!(bytes, b"1\n");
+    }
+
+    /// A `Spliced` part is a resolved value, not raw AST — its cell carries a producer reach the
+    /// empty (foreign-reach-only) witnessed seal `QUOTE`'s bare move-in uses cannot name.
+    /// `is_splice_free`'s audit must reject it, and — since `alloc_object_witnessed_checked` is an
+    /// always-on loud gate, not a `debug_assert!` — the rejection surfaces as a structured `KError`,
+    /// not an assertion failure or a silently-stored dangle.
+    #[test]
+    fn quote_with_spliced_part_is_rejected_not_stored() {
+        use crate::machine::model::ast::{ExpressionPart, KExpression};
+        use crate::machine::model::KObject;
+        use crate::witnessed::{Delivered, Sealed};
+
+        let storage = run_root_storage();
+        let scope = crate::builtins::test_support::run_root_bare(&storage);
+
+        let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
+        let spliced = ExpressionPart::Spliced {
+            cell: Delivered::hosted(
+                Sealed::seal(scope.resident_value_carrier(obj, None, false)),
+                std::rc::Rc::clone(&storage),
+            ),
+        };
+        let expr = KExpression::new(vec![spliced.into()]);
+        assert!(
+            !expr.is_splice_free(),
+            "a Spliced part makes the expression not splice-free"
+        );
+
+        let result = scope.brand().alloc_object_witnessed_checked(
+            KObject::KExpression(expr),
+            |_region, o| matches!(o, KObject::KExpression(e) if e.is_splice_free()),
+        );
+        assert!(
+            result.is_err(),
+            "a spliced quoted expression must be rejected, not silently stored"
+        );
     }
 }

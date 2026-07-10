@@ -42,9 +42,11 @@ use crate::machine::DeliveredCarried;
 ///
 /// `repr` embeds `carrier`'s reach when `carrier` is `Some` — a bind-time `repr` argument (a
 /// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
-/// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...);
-/// `None` is a bare-leaf name resolved against scope bindings, out of this fold's reach (that
-/// channel's own audit belongs to the total-carrier-resolution item).
+/// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...).
+/// `carrier` is `None` for a bare-leaf name resolved against scope bindings; `repr` there routes
+/// through [`KoanStepContextExt::alloc_type_pure`], which picks the tier `repr`'s own shape needs
+/// (compile-enforced `'static` for an owned leaf, the runtime-audited seal for a `SetRef` or
+/// other region-borrowing rebuild `to_static` declines).
 fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
@@ -58,8 +60,13 @@ fn finalize_newtype<'a>(
     member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    let kt_ref: &'a KType = scope.brand().alloc_ktype(identity);
+    // Minted before the alloc so `identity`'s SetRef (never `'static`, and possibly embedding
+    // `repr`'s foreign borrow — see this fn's doc) can be audited against it: `stored.foreign` is
+    // `None` when `carrier` is `None`, which degrades the reaching check to the dest-only case.
     let stored = carrier.map(|c| scope.host_reach_of(c)).unwrap_or_default();
+    let kt_ref: &'a KType = scope
+        .brand()
+        .alloc_ktype_reaching(identity, &stored, scope)?;
     match scope
         .bindings()
         .try_register_type(&name, kt_ref, bind_index, stored)
@@ -67,7 +74,7 @@ fn finalize_newtype<'a>(
         Ok(ApplyOutcome::Applied) => {
             let sealed = match carrier {
                 Some(c) => fctx.ctx.alloc_type_with(&[c], kt_ref.clone()),
-                None => fctx.ctx.alloc_type(kt_ref.clone()),
+                None => fctx.ctx.alloc_type_pure(kt_ref.clone())?,
             };
             Ok(sealed)
         }
@@ -157,8 +164,7 @@ pub fn body<'a>(
                             te.as_str(),
                         )
                     },
-                    // A bare-leaf name resolved against scope bindings, not a dep terminal — that
-                    // channel's own carrier audit belongs to the total-carrier-resolution item.
+                    // A bare-leaf name resolved against scope bindings, not a dep terminal.
                     move |fctx, kt| {
                         Action::Done(finalize_newtype(fctx, name, kt, bind_index, None))
                     },

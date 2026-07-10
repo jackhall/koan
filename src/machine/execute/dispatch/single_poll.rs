@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{KoanRegion, KoanRegionExt, RegionBrand, Scope};
+use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
@@ -217,7 +217,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 Residence::Copied,
-                |value, region, _brand| copy_carried(value, RegionBrand(region)),
+                |value, region, _brand| copy_carried(value, FoldingBrand::in_fold_closure(region)),
             ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)

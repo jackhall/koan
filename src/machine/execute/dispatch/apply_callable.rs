@@ -131,7 +131,10 @@ fn apply_constructor<'step>(
                 };
                 // A freshly-built union `Variant` — owned data (a `SetRef` via `Rc`) reaching no
                 // foreign region — sealed under the home frame alone, structural via the brand.
-                return Outcome::Done(Ok(ctx.step_ctx().alloc_type(variant)));
+                return match ctx.step_ctx().alloc_type_pure(variant) {
+                    Ok(sealed) => Outcome::Done(Ok(sealed)),
+                    Err(e) => Outcome::Done(Err(e)),
+                };
             }
             // Positional construction: `Outcome (Error "x")` (paren-group body).
             match extract_call_body(expr) {

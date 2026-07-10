@@ -21,7 +21,9 @@ pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
     run_root_storage, CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily,
 };
-pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile};
+pub(crate) use arena::{
+    FoldingBrand, FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile, Residence,
+};
 pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
     PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit, ValueHit,

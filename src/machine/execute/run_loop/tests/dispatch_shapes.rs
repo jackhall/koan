@@ -50,7 +50,10 @@ fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -
 fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
     match arg_object(ctx.args, "n") {
         Some(obj) => Action::done_resident(Carried::Object(
-            ctx.scope.brand().alloc_object(obj.deep_clone()),
+            ctx.scope
+                .brand()
+                .alloc_object_checked(obj.deep_clone())
+                .expect("a deep-cloned Number is always resident-in-self"),
         )),
         None => Action::Done(Err(crate::machine::KError::new(
             crate::machine::KErrorKind::MissingArg("n".to_string()),
@@ -76,7 +79,10 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
         None,
         false,
     ));
-    let obj = scope.brand().alloc_object(KObject::KFunction(f));
+    let obj = scope
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .bind_value(
             "f".to_string(),

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::{KoanStorageProfile, RegionBrand};
+use crate::machine::core::{FoldingBrand, KoanStorageProfile};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CallFrame, CarrierWitness, FrameSet, KError, KErrorKind};
@@ -95,7 +95,7 @@ impl NodeFinalize for KoanRuntime<'_> {
                 home_operand,
                 Residence::Copied,
                 |value, (home_region, declared_type), _brand| {
-                    let home_region = RegionBrand(home_region);
+                    let home_region = FoldingBrand::in_fold_closure(home_region);
                     let object = value.object();
                     if !declared_type.matches_value(object) {
                         mismatch = Some(return_type_mismatch(
@@ -104,10 +104,13 @@ impl NodeFinalize for KoanRuntime<'_> {
                             &label,
                             object.ktype().name(),
                         ));
-                        return Carried::Object(home_region.alloc_object(object.deep_clone()));
+                        return Carried::Object(
+                            home_region.alloc_object_folded(object.deep_clone()),
+                        );
                     }
                     Carried::Object(
-                        home_region.alloc_object(object.deep_clone().stamp_type(declared_type)),
+                        home_region
+                            .alloc_object_folded(object.deep_clone().stamp_type(declared_type)),
                     )
                 },
             );

@@ -96,7 +96,9 @@ pub(crate) fn register_builtin_full<'a>(
         binder_bucket,
         is_functor,
     ));
-    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
+    let obj: &'a KObject<'a> = region
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region's own region");
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
@@ -131,7 +133,9 @@ pub(crate) fn register_overload_at<'a>(
         None,
         false,
     ));
-    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
+    let obj: &'a KObject<'a> = region
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region's own region");
     scope
         .register_function(name.into(), f, obj, index)
         .expect("register_overload_at: user-index overload should not collide with a builtin");

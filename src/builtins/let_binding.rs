@@ -116,12 +116,15 @@ pub fn body<'a>(
         {
             return done_err(e);
         }
-        // The terminal witnesses the aliased type in place from that stored reach.
-        let carrier = ctx.scope.resident_type_carrier(
-            region.alloc_ktype(kt),
-            stored.foreign,
-            stored.borrows_into_home,
-        );
+        // The terminal witnesses the aliased type in place from that stored reach. `stored` was
+        // minted into `ctx.scope`'s own region above, so it is dest-relative evidence here.
+        let kt_ref = match region.alloc_ktype_reaching(kt, &stored, ctx.scope) {
+            Ok(kt_ref) => kt_ref,
+            Err(e) => return done_err(e),
+        };
+        let carrier =
+            ctx.scope
+                .resident_type_carrier(kt_ref, stored.foreign, stored.borrows_into_home);
         Action::Done(Ok(carrier))
     } else {
         let value = rhs
@@ -135,19 +138,12 @@ pub fn body<'a>(
                 suggestion = capitalize_identifier(&name),
             ))));
         }
-        let allocated: &'a KObject<'a> = region.alloc_object(value.deep_clone());
-        if allocated.is_unstamped_empty_container() {
-            return done_err(KError::new(KErrorKind::ShapeError(format!(
-                "empty container bound to `{name}` has no element type to infer; \
-                 annotate the value's type (e.g. via a typed FN return) or use a \
-                 non-empty literal",
-            ))));
-        }
-        // The bound value's stored reach. The RHS was `deep_clone`d into this scope's own region
-        // above, so it does *not* reside in the delivered carrier's producer region: residence there
-        // pins nothing, and the producer host materializes as a reach member only when the copy
-        // genuinely borrows back into it (the copied-adoption rule — `adopted_reach_of`, the same
-        // split the parameter and MATCH `it` binds already apply). Minting still both computes the
+        // The bound value's stored reach, minted *before* the deep-clone alloc below so the copy's
+        // own residence audit can see it. The RHS was `deep_clone`d into this scope's own region, so
+        // it does *not* reside in the delivered carrier's producer region: residence there pins
+        // nothing, and the producer host materializes as a reach member only when the copy genuinely
+        // borrows back into it (the copied-adoption rule — `adopted_reach_of`, the same split the
+        // parameter and MATCH `it` binds already apply). Minting still both computes the
         // home-omitted foreign reach (stored on the binding so a later read rebuilds the value's
         // carrier from it) AND pins it for the scope's life — no separate fold. A region-pure RHS (no
         // delivered carrier) reaches nothing foreign, so the reach is empty.
@@ -155,6 +151,21 @@ pub fn body<'a>(
             .arg_carrier("value")
             .map(|carrier| ctx.scope.adopted_reach_of(carrier))
             .unwrap_or_default();
+        let allocated: &'a KObject<'a> = match region.alloc_object_delivered(
+            value.deep_clone(),
+            std::slice::from_ref(&stored),
+            ctx.scope,
+        ) {
+            Ok(allocated) => allocated,
+            Err(e) => return done_err(e),
+        };
+        if allocated.is_unstamped_empty_container() {
+            return done_err(KError::new(KErrorKind::ShapeError(format!(
+                "empty container bound to `{name}` has no element type to infer; \
+                 annotate the value's type (e.g. via a typed FN return) or use a \
+                 non-empty literal",
+            ))));
+        }
         if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index, stored) {
             return done_err(e);
         }

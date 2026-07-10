@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::{FrameSet, KoanRegion, Residence, StoredReach};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KKind, KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
@@ -250,6 +251,60 @@ impl<'a> KObject<'a> {
         )
     }
 
+    /// True when every answerable region borrow in `self` points into `dest` — the object twin
+    /// of [`KType::resident_in`]. Honest-partial: `Wrapped { type_id }`'s `&KType` pointer is
+    /// un-answerable (`KType` opts out of the residence side-table — see `arena.rs`'s `Stored`
+    /// impls), so this walk is permissive there; every other borrow (`KFunction`, `KExpression`
+    /// splices, and the region pointers nested in a memoized/carried `KType` tag) is checked.
+    pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
+        self.resident_in_visiting(&Residence::dest_only(dest))
+    }
+
+    /// The evidence-widened twin of [`Self::resident_in`], for a value built from (or embedding a
+    /// projection of) one or more delivered carriers: every answerable borrow must point into
+    /// `dest` or be covered by some `evidence` member's reach — the object delivered tier's
+    /// coverage predicate, same partiality as [`Self::resident_in`].
+    pub(crate) fn resident_in_delivered(
+        &self,
+        dest: &KoanRegion,
+        evidence: &[StoredReach<'_>],
+    ) -> bool {
+        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
+        self.resident_in_visiting(&Residence::with_reach(dest, &sets))
+    }
+
+    pub(crate) fn resident_in_visiting(&self, residence: &Residence<'_>) -> bool {
+        match self {
+            KObject::Number(_) | KObject::KString(_) | KObject::Bool(_) | KObject::Null => true,
+            KObject::KFunction(f) => residence.owns_function(f),
+            KObject::KExpression(e) => e.is_splice_free(),
+            KObject::List(items, elem) => {
+                elem.resident_in_visiting(residence, &mut Vec::new())
+                    && items.iter().all(|h| held_resident_in(h, residence))
+            }
+            KObject::Dict(map, k, v) => {
+                k.resident_in_visiting(residence, &mut Vec::new())
+                    && v.resident_in_visiting(residence, &mut Vec::new())
+                    && map.values().all(|h| held_resident_in(h, residence))
+            }
+            KObject::Record(fields, types) => {
+                types
+                    .iter()
+                    .all(|(_, t)| t.resident_in_visiting(residence, &mut Vec::new()))
+                    && fields.iter().all(|(_, h)| held_resident_in(h, residence))
+            }
+            KObject::Tagged {
+                value, type_args, ..
+            } => {
+                value.resident_in_visiting(residence)
+                    && type_args
+                        .iter()
+                        .all(|t| t.resident_in_visiting(residence, &mut Vec::new()))
+            }
+            KObject::Wrapped { inner, .. } => inner.get().resident_in_visiting(residence),
+        }
+    }
+
     /// Runtime type tag.
     pub fn ktype(&self) -> KType<'a> {
         match self {
@@ -344,6 +399,16 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f) => Some(*f),
             _ => None,
         }
+    }
+}
+
+/// [`KObject::resident_in`]/[`KObject::resident_in_delivered`]'s cell-wise dispatch for a
+/// [`Held`] value — an object recurses structurally, a type routes to [`KType::resident_in_visiting`]
+/// under the same [`Residence`].
+fn held_resident_in(h: &Held<'_>, residence: &Residence<'_>) -> bool {
+    match h {
+        Held::Object(o) => o.resident_in_visiting(residence),
+        Held::Type(t) => t.resident_in_visiting(residence, &mut Vec::new()),
     }
 }
 

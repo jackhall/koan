@@ -298,15 +298,21 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let module = region
         .brand()
         .alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KType<'_> = region.brand().alloc_ktype(KType::Module { module });
+    let kt_module: &KType<'_> = region
+        .brand()
+        .alloc_ktype_checked(KType::Module { module })
+        .expect("module was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_module))));
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
-    let kt_sig: &KType<'_> = region.brand().alloc_ktype(KType::Signature {
-        sig,
-        pinned_slots: Vec::new(),
-    });
+    let kt_sig: &KType<'_> = region
+        .brand()
+        .alloc_ktype_checked(KType::Signature {
+            sig,
+            pinned_slots: Vec::new(),
+        })
+        .expect("sig was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig))));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
@@ -345,11 +351,15 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = region.alloc_ktype(newtype_tv.clone());
-    let w: &KObject<'_> = region.alloc_object(KObject::Wrapped {
-        inner: crate::machine::model::values::NonWrappedRef::peel(inner),
-        type_id,
-    });
+    let type_id: &KType = region
+        .alloc_ktype_checked(newtype_tv.clone())
+        .expect("a freshly-cloned SetRef is always resident-in-self");
+    let w: &KObject<'_> = region
+        .alloc_object_checked(KObject::Wrapped {
+            inner: crate::machine::model::values::NonWrappedRef::peel(inner),
+            type_id,
+        })
+        .expect("type_id was just allocated into region's own region");
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w))));
     assert!(!newtype_ty.matches_value(w));
 }

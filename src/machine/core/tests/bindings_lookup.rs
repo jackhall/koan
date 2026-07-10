@@ -132,7 +132,10 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
         .unwrap();
@@ -187,8 +190,14 @@ fn lookup_function_filters_per_overload_visibility() {
         None,
         false,
     ));
-    let obj_early = region.brand().alloc_object(KObject::KFunction(f_early));
-    let obj_late = region.brand().alloc_object(KObject::KFunction(f_late));
+    let obj_early = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f_early))
+        .expect("f was just allocated into region\'s own region");
+    let obj_late = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f_late))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function(
             "BAR".to_string(),
@@ -243,7 +252,10 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
         .unwrap();
@@ -270,7 +282,10 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))
         .unwrap();

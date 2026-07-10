@@ -279,7 +279,14 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
     let producer = CallFrame::new_test(scope, None);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
     let carrier = producer.with_scope(|child| {
-        let kt_ref = child.brand().alloc_ktype(KType::Module { module });
+        let evidence = crate::machine::core::StoredReach {
+            foreign: Some(&foreign_reach),
+            borrows_into_home: false,
+        };
+        let kt_ref = child
+            .brand()
+            .alloc_ktype_reaching(KType::Module { module }, &evidence, child)
+            .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), false)
     });
     assert!(
@@ -393,7 +400,14 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
     // `borrows_into_home = true` marks the value as home-borrowing; the type channel must pass the
     // carrier through with the bit and the reach untouched either way.
     let carrier = producer.with_scope(|child| {
-        let kt_ref = child.brand().alloc_ktype(KType::Module { module });
+        let evidence = crate::machine::core::StoredReach {
+            foreign: Some(&foreign_reach),
+            borrows_into_home: true,
+        };
+        let kt_ref = child
+            .brand()
+            .alloc_ktype_reaching(KType::Module { module }, &evidence, child)
+            .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, Some(&foreign_reach), true)
     });
 

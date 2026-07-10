@@ -46,7 +46,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Return contracts ride continuations](scheduler_library/contract-as-continuation.md)
-- [Region-purity typed at the move-in allocs](scheduler_library/region-pure-move-in.md)
 - [Scheduler-owned frame storage](scheduler_library/scheduler-owned-frame-storage.md)
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)

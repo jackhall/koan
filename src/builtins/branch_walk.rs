@@ -42,7 +42,7 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.brand().alloc_ktype(ret_kt),
+        ret: ctx.scope.brand().alloc_ktype_pure(ret_kt)?,
         kind,
         scope: ctx.scope,
     })
@@ -86,19 +86,46 @@ pub(crate) fn arm_tail<'a>(
     // binding), and a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
         let (it_object, reach) = match it_source {
-            ItSource::Value { value, delivered } => (
-                child.brand().alloc_object(value),
-                delivered
-                    .as_ref()
-                    .map(|d| child.adopted_reach_of(d))
-                    .unwrap_or_default(),
-            ),
-            ItSource::Carrier(carrier) => (
+            // `delivered` supplies this value's reach evidence; `None` is `TRY`'s
+            // region-pure error payload, whose purity is an audit now instead of a comment.
+            ItSource::Value {
+                value,
+                delivered: Some(d),
+            } => {
+                let reach = child.adopted_reach_of(&d);
+                let object = child
+                    .brand()
+                    .alloc_object_delivered(value, std::slice::from_ref(&reach), child)
+                    .expect("ItSource::Value's delivered carrier must cover its own reach");
+                (object, reach)
+            }
+            ItSource::Value {
+                value,
+                delivered: None,
+            } => {
+                let object = child
+                    .brand()
+                    .alloc_object_checked(value)
+                    .expect("ItSource::Value with no delivered carrier must be region-pure");
+                (object, Default::default())
+            }
+            ItSource::Carrier(carrier) => {
                 // Adopt at the bind brand: one structural copy, made directly into the arm frame's
-                // region inside the envelope's pinned open; the binding stores the copy's reach.
-                carrier.open(|live| child.brand().alloc_object(live.object().deep_clone())),
-                child.adopted_reach_of(&carrier),
-            ),
+                // region inside the envelope's pinned open; the binding stores the copy's reach,
+                // minted first so the copy's own residence audit can see it.
+                let reach = child.adopted_reach_of(&carrier);
+                let object = carrier.open(|live| {
+                    child
+                        .brand()
+                        .alloc_object_delivered(
+                            live.object().deep_clone(),
+                            std::slice::from_ref(&reach),
+                            child,
+                        )
+                        .expect("ItSource::Carrier's own reach must cover its deep copy")
+                });
+                (object, reach)
+            }
         };
         let _ = child.bind_value("it".to_string(), it_object, BindingIndex::value(0), reach);
     });

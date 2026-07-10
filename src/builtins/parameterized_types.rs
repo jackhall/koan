@@ -183,7 +183,7 @@ fn build_carrier<'a>(
     ) {
         FieldListOutcome::Done(fields) => {
             let kt = finalize_carrier(fields, ret, kind);
-            Action::Done(Ok(ctx.ctx.alloc_type(kt)))
+            Action::Done(Ok(crate::try_action!(ctx.ctx.alloc_type_pure(kt))))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {

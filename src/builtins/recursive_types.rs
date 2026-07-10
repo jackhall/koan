@@ -167,7 +167,9 @@ pub fn body<'a>(
             bind_index,
             StoredReach::empty(),
         ) {
-            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
+            Ok(kt_ref) => Action::Done(Ok(crate::try_action!(fctx
+                .ctx
+                .alloc_type_pure(kt_ref.clone())))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     })

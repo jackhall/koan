@@ -71,10 +71,10 @@ pub fn body<'a>(
             }
         }
     }
-    Action::Done(Ok(ctx.ctx.alloc_type(KType::Signature {
+    Action::Done(ctx.ctx.alloc_type_checked(KType::Signature {
         sig: s,
         pinned_slots: pinned,
-    })))
+    }))
 }
 
 #[cfg(test)]

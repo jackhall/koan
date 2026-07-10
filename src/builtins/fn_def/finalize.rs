@@ -235,8 +235,11 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         is_functor,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
-    // KFunction value escapes a per-call body; top-level FNs have no frame.
-    let obj: &'a KObject<'a> = region.alloc_object(KObject::KFunction(f));
+    // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
+    // allocated into `region`'s own region above, so the checked audit always passes.
+    let obj: &'a KObject<'a> = region
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region's own region");
     if !matches!(kind, FnKind::Anonymous) {
         let name = match name {
             Some(n) => n,

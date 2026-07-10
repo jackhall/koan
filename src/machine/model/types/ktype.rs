@@ -12,10 +12,11 @@
 
 use super::kkind::KKind;
 use super::record::Record;
-use super::recursive_set::RecursiveSet;
+use super::recursive_set::{NominalSchema, RecursiveSet};
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
+use crate::machine::core::{FrameSet, KoanRegion, Residence, StoredReach};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
@@ -277,6 +278,181 @@ impl<'a> KType<'a> {
         self.name()
     }
 
+    /// Variant-wise rebuild at `'static`. `Some` exactly when the rebuild is
+    /// possible without a region borrow and without re-minting a shared set:
+    /// - `Module` / `Signature` / `AbstractType { source: Module(_) }` /
+    ///   `KFunctor { body: Some(_) }` hold region pointers -> `None`.
+    /// - `SetRef` / `Variant` / `RecursiveGroup` share their set by `Rc` and
+    ///   compare by `Rc::ptr_eq`; a rebuilt set is a different identity -> `None`
+    ///   (such values take the runtime-checked resident path instead).
+    /// - every other variant rebuilds recursively.
+    pub fn to_static(&self) -> Option<KType<'static>> {
+        match self {
+            KType::Number => Some(KType::Number),
+            KType::Str => Some(KType::Str),
+            KType::Bool => Some(KType::Bool),
+            KType::Null => Some(KType::Null),
+            KType::List(t) => Some(KType::List(Box::new(t.to_static()?))),
+            KType::Dict(k, v) => Some(KType::Dict(
+                Box::new(k.to_static()?),
+                Box::new(v.to_static()?),
+            )),
+            KType::Record(r) => Some(KType::Record(Box::new(record_to_static(r)?))),
+            KType::KFunction { params, ret } => Some(KType::KFunction {
+                params: record_to_static(params)?,
+                ret: Box::new(ret.to_static()?),
+            }),
+            // A bound functor value's `body` is a live region pointer.
+            KType::KFunctor { body: Some(_), .. } => None,
+            KType::KFunctor {
+                params,
+                ret,
+                body: None,
+            } => Some(KType::KFunctor {
+                params: record_to_static(params)?,
+                ret: Box::new(ret.to_static()?),
+                body: None,
+            }),
+            KType::DeferredReturn(s) => Some(KType::DeferredReturn(s.clone())),
+            KType::Identifier => Some(KType::Identifier),
+            KType::KExpression => Some(KType::KExpression),
+            KType::SigiledTypeExpr => Some(KType::SigiledTypeExpr),
+            KType::RecordType => Some(KType::RecordType),
+            KType::OfKind(k) => Some(KType::OfKind(*k)),
+            // `Rc`-shared set: rebuilding would mint a new `Rc` and break identity.
+            KType::SetRef { .. } => None,
+            KType::Variant { .. } => None,
+            KType::SetLocal(i) => Some(KType::SetLocal(*i)),
+            KType::RecursiveGroup(_) => None,
+            // Region pointers.
+            KType::Signature { .. } => None,
+            KType::Module { .. } => None,
+            KType::AbstractType {
+                source: AbstractSource::Sig(id),
+                name,
+            } => Some(KType::AbstractType {
+                source: AbstractSource::Sig(*id),
+                name: name.clone(),
+            }),
+            KType::AbstractType {
+                source: AbstractSource::Module(_),
+                ..
+            } => None,
+            KType::ConstructorApply { ctor, args } => {
+                let ctor = Box::new(ctor.to_static()?);
+                let mut static_args = Vec::with_capacity(args.len());
+                for a in args {
+                    static_args.push(a.to_static()?);
+                }
+                Some(KType::ConstructorApply {
+                    ctor,
+                    args: static_args,
+                })
+            }
+            KType::RecursiveRef(s) => Some(KType::RecursiveRef(s.clone())),
+            KType::Unresolved(t) => Some(KType::Unresolved(t.clone())),
+            KType::Any => Some(KType::Any),
+        }
+    }
+
+    /// True when every region borrow in `self` points into `dest` and every `Rc`'d set member is
+    /// transitively free of foreign borrows. The runtime twin of [`Self::to_static`]:
+    /// `to_static().is_some()` implies this for any `dest`, but this also answers for the
+    /// `SetRef` / `Variant` / `RecursiveGroup` values `to_static` declines — the whole reason the
+    /// checked path exists for them (rebuilding the set would break `Rc` identity, but the set's
+    /// members can still be audited by address without rebuilding anything).
+    pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
+        let residence = Residence::dest_only(dest);
+        let mut visited = Vec::new();
+        self.resident_in_visiting(&residence, &mut visited)
+    }
+
+    /// The evidence-widened twin of [`Self::resident_in`]: every region borrow in `self` must
+    /// point into `dest` **or** be covered by `reach`'s foreign reach — the reaching tier's
+    /// coverage predicate. Exact for `KType`, whose only region pointers (`&Module` /
+    /// `&ModuleSignature` / `&KFunction`) each expose their own region directly, so no
+    /// member-enumeration is needed (see [`Residence`]).
+    pub(crate) fn resident_in_reach(&self, dest: &KoanRegion, reach: &StoredReach<'_>) -> bool {
+        let sets: &[&FrameSet] = match &reach.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        let residence = Residence::with_reach(dest, sets);
+        let mut visited = Vec::new();
+        self.resident_in_visiting(&residence, &mut visited)
+    }
+
+    /// [`Self::resident_in`]/[`Self::resident_in_reach`]'s shared recursive walk, threading a
+    /// `visited` list of `RecursiveSet` `Rc` addresses so a set reachable via more than one path
+    /// (a shared nominal referenced from two fields) is walked at most once. `pub(crate)` (not
+    /// private) so [`KObject::resident_in`](crate::machine::model::values::KObject::resident_in)'s
+    /// walk can recurse into a memoized/carried `KType` tag under the same `Residence`.
+    pub(crate) fn resident_in_visiting(
+        &self,
+        residence: &Residence<'_>,
+        visited: &mut Vec<*const ()>,
+    ) -> bool {
+        match self {
+            KType::Number
+            | KType::Str
+            | KType::Bool
+            | KType::Null
+            | KType::DeferredReturn(_)
+            | KType::Identifier
+            | KType::KExpression
+            | KType::SigiledTypeExpr
+            | KType::RecordType
+            | KType::OfKind(_)
+            | KType::SetLocal(_)
+            | KType::RecursiveRef(_)
+            | KType::Unresolved(_)
+            | KType::Any => true,
+            KType::List(t) => t.resident_in_visiting(residence, visited),
+            KType::Dict(k, v) => {
+                k.resident_in_visiting(residence, visited)
+                    && v.resident_in_visiting(residence, visited)
+            }
+            KType::Record(r) => record_resident_in(r, residence, visited),
+            KType::KFunction { params, ret } => {
+                record_resident_in(params, residence, visited)
+                    && ret.resident_in_visiting(residence, visited)
+            }
+            KType::KFunctor { params, ret, body } => {
+                let body_ok = match body {
+                    Some(f) => residence.owns_function(f),
+                    None => true,
+                };
+                body_ok
+                    && record_resident_in(params, residence, visited)
+                    && ret.resident_in_visiting(residence, visited)
+            }
+            KType::SetRef { set, .. } | KType::Variant { set, .. } | KType::RecursiveGroup(set) => {
+                set_resident_in(set, residence, visited)
+            }
+            KType::Signature { sig, pinned_slots } => {
+                residence.owns_signature(sig)
+                    && pinned_slots
+                        .iter()
+                        .all(|(_, kt)| kt.resident_in_visiting(residence, visited))
+            }
+            KType::Module { module } => residence.owns_module(module),
+            KType::AbstractType {
+                source: AbstractSource::Sig(_),
+                ..
+            } => true,
+            KType::AbstractType {
+                source: AbstractSource::Module(m),
+                ..
+            } => residence.owns_module(m),
+            KType::ConstructorApply { ctor, args } => {
+                ctor.resident_in_visiting(residence, visited)
+                    && args
+                        .iter()
+                        .all(|a| a.resident_in_visiting(residence, visited))
+            }
+        }
+    }
+
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
     /// its family (`Tagged` / `NewType` / `TypeConstructor`, read off the set member it
@@ -296,6 +472,60 @@ impl<'a> KType<'a> {
             _ => KKind::ProperType,
         }
     }
+}
+
+/// Field-wise `'static` rebuild of a parameter/field record for [`KType::to_static`].
+/// `Record::map` cannot express a fallible per-field transform, so this walks `iter()`
+/// directly and short-circuits on the first region-borrowing field.
+fn record_to_static(record: &Record<KType<'_>>) -> Option<Record<KType<'static>>> {
+    let mut out = Record::new();
+    for (name, kt) in record.iter() {
+        out.insert(name.clone(), kt.to_static()?);
+    }
+    Some(out)
+}
+
+/// Field-wise residence audit of a parameter/field record for [`KType::resident_in`] — the
+/// checked-path sibling of [`record_to_static`].
+fn record_resident_in(
+    record: &Record<KType<'_>>,
+    residence: &Residence<'_>,
+    visited: &mut Vec<*const ()>,
+) -> bool {
+    record
+        .iter()
+        .all(|(_, kt)| kt.resident_in_visiting(residence, visited))
+}
+
+/// Residence audit of every member schema in a [`RecursiveSet`] shared by [`KType::SetRef`] /
+/// [`KType::Variant`] / [`KType::RecursiveGroup`] — the checked path those variants take since
+/// [`KType::to_static`] declines them (rebuilding the set would mint a new `Rc` and break
+/// identity). `visited` guards a set reachable via more than one member from being walked twice —
+/// a `Vec` linear scan is fine since sets are small and this is not a hot path. An unfilled
+/// member schema (mid-declaration, before its own finalize) has nothing to check yet, so it's
+/// trivially resident.
+fn set_resident_in(
+    set: &Rc<RecursiveSet<'_>>,
+    residence: &Residence<'_>,
+    visited: &mut Vec<*const ()>,
+) -> bool {
+    let ptr = Rc::as_ptr(set) as *const ();
+    if visited.contains(&ptr) {
+        return true;
+    }
+    visited.push(ptr);
+    set.members()
+        .iter()
+        .all(|member| match member.schema().as_ref() {
+            None => true,
+            Some(NominalSchema::Tagged(members)) => members
+                .values()
+                .all(|kt| kt.resident_in_visiting(residence, visited)),
+            Some(NominalSchema::NewType(kt)) => kt.resident_in_visiting(residence, visited),
+            Some(NominalSchema::TypeConstructor { schema, .. }) => schema
+                .values()
+                .all(|kt| kt.resident_in_visiting(residence, visited)),
+        })
 }
 
 /// Render an FN/FUNCTOR parameter record as the comma-free `name :type` group the

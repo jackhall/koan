@@ -109,7 +109,7 @@ pub fn body<'a>(
         CarrierForm::Direct(kt) => {
             // A bind-time `ty` argument: any caller-supplied carrier (a `:(...)` sub-dispatch
             // spliced in before this call), so `arg_carrier` names its own foreign reach if it
-            // has one — `None` only for a scalar-literal (already-region-pure) argument.
+            // has one.
             return finalize_val(
                 &ctx.finish_ctx(),
                 name,
@@ -139,9 +139,11 @@ pub fn body<'a>(
 ///
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
-/// dep terminal; `carrier` is `None` only for an already-region-pure scalar leaf. Both the stored
-/// binding's reach and the sealed result's witness fold it in, so neither under-witnesses the
-/// declared type's actual reach.
+/// dep terminal. When `carrier` is `Some`, the stored binding's reach and the sealed result's
+/// witness fold it in. When `carrier` is `None`, [`KoanStepContextExt::alloc_type_pure`] routes
+/// `declared_kt` to whichever tier its own shape needs — compile-enforced `'static` for an owned
+/// leaf, the runtime-audited seal otherwise — so neither under-witnesses the declared type's
+/// actual reach.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
@@ -161,7 +163,10 @@ fn finalize_val<'a>(
     }
     let sealed = match carrier {
         Some(c) => fctx.ctx.alloc_type_with(&[c], declared_kt),
-        None => fctx.ctx.alloc_type(declared_kt),
+        None => match fctx.ctx.alloc_type_pure(declared_kt) {
+            Ok(sealed) => sealed,
+            Err(e) => return Action::Done(Err(e)),
+        },
     };
     Action::Done(Ok(sealed))
 }

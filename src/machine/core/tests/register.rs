@@ -140,7 +140,10 @@ fn register_function_dedupes_exact_signature() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f1))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -152,7 +155,10 @@ fn register_function_dedupes_exact_signature() {
         None,
         false,
     ));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f2))
+        .expect("f was just allocated into region\'s own region");
     let err = scope
         .register_function("FOO".to_string(), f2, obj2, BindingIndex::BUILTIN)
         .unwrap_err();
@@ -177,7 +183,10 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f1))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -189,7 +198,10 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         None,
         false,
     ));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f2))
+        .expect("f was just allocated into region\'s own region");
     let err = scope
         .bind_value(
             "OTHER_NAME".to_string(),
@@ -219,8 +231,14 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(f));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(f));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .bind_value(
             "FIRST".to_string(),
@@ -279,8 +297,14 @@ fn register_function_allows_overload_with_different_arg_types() {
         None,
         false,
     ));
-    let obj1 = region.brand().alloc_object(KObject::KFunction(f1));
-    let obj2 = region.brand().alloc_object(KObject::KFunction(f2));
+    let obj1 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f1))
+        .expect("f was just allocated into region\'s own region");
+    let obj2 = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f2))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("BAR".to_string(), f1, obj1, BindingIndex::BUILTIN)
         .unwrap();
@@ -312,7 +336,10 @@ fn register_function_coexists_with_same_name_value() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name value");
@@ -349,7 +376,10 @@ fn register_function_coexists_with_same_name_type() {
         None,
         false,
     ));
-    let obj = region.brand().alloc_object(KObject::KFunction(f));
+    let obj = region
+        .brand()
+        .alloc_object_checked(KObject::KFunction(f))
+        .expect("f was just allocated into region\'s own region");
     scope
         .register_function("Foo".to_string(), f, obj, BindingIndex::BUILTIN)
         .expect("bare FN registration must not collide with a same-name type");

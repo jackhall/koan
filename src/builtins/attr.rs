@@ -311,7 +311,7 @@ fn access_module_member<'a>(
                     module_scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)
                 }
                 _ => module_scope.resident_type_carrier(
-                    module_scope.brand().alloc_ktype(minted),
+                    module_scope.brand().alloc_ktype_pure(minted)?,
                     None,
                     false,
                 ),
@@ -341,10 +341,12 @@ fn access_module_member<'a>(
                 let ctx = StepContext::new(scope_frame(module_scope));
                 return Ok(
                     ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {
-                        Carried::Object(o) => Carried::Object(b.alloc_object(KObject::Wrapped {
-                            inner: NonWrappedRef::peel(o),
-                            type_id: b.alloc_ktype(tag),
-                        })),
+                        Carried::Object(o) => {
+                            Carried::Object(b.alloc_object_folded(KObject::Wrapped {
+                                inner: NonWrappedRef::peel(o),
+                                type_id: b.alloc_ktype_folded(tag),
+                            }))
+                        }
                         Carried::Type(_) => unreachable!("a module value member is always Object"),
                     }),
                 );

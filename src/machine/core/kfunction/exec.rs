@@ -17,7 +17,7 @@
 use crate::machine::DeliveredCarried;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
+use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand, StoredReach};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
@@ -97,9 +97,11 @@ pub(crate) fn home_return_type<'a>(
                 .to_string(),
         )));
     }
-    // `alloc_ktype` erases the clone's elaboration-brand lifetime and re-anchors it to `region` at
-    // the caller's contract lifetime `'a`.
-    Ok(region.alloc_ktype(kt.clone()))
+    // `alloc_ktype_pure` erases the clone's elaboration-brand lifetime and re-anchors it to
+    // `region` at the caller's contract lifetime `'a`; a return type embedding a scope borrow (a
+    // `Signature`'s `decl_scope_ref`, an `AbstractType`'s `Module` source) is already homed in
+    // `region`'s own region by this fn's caller-region invariant, so the checked tier passes.
+    region.alloc_ktype_pure(kt.clone())
 }
 
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
@@ -127,7 +129,28 @@ where
     // no `&'a`; its foreign reach is pinned by the call scope's reach-set.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
         let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
-        let args_record = child.brand().alloc_object(KObject::record_of_held(cells));
+        // Evidence for the record's own placement: every arg carrier's reach, minted into
+        // `child`'s region up front — `Held::from_carried`'s clone is shallow-structural, so a
+        // leaf may still embed a foreign borrow from whichever carrier it came from. Mode matches
+        // each cell's own kind (mirroring the per-field binds below): an `Object` cell is a deep
+        // copy (`Copied`/`adopted_reach_of`), a `Type` cell is a shallow clone that still points at
+        // its carrier's home (`Kept`/`host_reach_of` — the same reason `register_type` below uses
+        // it), so a Copied-only evidence set would under-cover a module/signature-typed argument.
+        let evidence: Vec<StoredReach> = cells
+            .iter()
+            .filter_map(|(name, cell)| {
+                let carrier = arg_carriers.get(name)?;
+                Some(match cell {
+                    Held::Object(_) => child.adopted_reach_of(carrier),
+                    Held::Type(_) => child.host_reach_of(carrier),
+                })
+            })
+            .collect();
+        let args_record = child.brand().alloc_object_delivered(
+            KObject::record_of_held(cells),
+            &evidence,
+            child,
+        )?;
         if let KObject::Record(cells, _types) = args_record {
             for (name, cell) in cells.iter() {
                 match cell {

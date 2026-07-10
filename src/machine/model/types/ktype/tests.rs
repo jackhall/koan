@@ -1,5 +1,10 @@
 use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
+use crate::builtins::default_scope;
+use crate::machine::core::kfunction::Body;
+use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::{ExpressionSignature, ReturnType};
 
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
@@ -320,4 +325,299 @@ fn set_ref_name_renders_member_name() {
     let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x1234));
     let t = KType::SetRef { set, index: 0 };
     assert_eq!(t.name(), "Point");
+}
+
+// --- KType::to_static -------------------------------------------------------------
+
+/// Every owned leaf (no boxed/nested payload) rebuilds at `'static` by clone/copy,
+/// round-tripping through the same surface rendering.
+#[test]
+fn to_static_rebuilds_owned_leaves() {
+    let leaves: Vec<KType<'_>> = vec![
+        KType::Number,
+        KType::Str,
+        KType::Bool,
+        KType::Null,
+        KType::Identifier,
+        KType::KExpression,
+        KType::SigiledTypeExpr,
+        KType::RecordType,
+        KType::Any,
+        KType::SetLocal(3),
+        KType::RecursiveRef("Tree".into()),
+        KType::Unresolved(TypeIdentifier::leaf("Foo".into())),
+        KType::OfKind(KKind::Tagged),
+        KType::DeferredReturn(DeferredReturnSurface::Expression("expr".into())),
+    ];
+    for leaf in &leaves {
+        let rebuilt = leaf.to_static().expect("owned leaf rebuilds at 'static");
+        assert_eq!(rebuilt.name(), leaf.name());
+    }
+}
+
+/// `AbstractType { source: Sig(_), .. }` is owned (no `&Module`), so it rebuilds too.
+#[test]
+fn to_static_rebuilds_abstract_type_sig_source() {
+    let t = KType::AbstractType {
+        source: AbstractSource::Sig(ScopeId::from_raw(0, 42)),
+        name: "Carrier".into(),
+    };
+    let rebuilt = t
+        .to_static()
+        .expect("Sig-sourced AbstractType holds no region pointer");
+    assert_eq!(
+        rebuilt,
+        KType::AbstractType {
+            source: AbstractSource::Sig(ScopeId::from_raw(0, 42)),
+            name: "Carrier".into(),
+        }
+    );
+}
+
+/// Nested container variants (`List`, `Dict`, `Record`) recurse into their owned
+/// children and propagate the rebuild.
+#[test]
+fn to_static_rebuilds_nested_containers() {
+    let list = KType::List(Box::new(KType::Dict(
+        Box::new(KType::Str),
+        Box::new(KType::Number),
+    )));
+    assert_eq!(
+        list.to_static().expect("nested owned containers rebuild"),
+        KType::List(Box::new(KType::Dict(
+            Box::new(KType::Str),
+            Box::new(KType::Number)
+        )))
+    );
+
+    let record = KType::Record(Box::new(Record::from_pairs(vec![(
+        "x".into(),
+        KType::Number,
+    )])));
+    assert_eq!(
+        record.to_static().expect("record-type fields rebuild"),
+        KType::Record(Box::new(Record::from_pairs(vec![(
+            "x".into(),
+            KType::Number
+        )])))
+    );
+}
+
+/// `KFunction` (always owned) and a bodyless `KFunctor` both recurse `params`/`ret`.
+#[test]
+fn to_static_rebuilds_function_and_bodyless_functor() {
+    let f = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Bool),
+    };
+    assert_eq!(
+        f.to_static().expect("KFunction is owned"),
+        KType::KFunction {
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+            ret: Box::new(KType::Bool),
+        }
+    );
+
+    let g = KType::KFunctor {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Bool),
+        body: None,
+    };
+    assert_eq!(
+        g.to_static().expect("bodyless KFunctor is owned"),
+        KType::KFunctor {
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+            ret: Box::new(KType::Bool),
+            body: None,
+        }
+    );
+}
+
+/// `ConstructorApply` recurses `ctor` and every element of `args`.
+#[test]
+fn to_static_rebuilds_constructor_apply() {
+    let t = KType::ConstructorApply {
+        ctor: Box::new(KType::Any),
+        args: vec![KType::Number, KType::Str],
+    };
+    assert_eq!(
+        t.to_static()
+            .expect("ConstructorApply over owned args rebuilds"),
+        KType::ConstructorApply {
+            ctor: Box::new(KType::Any),
+            args: vec![KType::Number, KType::Str],
+        }
+    );
+}
+
+/// `Module { module }` holds a live `&'a Module` region pointer -> `None`. `Module` /
+/// `ModuleSignature` / `KFunction` are region-pinned (`Scope<'a>`'s fields make them
+/// self-referential), so — matching every other fixture in this crate that needs one
+/// (e.g. `ktype_predicates/tests.rs`, `kfunction/tests.rs`) — they are built through the
+/// region brand rather than as bare stack locals.
+#[test]
+fn to_static_none_for_module_borrow() {
+    let storage = run_root_storage();
+    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let module = storage
+        .brand()
+        .alloc_module(Module::new("Test".into(), scope));
+    let t = KType::Module { module };
+    assert!(t.to_static().is_none());
+}
+
+/// `Signature { sig, .. }` holds a live `&'a ModuleSignature` region pointer -> `None`,
+/// even with an otherwise-owned (empty) `pinned_slots`.
+#[test]
+fn to_static_none_for_signature_borrow() {
+    let storage = run_root_storage();
+    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let sig = storage
+        .brand()
+        .alloc_signature(ModuleSignature::new("Sig".into(), scope));
+    let t = KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    };
+    assert!(t.to_static().is_none());
+}
+
+/// `AbstractType { source: Module(_), .. }` holds a live `&'a Module` -> `None`, unlike
+/// the `Sig(_)`-sourced case above.
+#[test]
+fn to_static_none_for_abstract_type_module_source() {
+    let storage = run_root_storage();
+    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let module = storage
+        .brand()
+        .alloc_module(Module::new("Test".into(), scope));
+    let t = KType::AbstractType {
+        source: AbstractSource::Module(module),
+        name: "Carrier".into(),
+    };
+    assert!(t.to_static().is_none());
+}
+
+/// A bound functor value's `body: Some(&'a KFunction)` is a live region pointer -> `None`,
+/// even though `body` is identity-inert for `Eq`/`Hash`.
+#[test]
+fn to_static_none_for_functor_with_body() {
+    let storage = run_root_storage();
+    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Number),
+        elements: Vec::new(),
+    };
+    let func = storage.brand().alloc_function(KFunction::new(
+        sig,
+        Body::UserDefined(KExpression::new(Vec::new())),
+        scope,
+        None,
+        None,
+        true,
+    ));
+    let t = KType::KFunctor {
+        params: Record::new(),
+        ret: Box::new(KType::Number),
+        body: Some(func),
+    };
+    assert!(t.to_static().is_none());
+}
+
+/// `SetRef` shares its schema by `Rc`, compared by `Rc::ptr_eq` — rebuilding it would
+/// mint a distinct allocation and silently break nominal identity, so `to_static`
+/// declines unconditionally (even though every member here is otherwise pure).
+#[test]
+fn to_static_none_for_set_ref_rc_shared() {
+    let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x9999));
+    let t = KType::SetRef { set, index: 0 };
+    assert!(t.to_static().is_none());
+}
+
+// --- KType::resident_in / resident_in_reach --------------------------------------
+
+/// A `Module` allocated into `dest`'s own region is dest-resident.
+#[test]
+fn resident_in_true_for_same_region_module() {
+    let storage = run_root_storage();
+    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let module = storage
+        .brand()
+        .alloc_module(Module::new("Test".into(), scope));
+    let t = KType::Module { module };
+    assert!(t.resident_in(storage.region()));
+}
+
+/// A `Module` allocated into a foreign region is not resident in an unrelated `dest`.
+#[test]
+fn resident_in_false_for_foreign_region_module() {
+    let foreign = run_root_storage();
+    let foreign_scope = default_scope(&foreign, Box::new(std::io::sink()));
+    let module = foreign
+        .brand()
+        .alloc_module(Module::new("Test".into(), foreign_scope));
+    let t = KType::Module { module };
+
+    let dest = run_root_storage();
+    assert!(!t.resident_in(dest.region()));
+}
+
+/// An `Rc`-shared `SetRef` whose every member schema is owned data is resident in any `dest` —
+/// the checked path's whole reason to exist for the identity-preserving set family.
+#[test]
+fn resident_in_true_for_pure_set_ref() {
+    let set = record_newtype_set("Point", ScopeId::from_raw(0, 0xA1));
+    let t = KType::SetRef { set, index: 0 };
+    let dest = run_root_storage();
+    assert!(t.resident_in(dest.region()));
+}
+
+/// A `SetRef` whose member schema embeds a `KType::Signature` pointing into a foreign region is
+/// not resident in an unrelated `dest` — the walk descends into member schemas, not just the
+/// set's own (foreign-agnostic) `Rc` identity.
+#[test]
+fn resident_in_false_for_set_with_foreign_signature_member() {
+    let sig_storage = run_root_storage();
+    let sig_scope = default_scope(&sig_storage, Box::new(std::io::sink()));
+    let sig = sig_storage
+        .brand()
+        .alloc_signature(ModuleSignature::new("Sig".into(), sig_scope));
+
+    let member = NominalMember::pending("Wrap".into(), ScopeId::from_raw(0, 0xA2), KKind::NewType);
+    member.fill(NominalSchema::NewType(Box::new(KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    })));
+    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let t = KType::SetRef { set, index: 0 };
+
+    let dest = run_root_storage();
+    assert!(!t.resident_in(dest.region()));
+}
+
+/// [`KType::resident_in_reach`] widens the dest-only check: a `Module` foreign to `dest` but
+/// named by `reach`'s evidence is resident.
+#[test]
+fn resident_in_reach_true_when_evidence_covers_foreign_module() {
+    use crate::machine::core::{FrameSet, StoredReach};
+
+    let foreign = run_root_storage();
+    let foreign_scope = default_scope(&foreign, Box::new(std::io::sink()));
+    let module = foreign
+        .brand()
+        .alloc_module(Module::new("Test".into(), foreign_scope));
+    let t = KType::Module { module };
+
+    let dest = run_root_storage();
+    assert!(
+        !t.resident_in(dest.region()),
+        "sanity: not resident without evidence"
+    );
+
+    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign));
+    let reach = StoredReach {
+        foreign: Some(&foreign_reach),
+        borrows_into_home: false,
+    };
+    assert!(t.resident_in_reach(dest.region(), &reach));
 }

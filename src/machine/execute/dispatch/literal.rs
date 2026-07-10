@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{KoanRegionExt, KoanStorageProfile, RegionBrand};
+use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
@@ -150,8 +150,8 @@ impl<'step> KoanRuntime<'step> {
             let dest_frame = view.dest_frame();
             Ok(
                 acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
-                    let region = RegionBrand(region);
-                    Carried::Object(region.alloc_object(assemble(keys, value_helds)))
+                    let region = FoldingBrand::in_fold_closure(region);
+                    Carried::Object(region.alloc_object_folded(assemble(keys, value_helds)))
                 }),
             )
         });

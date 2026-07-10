@@ -132,9 +132,12 @@ fn with_scope_relocates_seed_value_into_brand() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     frame.with_scope(|child| {
-        // `alloc_object` erases the caller-`'a` input and re-homes it at the frame region, so no
-        // pre-shortening is needed.
-        let it_obj = child.brand().alloc_object(it_value);
+        // `alloc_object_checked` erases the caller-`'a` input and re-homes it at the frame region,
+        // so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
+        let it_obj = child
+            .brand()
+            .alloc_object_checked(it_value)
+            .expect("a deep-cloned Number is always resident-in-self");
         child
             .bind_value(
                 "it".to_string(),
@@ -449,8 +452,8 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // regions, both now minted as members into the dest arena.
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_frame, |(region, cells), _brand| {
-            let region = RegionBrand(region);
-            Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+            let region = FoldingBrand::in_fold_closure(region);
+            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
         });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
     // dest region itself rides the held `dest_frame` (the retention stand-in), which the read names.
@@ -612,7 +615,9 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
             false,
         );
         let kf_ref = home.brand().alloc_function(kf);
-        home.brand().alloc_object(KObject::KFunction(kf_ref))
+        home.brand()
+            .alloc_object_checked(KObject::KFunction(kf_ref))
+            .expect("f was just allocated into region\'s own region")
     })
 }
 
@@ -679,8 +684,8 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let dest_storage = dest_frame.storage_rc();
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
-            let region = RegionBrand(region);
-            Carried::Object(region.alloc_object(KObject::list_of_held(cells)))
+            let region = FoldingBrand::in_fold_closure(region);
+            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
         });
 
     // Free every producing frame shell: the dest arena's minted set (frame_a ∪ frame_b) plus the
@@ -756,9 +761,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         acc2,
         Residence::Kept,
         |outer_v, (region, cells), _brand| {
-            let region = RegionBrand(region);
+            let region = FoldingBrand::in_fold_closure(region);
             if let KObject::KFunction(kf) = outer_v.object() {
-                let list_obj = region.alloc_object(KObject::list_of_held(cells));
+                let list_obj = region.alloc_object_folded(KObject::list_of_held(cells));
                 kf.captured_scope()
                     .bind_value(
                         "inners".to_string(),
@@ -836,8 +841,10 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let dest_storage = dest_frame.storage_rc();
     let record: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
-            let region = RegionBrand(region);
-            Carried::Object(region.alloc_object(KObject::record_of_held(Record::from_pairs(cells))))
+            let region = FoldingBrand::in_fold_closure(region);
+            Carried::Object(
+                region.alloc_object_folded(KObject::record_of_held(Record::from_pairs(cells))),
+            )
         });
 
     drop(frame_a);
@@ -893,7 +900,9 @@ fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run>
             ret: Box::new(KType::Null),
             body: Some(kf_ref),
         };
-        home.brand().alloc_ktype(kt)
+        home.brand()
+            .alloc_ktype_checked(kt)
+            .expect("kf_ref was just allocated into home's own region")
     })
 }
 
@@ -1111,4 +1120,37 @@ fn mint_teardown_releases_members() {
     drop(c);
     assert_eq!(Rc::strong_count(&a), count_before_a, "C's death releases A");
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
+}
+
+/// The checked-seal rejection this item's audits exist to catch: a `ModuleSignature` allocated
+/// into region A, wrapped as `KType::Signature`, sealed into region B's `alloc_ktype_checked`
+/// (no evidence naming A) — a structured `ShapeError`, and nothing stored.
+#[test]
+fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
+    use crate::machine::model::values::ModuleSignature;
+
+    let region_a = run_root_storage();
+    let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
+    let sig = region_a
+        .brand()
+        .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
+    let kt = KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    };
+
+    let region_b = run_root_storage();
+    let before = region_b.region().alloc_count();
+    let result = region_b.brand().alloc_ktype_checked(kt);
+
+    let err = result.expect_err("a foreign-region Signature must be rejected, not stored");
+    assert!(
+        matches!(&err.kind, crate::machine::core::KErrorKind::ShapeError(_)),
+        "expected ShapeError, got {err:?}"
+    );
+    assert_eq!(
+        region_b.region().alloc_count(),
+        before,
+        "a rejected checked seal must store nothing"
+    );
 }

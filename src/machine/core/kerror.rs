@@ -195,10 +195,16 @@ impl KError {
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
-        let type_id: &'a KType<'a> = region.alloc_ktype(KType::SetRef {
-            set: synthetic_singleton(name.clone(), KKind::NewType),
-            index: 0,
-        });
+        // A freshly-minted synthetic `Rc` every call — no external identity to preserve, but a
+        // `SetRef` never rebuilds at `'static` regardless, so it takes the checked path; its
+        // members are always owned (`synthetic_singleton` never embeds a region pointer), so the
+        // audit can never actually reject.
+        let type_id: &'a KType<'a> = region
+            .alloc_ktype_checked(KType::SetRef {
+                set: synthetic_singleton(name.clone(), KKind::NewType),
+                index: 0,
+            })
+            .expect("a freshly synthesized KError SetRef is always region-pure");
         let payload = KObject::Wrapped {
             inner: NonWrappedRef::peel(&record),
             type_id,
