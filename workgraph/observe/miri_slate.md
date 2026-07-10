@@ -17,8 +17,10 @@ invariants the slate verifies live in
 
 ## The slate
 
-14 tests, grouped by the unsafe site each pins down. Names below are the
-exact test identifiers; pass them after `--` in the Miri command.
+21 tests, grouped by the unsafe site (or the safe mint discipline routing it)
+each pins down. Names below are the exact test identifiers; pass them after
+`--` in the Miri command, or run the whole lib binary
+(`MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p workgraph --lib`).
 
 **`retype` primitive — `Erased<T>` / `Witnessed<T, W>`** ([src/witnessed.rs](../src/witnessed.rs))
 — the single audited lifetime-retype every carrier family routes: `retype<A, B>` (a
@@ -85,6 +87,56 @@ own — the `unsafe` they exercise is this primitive).
 - `sealed_extern_open_consumes_non_copy`
 - `sealed_extern_zip_opens_heterogeneous_at_one_brand`
 - `seal_option_none_opens_to_none`
+
+**Envelope mint — the residence and reach channels** ([src/witnessed/delivered.rs](../src/witnessed/delivered.rs),
+core in [src/witnessed/carrier.rs](../src/witnessed/carrier.rs)) — the reference-only `Carrier`
+pins nothing; a value's liveness folds into a destination's minted set only at the
+envelope-bearing verbs (`Delivered::transfer_into` / `mint_reach`, over `Carrier::mint_into` /
+`compose_into`), through two channels: **residence** — the retained host `Rc`, materialized
+unconditionally at `Residence::Kept` and on the `borrows_host` bit at `Copied` — and **reach** —
+the exact members of the carrier's referenced set, unioned including the accumulator's own prior
+folds (never the newcomer alone). Five tests pin the matrix over a library-only profile
+(`RegionHost` frames, `u32` content), each freeing every frame handle a regression would leave
+the value dangling into before the read: the `Kept` host materialization surviving the producer
+handle's drop; the chained reach union surviving both content regions' drops (elements hosted by
+the destination itself, so home-omission strips the residence member and the union alone carries
+the read — the strict form, with no transitive pin to fall back on); the `Copied` ×
+`borrows_host` materialization; the `Copied` residence-only **release** (the tail-turnover rule —
+a phantom member is the leak this gates, checked by a `Weak` probe); and pass-through duplication
+(the reach set rides by reference, exactly one retained-host `Rc` clone, no per-member refcount
+traffic). The multi-handle mints here also pin `RegionHost::region`'s init-tag re-derivation
+([src/witnessed/host.rs](../src/witnessed/host.rs)): the minting call re-derives its return
+through a plain `get`, so no caller ever holds the init frame's unique tag — which the next
+foreign handle's interior arena write would disable. The only `unsafe` routed is the shared
+`retype` (`alloc_resident`'s freeze-at-store and the branded re-anchors).
+
+- `kept_transfer_materializes_residence_host`
+- `kept_transfer_unions_element_reach_across_folds`
+- `copied_transfer_materializes_borrowing_host`
+- `copied_transfer_releases_residence_only_host`
+- `duplicate_shares_reach_and_clones_one_host`
+
+**`RegionSet::mint` — home-omission / teardown** ([src/witnessed/region_set.rs](../src/witnessed/region_set.rs))
+— the one cycle shape storage-side reasoning can't rule out: a set hosted in region A holding
+`Rc<A>` would be a strong self-cycle A never drops. `mint` omits the destination's own region
+unconditionally; the test mints sources that include the destination's own frame, checks only the
+foreign member materializes, and walks the teardown (the member released with the hosting arena,
+`Weak`-probed) — the Miri leak audit over this test signs off the no-self-cycle shape at the
+library layer. Embedder twin: koan's `mint_teardown_releases_members`, over `FrameStorage`.
+
+- `mint_home_omission_prevents_self_cycle`
+
+**`StepContext::alloc_with` — finish-surface fold** ([src/witnessed/step_ctx.rs](../src/witnessed/step_ctx.rs))
+— guarantee 5 made structural: every listed dep's envelope folds into the result's carrier by
+construction, before the build closure can embed a dep view. The test's built value **is** a dep
+view (a borrow into the producer's region, riding the result un-copied); the producer handle
+drops, and the by-construction fold is the sole pin under the read. The behavioral twins
+(`step_context_alloc_carrier_is_empty`,
+`step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order` — membership and dep-order
+assertions) run under plain `cargo test` and stay off the slate. Embedder twin: koan's
+`functor_field_reach_fold_survives_producer_frame_free`.
+
+- `alloc_with_folds_dep_reach_before_result_read`
 
 **`ReturnContract` re-attach — Done-boundary open** ([src/witnessed.rs](../src/witnessed.rs))
 — an embedder's return-contract opens at its run-loop step brand alongside the continuation (a

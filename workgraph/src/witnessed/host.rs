@@ -38,12 +38,19 @@ impl<P: StorageProfile> RegionHost<P> {
 
     /// The backing region, minting it on first call. This is the **sole** mint point: nothing else
     /// in the library or a workload ever constructs a `Region<P>` directly against a `RegionHost`.
+    ///
+    /// The `get_or_init` result is deliberately discarded and the reference re-derived through a
+    /// plain `get`: the reference `get_or_init` returns on the minting call descends from the init
+    /// frame's unique tag, which the next foreign handle's interior arena write would disable under
+    /// tree borrows — poisoning everything stored through it. Re-deriving gives the minting caller
+    /// the same shared-read lineage every later caller gets.
     pub fn region(&self) -> &Region<P> {
-        self.region.get_or_init(|| {
+        let _ = self.region.get_or_init(|| {
             #[cfg(any(test, feature = "test-hooks"))]
             note_mint();
             Region::new()
-        })
+        });
+        self.region.get().expect("initialized just above")
     }
 
     /// A non-minting peek at the region — `Some` iff [`region()`](Self::region) has already been

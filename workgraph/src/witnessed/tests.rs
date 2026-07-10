@@ -13,6 +13,11 @@ use std::rc::Rc;
 
 use super::*;
 
+/// The abstract-shape slate: the carrier's residence/reach channels, the
+/// `Residence` × `borrows_host` matrix, duplication, home-omission, and the finish-surface fold,
+/// over a library-only profile.
+mod shapes;
+
 /// Covariant stand-in: a plain shared reference. `At<'r>` is a `&'r u32`, whose lifetime the borrow
 /// checker can't track across the `'static` store.
 struct RefFamily;
