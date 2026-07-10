@@ -1,6 +1,7 @@
 digraph {
     "koan" [label="koan"];
     "koan::builtins" [label="koan::builtins"];
+    "koan::builtins::arithmetic" [label="koan::builtins::arithmetic"];
     "koan::builtins::ascribe" [label="koan::builtins::ascribe"];
     "koan::builtins::attr" [label="koan::builtins::attr"];
     "koan::builtins::await_body" [label="koan::builtins::await_body"];
@@ -115,6 +116,7 @@ digraph {
     "koan" -> "koan::machine" [label="owns", style="solid"];
     "koan" -> "koan::parse" [label="owns", style="solid"];
     "koan" -> "koan::source" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::arithmetic" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::ascribe" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::attr" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::await_body" [label="owns", style="solid"];
@@ -232,6 +234,11 @@ digraph {
     "koan::builtins" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins" -> "koan::parse" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::arithmetic" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::ascribe" -> "koan::machine::core" [label="uses", style="dashed"];

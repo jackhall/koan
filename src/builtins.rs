@@ -6,6 +6,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::KObject;
 
+mod arithmetic;
 mod ascribe;
 mod attr;
 mod await_body;
@@ -246,6 +247,7 @@ pub fn default_scope<'a>(
     record_projection::register(scope);
     type_ops::register(scope);
     parameterized_types::register(scope);
+    arithmetic::register(scope);
 
     run_storage.brand().alloc_scope(Scope::run_child(scope))
 }

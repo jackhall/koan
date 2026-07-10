@@ -454,8 +454,12 @@ pub fn build_tree<'a>(
                     d.accept_equals()?;
                 }
             }
-            // `<` / `>` emit standalone `Keyword` parts. The `prev == Some('-')`
-            // carve-out keeps `->` contiguous so the arrow survives as one token.
+            // `<` / `>` emit standalone `Keyword` parts, gluing an immediately-following
+            // `=` into the compound `<=` / `>=` keyword (mirroring `is_keyword_token`'s
+            // pure-symbol rule, which already admits multi-char operator tokens like
+            // `<=` — see `operator_tokens_classify_as_keywords`, `src/parse/tokens.rs`).
+            // The `prev == Some('-')` carve-out keeps `->` contiguous so the arrow
+            // survives as one token.
             '>' if prev == Some('-') => {
                 buf.push('>');
                 reader.advance_byte();
@@ -464,11 +468,16 @@ pub fn build_tree<'a>(
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let start = reader.cursor;
                 reader.advance_byte();
+                let mut text = c.to_string();
+                if reader.peek_byte() == Some(b'=') {
+                    reader.advance_byte();
+                    text.push('=');
+                }
                 let span = Span {
                     start,
                     end: reader.cursor,
                 };
-                stack.push_part(Spanned::at(ExpressionPart::Keyword(c.to_string()), span));
+                stack.push_part(Spanned::at(ExpressionPart::Keyword(text), span));
             }
             // `mask_quotes` rewrote the body as either an empty pair or
             // `LITERAL_MARK <idx> LEN_SEP <len>` + closing quote + trailing JUMP.

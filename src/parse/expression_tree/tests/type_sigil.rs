@@ -96,6 +96,17 @@ fn gt_lt_outside_type_emit_keywords() {
 }
 
 #[test]
+fn lt_gt_glue_a_following_equals_into_one_compound_keyword() {
+    // `<=` / `>=` are single pure-symbol keyword tokens (see
+    // `operator_tokens_classify_as_keywords`, `src/parse/tokens.rs`) — the raw scanner
+    // glues a directly-following `=` onto `<` / `>` the same way it glues `>` onto a
+    // preceding `-` for `->`, rather than splitting into two standalone keywords.
+    assert_eq!(tree("a <= b").unwrap(), "[t(a) t(<=) t(b)]");
+    assert_eq!(tree("a >= b").unwrap(), "[t(a) t(>=) t(b)]");
+    assert_eq!(tree("a<=b").unwrap(), "[t(a) t(<=) t(b)]");
+}
+
+#[test]
 fn type_token_with_invalid_char_errors() {
     assert!(tree("Foo$Bar").is_err());
     assert!(tree("Foo+Bar").is_err());
