@@ -10,9 +10,11 @@
 //! A miss — a cross-group operator mix, or an operator no module declared — surfaces a
 //! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
 //! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
-//! (see [`reduce_fold_left`]), and [`ReductionMode::Unary`] rewrites it into one keyword-first
-//! call over a list literal (see [`reduce_unary`]); both hand control back to dispatch. The
-//! remaining modes still terminate at the explicit "not yet implemented" seam.
+//! (see [`reduce_fold_left`]), [`ReductionMode::FoldRight`] mirrors it right-associated (see
+//! [`reduce_fold_right`]), and [`ReductionMode::Unary`] rewrites it into one keyword-first call
+//! over a list literal (see [`reduce_unary`]); all three hand control back to dispatch. The
+//! remaining mode ([`ReductionMode::Pairwise`]) still terminates at the explicit "not yet
+//! implemented" seam.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -55,8 +57,9 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
             }
             match group.mode() {
                 ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
+                ReductionMode::FoldRight => reduce_fold_right(ctx, expr),
                 ReductionMode::Unary => reduce_unary(ctx, expr),
-                ReductionMode::FoldRight | ReductionMode::Pairwise { .. } => {
+                ReductionMode::Pairwise { .. } => {
                     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                         expr: expr.summarize(),
                         reason: "operator-chain folding not yet implemented".to_string(),
@@ -138,6 +141,40 @@ fn reduce_fold_left<'step>(
     let mut acc = KExpression::new(vec![first_operand, first_operator, second_operand]);
     for (operator, operand) in operators.zip(operands) {
         acc = KExpression::new(vec![wrap_as_operand(acc), operator, operand]);
+    }
+
+    become_dispatch(ctx, acc)
+}
+
+/// Rewrites a `FoldRight`-mode run into nested binary dispatches — the mirror image of
+/// [`reduce_fold_left`], nesting right-associated instead of left-associated:
+///
+/// `a - b - c` ⇒ `[ a, -, Expression([b, -, c]) ]`, a bare 3-part expression whose nested
+/// `Expression` operand resolves through the existing eager-subs sub-dispatch track before the
+/// outer `-` runs as ordinary binary keyworded dispatch. The outermost expression stays a bare
+/// 3-part expression — never itself wrapped in `Expression(..)` — so [`become_dispatch`]
+/// re-enters ordinary dispatch on it directly.
+fn reduce_fold_right<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
+    let (operands, operators) = split_chain_parts(expr);
+    debug_assert!(
+        operands.len() >= 3 && operators.len() == operands.len() - 1,
+        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
+    );
+    let mut operands = operands.into_iter().rev();
+    let mut operators = operators.into_iter().rev();
+
+    let last_operand = operands.next().expect("chain shape guarantees ≥3 operands");
+    let second_last_operand = operands.next().expect("chain shape guarantees ≥3 operands");
+    let last_operator = operators
+        .next()
+        .expect("chain shape guarantees ≥2 operators");
+
+    let mut acc = KExpression::new(vec![second_last_operand, last_operator, last_operand]);
+    for (operator, operand) in operators.zip(operands) {
+        acc = KExpression::new(vec![operand, operator, wrap_as_operand(acc)]);
     }
 
     become_dispatch(ctx, acc)

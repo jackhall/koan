@@ -853,6 +853,54 @@ fn operator_chain_registered_group_folds_left() {
     assert_eq!(result, "6", "1 + 2 + 3 must fold left to 6; got {result}");
 }
 
+/// A fixture-registered `FoldRight` group resolves the chain's probe and reduces the run
+/// right-associated, observably distinct from `FoldLeft`'s `10 - 3 - 2` = 5: right-association
+/// gives `10 - (3 - 2)` = `10 - 1` = 9.
+///
+/// Unlike [`operator_chain_registered_group_folds_left`], this fixture cannot ride
+/// `default_scope`: `default_scope`'s root seeds `-` into the builtin additive `FoldLeft` group,
+/// and [`crate::machine::core::Scope::resolve_operator_group_with_chain`] resolves
+/// builtin-first — a probe the run-global root has already claimed as a builtin operator
+/// always resolves to the root's own group, so a same-probe registration on any
+/// `default_scope`-derived scope (however it's indexed) is dead on arrival. Instead this test
+/// builds its own bare root ([`crate::builtins::test_support::run_root_bare`]) and calls
+/// [`crate::builtins::arithmetic::register`] directly — the same `-` body Phase 2 wires into
+/// `default_scope` — without the group-seeding step, so `-` reaches this scope's dispatch bucket
+/// but is not yet a builtin-claimed operator probe; registering the fixture group here at
+/// `BindingIndex::BUILTIN` is then the *only* claim on `-`, and resolution hits it.
+#[test]
+fn operator_chain_registered_group_folds_right() {
+    use crate::builtins::arithmetic;
+    use crate::builtins::test_support::run_root_bare;
+    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
+    use std::collections::HashSet;
+
+    let region = run_root_storage();
+    let scope = run_root_bare(&region);
+    arithmetic::register(scope);
+
+    let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
+    let group = scope
+        .brand()
+        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldRight));
+    scope
+        .register_operator_group("-".to_string(), group, BindingIndex::BUILTIN)
+        .expect("register operator group");
+
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let result = runtime
+        .read_result_with(id, |v| v.summarize())
+        .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
+    assert_eq!(
+        result, "9",
+        "10 - 3 - 2 must fold right to 9 (10 - (3 - 2)); got {result}"
+    );
+}
+
 /// A fixture-registered `Unary` group hands its body the whole operand run as one list
 /// operand. The infix chain `1 ~ 2 ~ 3 ~ 4` and the prefix call `~ [1 2 3 4]` both lower to the
 /// same bare 2-part keyword-first dispatch `[Keyword("~"), ListLiteral(..)]` — exactly the shape

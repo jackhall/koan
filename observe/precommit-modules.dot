@@ -810,6 +810,7 @@ digraph {
     "koan::machine::execute::outcome" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::machine::execute::run_loop" -> "koan::builtins::arithmetic" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::run_loop" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];

@@ -6,7 +6,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::KObject;
 
-mod arithmetic;
+pub(crate) mod arithmetic;
 mod ascribe;
 mod attr;
 mod await_body;
