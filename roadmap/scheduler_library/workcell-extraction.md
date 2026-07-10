@@ -45,8 +45,6 @@ semantics, and the retention protocol.
 
 - [Scheduler-owned frame storage](scheduler-owned-frame-storage.md) — the
   trait's memory types must already be down to the single frame anchor.
-- [Return contracts ride continuations](contract-as-continuation.md) — the
-  cell contract has no contract type to carve around.
 
 **Unblocks:**
 

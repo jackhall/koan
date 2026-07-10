@@ -101,5 +101,3 @@ holds, and tail splicing. Koan instantiates the combined trait once
 - [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
   — collapses the scheduler's per-cell memory anchors to the single `Frame`
   type this contract names.
-- [Return contracts ride continuations](../roadmap/scheduler_library/contract-as-continuation.md)
-  — dissolves the stored contract type into continuation captures.

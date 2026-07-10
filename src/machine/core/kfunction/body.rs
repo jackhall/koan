@@ -22,9 +22,9 @@ use super::KFunction;
 /// `Arm`'s / `PerCall`'s `ret` is region-borrowed so the whole contract stays `Copy`, matching the
 /// `&KFunction` it sits beside. Sealed as [`SealedContract`] into a `ReturnObligation` that rides the
 /// tail chain as a continuation capture, pinned by its own carried witness. A tail chain keeps the
-/// **first** contract
-/// (the `next_contract` rule in `execute::run_loop`), so the check fires against the original caller's
-/// declared return, not the tail-most callee's.
+/// **first** contract (the keep-first rule at the `Outcome::Continue` construction sites in
+/// `execute::runtime`, which wraps each replacement continuation with the established obligation), so
+/// the check fires against the original caller's declared return, not the tail-most callee's.
 #[derive(Clone, Copy)]
 pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.

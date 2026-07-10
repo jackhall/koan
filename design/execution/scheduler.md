@@ -111,7 +111,9 @@ data, and a single harness method applies them. The three pieces:
   by composition (a `sched` field, not a `&mut` borrow) and is the **sole**
   holder of `&mut Scheduler` across the execute tree. The per-step *ambient*
   state — the active per-call frame, the slot reserve, the run frame, the
-  executing slot's opaque payload, and the contract-chain flag — lives on the
+  executing slot's opaque payload, and the slot's declared-return obligation
+  (the continuation capture a tail chain carries; its presence *is* the
+  contract-chain flag) — lives on the
   driver ([`ambient`](../../src/machine/execute/ambient.rs)), not the scheduler,
   which is a pure DAG runtime. Its
   [`apply_outcome`](../../src/machine/execute/runtime.rs) interprets a returned

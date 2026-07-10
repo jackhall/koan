@@ -308,8 +308,6 @@ picture:
 - [Scheduler-owned frame storage](../roadmap/scheduler_library/scheduler-owned-frame-storage.md)
   — moves frame ownership into scheduler slot state; collapses the trait's
   memory types to `Frame` and folds the payload into continuation captures.
-- [Return contracts ride continuations](../roadmap/scheduler_library/contract-as-continuation.md)
-  — dissolves the stored contract type into continuation captures.
 - [Carving the workcell crate](../roadmap/scheduler_library/workcell-extraction.md)
   — the crate split beneath the DAG layer.
 - [Publishing the workgraph crate](../roadmap/scheduler_library/workgraph-extraction.md)
