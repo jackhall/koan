@@ -853,6 +853,63 @@ fn operator_chain_registered_group_folds_left() {
     assert_eq!(result, "6", "1 + 2 + 3 must fold left to 6; got {result}");
 }
 
+/// A fixture-registered `Unary` group hands its body the whole operand run as one list
+/// operand. The infix chain `1 ~ 2 ~ 3 ~ 4` and the prefix call `~ [1 2 3 4]` both lower to the
+/// same bare 2-part keyword-first dispatch `[Keyword("~"), ListLiteral(..)]` — exactly the shape
+/// `HEAD [1 2 3]` dispatches through (see `fn_with_typed_list_param_accepts_matching_list` in
+/// `src/builtins/fn_def/tests/container_types.rs`) — so both reach the same echoing `FN` body,
+/// proving the "unary prefix and infix coincide" direction end-to-end.
+#[test]
+fn operator_chain_registered_unary_group_hands_body_the_list() {
+    use crate::builtins::test_support::run;
+    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
+    use std::collections::HashSet;
+
+    let region = run_root_storage();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
+    let group = scope
+        .brand()
+        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
+    scope
+        .register_operator_group("~".to_string(), group, BindingIndex::BUILTIN)
+        .expect("register operator group");
+    run(
+        scope,
+        "FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",
+    );
+
+    let mut runtime = KoanRuntime::new();
+    let infix_id = runtime.dispatch_in_scope(parse_one("1 ~ 2 ~ 3 ~ 4"), scope);
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let infix = runtime
+        .read_result_with(infix_id, |v| v.summarize())
+        .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
+    assert_eq!(
+        infix, "[1, 2, 3, 4]",
+        "the infix chain must hand the body the whole run as one list"
+    );
+
+    let mut runtime = KoanRuntime::new();
+    let prefix_id = runtime.dispatch_in_scope(parse_one("~ [1 2 3 4]"), scope);
+    runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let prefix = runtime
+        .read_result_with(prefix_id, |v| v.summarize())
+        .unwrap_or_else(|e| {
+            panic!(
+                "the prefix form must dispatch to the same body as the infix chain; got error {e}"
+            )
+        });
+    assert_eq!(
+        prefix, infix,
+        "the prefix call and the infix chain must dispatch to the same body and agree"
+    );
+}
+
 // =====================================================================
 // HeadDeferred / TypeHeadDeferred / NonCallableHead routing + behavior.
 // =====================================================================

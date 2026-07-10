@@ -10,8 +10,9 @@
 //! A miss — a cross-group operator mix, or an operator no module declared — surfaces a
 //! structured [`KErrorKind::DispatchFailed`]. A hit reduces the run by the resolved group's
 //! declared mode: [`ReductionMode::FoldLeft`] rewrites the chain into nested binary dispatches
-//! (see [`reduce_fold_left`]) and hands control back to dispatch; the other modes still
-//! terminate at the explicit "not yet implemented" seam.
+//! (see [`reduce_fold_left`]), and [`ReductionMode::Unary`] rewrites it into one keyword-first
+//! call over a list literal (see [`reduce_unary`]); both hand control back to dispatch. The
+//! remaining modes still terminate at the explicit "not yet implemented" seam.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -54,9 +55,8 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
             }
             match group.mode() {
                 ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
-                ReductionMode::Unary
-                | ReductionMode::FoldRight
-                | ReductionMode::Pairwise { .. } => {
+                ReductionMode::Unary => reduce_unary(ctx, expr),
+                ReductionMode::FoldRight | ReductionMode::Pairwise { .. } => {
                     Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
                         expr: expr.summarize(),
                         reason: "operator-chain folding not yet implemented".to_string(),
@@ -141,6 +141,43 @@ fn reduce_fold_left<'step>(
     }
 
     become_dispatch(ctx, acc)
+}
+
+/// Rewrites a `Unary`-mode run into one keyword-first call over a list literal — the prefix
+/// surface `sym [x1 x2 x3]` and the infix chain `x1 sym x2 sym x3` are one dispatch shape for a
+/// unary operator (the roadmap's "prefix and infix coincide" direction): both become the bare
+/// 2-part expression `[ Keyword(sym), ListLiteral([x1, x2, x3]) ]`, the same shape `HEAD [1 2 3]`
+/// dispatches through (a keyword-first call whose single slot carries a list). Unary is
+/// homogeneous — a well-formed run names one operator throughout — so the first operator
+/// keyword's span and text stand in for the whole run.
+fn reduce_unary<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    expr: &KExpression<'step>,
+) -> Outcome<'step> {
+    let (operands, operators) = split_chain_parts(expr);
+    debug_assert!(
+        operands.len() >= 3 && operators.len() == operands.len() - 1,
+        "OperatorChain shape guarantees ≥3 operands and one fewer operator"
+    );
+    let operator = operators
+        .into_iter()
+        .next()
+        .expect("chain shape guarantees ≥2 operators");
+    let sym = match &operator.value {
+        ExpressionPart::Keyword(s) => s.clone(),
+        _ => unreachable!("odd-index chain parts are keywords by shape"),
+    };
+    let list_items: Vec<ExpressionPart<'step>> =
+        operands.into_iter().map(|operand| operand.value).collect();
+    let kw_part = Spanned {
+        value: ExpressionPart::Keyword(sym),
+        span: operator.span,
+    };
+    let list_part = Spanned {
+        value: ExpressionPart::ListLiteral(list_items),
+        span: expr.span,
+    };
+    become_dispatch(ctx, KExpression::new(vec![kw_part, list_part]))
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {
