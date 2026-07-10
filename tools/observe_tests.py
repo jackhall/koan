@@ -379,6 +379,14 @@ def cmd_slate_audit(args):
         for p in live_files & set(fingerprints.keys())
         if fingerprints[p] != live_counts[p]
     )
+    # Files the fingerprint records but that no longer carry any `unsafe`: their
+    # count dropped to zero, so they fall out of live_counts entirely and the
+    # live-intersection changed_counts check above can never see them.
+    dropped_counts = sorted(
+        (p, fingerprints[p])
+        for p in set(fingerprints.keys()) - live_files
+        if fingerprints[p] != 0
+    )
     missing_fingerprint = sorted(live_files - set(fingerprints.keys()))
 
     if args.update:
@@ -416,17 +424,21 @@ def cmd_slate_audit(args):
         print("\nunsafe-count changed since last fingerprint (review whether new sites are covered):")
         for p, before, after in changed_counts:
             print(f"  ~ {p}: {before} -> {after}")
+    if dropped_counts:
+        print("\nfingerprinted `unsafe` dropped to zero (run --update; check the slate group is still needed):")
+        for p, before in dropped_counts:
+            print(f"  ~ {p}: {before} -> 0")
     if missing_fingerprint:
         print("\nfiles with `unsafe` but no fingerprint entry (run --update to record):")
         for p in missing_fingerprint:
             print(f"  ? {p}  (unsafe count: {live_counts[p]})")
-    if not (new_unsafe or stale_groups or changed_counts or missing_fingerprint):
+    if not (new_unsafe or stale_groups or changed_counts or dropped_counts or missing_fingerprint):
         print("\nslate is in sync with src/ unsafe sites.")
     # Limits / caveats
     print("\nlimits: file-level granularity. A slate test can pin behavior in a")
     print("file other than its own — group-header paths are the anchor.")
 
-    if new_unsafe or stale_groups or changed_counts:
+    if new_unsafe or stale_groups or changed_counts or dropped_counts:
         sys.exit(1)
 
 
