@@ -141,6 +141,17 @@ that member. An unknown variant name in either form is a schema error listing th
 union's members. The member `SetRef` renders as its member name (`Some`), so
 `:(Maybe Some)` round-trips.
 
+**A schema field can name a sibling variant of the union still under seal** through
+the same qualified sigil (`Node :(Tree Leaf)`): while `Tree` is the binder being
+threaded, the elaborator
+([typed_field_list.rs](../../src/machine/model/types/typed_field_list.rs)) recognizes a
+sigil head naming that binder and folds `(Tree Leaf)` straight to the member's
+`RecursiveRef` rather than sub-dispatching — parking would deadlock on the very seal
+awaiting this field — and [`seal_union_refs`](../../src/machine/model/types/recursive_set.rs)
+resolves it to the member's `SetLocal` like any intra-set reference. A bare sibling tag
+(`Node :Leaf`) stays an unknown-type error: tags are never bare names, even in the
+declaring schema.
+
 **Nesting survives** because the wrap chooses between two payload dispositions
 ([`WrappedPayload`](../../src/machine/model/values/kobject.rs)): a transparent re-tag
 (a `NEWTYPE` over a value already of that exact repr) *peels* one wrapper layer so
@@ -151,10 +162,19 @@ keeps every layer. This relaxes the older single-layer newtype-collapse invarian
 
 **`MATCH` selects by type** ([match_case.rs](../../src/builtins/match_case.rs) via
 [`find_branch_body_by_type`](../../src/builtins/branch_walk.rs)). A member-name head
-over a variant value admits by member `SetRef` identity and binds the wrapped payload
+over a variant value resolves to that member `SetRef` and binds the wrapped payload
 to `it`; a general type head resolves through the scope and binds the scrutinee
-unchanged; the strictly most-specific admitting arm wins, and two arms with no strict
-winner are an ambiguity error (ruling F1/F3). See
+unchanged. Boolean-literal heads (`true ->` / `false ->`) and `Result`-tag heads
+settle first through an exact pre-pass that ranks strictly above every typed arm; the
+remaining type heads admit by
+[`matches_value`](../../src/machine/model/types/ktype_predicates.rs) and compete in the
+same [`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)
+tournament that resolves ordinary overload buckets, so the strictly most-specific
+admitting arm wins and two arms with no strict winner are an ambiguity error (ruling
+F1/F3). A head naming no type over a variant scrutinee errors listing the scrutinee's
+variants. The winner's `it` reaches the arm frame through the same single-copy carrier
+door `TRY`'s success arm uses — the scrutinee (or, for a variant/tag arm, its wrapped
+payload) copied once at bind time, with no MATCH-specific bind site. See
 [unions and match-by-type](type-language-via-dispatch.md#anonymous-union-sigil).
 
 The `TypeConstructor` carve-out: a `Result` value (`KKind::TypeConstructor`)

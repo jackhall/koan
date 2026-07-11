@@ -55,9 +55,6 @@ those items.
 
 **Requires:**
 
-- [MATCH as ordinary type-dispatch](tagged-variant-types.md) —
-  converging `MATCH` onto type-dispatch first retires `branch_walk`'s MATCH
-  bind, shrinking the bind-leg surface the fused door covers.
 
 **Unblocks:**
 

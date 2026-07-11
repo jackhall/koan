@@ -35,7 +35,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Field-list re-walk type provenance](compile_safety/field-list-rewalk-provenance.md)
 - [Scheduler-owned lifetime tokens](compile_safety/scheduler-lifetime-tokens.md)
 - [Sparse-carrier correlation in parameterized-type constructors](compile_safety/sparse-carrier-correlation.md)
-- [MATCH as ordinary type-dispatch](compile_safety/tagged-variant-types.md)
+- [Witness-derived binding](compile_safety/witness-derived-binding.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-defined operator modules](operator_chaining/user-defined-operator-modules.md)
@@ -59,5 +59,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
+- [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
 - [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
 

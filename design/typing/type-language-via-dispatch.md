@@ -117,7 +117,10 @@ type validates but never re-tags, so the value keeps its own runtime type for
 downstream type-dispatch (ruling F4,
 [finalize.rs](../../src/machine/execute/finalize.rs)). `MATCH` eliminates a union by
 that runtime type: each arm head resolves to a `KType`, the admitting arms compete in
-a most-specific-wins tournament, and the winner runs (ruling F1,
+the same most-specific-wins tournament
+([`ExpressionSignature::most_specific`](../../src/machine/model/types/signature.rs)) that
+resolves ordinary overload buckets — boolean-literal and `Result`-tag heads settle first
+through an exact pre-pass ranked above every typed arm — and the winner runs (ruling F1,
 [find_branch_body_by_type](../../src/builtins/branch_walk.rs)).
 
 ## Variant-reference sigil
@@ -130,7 +133,11 @@ are disambiguated by body shape — a bare `Type`-token body with no payload is 
 variant *reference*, a paren-group payload (`(Some 42)`) newtype-constructs that
 member. An unknown variant name at either surface is a schema error listing the
 union's members. There is no global `:Some` name and no `.` path operator; the variant
-is reachable only through its union. See
+is reachable only through its union. The same sigil names a *sibling* variant of a union
+still under seal when it types one of that union's own schema fields (`Node :(Tree Leaf)`):
+the elaborator folds the `(Binder Tag)` pair straight to the member's `RecursiveRef`
+instead of sub-dispatching, since the producer it would otherwise park on is the seal
+awaiting this field; a bare sibling tag (`Node :Leaf`) stays an unknown-type error. See
 [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes).
 
 ## Record-type sigil
