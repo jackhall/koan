@@ -17,12 +17,14 @@ mod outcome;
 // program entry points (interpret submodule). See runtime.rs.
 mod run_loop;
 mod runtime;
+mod step_carried;
 
 pub(in crate::machine::execute) use outcome::{
     catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
     ContinuationFamily, TerminalDepFinish, WitnessedDepFinish,
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
+pub use step_carried::{drive_step_allocator, StepCarried};
 
 pub(crate) use dispatch::{
     build_type_operand, defer_field_list_action, defer_field_list_action_composed,

@@ -17,7 +17,6 @@
 //! mirrors the sealed members into the enclosing scope and binds the group handle: exiting
 //! the block guarantees every forward reference resolved.
 
-use crate::machine::core::KoanStepContextExt;
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use std::collections::HashSet;

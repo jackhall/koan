@@ -222,7 +222,8 @@ pub(in crate::machine::execute) fn run_action<'step>(
     action: Action<'step>,
 ) -> Outcome<'step> {
     match action {
-        // Already a witnessed carrier (or error): `finalize` seals it as-is, no co-location bundle.
+        // Already a step-branded carrier (or error): `finalize` seals it as-is, no co-location
+        // bundle.
         Action::Done(result) => Outcome::Done(result),
 
         Action::Tail {
@@ -468,7 +469,7 @@ impl<'run> KoanRuntime<'run> {
         &mut self,
         outcome: Outcome<'step>,
         idx: usize,
-    ) -> NodeStep {
+    ) -> NodeStep<'step> {
         match outcome {
             Outcome::Done(result) => {
                 self.close_owned_scope(idx);

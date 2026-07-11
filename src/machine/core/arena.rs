@@ -15,7 +15,11 @@
 
 use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
 use std::cell::Cell;
+use std::marker::PhantomData;
 use std::rc::Rc;
+
+use crate::machine::core::kfunction::action::scope_frame;
+use crate::machine::execute::StepCarried;
 
 use super::bindings::StoredReach;
 use super::scope::Scope;
@@ -133,7 +137,7 @@ impl<'a> RegionBrand<'a> {
     /// compile-enforced `'static` tier when [`KType::to_static`] succeeds, else
     /// [`Self::alloc_ktype_checked`]. The fallback enforces residence at runtime — the weakest
     /// tier; a site that can build `t` from declared operands at a brand takes a brand door
-    /// instead. The brand-level twin of [`KoanStepContextExt::alloc_type_pure`].
+    /// instead. The brand-level twin of [`StepAllocator::alloc_type_pure`].
     pub fn alloc_ktype_pure(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
         match t.to_static() {
             Some(owned) => Ok(self.alloc_ktype(owned)),
@@ -242,19 +246,21 @@ impl<'a> RegionBrand<'a> {
     /// region-resident value never strong-owns its own frame (the `region → object → frame` cycle that
     /// would keep the frame's `Rc` alive forever and defeat the refcount-driven region free).
     ///
-    /// Soundness is the within-step transient invariant: the empty-witness carrier pins nothing,
-    /// sound only because the active frame pins the region externally for the construction step and
-    /// `finalize` folds the producer **before** the carrier is stored on a node. `value`'s `'static`
-    /// bound is region-purity, compile-enforced: a value that references another region cannot
-    /// satisfy it — it takes the `yoke` / `merge` path, or
+    /// The within-step transient invariant is typed: the empty-witness carrier pins nothing, so it
+    /// returns as a [`StepCarried`] branded at this brand's own `'a` — in production a step's
+    /// rank-2 open lifetime — and the borrow checker rejects any use past the step. The active
+    /// frame pins the region across the step, and the sole exit to node storage is the seal door in
+    /// `step_carried.rs`, where finalize's fold names the producer in the carrier's own reach.
+    /// `value`'s `'static` bound is region-purity, compile-enforced: a value that references
+    /// another region cannot satisfy it — it takes the `yoke` / `merge` path, or
     /// [`Self::alloc_object_witnessed_checked`] for a value whose region borrow is only
     /// runtime-auditable (e.g. raw AST that is splice-free).
-    pub(crate) fn alloc_object_witnessed(
-        self,
-        value: KObject<'static>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.0
-            .alloc::<KObject<'static>, _>(value, |live| Witnessed::resident(Carried::Object(live)))
+    pub(crate) fn alloc_object_witnessed(self, value: KObject<'static>) -> StepCarried<'a> {
+        StepCarried::born(
+            self.0.alloc::<KObject<'static>, _>(value, |live| {
+                Witnessed::resident(Carried::Object(live))
+            }),
+        )
     }
 
     /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
@@ -267,11 +273,11 @@ impl<'a> RegionBrand<'a> {
         self,
         value: KObject<'_>,
         audit: impl FnOnce(&KoanRegion, &KObject<'_>) -> bool,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    ) -> Result<StepCarried<'a>, KError> {
         let name = value.ktype().name();
         self.0
             .alloc_resident_audited::<KObject<'static>>(value, audit)
-            .map(|live| Witnessed::resident(Carried::Object(live)))
+            .map(|live| StepCarried::born(Witnessed::resident(Carried::Object(live))))
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -415,7 +421,7 @@ impl<'a> Scope<'a> {
 }
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator
-/// (`transfer_into` / `merge_pinned` / `map_pinned` / [`KoanStepContextExt::alloc_carried_with`])
+/// (`transfer_into` / `merge_pinned` / `map_pinned` / [`StepAllocator::alloc_carried_with`])
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
 /// operands* is covered by the fold without a per-value audit. Carries the folded-placement
 /// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldToken`] is the sole
@@ -435,7 +441,7 @@ impl<'a> std::ops::Deref for FoldingBrand<'a> {
 impl<'a> FoldingBrand<'a> {
     /// Mint the folded-placement capability inside a fold closure. The [`FoldToken`] is proof of
     /// residence: a fold engine (`transfer_into` / `merge_pinned` / `map_pinned` /
-    /// [`KoanStepContextExt::alloc_carried_with`]) mints it and hands it to the closure alongside the
+    /// [`StepAllocator::alloc_carried_with`]) mints it and hands it to the closure alongside the
     /// operands, and its `'a` brand keeps it confined there — so this constructor is callable only
     /// where the enclosing combinator already folds the operands' reach into the result.
     pub(crate) fn in_fold_closure(
@@ -470,7 +476,7 @@ impl<'a> FoldingBrand<'a> {
 }
 
 /// One positional operand of a brand-composed type build: the total, embedding-ordered form of
-/// the sparse `deps` list [`KoanStepContextExt::alloc_type_composed`] partitions. `Reaching` folds the
+/// the sparse `deps` list [`StepAllocator::alloc_type_composed`] partitions. `Reaching` folds the
 /// carrier's reach + host into the result's witness and surfaces as a view; `Pure` is a
 /// region-free type rebuilt at the brand through the region's own `'static` door, contributing no
 /// reach.
@@ -504,7 +510,7 @@ reattachable! {
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
 
-/// [`KoanStepContextExt::alloc_carried_with_scope`]'s dep-fold accumulator: the destination region
+/// [`StepAllocator::alloc_carried_with_scope`]'s dep-fold accumulator: the destination region
 /// handle paired with the dep views folded in so far. The handle heads the tuple so the library
 /// [`HasRegionHandle`](crate::witnessed::HasRegionHandle) blanket for `(RegionHandle<'b, P>, T)`
 /// discharges each fold's composition seam. Layout-invariant in `'r`: a thin handle and a `Vec` of
@@ -512,7 +518,7 @@ reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KTy
 struct ScopeFoldViews;
 reattachable!(ScopeFoldViews => (RegionHandle<'r, KoanStorageProfile>, Vec<Carried<'r>>));
 
-/// [`KoanStepContextExt::alloc_carried_with_scope`]'s final accumulator: the [`ScopeFoldViews`] pair
+/// [`StepAllocator::alloc_carried_with_scope`]'s final accumulator: the [`ScopeFoldViews`] pair
 /// with the crossed scope envelope re-anchored at the brand nested alongside. Same handle-first
 /// nesting so the `(RegionHandle<'b, P>, T)` blanket still applies.
 struct ScopeFoldOperands;
@@ -788,21 +794,78 @@ impl<'d> Residence<'d> {
     }
 }
 
-/// Koan-branded wrappers over [`StepContext::alloc`]/[`StepContext::alloc_with`] — the closure
-/// receives a [`RegionBrand`] (the koan allocation capability) rather than the bare `&KoanRegion`
-/// the library-level context hands out, so a step construction site allocates through the one
-/// capability every other site uses. Named with full words (`alloc_carried`, not `alloc`) to avoid
-/// colliding with the generic verb each wraps. Lives here — not on `StepContext` itself — because
-/// `RegionBrand`'s constructor is private to this module (see [`FrameStorage::brand`]).
-/// [`Self::alloc_carried_with`] is how a finish folds a dep's reach into a carrier it builds from
-/// that dep's value: the dep views only exist inside the shared brand, so a caller cannot smuggle
-/// one out and seal it under a narrower reach than the fold produces.
-pub(crate) trait KoanStepContextExt {
+/// The step-branded construction context: the library [`StepContext`] over the step's destination
+/// frame, confined to the scheduler step that minted it by the brand lifetime `'step`. The koan
+/// construction doors live here — not on `StepContext` itself — because [`RegionBrand`]'s
+/// constructor is private to this module (see [`FrameStorage::brand`]): each door's closure
+/// receives a [`RegionBrand`] / [`FoldingBrand`] (the koan allocation capability) rather than the
+/// bare `&KoanRegion` the library-level context hands out, so a step construction site allocates
+/// through the one capability every other site uses. Named with full words (`alloc_carried`, not
+/// `alloc`) to avoid colliding with the generic verb each wraps.
+///
+/// Every door returns its carrier as a [`StepCarried`] at `'step` — in production the step tail's
+/// rank-2 open lifetime, so a door product cannot be stashed past its construction step (the
+/// within-step transient invariant, borrow-checker-enforced) and the sole exit to node storage is
+/// the seal door in `step_carried.rs`. [`Self::alloc_carried_with`] is how a finish folds a dep's
+/// reach into a carrier it builds from that dep's value: the dep views only exist inside the
+/// shared brand, so a caller cannot smuggle one out and seal it under a narrower reach than the
+/// fold produces.
+///
+/// The type is `pub` and the one door an external `compile_fail` guard drives
+/// ([`Self::alloc_object_scalar`]) is `pub`, so the `#[doc(hidden)]` `step_fixture` can hand a guard
+/// an allocator and have it door-allocate; the remaining doors are crate-visible. The constructors
+/// are crate-confined, so no external caller can mint one. The confinement rests on the brand
+/// lifetime and on the constructors' visibility — builtins receive an allocator already branded at
+/// their step (`BodyCtx.ctx` / `FinishCtx.ctx`) and cannot mint one at a lifetime of their choosing.
+pub struct StepAllocator<'step> {
+    context: StepContext<FrameStorage>,
+    step: PhantomData<&'step ()>,
+}
+
+impl Clone for StepAllocator<'_> {
+    fn clone(&self) -> Self {
+        StepAllocator {
+            context: self.context.clone(),
+            step: PhantomData,
+        }
+    }
+}
+
+impl<'step> StepAllocator<'step> {
+    /// Mint over the step's destination frame at a caller-chosen brand — the harness door (the
+    /// scheduler view's step door mints at the step's own `'step`). `pub(in crate::machine)` keeps
+    /// the free-brand mint out of builtins' reach.
+    pub(in crate::machine) fn over_frame(frame: Rc<FrameStorage>) -> Self {
+        StepAllocator {
+            context: StepContext::new(frame),
+            step: PhantomData,
+        }
+    }
+
+    /// Mint over `scope`'s own frame, branded at the scope reference's lifetime. Sound to expose
+    /// in-crate: every production `&Scope` is minted at a step's rank-2 open (the step-brand
+    /// design's verified premise), so the allocator inherits a genuinely step-confined brand.
+    pub(crate) fn for_scope(scope: &'step Scope<'step>) -> Self {
+        Self::over_frame(scope_frame(scope))
+    }
+
+    /// The held destination-frame `Rc` itself — for callers that pin or compare the frame.
+    pub(crate) fn frame(&self) -> Rc<FrameStorage> {
+        self.context.frame()
+    }
+
     /// [`StepContext::alloc`] with the closure receiving a [`RegionBrand`]: reach = own region only.
-    fn alloc_carried(
+    pub(crate) fn alloc_carried(
         &self,
         build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+    ) -> StepCarried<'step> {
+        StepCarried::born(
+            self.context
+                .alloc_handle::<KoanStorageProfile, CarriedFamily>(|handle| {
+                    build(RegionBrand(handle))
+                }),
+        )
+    }
 
     /// [`StepContext::alloc_with`] with the closure receiving a [`FoldingBrand`] and the deps'
     /// views: the built carrier names every listed dep's reach **and residence host** (each dep
@@ -811,11 +874,21 @@ pub(crate) trait KoanStepContextExt {
     /// [`FoldingBrand`]'s folded-placement methods store it without a per-value audit. Plain
     /// [`RegionBrand`] methods stay reachable through `Deref`, so a closure building an unrelated
     /// `'static` value is unaffected.
-    fn alloc_carried_with(
+    pub(crate) fn alloc_carried_with(
         &self,
         deps: &[&DeliveredCarried],
         build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+    ) -> StepCarried<'step> {
+        StepCarried::born(
+            self.context
+                .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
+                    deps,
+                    |handle, views, token| {
+                        build(FoldingBrand::in_fold_closure(handle, token), views)
+                    },
+                ),
+        )
+    }
 
     /// [`Self::alloc_carried_with`] plus the consumer's scope crossed as its own delivered envelope:
     /// the build closure receives the scope re-anchored at the fold brand, so scope reads are
@@ -823,99 +896,12 @@ pub(crate) trait KoanStepContextExt {
     /// dep's reach and host. Scope reads resolving to *ancestor* bindings stay covered by the
     /// destination's ambient coverage, exactly as everywhere else — folding the immediate scope host
     /// is strictly more coverage than folding the deps alone, never less.
-    fn alloc_carried_with_scope<'sc>(
+    pub(crate) fn alloc_carried_with_scope<'sc>(
         &self,
         deps: &[&DeliveredCarried],
         scope: &'sc Scope<'sc>,
         build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>, &'b Scope<'b>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
-
-    /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
-    /// only. `kt`'s `'static` bound is region-purity, compile-enforced — the common case for a
-    /// bind-time or synchronously-resolved type. A `kt` that borrows another region takes
-    /// [`Self::alloc_type_checked`] instead.
-    fn alloc_type(&self, kt: KType<'static>) -> Witnessed<CarriedFamily, CarrierWitness>;
-
-    /// The step twin of [`RegionBrand::alloc_ktype_checked`]: runtime-audits `kt`'s region
-    /// borrows against this frame's own region and seals the result under the empty (own-region
-    /// only) reach — the same [`Carried::Type`] wrap [`Self::alloc_type`] uses — erroring instead
-    /// of storing an unvetted foreign-region dangle. For a `kt` [`KType::to_static`] declines (a
-    /// module-family pointer or an `Rc`-shared set).
-    fn alloc_type_checked(
-        &self,
-        kt: KType<'_>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
-
-    /// Composite entry a caller reaches for whenever it doesn't already know which tier `kt`
-    /// needs: the compile-enforced `'static` tier when [`KType::to_static`] succeeds, else the
-    /// runtime-checked tier. The split is value-transparent — the two tiers agree on every value
-    /// `to_static` accepts (`to_static().is_some()` implies [`KType::resident_in`] for any
-    /// destination) — but the fallback enforces residence at runtime, not compile time; a site
-    /// that can build `kt` from declared operands at a brand takes a brand door instead.
-    fn alloc_type_pure(
-        &self,
-        kt: KType<'_>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        match kt.to_static() {
-            Some(owned) => Ok(self.alloc_type(owned)),
-            None => self.alloc_type_checked(kt),
-        }
-    }
-
-    /// Seal a delivered *type* terminal's value as this step's own carrier. The type is rebuilt at
-    /// the fold brand from the dep's view — never captured at an ambient lifetime — so reach = own
-    /// region ∪ the dep's reach and host. Scalar gate: a region-free scalar type references no
-    /// region, so it routes to the no-fold path and seals with an empty reach.
-    fn alloc_type_of(&self, dep: &DeliveredCarried) -> Witnessed<CarriedFamily, CarrierWitness>;
-
-    /// The correlated multi-operand type build: `operands` lists **every** type the composite
-    /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
-    /// at the same position — so the composite is built at the brand from declared operands only.
-    /// `compose` is a plain `fn` so it cannot capture: an ambient-lifetime `KType` smuggled past
-    /// the operand list is a compile error, not an audit obligation. Reach = own region ∪ every
-    /// `Reaching` operand's reach and host; `Pure` operands add none (the scalar gate's
-    /// exact-reach behavior, by construction).
-    fn alloc_type_composed(
-        &self,
-        operands: Vec<TypeOperand<'_>>,
-        compose: for<'b> fn(FoldingBrand<'b>, &[&'b KType<'b>]) -> KType<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
-
-    /// The no-fold arm for a shallow scalar (Number / KString / Bool / Null): such a value embeds
-    /// no borrow, so it rebuilds owned and seals with an empty reach instead of over-retaining a
-    /// producer arena. `None` when the value is not a shallow scalar (the caller takes a fold door
-    /// instead).
-    fn alloc_object_scalar(
-        &self,
-        value: &KObject<'_>,
-    ) -> Option<Witnessed<CarriedFamily, CarrierWitness>>;
-}
-
-impl KoanStepContextExt for StepContext<FrameStorage> {
-    fn alloc_carried(
-        &self,
-        build: impl for<'b> FnOnce(RegionBrand<'b>) -> <CarriedFamily as Reattachable>::At<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.alloc_handle::<KoanStorageProfile, CarriedFamily>(|handle| build(RegionBrand(handle)))
-    }
-
-    fn alloc_carried_with(
-        &self,
-        deps: &[&DeliveredCarried],
-        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
-            deps,
-            |handle, views, token| build(FoldingBrand::in_fold_closure(handle, token), views),
-        )
-    }
-
-    fn alloc_carried_with_scope<'sc>(
-        &self,
-        deps: &[&DeliveredCarried],
-        scope: &'sc Scope<'sc>,
-        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>, &'b Scope<'b>) -> Carried<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    ) -> StepCarried<'step> {
         // Hand-rolls `StepContext::alloc_with`'s fold shape, extended with the scope operand: yoke the
         // dest-region handle up front, fold each dep view onto it at `Residence::Kept` (the dep keeps
         // living in its producer region, so that host materializes as a member), then fold the scope's
@@ -941,23 +927,33 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
                 |scope_view, (handle, views), _brand| (handle, (views, scope_view)),
             );
         let frame = self.frame();
-        operands.map_pinned::<CarriedFamily, _>(&frame, |(handle, (views, scope)), token| {
-            // The fold token proves this closure runs at a fresh fold brand; the value `build` returns
-            // comes only from this fold's own operands — the dep views and the crossed scope envelope,
-            // both re-anchored at this brand — whose reach the enclosing fold already composes into the
-            // result's witness. No ambient-lifetime borrow reaches this closure.
-            build(FoldingBrand::in_fold_closure(handle, token), views, scope)
-        })
+        StepCarried::born(operands.map_pinned::<CarriedFamily, _>(
+            &frame,
+            |(handle, (views, scope)), token| {
+                // The fold token proves this closure runs at a fresh fold brand; the value `build`
+                // returns comes only from this fold's own operands — the dep views and the crossed
+                // scope envelope, both re-anchored at this brand — whose reach the enclosing fold
+                // already composes into the result's witness. No ambient-lifetime borrow reaches
+                // this closure.
+                build(FoldingBrand::in_fold_closure(handle, token), views, scope)
+            },
+        ))
     }
 
-    fn alloc_type(&self, kt: KType<'static>) -> Witnessed<CarriedFamily, CarrierWitness> {
+    /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
+    /// only. `kt`'s `'static` bound is region-purity, compile-enforced — the common case for a
+    /// bind-time or synchronously-resolved type. A `kt` that borrows another region takes
+    /// [`Self::alloc_type_checked`] instead.
+    pub(crate) fn alloc_type(&self, kt: KType<'static>) -> StepCarried<'step> {
         self.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))
     }
 
-    fn alloc_type_checked(
-        &self,
-        kt: KType<'_>,
-    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    /// The step twin of [`RegionBrand::alloc_ktype_checked`]: runtime-audits `kt`'s region
+    /// borrows against this frame's own region and seals the result under the empty (own-region
+    /// only) reach — the same [`Carried::Type`] wrap [`Self::alloc_type`] uses — erroring instead
+    /// of storing an unvetted foreign-region dangle. For a `kt` [`KType::to_static`] declines (a
+    /// module-family pointer or an `Rc`-shared set).
+    pub(crate) fn alloc_type_checked(&self, kt: KType<'_>) -> Result<StepCarried<'step>, KError> {
         // Unlike `alloc_carried`'s `for<'b>` brand construction, the checked veneer doesn't need
         // to build `kt` from brand-derived references — `kt` already exists and is audited by
         // address, so the resident reference it hands back is erased straight into the empty
@@ -966,10 +962,29 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         // indirection `alloc_carried` needs for a from-scratch construction.
         let frame = self.frame();
         let stored = frame.brand().alloc_ktype_checked(kt)?;
-        Ok(Witnessed::resident(Carried::Type(stored)))
+        Ok(StepCarried::born(Witnessed::resident(Carried::Type(
+            stored,
+        ))))
     }
 
-    fn alloc_type_of(&self, dep: &DeliveredCarried) -> Witnessed<CarriedFamily, CarrierWitness> {
+    /// Composite entry a caller reaches for whenever it doesn't already know which tier `kt`
+    /// needs: the compile-enforced `'static` tier when [`KType::to_static`] succeeds, else the
+    /// runtime-checked tier. The split is value-transparent — the two tiers agree on every value
+    /// `to_static` accepts (`to_static().is_some()` implies [`KType::resident_in`] for any
+    /// destination) — but the fallback enforces residence at runtime, not compile time; a site
+    /// that can build `kt` from declared operands at a brand takes a brand door instead.
+    pub(crate) fn alloc_type_pure(&self, kt: KType<'_>) -> Result<StepCarried<'step>, KError> {
+        match kt.to_static() {
+            Some(owned) => Ok(self.alloc_type(owned)),
+            None => self.alloc_type_checked(kt),
+        }
+    }
+
+    /// Seal a delivered *type* terminal's value as this step's own carrier. The type is rebuilt at
+    /// the fold brand from the dep's view — never captured at an ambient lifetime — so reach = own
+    /// region ∪ the dep's reach and host. Scalar gate: a region-free scalar type references no
+    /// region, so it routes to the no-fold path and seals with an empty reach.
+    pub(crate) fn alloc_type_of(&self, dep: &DeliveredCarried) -> StepCarried<'step> {
         // Scalar gate: a region-free scalar type references no region, so folding the dep's reach in
         // would only over-retain. Route it to the no-fold path so it seals with an empty reach.
         // `is_region_free_scalar` is exactly `to_static`'s owned-leaf class, so the rebuild always
@@ -988,11 +1003,18 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         })
     }
 
-    fn alloc_type_composed(
+    /// The correlated multi-operand type build: `operands` lists **every** type the composite
+    /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
+    /// at the same position — so the composite is built at the brand from declared operands only.
+    /// `compose` is a plain `fn` so it cannot capture: an ambient-lifetime `KType` smuggled past
+    /// the operand list is a compile error, not an audit obligation. Reach = own region ∪ every
+    /// `Reaching` operand's reach and host; `Pure` operands add none (the scalar gate's
+    /// exact-reach behavior, by construction).
+    pub(crate) fn alloc_type_composed(
         &self,
         operands: Vec<TypeOperand<'_>>,
         compose: for<'b> fn(FoldingBrand<'b>, &[&'b KType<'b>]) -> KType<'b>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+    ) -> StepCarried<'step> {
         // One pass keeps the invariant the compose relies on: the deps list is exactly the
         // `Reaching` subsequence of `operands`, in order, and `plan` holds each `Pure` value at
         // its operand position (`None` = "take the next view").
@@ -1031,10 +1053,11 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         })
     }
 
-    fn alloc_object_scalar(
-        &self,
-        value: &KObject<'_>,
-    ) -> Option<Witnessed<CarriedFamily, CarrierWitness>> {
+    /// The no-fold arm for a shallow scalar (Number / KString / Bool / Null): such a value embeds
+    /// no borrow, so it rebuilds owned and seals with an empty reach instead of over-retaining a
+    /// producer arena. `None` when the value is not a shallow scalar (the caller takes a fold door
+    /// instead).
+    pub fn alloc_object_scalar(&self, value: &KObject<'_>) -> Option<StepCarried<'step>> {
         // A shallow scalar embeds no borrow, so the dep-witness union would be pure over-retention:
         // route it to the no-fold path so an escaped scalar seals with an empty reach and stops
         // pinning its producer arena. `is_shallow_scalar`'s four variants hold only owned payloads,

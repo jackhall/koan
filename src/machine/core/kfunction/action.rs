@@ -9,14 +9,18 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use super::KFunction;
-use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, TypeOperand};
+use crate::machine::core::{
+    CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator, TypeOperand,
+};
+use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
-use crate::machine::model::values::{CarriedFamily, Held};
+use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::{BindingIndex, CarrierWitness, DeliveredCarried, KError, KErrorKind, NodeId};
+use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
-use crate::witnessed::{StepContext, Witnessed};
+#[cfg(test)]
+use crate::witnessed::Witnessed;
 
 /// Unwrap a `Result<T, KError>` inside an `Action`-returning body, early-returning
 /// `Action::Done(Err(e))` on the error arm — the `Action`-body analogue of `?`. Collapses the
@@ -185,9 +189,10 @@ pub struct BodyCtx<'a, 'c> {
     /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
     /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
     pub arg_carriers: &'c Record<&'c DeliveredCarried>,
-    /// The step construction context for this slot's own scope — the same `ctx.region()` /
-    /// `ctx.alloc()` / `ctx.alloc_with()` surface a wake-time [`FinishCtx`] carries.
-    pub ctx: StepContext<FrameStorage>,
+    /// The step construction allocator for this slot's own scope, branded at the step lifetime
+    /// `'a`: its doors return a [`StepCarried`] that cannot outlive the step. The same allocator a
+    /// wake-time [`FinishCtx`] carries.
+    pub ctx: StepAllocator<'a>,
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {
@@ -208,7 +213,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     }
 
     /// The total-operand form of argument `name` for
-    /// [`KoanStepContextExt::alloc_type_composed`](crate::machine::core::KoanStepContextExt::alloc_type_composed):
+    /// [`StepAllocator::alloc_type_composed`](crate::machine::core::StepAllocator::alloc_type_composed):
     /// its reach carrier when it arrived as a resolved value, else the region-free type rebuilt
     /// from its `'static` form. A type that reaches a region but arrived carrier-less cannot cross
     /// the fold as an operand, so it errors loudly.
@@ -245,7 +250,7 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 /// `design/scheduler-library.md` guarantees 3 and 5).
 pub struct FinishCtx<'a> {
     pub scope: &'a Scope<'a>,
-    pub ctx: StepContext<FrameStorage>,
+    pub ctx: StepAllocator<'a>,
 }
 
 impl<'a> FinishCtx<'a> {
@@ -257,7 +262,7 @@ impl<'a> FinishCtx<'a> {
     pub fn for_scope(scope: &'a Scope<'a>) -> Self {
         FinishCtx {
             scope,
-            ctx: StepContext::new(scope_frame(scope)),
+            ctx: StepAllocator::for_scope(scope),
         }
     }
 }
@@ -313,7 +318,9 @@ pub enum Action<'a> {
     /// wrappers) / `resident_type_carrier` sealing a constructed or read value) — so it is co-located
     /// by construction rather than paired with an asserted witness at finalize. The construction
     /// terminal for **both** channels: a builtin that allocates a `KObject` or a `KType` seals it here.
-    Done(Result<Witnessed<CarriedFamily, CarrierWitness>, KError>),
+    /// The carrier rides the step brand `'a` from the door that built it (a [`StepCarried`]), so it
+    /// cannot be stashed past the step; the sole exit to node storage is finalize's seal.
+    Done(Result<StepCarried<'a>, KError>),
     /// Tail-replace into `tail`, carrying `contract` (see [`TailContract`]), in a cart per
     /// `frame_placement`. When `leading` (the body's non-tail statements) is non-empty the slot
     /// first parks on them as owned deps and tail-replaces only once they resolve — so they run,
@@ -347,7 +354,7 @@ impl<'a> Action<'a> {
     /// alloc site (`alloc_carried`/`alloc_carried_with` / `yoke` / `merge` / `resident_*_carrier`), so
     /// this stays behind `cfg(test)`.
     pub(crate) fn done_resident(value: Carried<'a>) -> Self {
-        Action::Done(Ok(Witnessed::resident(value)))
+        Action::Done(Ok(StepCarried::born(Witnessed::resident(value))))
     }
 }
 

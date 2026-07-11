@@ -11,6 +11,7 @@
 
 use crate::machine::core::kfunction::action::Action;
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::values::CarriedFamily;
@@ -267,7 +268,7 @@ pub(crate) fn fn_action<'a>(
     result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
 ) -> Action<'a> {
     match result {
-        Ok(witnessed) => Action::Done(Ok(witnessed)),
+        Ok(witnessed) => Action::Done(Ok(StepCarried::born(witnessed))),
         Err(e) => Action::Done(Err(e)),
     }
 }

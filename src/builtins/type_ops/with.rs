@@ -9,7 +9,6 @@
 
 use std::collections::HashSet;
 
-use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 

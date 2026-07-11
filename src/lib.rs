@@ -11,6 +11,11 @@ pub mod fold_fixture;
 pub mod machine;
 pub mod parse;
 pub mod source;
+/// Guard-fixture surface for the step-brand `compile_fail` tests, which compile as external
+/// crates and so cannot name the `pub(crate)` `StepCarried` directly. Hidden from docs; not part
+/// of koan's real API.
+#[doc(hidden)]
+pub mod step_fixture;
 /// The lifetime-erasure carrier substrate (`Witnessed`, `Reattachable`, `Erased`) and the
 /// workload-generic DAG scheduler, re-exported from the `workgraph` crate so `machine` and
 /// integration tests keep resolving `koan::witnessed::…` / `koan::scheduler::…` paths unchanged.

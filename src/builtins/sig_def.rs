@@ -10,7 +10,6 @@
 //! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
-use crate::machine::core::KoanStepContextExt;
 use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::ModuleSignature;

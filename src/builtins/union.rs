@@ -3,14 +3,12 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::core::{NameLookup, ScopeId, StoredReach};
-use crate::machine::execute::seal_type_operand;
+use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::types::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
 };
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope, TraceFrame};
-use crate::witnessed::Witnessed;
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
@@ -70,7 +68,7 @@ fn finalize_union<'a>(
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
     carriers: &[&DeliveredCarried],
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
@@ -370,8 +368,8 @@ mod tests {
         let second =
             super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
         // The short-circuit returns the bound union type unchanged.
-        let is_union = second.as_ref().map(|carrier| {
-            carrier.with_pinned(
+        let is_union = second.map(|carrier| {
+            carrier.into_witnessed_for_test().with_pinned(
                 &crate::machine::FrameSet::empty(),
                 |c| matches!(c, Carried::Type(KType::Union(members)) if members.len() == 2),
             )

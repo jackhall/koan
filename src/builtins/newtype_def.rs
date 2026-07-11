@@ -20,18 +20,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::{ApplyOutcome, KoanStepContextExt};
-use crate::machine::execute::seal_type_operand;
+use crate::machine::core::ApplyOutcome;
+use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::{CarriedFamily, KObject};
+use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
-use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
-use crate::witnessed::Witnessed;
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
@@ -45,7 +44,7 @@ use crate::machine::DeliveredCarried;
 /// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
 /// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...).
 /// `carrier` is `None` for a bare-leaf name resolved against scope bindings; `repr` there routes
-/// through [`KoanStepContextExt::alloc_type_pure`], which picks the tier `repr`'s own shape needs
+/// through [`StepAllocator::alloc_type_pure`], which picks the tier `repr`'s own shape needs
 /// (compile-enforced `'static` for an owned leaf, the runtime-audited seal for a `SetRef` or
 /// other region-borrowing rebuild `to_static` declines).
 fn finalize_newtype<'a>(
@@ -54,7 +53,7 @@ fn finalize_newtype<'a>(
     repr: KType<'a>,
     bind_index: BindingIndex,
     carrier: Option<&DeliveredCarried>,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<StepCarried<'a>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
     let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
@@ -106,7 +105,7 @@ fn finalize_record_newtype<'a>(
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
     carriers: &[&DeliveredCarried],
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE record repr must have at least one field".to_string(),

@@ -14,11 +14,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::FrameStorage;
+use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
-use crate::witnessed::StepContext;
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
@@ -141,12 +140,12 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         Rc::clone(&self.dest_frame)
     }
 
-    /// The step construction context wrapping [`Self::dest_frame`] — the library-owned
-    /// `ctx.region()` / `ctx.alloc()` / `ctx.alloc_with()` surface (`design/scheduler-library.md`
-    /// guarantees 3 and 5), handed to a finish through
+    /// The step construction allocator wrapping [`Self::dest_frame`], branded at the step lifetime
+    /// `'step` — its doors return a [`StepCarried`](crate::machine::execute::StepCarried) confined to
+    /// the step (`design/scheduler-library.md` guarantees 3 and 5), handed to a finish through
     /// [`FinishCtx`](crate::machine::core::kfunction::action::FinishCtx).
-    pub(in crate::machine::execute) fn step_ctx(&self) -> StepContext<FrameStorage> {
-        StepContext::new(self.dest_frame())
+    pub(in crate::machine::execute) fn step_ctx(&self) -> StepAllocator<'step> {
+        StepAllocator::over_frame(self.dest_frame())
     }
 
     /// Whether the executing slot already carries a kept return contract (a tail call within an

@@ -15,7 +15,6 @@ pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_held, arg_type, Action};
-    use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::values::Held;
 
     use crate::machine::{KError, KErrorKind};

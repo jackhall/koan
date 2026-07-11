@@ -534,8 +534,10 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
     // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
     // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
     // names no `'b`.
-    let carrier: Witnessed<CarriedFamily, CarrierWitness> =
-        storage.brand().alloc_object_witnessed(KObject::Number(1.0));
+    let carrier: Witnessed<CarriedFamily, CarrierWitness> = storage
+        .brand()
+        .alloc_object_witnessed(KObject::Number(1.0))
+        .into_witnessed_for_test();
     // A sibling alloc into the same region coexists — the membership-table write and the prior store
     // do not alias under tree borrows.
     let sibling = storage.brand().alloc_object(KObject::Number(2.0));
@@ -564,8 +566,10 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
 
     // Born reference-only: the active frame is excluded at the alloc site.
-    let carrier: Witnessed<CarriedFamily, CarrierWitness> =
-        frame.brand().alloc_object_witnessed(KObject::Number(7.0));
+    let carrier: Witnessed<CarriedFamily, CarrierWitness> = frame
+        .brand()
+        .alloc_object_witnessed(KObject::Number(7.0))
+        .into_witnessed_for_test();
     assert!(
         carrier.witness().is_empty(),
         "a region-pure carrier is born under the empty reach",
@@ -981,8 +985,9 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     // Consumer: a StepContext over a *different* frame — the finish surface's own region.
     // `alloc_type_of` rebuilds `kt` at the brand from the dep's view and folds the producer's reach.
     let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> = ctx.alloc_type_of(&dep);
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
+        ctx.alloc_type_of(&dep).into_witnessed_for_test();
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
     // producer's region alive, through the set minted into the consumer arena — itself pinned by
@@ -1022,8 +1027,9 @@ fn alloc_type_of_scalar_gate_seals_empty_reach() {
     );
 
     let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> = ctx.alloc_type_of(&dep);
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
+        ctx.alloc_type_of(&dep).into_witnessed_for_test();
 
     assert!(
         sealed.witness().is_empty(),
@@ -1060,7 +1066,7 @@ fn alloc_type_composed_correlates_mixed_operands() {
     );
 
     let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let operands = vec![
         TypeOperand::Pure(KType::Number),
         TypeOperand::Reaching(&dep),
@@ -1068,7 +1074,8 @@ fn alloc_type_composed_correlates_mixed_operands() {
     let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
         .alloc_type_composed(operands, |_brand, parts| {
             KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        });
+        })
+        .into_witnessed_for_test();
 
     let consumer_storage = consumer_frame.storage_rc();
     drop(dep);
@@ -1116,7 +1123,7 @@ fn alloc_type_composed_operand_order_is_positional() {
     );
 
     let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let operands = vec![
         TypeOperand::Reaching(&dep),
         TypeOperand::Pure(KType::Number),
@@ -1124,7 +1131,8 @@ fn alloc_type_composed_operand_order_is_positional() {
     let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
         .alloc_type_composed(operands, |_brand, parts| {
             KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        });
+        })
+        .into_witnessed_for_test();
 
     let consumer_storage = consumer_frame.storage_rc();
     drop(dep);
@@ -1153,12 +1161,12 @@ fn alloc_type_composed_operand_order_is_positional() {
 }
 
 /// An all-`Pure` operand list folds no dep — reach = own region only, the same exact-reach result
-/// [`alloc_type_of`](KoanStepContextExt::alloc_type_of)'s scalar gate produces elsewhere, here
+/// [`alloc_type_of`](StepAllocator::alloc_type_of)'s scalar gate produces elsewhere, here
 /// without needing a gate at all: `Pure` operands simply add nothing to `deps`.
 #[test]
 fn alloc_type_composed_all_pure_seals_empty_reach() {
     let root = run_root_storage();
-    let ctx = StepContext::<FrameStorage>::new(Rc::clone(&root));
+    let ctx = StepAllocator::over_frame(Rc::clone(&root));
     let operands = vec![
         TypeOperand::Pure(KType::Str),
         TypeOperand::Pure(KType::Number),
@@ -1166,7 +1174,8 @@ fn alloc_type_composed_all_pure_seals_empty_reach() {
     let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
         .alloc_type_composed(operands, |_brand, parts| {
             KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        });
+        })
+        .into_witnessed_for_test();
     assert!(
         composed.witness().is_empty(),
         "all-Pure operand list folds no dep: empty reach"
@@ -1370,15 +1379,15 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
     // The consumer scope, built inside `run_storage` so its region owner is held — the pin
     // `seal_scope_ref_delivered`'s `expect` requires. Builtins register `Number` as a readable type.
     let scope = default_scope(&run_storage, Box::new(std::io::sink()));
-    let step_ctx: StepContext<FrameStorage> = StepContext::new(Rc::clone(&run_storage));
+    let step_ctx = StepAllocator::over_frame(Rc::clone(&run_storage));
 
     // A dep view carrying a `Bool` type, delivered from an unrelated producer frame.
     let producer = run_root_storage();
     let bool_ty: Carried = Carried::Type(producer.brand().alloc_ktype(KType::Bool));
     let dep: DeliveredCarried = delivered_with_host(bool_ty, Rc::clone(&producer));
 
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
-        step_ctx.alloc_carried_with_scope(&[&dep], scope, |brand, views, scope| {
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> = step_ctx
+        .alloc_carried_with_scope(&[&dep], scope, |brand, views, scope| {
             let flag = match views[0] {
                 Carried::Type(kt) => kt.clone(),
                 Carried::Object(_) => panic!("dep view is a type"),
@@ -1390,7 +1399,8 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
             let record =
                 Record::from_pairs([("flag".to_string(), flag), ("count".to_string(), count)]);
             Carried::Type(brand.alloc_ktype_folded(KType::Record(Box::new(record))))
-        });
+        })
+        .into_witnessed_for_test();
 
     // The record lives in `run_storage`'s region; `producer` still pins the `Bool` leaf it embeds.
     sealed.with_pinned(&run_storage, |c| match c {

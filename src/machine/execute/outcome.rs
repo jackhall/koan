@@ -17,17 +17,18 @@
 use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
 #[cfg(test)]
 use crate::machine::model::values::Carried;
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::DeliveredCarried;
 
-use crate::machine::{CarrierWitness, KError, NodeId, TraceFrame};
+use crate::machine::{KError, NodeId, TraceFrame};
 use crate::scheduler::{DepResults, Deps};
 use crate::witnessed::reattachable;
+#[cfg(test)]
 use crate::witnessed::Witnessed;
 
 use super::dispatch::{propagate_dep_error, DepRequest, ResumeFn, SchedulerView};
 use super::nodes::{ChainOp, NodeWork};
 use super::runtime::KoanWorkload;
+use super::StepCarried;
 
 /// What a node's step wants the harness to do — the single currency every producer and finish
 /// returns. See the module docs for the taxonomy.
@@ -38,9 +39,9 @@ use super::runtime::KoanWorkload;
 pub(in crate::machine::execute) enum Outcome<'step> {
     /// The node dies with a value or an error. The `Ok` carrier already names every region it reaches
     /// (built inside its witness closure) so `finalize` seals it without an asserted-co-location
-    /// bundle. The sole value terminal for both channels (object and type); the carrier is
-    /// lifetime-free, so this arm carries no `'step`.
-    Done(Result<Witnessed<CarriedFamily, CarrierWitness>, KError>),
+    /// bundle. The sole value terminal for both channels (object and type); it rides the step brand
+    /// `'step` as a [`StepCarried`], confined to the step until finalize's seal exit.
+    Done(Result<StepCarried<'step>, KError>),
     /// The node lives: install `work` and run again immediately (no park). `frame` rotates the
     /// per-call cart; `chain` is the pre-decided lexical-chain reshape (decided at the construction
     /// site while the contract variant is still live) and `block_entry` names any overlay scope the
@@ -75,9 +76,10 @@ pub(in crate::machine::execute) enum Outcome<'step> {
 #[cfg(test)]
 impl<'step> Outcome<'step> {
     /// Seal a region-pure bare value as a `Done` terminal ([`Witnessed::resident`] fixes the empty
-    /// witness). Test-only: production always builds a value witnessed at its alloc site, never bare.
+    /// witness, [`StepCarried::born`] brands it at the step). Test-only: production always builds a
+    /// value witnessed at its alloc site, never bare.
     pub(in crate::machine::execute) fn done_resident(value: Carried<'step>) -> Self {
-        Outcome::Done(Ok(Witnessed::resident(value)))
+        Outcome::Done(Ok(StepCarried::born(Witnessed::resident(value))))
     }
 }
 
@@ -270,13 +272,14 @@ pub(in crate::machine::execute) type WitnessedDepFinish<'a> = Box<
     dyn for<'view> FnOnce(
             &SchedulerView<'a, 'view>,
             DepResults<'_, &DepTerminal<'a>>,
-        ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>
+        ) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;
 
 /// Project a [`WitnessedDepFinish`] onto the [`TerminalDepFinish`] delivery: run the fold and seal the
 /// resulting carrier (or error) as an [`Outcome::Done`]. The fold relocates each dep once
 /// (`transfer_into`) and names the union of their reaches, so no separate per-dep relocation runs here.
+/// The finish hands back a step-branded carrier from its own door, so it seals as-is.
 pub(in crate::machine::execute) fn seal_witnessed<'a>(
     finish: WitnessedDepFinish<'a>,
 ) -> TerminalDepFinish<'a> {

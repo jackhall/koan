@@ -15,9 +15,10 @@
 //! `#[doc(hidden)]` and `pub` only because trybuild fixtures import it; it is not part of
 //! koan's real surface.
 
-use crate::machine::core::{FrameStorageExt, KoanStepContextExt};
+use crate::machine::core::FrameStorageExt;
+use crate::machine::execute::drive_step_allocator;
 use crate::machine::{run_root_storage, CarrierWitness};
-use crate::witnessed::{Delivered, Erased, StepContext, Witnessed};
+use crate::witnessed::{Delivered, Erased, Witnessed};
 
 pub use crate::machine::core::{FoldingBrand, FrameStorage};
 pub use crate::machine::model::types::KType;
@@ -60,8 +61,9 @@ pub fn drive_type_fold<F>(deps: &[&DeliveredCarried], build: F)
 where
     F: for<'b> FnOnce(FoldingBrand<'b>, &[Carried<'b>]) -> &'b KType<'b>,
 {
-    let ctx: StepContext<FrameStorage> = StepContext::new(run_root_storage());
-    let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Type(build(brand, &views)));
+    drive_step_allocator(|ctx| {
+        let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Type(build(brand, &views)));
+    });
 }
 
 /// [`drive_type_fold`]'s object twin, sealing the `&KObject` result as the step's object carrier.
@@ -69,8 +71,9 @@ pub fn drive_object_fold<F>(deps: &[&DeliveredCarried], build: F)
 where
     F: for<'b> FnOnce(FoldingBrand<'b>, &[Carried<'b>]) -> &'b KObject<'b>,
 {
-    let ctx: StepContext<FrameStorage> = StepContext::new(run_root_storage());
-    let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Object(build(brand, &views)));
+    drive_step_allocator(|ctx| {
+        let _ = ctx.alloc_carried_with(deps, |brand, views| Carried::Object(build(brand, &views)));
+    });
 }
 
 /// Forward to the tied type sink `FoldingBrand::alloc_ktype_folded`, preserving its

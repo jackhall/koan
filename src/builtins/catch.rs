@@ -7,6 +7,7 @@
 use std::rc::Rc;
 
 use crate::machine::core::{kerror_ktype, KoanRegionExt};
+use crate::machine::execute::StepCarried;
 use crate::machine::model::{KObject, KType};
 use crate::machine::Scope;
 
@@ -125,7 +126,7 @@ pub fn body<'a>(
                 )
             }
         };
-        Action::Done(Ok(witnessed))
+        Action::Done(Ok(StepCarried::born(witnessed)))
     });
     Action::Catch {
         watched: DepRequest::Dispatch {

@@ -25,7 +25,7 @@ use crate::witnessed::{reattachable, RegionHandle, Witnessed};
 
 use super::super::outcome::DepTerminal;
 use super::super::run_loop::{dest_brand, DestHandleFamily};
-use super::super::WitnessedDepFinish;
+use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::SchedulerView;
 use super::single_poll::CtorKind;
 use super::{Await, DepRequest, Outcome};
@@ -170,8 +170,9 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
             placement: DepPlacement::OwnScope,
         })
         .collect();
-    let combine_finish: WitnessedDepFinish<'step> =
-        Box::new(move |view, terminals| finish_witnessed(view, &kind, terminals));
+    let combine_finish: WitnessedDepFinish<'step> = Box::new(move |view, terminals| {
+        finish_witnessed(view, &kind, terminals).map(StepCarried::born)
+    });
     Await::on(Deps::from_owned(deps)).finish_witnessed(combine_finish)
 }
 
@@ -220,7 +221,7 @@ pub(crate) fn build_type_operand<'step>(
 /// brand as a [`RegionTypeFamily`] operand ([`build_type_operand`]) rather than captured into a fold
 /// closure, so the placement's witness folds the identity's own reach as a declared operand. Reach =
 /// the dest region ∪ the identity's own reach ∪ every carrier's reach-and-host — the coverage
-/// [`alloc_carried_with`](crate::machine::core::KoanStepContextExt::alloc_carried_with) produces for
+/// [`alloc_carried_with`](crate::machine::core::StepAllocator::alloc_carried_with) produces for
 /// the same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
 ///
 /// `reach` is the identity's own home-omitted foreign reach (empty while a `RecursiveSet` is
@@ -232,7 +233,7 @@ pub(crate) fn seal_type_operand<'a>(
     identity: &'a KType<'a>,
     reach: Option<&FrameSet>,
     carriers: &[&DeliveredCarried],
-) -> Witnessed<CarriedFamily, CarrierWitness> {
+) -> StepCarried<'a> {
     let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, reach);
     // Fold each carrier's reach onto the identity operand at `Residence::Kept` — the dep keeps living
     // in its producer region, so its host materializes as a member — the per-dep envelope fold
@@ -247,9 +248,11 @@ pub(crate) fn seal_type_operand<'a>(
     });
     // Drop the destination handle and re-seal the identity as a `Carried::Type` under the composed
     // witness; `dest_frame` pins the operand's backing for the transient re-anchor.
-    operand.map_pinned::<CarriedFamily, _>(&dest_frame, |(_region, identity_ty), _brand| {
-        Carried::Type(identity_ty)
-    })
+    StepCarried::born(
+        operand.map_pinned::<CarriedFamily, _>(&dest_frame, |(_region, identity_ty), _brand| {
+            Carried::Type(identity_ty)
+        }),
+    )
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the

@@ -12,29 +12,26 @@
 //! `Identifier` lhs wins `body_identifier`, a module / type-token lhs wins its `OfKind`
 //! overload, and only a bare runtime value falls through to [`body_newtype`].
 
-use crate::machine::core::kfunction::action::scope_frame;
-use crate::machine::core::KoanStepContextExt;
+use crate::machine::core::StepAllocator;
+use crate::machine::execute::StepCarried;
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::values::{Carried, CarriedFamily, Module, WrappedPayload};
+use crate::machine::model::values::{Carried, Module, WrappedPayload};
 use crate::machine::model::{Held, KObject, KType};
-use crate::machine::{
-    CarrierWitness, FrameStorage, KError, KErrorKind, MemberResolution, NameLookup, Scope,
-};
-use crate::witnessed::{StepContext, Witnessed};
+use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
-/// seals as a [`Witnessed`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
+/// seals as a [`StepCarried`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
 /// [`Action::Done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
 /// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
 /// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
 /// field, re-projected and sealed under the folded lhs reach).
 fn route<'a>(
-    result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
+    result: Result<StepCarried<'a>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     crate::machine::core::kfunction::action::Action::Done(result)
 }
@@ -216,10 +213,7 @@ pub fn body_module<'a>(
 /// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
 /// A `SetRef` (struct / union name) and every other type has no members and falls through to
 /// the same TypeMismatch a static struct field access produces.
-fn access_type_member<'a>(
-    kt: &KType<'a>,
-    field: &str,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
@@ -231,12 +225,20 @@ fn access_type_member<'a>(
                     obj,
                     reach,
                     borrows_into_home,
-                }) => Ok(decl.resident_value_carrier(obj, reach, borrows_into_home)),
+                }) => Ok(StepCarried::born(decl.resident_value_carrier(
+                    obj,
+                    reach,
+                    borrows_into_home,
+                ))),
                 Some(MemberResolution::Type {
                     kt,
                     reach,
                     borrows_into_home,
-                }) => Ok(decl.resident_type_carrier(kt, reach, borrows_into_home)),
+                }) => Ok(StepCarried::born(decl.resident_type_carrier(
+                    kt,
+                    reach,
+                    borrows_into_home,
+                ))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     s.path, field
@@ -294,11 +296,11 @@ fn wrapped_field<'v, 'w>(target: &'v KObject<'w>, field: &str) -> Result<&'v Hel
 /// laundering an ambient-lifetime clone. A shallow-scalar or region-free-scalar member embeds no
 /// borrow, so it seals with an empty reach through the no-fold door.
 fn access_field<'a>(
-    step: &StepContext<FrameStorage>,
+    step: &StepAllocator<'a>,
     target: &KObject<'a>,
     field: &str,
     lhs: &DeliveredCarried,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<StepCarried<'a>, KError> {
     match wrapped_field(target, field)? {
         Held::Object(value) => {
             if let Some(sealed) = step.alloc_object_scalar(value) {
@@ -363,16 +365,13 @@ fn access_field<'a>(
 /// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
 /// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
-fn access_module_member<'a>(
-    m: &'a Module<'a>,
-    field: &str,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
         // Prefer the child scope's own binding — witness its `&KType` in place from the stored reach
         // (non-empty for a nested module). A member present only in the mirror is an `:|`-minted
         // abstract type reaching nothing foreign, so it is alloc'd fresh under the empty reach.
-        return Ok(
+        return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type_carrier(field, None) {
                 Some(NameLookup::Bound(hit)) => {
                     module_scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)
@@ -383,7 +382,7 @@ fn access_module_member<'a>(
                     false,
                 ),
             },
-        );
+        ));
     }
     // One classified lookup over the module's own bindings — the cross-kind exclusion makes a
     // name value-xor-type, so a single read decides the arm instead of probing `data` then
@@ -415,7 +414,7 @@ fn access_module_member<'a>(
                 let tag_carrier = module_scope.seal_resident_delivered(
                     module_scope.resident_type_carrier(tag_reference, None, true),
                 );
-                let ctx = StepContext::new(scope_frame(module_scope));
+                let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],
                     |b, views| match (views[0], views[1]) {
@@ -429,13 +428,21 @@ fn access_module_member<'a>(
                     },
                 ));
             }
-            Ok(module_scope.resident_value_carrier(obj, reach, borrows_into_home))
+            Ok(StepCarried::born(module_scope.resident_value_carrier(
+                obj,
+                reach,
+                borrows_into_home,
+            )))
         }
         Some(MemberResolution::Type {
             kt,
             reach,
             borrows_into_home,
-        }) => Ok(module_scope.resident_type_carrier(kt, reach, borrows_into_home)),
+        }) => Ok(StepCarried::born(module_scope.resident_type_carrier(
+            kt,
+            reach,
+            borrows_into_home,
+        ))),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

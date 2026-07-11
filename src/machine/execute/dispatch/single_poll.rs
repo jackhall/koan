@@ -18,6 +18,7 @@ use crate::source::Spanned;
 
 use super::super::lift::copy_carried;
 use super::super::run_loop::{dest_brand, DestHandleFamily};
+use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
@@ -74,7 +75,7 @@ pub(super) fn bare_identifier<'step, 'b>(
         // The bound value rides out on a carrier witnessed by its binding scope's home frame, which
         // transitively pins that scope's reach-set — so the read names the value's reach by
         // construction rather than reconstructing it from the value.
-        Some(NameLookup::Bound(carrier)) => Outcome::Done(Ok(carrier)),
+        Some(NameLookup::Bound(carrier)) => Outcome::Done(Ok(StepCarried::born(carrier))),
         Some(NameLookup::Parked(producer)) => forward_to_producer(producer),
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(name)))),
     }
@@ -90,10 +91,8 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
-        TypeResolution::Done(resolved) => Outcome::Done(Ok(s.resident_type_carrier(
-            resolved.kt,
-            resolved.reach,
-            resolved.borrows_into_home,
+        TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
+            s.resident_type_carrier(resolved.kt, resolved.reach, resolved.borrows_into_home),
         ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
@@ -190,12 +189,14 @@ pub(super) fn literal_pass_through<'step>(
             let carrier = KoanRegion::alloc_witnessed(frame, move |region| {
                 Carried::Object(region.alloc_object(lit.to_kobject()))
             });
-            Outcome::Done(Ok(carrier))
+            Outcome::Done(Ok(StepCarried::born(carrier)))
         }
         // A spliced cell already *is* the producer's own carrier — recover it directly with `unseal`
         // rather than re-wrapping the read-back value under a freshly-asserted witness. Strictly
         // better witnessing: the value arrives with the exact reach its producer named.
-        ExpressionPart::Spliced { cell } => Outcome::Done(Ok(cell.into_cell().unseal())),
+        ExpressionPart::Spliced { cell } => {
+            Outcome::Done(Ok(StepCarried::born(cell.into_cell().unseal())))
+        }
         ExpressionPart::Expression(boxed) => become_dispatch(ctx, *boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),
@@ -214,16 +215,17 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         // The dest brand is `yoke`d into the frame that owns the consumer scope's region, witnessed by
         // it — co-located by construction rather than paired with an asserted singleton.
         let dest = dest_brand(view.dest_frame());
-        Ok(deps
-            .owned(0)
-            .delivered
-            .transfer_into::<DestHandleFamily, CarriedFamily, _>(
-                dest,
-                Residence::Copied,
-                |value, region, token| {
-                    copy_carried(value, FoldingBrand::in_fold_closure(region, token))
-                },
-            ))
+        Ok(StepCarried::born(
+            deps.owned(0)
+                .delivered
+                .transfer_into::<DestHandleFamily, CarriedFamily, _>(
+                    dest,
+                    Residence::Copied,
+                    |value, region, token| {
+                        copy_carried(value, FoldingBrand::in_fold_closure(region, token))
+                    },
+                ),
+        ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)
 }

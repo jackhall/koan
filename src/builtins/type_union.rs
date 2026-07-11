@@ -13,7 +13,7 @@
 use crate::machine::core::kfunction::action::{
     arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest,
 };
-use crate::machine::core::{KoanStepContextExt, TypeOperand};
+use crate::machine::core::TypeOperand;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::KObject;

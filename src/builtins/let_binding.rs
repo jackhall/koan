@@ -1,3 +1,4 @@
+use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
@@ -124,7 +125,7 @@ pub fn body<'a>(
         let carrier =
             ctx.scope
                 .resident_type_carrier(kt_ref, stored.foreign, stored.borrows_into_home);
-        Action::Done(Ok(carrier))
+        Action::Done(Ok(StepCarried::born(carrier)))
     } else {
         let value = rhs
             .as_object()
@@ -170,11 +171,11 @@ pub fn body<'a>(
         // The bound value lives in this scope's region with its stored foreign reach, so its terminal
         // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
         // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::Done(Ok(ctx.scope.resident_value_carrier(
+        Action::Done(Ok(StepCarried::born(ctx.scope.resident_value_carrier(
             allocated,
             stored.foreign,
             stored.borrows_into_home,
-        )))
+        ))))
     }
 }
 

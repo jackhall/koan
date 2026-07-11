@@ -13,7 +13,6 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::Record;
 use crate::machine::model::values::Carried;

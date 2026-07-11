@@ -17,20 +17,18 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{DepPlacement, FinishCtx};
-use crate::machine::core::{
-    FoldingBrand, FrameStorage, KoanStepContextExt, LexicalFrame, PendingBinderGuard,
-};
+use crate::machine::core::{FoldingBrand, LexicalFrame, PendingBinderGuard, StepAllocator};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::values::{Carried, CarriedFamily};
+use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
-use crate::machine::{CarrierWitness, KError, KErrorKind, NodeId, Scope, TraceFrame};
+use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
-use crate::witnessed::{StepContext, Witnessed};
 
 use super::super::outcome::{dep_error_frame, Await, Outcome};
+use super::super::StepCarried;
 use super::super::TerminalDepFinish;
 use super::DepRequest;
 use super::SchedulerView;
@@ -60,7 +58,7 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
             &FinishCtx<'a>,
             Vec<(String, KType<'a>)>,
             &[&DeliveredCarried],
-        ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>
+        ) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;
 
@@ -138,7 +136,7 @@ impl<'step> FieldListRewalk<'step> {
 }
 
 /// The ONE at-brand construction site both deferral currencies call: fold `[carriers ++ extras]`
-/// and the consumer scope through [`KoanStepContextExt::alloc_carried_with_scope`], then — inside
+/// and the consumer scope through [`StepAllocator::alloc_carried_with_scope`], then — inside
 /// the fold closure, at the store's
 /// own brand `'b` — re-walk the field list against the brand-delivered feed views, compose the
 /// result `KType`, and store it folded.
@@ -150,14 +148,14 @@ impl<'step> FieldListRewalk<'step> {
 /// `views[carriers.len()..]`. Every operand's reach and residence host fold into the result's
 /// witness, so a field or return type reaching a producer region carries that reach forward.
 fn fold_fields_at_brand<'step>(
-    step_ctx: &StepContext<FrameStorage>,
+    step_ctx: &StepAllocator<'step>,
     scope: &'step Scope<'step>,
     rewalk: FieldListRewalk<'step>,
     carriers: &[&DeliveredCarried],
     park_count: usize,
     extras: &[&DeliveredCarried],
     compose: BrandCompose<'step>,
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+) -> Result<StepCarried<'step>, KError> {
     let deps: Vec<&DeliveredCarried> = carriers.iter().chain(extras).copied().collect();
     let walk_len = carriers.len();
     // The fold closure must return a `Carried`, so a walk/compose error is stashed here and

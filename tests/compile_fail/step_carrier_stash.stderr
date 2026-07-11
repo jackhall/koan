@@ -1,0 +1,10 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/compile_fail/step_carrier_stash.rs:11:9
+   |
+ 8 |     let mut escaped = None;
+   |         ----------- `escaped` declared here, outside of the closure body
+ 9 |     drive_step(|carrier| {
+   |                 ------- `carrier` is a reference that is only valid in the closure body
+10 |         // Smuggle the step-branded carrier out of its step: `'b` escapes into `escaped`.
+11 |         escaped = Some(carrier);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ `carrier` escapes the closure body here

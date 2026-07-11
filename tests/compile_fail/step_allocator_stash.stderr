@@ -1,0 +1,10 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/compile_fail/step_allocator_stash.rs:13:9
+   |
+10 |     let mut escaped = None;
+   |         ----------- `escaped` declared here, outside of the closure body
+11 |     drive_step_allocator(|allocator| {
+   |                           --------- `allocator` is a reference that is only valid in the closure body
+12 |         // Smuggle the door product out of its step: `'b` escapes into `escaped`.
+13 |         escaped = allocator.alloc_object_scalar(&KObject::Number(1.0));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `allocator` escapes the closure body here

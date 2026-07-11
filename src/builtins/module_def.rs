@@ -9,6 +9,7 @@
 //! MODULE's body returns to the dispatcher.
 
 use crate::machine::core::StoredReach;
+use crate::machine::execute::StepCarried;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
@@ -47,11 +48,11 @@ pub fn body<'a>(
                 .bindings()
                 .lookup_type_carrier(&name_for_finish, None)
             {
-                return Action::Done(Ok(fctx.scope.resident_type_carrier(
+                return Action::Done(Ok(StepCarried::born(fctx.scope.resident_type_carrier(
                     hit.kt,
                     hit.reach,
                     hit.borrows_into_home,
-                )));
+                ))));
             }
             // The module's home-omitted foreign reach, folded from the child scope held **directly** here
             // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
@@ -87,7 +88,9 @@ pub fn body<'a>(
                 Ok(kt_ref) => {
                     // Witness the registered `&KType` in place from the stored reach — no re-clone, no
                     // `child_scope()` walk.
-                    Action::Done(Ok(fctx.scope.resident_type_carrier(kt_ref, reach, true)))
+                    Action::Done(Ok(StepCarried::born(
+                        fctx.scope.resident_type_carrier(kt_ref, reach, true),
+                    )))
                 }
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",

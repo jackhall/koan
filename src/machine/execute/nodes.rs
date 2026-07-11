@@ -3,9 +3,10 @@ use std::rc::Rc;
 use super::runtime::KoanWorkload;
 use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
-use crate::machine::model::values::CarriedFamily;
-use crate::machine::{CallFrame, CarrierWitness, KError, LexicalFrame, NodeId};
-use crate::witnessed::{SealedExtern, Witnessed};
+use crate::machine::{CallFrame, KError, LexicalFrame, NodeId};
+use crate::witnessed::SealedExtern;
+
+use super::StepCarried;
 
 /// The generic per-node work lives in [`crate::scheduler::nodes`]; re-exported here so the Koan
 /// execute tree has a single `nodes` surface combining it with the Koan-side [`NodeStep`] /
@@ -51,19 +52,20 @@ impl SlotFrame {
 /// slot's declared-return obligation rides the replacement's continuation as a capture (wrapped
 /// at the construction site), not a slot field.
 ///
-/// Every arm is lifetime-free — a value terminal is a
-/// [`Witnessed`](crate::witnessed::Witnessed) carrier (already `'step`-erased) and an error
-/// carries no value — so the enum needs no `'step`.
+/// The value terminal rides the step brand `'step` as a [`StepCarried`], confined to the step tail's
+/// rank-2 open (`run_loop.rs`) until it exits through
+/// [`StepCarried::seal_at_step`] into finalize; the other arms carry no value (an error, a producer
+/// [`NodeId`], or a tail-replace payload), so `'step` names only the `DoneWitnessed` carrier's brand.
 // `Replace` is intrinsically the large variant (`NodeWork` plus the frame/chain tail-call
 // payload); boxing the hot tail-call path to balance the variants is the wrong trade.
 #[allow(clippy::large_enum_variant)]
-pub(super) enum NodeStep {
-    /// The finalized value terminal — a [`Witnessed`](crate::witnessed::Witnessed) carrier naming
+pub(super) enum NodeStep<'step> {
+    /// The finalized value terminal — a step-branded [`StepCarried`] wrapping the carrier that names
     /// every region it reaches, sealed through
     /// [`finalize_terminal`](super::finalize::NodeFinalize::finalize_terminal), which folds the
     /// producing frame into the witness at close. The **sole** value terminal — object and type
-    /// both — so no terminal recomputes a witness beside its value. Lifetime-free.
-    DoneWitnessed(Witnessed<CarriedFamily, CarrierWitness>),
+    /// both — so no terminal recomputes a witness beside its value.
+    DoneWitnessed(StepCarried<'step>),
     /// The finalized **error** terminal. An error carries no value, so it needs no witness and
     /// finalizes bare, labelled with the frame-gated contract's trace frame.
     Error(KError),

@@ -1,0 +1,23 @@
+error[E0624]: method `seal_at_step` is private
+  --> tests/compile_fail/step_carrier_unwrap.rs:11:31
+   |
+11 |           let _escape = carrier.seal_at_step(unimplemented!());
+   |                                 ^^^^^^^^^^^^ private method
+   |
+  ::: src/machine/execute/step_carried.rs
+   |
+   | /     pub(super) fn seal_at_step(
+   | |         self,
+   | |         host: Rc<FrameStorage>,
+   | |     ) -> Delivered<T, CarrierWitness, FrameStorage> {
+   | |___________________________________________________- private method defined here
+
+warning: unreachable call
+  --> tests/compile_fail/step_carrier_unwrap.rs:11:31
+   |
+11 |         let _escape = carrier.seal_at_step(unimplemented!());
+   |                               ^^^^^^^^^^^^ ---------------- any code following this expression is unreachable
+   |                               |
+   |                               unreachable call
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default

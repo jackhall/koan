@@ -13,7 +13,7 @@ use crate::witnessed::{reattachable, Delivered, RegionHandle, Residence, Witness
 
 use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
-use super::super::WitnessedDepFinish;
+use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
 use super::resolve_name_part;
 use crate::scheduler::{DepResults, ResolvedDeps};
@@ -148,12 +148,13 @@ impl<'step> KoanRuntime<'step> {
             // The pin: the destination frame, whose arena holds the set the folds minted — through
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
-            Ok(
-                acc.map_pinned(&dest_frame, move |(region, value_helds), token| {
+            Ok(StepCarried::born(acc.map_pinned(
+                &dest_frame,
+                move |(region, value_helds), token| {
                     let region = FoldingBrand::in_fold_closure(region, token);
                     Carried::Object(region.alloc_object_folded(assemble(keys, value_helds)))
-                }),
-            )
+                },
+            )))
         });
         self.submit_dep_finish_witnessed_in_own_scope(deps, finish)
     }

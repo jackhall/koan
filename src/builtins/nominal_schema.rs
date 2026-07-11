@@ -9,15 +9,13 @@
 
 use crate::machine::core::kfunction::action::{Action, BodyCtx, FinishCtx};
 use crate::machine::core::PendingTypeEntry;
-use crate::machine::execute::defer_field_list_action;
+use crate::machine::execute::{defer_field_list_action, StepCarried};
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, KKind,
 };
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::KType;
 use crate::machine::DeliveredCarried;
-use crate::machine::{BindingIndex, CarrierWitness, KError, KErrorKind, TraceFrame};
-use crate::witnessed::Witnessed;
+use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
@@ -29,8 +27,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     Vec<(String, KType<'a>)>,
     BindingIndex,
     &[&DeliveredCarried],
-)
-    -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError>;
+) -> Result<StepCarried<'a>, KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it. `kind` /
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`

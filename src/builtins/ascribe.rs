@@ -4,6 +4,7 @@
 //! Shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
+use crate::machine::execute::StepCarried;
 use crate::machine::model::types::{
     AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
 };
@@ -138,7 +139,9 @@ pub fn body_opaque<'a>(
     // The opaque view's `new_scope` is a same-region child of this frame, so the module value borrows
     // into home — the home-omitted `reach` drops that fact, so materialize it back via the bit (a
     // downstream copied-mode mint keeps the frame `new_scope` lives in as a reach member).
-    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, true)))
+    Action::Done(Ok(StepCarried::born(
+        ctx.scope.resident_type_carrier(kt_ref, reach, true),
+    )))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
@@ -175,7 +178,9 @@ pub fn body_transparent<'a>(
     let kt_ref = crate::try_action!(ctx
         .scope
         .alloc_ktype_reaching(KType::Module { module: new_module }, &evidence));
-    Action::Done(Ok(ctx.scope.resident_type_carrier(kt_ref, reach, false)))
+    Action::Done(Ok(StepCarried::born(
+        ctx.scope.resident_type_carrier(kt_ref, reach, false),
+    )))
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing

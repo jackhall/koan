@@ -79,7 +79,6 @@ fn finalize_carrier<'a>(
 mod action_bodies {
     use super::{build_carrier, CarrierKind};
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
-    use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 
     use crate::machine::model::KType;
@@ -175,7 +174,6 @@ fn build_carrier<'a>(
     kind: CarrierKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
-    use crate::machine::core::KoanStepContextExt;
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);

@@ -221,13 +221,14 @@ impl<'run> KoanRuntime<'run> {
                     NodeStep::DoneWitnessed(carrier) => {
                         // Seal the value terminal into a delivery envelope pinned by the anchor's own
                         // region owner — the same owner the scheduler seeds as the slot's retention
-                        // host — before the Done-boundary hook runs. The already-witnessed carrier
-                        // names its reach; the obligation the step deposited (`post.obligation`) is
-                        // the slot's declared return, dropped by the `frame` gate for a frameless /
-                        // run-frame producer. `finalize_terminal` re-stamps an obligation-coarsened
-                        // value into the obligation's home region through the received envelope.
-                        let envelope =
-                            crate::witnessed::Delivered::seal(carrier, Rc::clone(anchor.owner()));
+                        // host — before the Done-boundary hook runs. [`StepCarried::seal_at_step`] is
+                        // the sole exit from the step brand: it discharges `'b` into the lifetime-free
+                        // envelope. The already-witnessed carrier names its reach; the obligation the
+                        // step deposited (`post.obligation`) is the slot's declared return, dropped by
+                        // the `frame` gate for a frameless / run-frame producer. `finalize_terminal`
+                        // re-stamps an obligation-coarsened value into the obligation's home region
+                        // through the received envelope.
+                        let envelope = carrier.seal_at_step(Rc::clone(anchor.owner()));
                         let result =
                             self.finalize_terminal(envelope, frame.and(post.obligation.as_ref()));
                         if result.is_err() {

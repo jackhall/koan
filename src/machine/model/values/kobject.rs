@@ -249,7 +249,7 @@ impl<'a> KObject<'a> {
     /// Whether this is a **shallow scalar** — a fully-owned leaf (`Number`, `KString`, `Bool`,
     /// `Null`) whose representation embeds no `&'a` region borrow and no [`Held`] cell. Such a value
     /// cannot reference any dep the construction fold was handed, so the dep-witness union is pure
-    /// over-retention: the combinator gate ([`alloc_object_scalar`](crate::machine::core::KoanStepContextExt::alloc_object_scalar))
+    /// over-retention: the combinator gate ([`alloc_object_scalar`](crate::machine::core::StepAllocator::alloc_object_scalar))
     /// routes it to the no-fold path so it seals with an empty reach. Every other variant borrows
     /// (`KFunction`) or holds cells / memos that transitively might (`List`/`Dict`/`Record`/`Tagged`/
     /// `Wrapped`/`KExpression`), so it keeps the fold.

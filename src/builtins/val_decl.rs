@@ -12,7 +12,6 @@
 //! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
 use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
@@ -140,7 +139,7 @@ pub fn body<'a>(
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
 /// dep terminal. When `carrier` is `Some`, the stored binding's reach and the sealed result's
-/// witness fold it in. When `carrier` is `None`, [`KoanStepContextExt::alloc_type_pure`] routes
+/// witness fold it in. When `carrier` is `None`, [`StepAllocator::alloc_type_pure`] routes
 /// `declared_kt` to whichever tier its own shape needs — compile-enforced `'static` for an owned
 /// leaf, the runtime-audited seal otherwise — so neither under-witnesses the declared type's
 /// actual reach.
