@@ -181,6 +181,36 @@ fn fold_fields_at_brand<'step>(
     }
 }
 
+/// Synchronous twin of the deferred composers: re-walk `expr` at the store's own fold brand (the
+/// consumer scope crossed as a delivered envelope, no dep carriers) and compose the result `KType`
+/// there. For a sync-resolved field list whose composed type cannot rebuild at `'static` (a reaching
+/// field type), so the ambient pairs are discarded and the walk is redone at the brand where the
+/// scope reads are declared operands. `extras` are compose-only operand views; `compose` folds the
+/// re-walked pairs plus those views into the result inside the fold closure.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fold_field_list_sync<'a>(
+    step_ctx: &StepAllocator<'a>,
+    scope: &'a Scope<'a>,
+    expr: KExpression<'a>,
+    context: &'static str,
+    name_kind: FieldNameKind,
+    threaded: Vec<String>,
+    chain: Option<Rc<LexicalFrame>>,
+    error_frame: Option<TraceFrame>,
+    extras: &[&DeliveredCarried],
+    compose: BrandCompose<'a>,
+) -> Result<StepCarried<'a>, KError> {
+    let rewalk = FieldListRewalk {
+        expr,
+        context,
+        name_kind,
+        threaded,
+        chain,
+        error_frame,
+    };
+    fold_fields_at_brand(step_ctx, scope, rewalk, &[], 0, extras, compose)
+}
+
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
 /// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
 /// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
@@ -366,13 +396,30 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         &mut elaborator,
         None,
     ) {
-        // Sync `Done`: the single ambient walk resolved everything, so store the composed record
-        // through the audited non-fold tier (`alloc_type_pure`) — no folded placement. Composing the
-        // sync arm on a fold brand instead is `checked-tier-confinement`'s scope.
-        FieldListOutcome::Done(pairs) => Outcome::Done(
-            view.step_ctx()
-                .alloc_type_pure(KType::Record(Box::new(Record::from_pairs(pairs)))),
-        ),
+        FieldListOutcome::Done(pairs) => {
+            let kt = KType::Record(Box::new(Record::from_pairs(pairs)));
+            match kt.to_static() {
+                // Region-free record: the compile-enforced `'static` tier.
+                Some(owned) => Outcome::Done(Ok(view.step_ctx().alloc_type(owned))),
+                // A field type that cannot rebuild at `'static` (a `SetRef` alias, a module-sourced
+                // abstract type): discard the ambient pairs and re-walk at the fold brand, where the
+                // scope reads are declared operands.
+                None => Outcome::Done(fold_field_list_sync(
+                    &view.step_ctx(),
+                    view.current_scope(),
+                    fields,
+                    "record fields",
+                    FieldNameKind::Identifier,
+                    Vec::new(),
+                    chain,
+                    None,
+                    &[],
+                    Box::new(|_brand, pairs, _extras| {
+                        Ok(KType::Record(Box::new(Record::from_pairs(pairs))))
+                    }),
+                )),
+            }
+        }
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
