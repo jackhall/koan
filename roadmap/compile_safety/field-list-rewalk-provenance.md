@@ -18,11 +18,15 @@ provenance](fold-closure-provenance.md) names.
 
 **Acceptance criteria.**
 
-- `elaborate_record_value` and the deferred function-carrier finalize build
-  their composite `KType` at the store's own fold brand, from the fold's
-  declared operands (dep views, crossed operands, or scope reads opened at
-  the same brand); neither captures an ambient-lifetime `KType` into a
-  folded placement.
+- `elaborate_record_value`'s deferred arm and the deferred function-carrier
+  finalize build their composite `KType` at the store's own fold brand, from
+  the fold's declared operands (dep views, crossed operands, or scope reads
+  opened at the same brand).
+- No field-list site captures an ambient-lifetime `KType` into a folded
+  placement: the synchronous `Done` arms store their ambient-composed type
+  through the audited non-fold tier (`alloc_type_pure`). Migrating
+  synchronous composition onto the brand is
+  [checked-tier confinement](checked-tier-confinement.md), not this item.
 - Each elaborated field type is paired with the carrier(s) it was elaborated
   from by the construction shape itself, not by a positional side-channel
   list.
@@ -30,17 +34,14 @@ provenance](fold-closure-provenance.md) names.
 
 **Directions.**
 
-- *Re-walk placement — open.* (a) Run the re-walk inside the fold closure
-  against brand views — its scope reads are available there via the frame's
-  own envelope, so the question is delivering the owned dep values at the
-  brand; (b) cross each elaborated field type as a `RegionTypeFamily`-style
-  operand after a scope-region alloc (the operand pattern
-  [catch.rs](../../src/builtins/catch.rs) and
-  [constructors.rs](../../src/machine/execute/dispatch/constructors.rs)
-  already use); (c) restructure the re-walk to emit an owned (`'static`)
-  schema with resident references resolved at store time. Recommended: spike
-  (a) — it keeps one construction site and lands directly in the
-  compile-enforced shape.
+- *Re-walk placement — decided.* (a): the deferred re-walk runs inside the
+  fold closure — sub-dispatch types arrive as dep views, the consumer's scope
+  crosses as its own `Delivered` envelope (`ScopeRefFamily`) opened at the
+  brand, and the FN/FUNCTOR return type rides as an extra dep view from its
+  arg carrier (region-free literal returns rebuild at the brand). The
+  synchronous arms keep their single ambient walk and the audited non-fold
+  store; the fold-brand requirement is deliberately scoped to the folded
+  placements this item exists to clean.
 
 ## Dependencies
 
@@ -51,3 +52,5 @@ provenance](fold-closure-provenance.md) names.
 - [Fold-closure capture provenance](fold-closure-provenance.md) — the
   record/function-carrier finalizes must build from declared operands before
   the fold surface can reject captures.
+- [Checked-tier confinement](checked-tier-confinement.md) — the at-brand
+  construction door is the surface synchronous composition migrates onto.

@@ -131,8 +131,9 @@ impl<'a> RegionBrand<'a> {
 
     /// Composite entry for a `t` this call site doesn't already know the tier of: the
     /// compile-enforced `'static` tier when [`KType::to_static`] succeeds, else
-    /// [`Self::alloc_ktype_checked`]. The brand-level twin of
-    /// [`KoanStepContextExt::alloc_type_pure`].
+    /// [`Self::alloc_ktype_checked`]. The fallback enforces residence at runtime — the weakest
+    /// tier; a site that can build `t` from declared operands at a brand takes a brand door
+    /// instead. The brand-level twin of [`KoanStepContextExt::alloc_type_pure`].
     pub fn alloc_ktype_pure(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
         match t.to_static() {
             Some(owned) => Ok(self.alloc_ktype(owned)),
@@ -801,8 +802,10 @@ pub(crate) trait KoanStepContextExt {
 
     /// Composite entry a caller reaches for whenever it doesn't already know which tier `kt`
     /// needs: the compile-enforced `'static` tier when [`KType::to_static`] succeeds, else the
-    /// runtime-checked tier. Always correct — the two tiers agree on every value `to_static`
-    /// accepts (`to_static().is_some()` implies [`KType::resident_in`] for any destination).
+    /// runtime-checked tier. The split is value-transparent — the two tiers agree on every value
+    /// `to_static` accepts (`to_static().is_some()` implies [`KType::resident_in`] for any
+    /// destination) — but the fallback enforces residence at runtime, not compile time; a site
+    /// that can build `kt` from declared operands at a brand takes a brand door instead.
     fn alloc_type_pure(
         &self,
         kt: KType<'_>,

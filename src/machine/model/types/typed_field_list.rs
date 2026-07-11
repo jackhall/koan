@@ -14,15 +14,17 @@ pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
-pub enum FieldListOutcome<'a> {
+pub enum FieldListOutcome<'e, 'a> {
     Done(Vec<(String, KType<'a>)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
     /// order. The caller schedules them in that order and, on the dep-finish re-walk,
     /// feeds the resolved `Carried::Type`s back through a [`ResultFeed`] — the walk
-    /// re-descends in the same order, so no slot index is needed.
+    /// re-descends in the same order, so no slot index is needed. The expressions
+    /// carry the source `'e` lifetime; they are only walked, never embedded in an
+    /// elaborated type.
     Pending {
         park_producers: Vec<NodeId>,
-        sub_dispatches: Vec<KExpression<'a>>,
+        sub_dispatches: Vec<KExpression<'e>>,
     },
     Err(String),
 }
@@ -61,15 +63,15 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 /// `Some` on the re-walk (each consumes the next resolved carrier in DFS order). The
 /// re-walk re-descends in the same deterministic order, so positional consumption needs no
 /// slot index and nested field-lists fall out for free.
-pub fn parse_typed_field_list_via_elaborator<'a>(
-    expr: &KExpression<'a>,
+pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
+    expr: &KExpression<'e>,
     context: &str,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'a>>,
-) -> FieldListOutcome<'a> {
+) -> FieldListOutcome<'e, 'a> {
     let mut parks: Vec<NodeId> = Vec::new();
-    let mut sub_dispatches: Vec<KExpression<'a>> = Vec::new();
+    let mut sub_dispatches: Vec<KExpression<'e>> = Vec::new();
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
         match part {
             ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
@@ -188,11 +190,11 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
 /// to `RecursiveRef` instead of parking on its own placeholder and closing a
 /// scheduler-deadlock cycle. Recurses into nested sigils and records; non-threaded names
 /// are left for the dispatcher.
-fn rewrite_threaded_self_refs<'a>(
-    inner: &KExpression<'a>,
+fn rewrite_threaded_self_refs<'e, 'a>(
+    inner: &KExpression<'e>,
     threaded: &HashSet<String>,
     scope: &Scope<'a>,
-) -> KExpression<'a> {
+) -> KExpression<'e> {
     let parts = inner
         .parts
         .iter()
