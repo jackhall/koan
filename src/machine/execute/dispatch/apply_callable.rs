@@ -145,10 +145,19 @@ fn apply_union_construct<'step>(
     {
         let name = t.render();
         return match union_member(members, &name) {
-            Some(member) => match ctx.step_ctx().alloc_type_pure(member.clone()) {
-                Ok(sealed) => Outcome::Done(Ok(sealed)),
-                Err(e) => Outcome::Done(Err(e)),
-            },
+            Some(member) => {
+                let step_ctx = ctx.step_ctx();
+                // A region-free union member takes the compile-enforced `'static` tier; a member
+                // that borrows a region (a `SetRef` variant) takes the runtime-checked seal.
+                let sealed = match member.to_static() {
+                    Some(owned) => Ok(step_ctx.alloc_type(owned)),
+                    None => step_ctx.alloc_type_checked(member.clone()),
+                };
+                match sealed {
+                    Ok(sealed) => Outcome::Done(Ok(sealed)),
+                    Err(e) => Outcome::Done(Err(e)),
+                }
+            }
             None => Outcome::Done(Err(unknown_variant_error(members, &name))),
         };
     }

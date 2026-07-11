@@ -80,7 +80,7 @@ pub fn body<'a>(
         // plus its stored reach rather than paired with an asserted singleton.
         let region = fctx.scope.brand();
         let frame = fctx.ctx.frame();
-        let identity: &KType<'a> = crate::try_action!(region.alloc_ktype_pure(KType::SetRef {
+        let identity: &KType<'a> = crate::try_action!(region.alloc_ktype_checked(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
         }));

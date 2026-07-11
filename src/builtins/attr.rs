@@ -377,7 +377,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     module_scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)
                 }
                 _ => module_scope.resident_type_carrier(
-                    module_scope.brand().alloc_ktype_pure(minted)?,
+                    module_scope.brand().alloc_ktype_checked(minted)?,
                     None,
                     false,
                 ),
@@ -401,8 +401,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
                 // is a pre-existing reference into the module region, sealed resident with the
                 // member's own `reach`; `tag` allocates once into the module region via
-                // `alloc_ktype_pure` (it borrows at most the module's own region, so the checked
-                // tier passes) and is sealed resident — the same region as the built `Wrapped`'s
+                // `alloc_ktype_checked` (an `:|`-minted `SetRef` or module-sourced abstract type,
+                // never `'static`, borrowing at most the module's own region so the audit passes)
+                // and is sealed resident — the same region as the built `Wrapped`'s
                 // placement (the `StepContext` targets the module's frame), so the built value is
                 // unchanged. Both carriers union into the wrapped result's witness via
                 // `alloc_carried_with`. `reach: None, borrows_into_home: true` for the tag mirrors
@@ -410,7 +411,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 let obj_carrier = module_scope.seal_resident_delivered(
                     module_scope.resident_value_carrier(obj, reach, borrows_into_home),
                 );
-                let tag_reference: &'a KType<'a> = module_scope.brand().alloc_ktype_pure(tag)?;
+                let tag_reference: &'a KType<'a> = module_scope.brand().alloc_ktype_checked(tag)?;
                 let tag_carrier = module_scope.seal_resident_delivered(
                     module_scope.resident_type_carrier(tag_reference, None, true),
                 );

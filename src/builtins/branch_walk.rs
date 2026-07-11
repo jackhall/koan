@@ -47,7 +47,13 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.brand().alloc_ktype_pure(ret_kt)?,
+        // A region-free return type takes the compile-enforced `'static` tier; one embedding a
+        // scope borrow (a `Signature`, a module-sourced abstract) cannot rebuild at `'static` and
+        // takes the runtime-checked seal.
+        ret: match ret_kt.to_static() {
+            Some(owned) => ctx.scope.brand().alloc_ktype(owned),
+            None => ctx.scope.brand().alloc_ktype_checked(ret_kt)?,
+        },
         kind,
         scope: ctx.scope,
     })

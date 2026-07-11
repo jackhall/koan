@@ -167,7 +167,7 @@ pub fn body<'a>(
         ) {
             Ok(kt_ref) => Action::Done(Ok(crate::try_action!(fctx
                 .ctx
-                .alloc_type_pure(kt_ref.clone())))),
+                .alloc_type_checked(kt_ref.clone())))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     })

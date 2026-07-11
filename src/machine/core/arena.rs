@@ -118,10 +118,16 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Runtime-checked twin of [`Self::alloc_ktype`] for a `t` that cannot rebuild at `'static`
-    /// (a module-family region pointer, or an `Rc`-shared set — see [`KType::to_static`]):
-    /// [`KType::resident_in`] audits every region borrow `t` carries against this brand's own
-    /// region before anything is stored, so a foreign-region dangle errors loudly instead of
-    /// landing unvetted. Storing nothing on a failed audit.
+    /// (a module-family region pointer, a signature pointer, or an `Rc`-shared set — see
+    /// [`KType::to_static`]): [`KType::resident_in`] audits every region borrow `t` carries against
+    /// this brand's own region before anything is stored, so a foreign-region dangle errors loudly
+    /// instead of landing unvetted. Storing nothing on a failed audit.
+    ///
+    /// Confined to identity-preserving stores: a caller reaches here to store a value that cannot
+    /// rebuild at `'static` (a module-family pointer, a signature pointer, an `Rc`-shared set). A
+    /// site assembling a new composite [`KType`] from ambiently-read parts takes a brand door
+    /// instead ([`StepAllocator::alloc_type_composed`], [`StepAllocator::alloc_carried_with`], or
+    /// the field-list fold), so no from-scratch composite rides the runtime audit.
     pub fn alloc_ktype_checked(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
         let name = t.name();
         self.0
@@ -131,18 +137,6 @@ impl<'a> RegionBrand<'a> {
                     "{name}: borrows a region other than its seal's destination"
                 )))
             })
-    }
-
-    /// Composite entry for a `t` this call site doesn't already know the tier of: the
-    /// compile-enforced `'static` tier when [`KType::to_static`] succeeds, else
-    /// [`Self::alloc_ktype_checked`]. The fallback enforces residence at runtime — the weakest
-    /// tier; a site that can build `t` from declared operands at a brand takes a brand door
-    /// instead. The brand-level twin of [`StepAllocator::alloc_type_pure`].
-    pub fn alloc_ktype_pure(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
-        match t.to_static() {
-            Some(owned) => Ok(self.alloc_ktype(owned)),
-            None => self.alloc_ktype_checked(t),
-        }
     }
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
@@ -952,7 +946,12 @@ impl<'step> StepAllocator<'step> {
     /// borrows against this frame's own region and seals the result under the empty (own-region
     /// only) reach — the same [`Carried::Type`] wrap [`Self::alloc_type`] uses — erroring instead
     /// of storing an unvetted foreign-region dangle. For a `kt` [`KType::to_static`] declines (a
-    /// module-family pointer or an `Rc`-shared set).
+    /// module-family pointer, a signature pointer, or an `Rc`-shared set).
+    ///
+    /// Confined to identity-preserving stores: a caller reaches here to store a value that cannot
+    /// rebuild at `'static`. A site assembling a new composite [`KType`] from ambiently-read parts
+    /// takes a brand door instead ([`Self::alloc_type_composed`], [`Self::alloc_carried_with`], or
+    /// the field-list fold), so no from-scratch composite rides the runtime audit.
     pub(crate) fn alloc_type_checked(&self, kt: KType<'_>) -> Result<StepCarried<'step>, KError> {
         // Unlike `alloc_carried`'s `for<'b>` brand construction, the checked veneer doesn't need
         // to build `kt` from brand-derived references — `kt` already exists and is audited by
@@ -965,19 +964,6 @@ impl<'step> StepAllocator<'step> {
         Ok(StepCarried::born(Witnessed::resident(Carried::Type(
             stored,
         ))))
-    }
-
-    /// Composite entry a caller reaches for whenever it doesn't already know which tier `kt`
-    /// needs: the compile-enforced `'static` tier when [`KType::to_static`] succeeds, else the
-    /// runtime-checked tier. The split is value-transparent — the two tiers agree on every value
-    /// `to_static` accepts (`to_static().is_some()` implies [`KType::resident_in`] for any
-    /// destination) — but the fallback enforces residence at runtime, not compile time; a site
-    /// that can build `kt` from declared operands at a brand takes a brand door instead.
-    pub(crate) fn alloc_type_pure(&self, kt: KType<'_>) -> Result<StepCarried<'step>, KError> {
-        match kt.to_static() {
-            Some(owned) => Ok(self.alloc_type(owned)),
-            None => self.alloc_type_checked(kt),
-        }
     }
 
     /// Seal a delivered *type* terminal's value as this step's own carrier. The type is rebuilt at

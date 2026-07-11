@@ -97,11 +97,15 @@ pub(crate) fn home_return_type<'a>(
                 .to_string(),
         )));
     }
-    // `alloc_ktype_pure` erases the clone's elaboration-brand lifetime and re-anchors it to
-    // `region` at the caller's contract lifetime `'a`; a return type embedding a scope borrow (a
-    // `Signature`'s `decl_scope_ref`, an `AbstractType`'s `Module` source) is already homed in
-    // `region`'s own region by this fn's caller-region invariant, so the checked tier passes.
-    region.alloc_ktype_pure(kt.clone())
+    // A region-free return type takes the compile-enforced `'static` tier. One embedding a scope
+    // borrow (a `Signature`'s `decl_scope_ref`, an `AbstractType`'s `Module` source) cannot rebuild
+    // at `'static`; it re-anchors to `region` at the caller's contract lifetime `'a` through the
+    // checked tier, which passes because this fn's caller-region invariant already homes it in
+    // `region`'s own region.
+    match kt.to_static() {
+        Some(owned) => Ok(region.alloc_ktype(owned)),
+        None => region.alloc_ktype_checked(kt.clone()),
+    }
 }
 
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an

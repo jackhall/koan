@@ -43,10 +43,10 @@ use crate::machine::DeliveredCarried;
 /// `repr` embeds `carrier`'s reach when `carrier` is `Some` — a bind-time `repr` argument (a
 /// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
 /// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...).
-/// `carrier` is `None` for a bare-leaf name resolved against scope bindings; `repr` there routes
-/// through [`StepAllocator::alloc_type_pure`], which picks the tier `repr`'s own shape needs
-/// (compile-enforced `'static` for an owned leaf, the runtime-audited seal for a `SetRef` or
-/// other region-borrowing rebuild `to_static` declines).
+/// `carrier` is `None` for a bare-leaf name resolved against scope bindings; the sealed identity
+/// there is a fresh `SetRef` over its own set (never `'static`), so it takes
+/// [`StepAllocator::alloc_type_checked`]'s runtime-audited seal, which passes because the identity
+/// borrows at most its own region.
 fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
@@ -80,7 +80,7 @@ fn finalize_newtype<'a>(
                 }
                 // A bare-leaf name reaches no foreign region: `kt_ref` is region-pure over its own
                 // set, so it seals with no carrier to fold and no capture to cross.
-                None => fctx.ctx.alloc_type_pure(kt_ref.clone())?,
+                None => fctx.ctx.alloc_type_checked(kt_ref.clone())?,
             };
             Ok(sealed)
         }

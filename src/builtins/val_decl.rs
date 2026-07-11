@@ -139,10 +139,10 @@ pub fn body<'a>(
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
 /// dep terminal. When `carrier` is `Some`, the stored binding's reach and the sealed result's
-/// witness fold it in. When `carrier` is `None`, [`StepAllocator::alloc_type_pure`] routes
-/// `declared_kt` to whichever tier its own shape needs — compile-enforced `'static` for an owned
-/// leaf, the runtime-audited seal otherwise — so neither under-witnesses the declared type's
-/// actual reach.
+/// witness fold it in. When `carrier` is `None`, the seal picks the tier `declared_kt`'s own shape
+/// needs — the compile-enforced `'static` tier ([`StepAllocator::alloc_type`]) for an owned leaf,
+/// the runtime-audited seal ([`StepAllocator::alloc_type_checked`]) otherwise — so neither
+/// under-witnesses the declared type's actual reach.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
@@ -167,10 +167,18 @@ fn finalize_val<'a>(
         // the `Direct` arm's `ty` argument is the spliced sub-dispatch this carrier delivers), so
         // the view and the ambient `declared_kt` are the same delivered type.
         Some(c) => fctx.ctx.alloc_type_of(c),
-        None => match fctx.ctx.alloc_type_pure(declared_kt) {
-            Ok(sealed) => sealed,
-            Err(e) => return Action::Done(Err(e)),
-        },
+        // A region-free declared type takes the compile-enforced `'static` tier; one embedding a
+        // region borrow (a bound `KFunctor`, a nominal `SetRef`) takes the runtime-checked seal.
+        None => {
+            let sealed = match declared_kt.to_static() {
+                Some(owned) => Ok(fctx.ctx.alloc_type(owned)),
+                None => fctx.ctx.alloc_type_checked(declared_kt),
+            };
+            match sealed {
+                Ok(sealed) => sealed,
+                Err(e) => return Action::Done(Err(e)),
+            }
+        }
     };
     Action::Done(Ok(sealed))
 }

@@ -373,7 +373,7 @@ fn finish_witnessed<'step>(
             // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
             // its set/index at the brand. Freshly minted in the dest region, so `reach` is empty
             // today; the operand `merge`s it under the dest frame's yoke plus that reach.
-            let identity: &KType<'step> = region.alloc_ktype_pure(KType::SetRef {
+            let identity: &KType<'step> = region.alloc_ktype_checked(KType::SetRef {
                 set: Rc::clone(set),
                 index: *index,
             })?;
