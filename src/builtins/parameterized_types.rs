@@ -314,11 +314,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+    use crate::builtins::test_support::{
+        parse_one, run, run_one_err, run_one_type, run_root_silent,
+    };
     use crate::machine::core::run_root_storage;
     use crate::machine::core::StoredReach;
     use crate::machine::model::{KKind, KType, Record};
-    use crate::machine::Scope;
+    use crate::machine::{KErrorKind, Scope};
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
@@ -442,6 +444,75 @@ mod tests {
                 )]),
                 ret: Box::new(KType::Bool),
             }
+        );
+    }
+
+    /// A `:{…}` record type that mixes a scope-alias field (`:Wrapped`, resolved from the crossed
+    /// scope during the deferred re-walk) with a sigil field (`:(LIST OF Number)`, which forces
+    /// deferral) composes its `KType::Record` at the fold brand with both field types resolved. The
+    /// scope-alias field reads through the brand-delivered scope envelope; the sigil field pops its
+    /// sub-Dispatch carrier from the fed views.
+    #[test]
+    fn record_sigil_defers_and_mixes_scope_read_with_sub_dispatch() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "LET Wrapped = :{a :Number}");
+        let result = run_one_type(scope, parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
+        assert_eq!(
+            *result,
+            KType::Record(Box::new(Record::from_pairs(vec![
+                (
+                    "x".into(),
+                    KType::Record(Box::new(Record::from_pairs(vec![(
+                        "a".into(),
+                        KType::Number,
+                    )]))),
+                ),
+                ("y".into(), KType::List(Box::new(KType::Number))),
+            ]))),
+        );
+    }
+
+    /// A deferred FN (the `:(LIST OF Number)` param forces deferral) whose return type names a
+    /// `NEWTYPE` alias — a `SetRef` that is not region-free, so it cannot be rebuilt from a `'static`
+    /// value — composes its `KType::KFunction` by cloning the return type out of its own carrier
+    /// view (the `Some(Carried::Type(_))` compose arm). Were the return type to arrive without a
+    /// carrier, `build_carrier`'s guard would error instead of producing a function type, so a
+    /// successful compose proves the carrier-view path ran.
+    #[test]
+    fn fn_deferred_with_reaching_ret_composes_from_carrier_view() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE Wrapped = :{a :Number}");
+        let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
+        match result {
+            KType::KFunction { params, ret } => {
+                assert_eq!(
+                    params.get("xs"),
+                    Some(&KType::List(Box::new(KType::Number))),
+                    "the sigil param must lower to LIST OF Number",
+                );
+                assert_eq!(
+                    ret.name(),
+                    "Wrapped",
+                    "the reaching return type must survive the carrier-view crossing",
+                );
+            }
+            other => panic!("expected a KFunction carrier, got {other:?}"),
+        }
+    }
+
+    /// A deferred record field whose sigil sub-Dispatch resolves to a non-type value (`:(1)` → the
+    /// number `1`) surfaces the walker's shape error through `fold_fields_at_brand`'s side-channel:
+    /// the fold closure stores a placeholder type and re-raises the stashed error after the alloc.
+    #[test]
+    fn record_field_sub_dispatch_to_non_type_value_errors() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(scope, parse_one(":{x :(1)}"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("resolved to non-type value")),
+            "expected a non-type-value ShapeError through the deferred side-channel, got {err}",
         );
     }
 

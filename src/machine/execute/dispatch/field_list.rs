@@ -4,9 +4,15 @@
 //!
 //! One dep-finish waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
 //! list through [`parse_typed_field_list_via_elaborator`], feeding the resolved
-//! sub-Dispatch carriers back through that walker's `results` channel in DFS order, then
-//! hands the sealed `(name, KType)` pairs to a caller-supplied `finalize` that folds them
-//! into the right carrier (`KType::Record`, `KFunction`, union schema, …).
+//! sub-Dispatch carriers back through that walker's `results` channel in DFS order. Two
+//! composition surfaces consume the sealed `(name, KType)` pairs:
+//!
+//! - the record-type sigil and the FN/FUNCTOR carrier compose at the store's own fold brand
+//!   via [`fold_fields_at_brand`] and a [`BrandCompose`] closure, so the pairs and every extra
+//!   operand cross as brand-delivered views rather than ambient captures;
+//! - the UNION schema and the NEWTYPE record repr hand the pairs to a caller-supplied
+//!   [`FieldListFinalizeAction`], which seals them into a heap `RecursiveSet` and crosses the
+//!   nominal identity through [`seal_type_operand`](super::constructors::seal_type_operand).
 
 use std::rc::Rc;
 
@@ -93,8 +99,8 @@ struct FieldListRewalk<'step> {
 impl<'step> FieldListRewalk<'step> {
     /// Re-walk the field list at the fold brand `'b`: the sub-Dispatch carriers arrive as brand
     /// views in `feed`, and each elaborated field type is cloned out at `'b`. The expression stays
-    /// at `'step` (only walked, never embedded), while the output pairs are `KType<'b>` — phase 1's
-    /// lifetime split is what lets these two diverge. `ResultFeed` is always installed: a
+    /// at `'step` (only walked, never embedded), while the output pairs are `KType<'b>`; the parser
+    /// carries these two lifetimes separately so they can diverge. `ResultFeed` is always installed: a
     /// `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer resolved
     /// sub-dispatches" error inside the walker.
     fn run<'b>(
@@ -130,7 +136,8 @@ impl<'step> FieldListRewalk<'step> {
 }
 
 /// The ONE at-brand construction site both deferral currencies call: fold `[carriers ++ extras]`
-/// and the consumer scope through the phase-2 door, then — inside the fold closure, at the store's
+/// and the consumer scope through [`KoanStepContextExt::alloc_carried_with_scope`], then — inside
+/// the fold closure, at the store's
 /// own brand `'b` — re-walk the field list against the brand-delivered feed views, compose the
 /// result `KType`, and store it folded.
 ///
@@ -360,8 +367,8 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         None,
     ) {
         // Sync `Done`: the single ambient walk resolved everything, so store the composed record
-        // through the audited non-fold tier (`alloc_type_pure`) — no folded placement. Migrating
-        // synchronous composition onto a brand is `checked-tier-confinement`'s job, not this one's.
+        // through the audited non-fold tier (`alloc_type_pure`) — no folded placement. Composing the
+        // sync arm on a fold brand instead is `checked-tier-confinement`'s scope.
         FieldListOutcome::Done(pairs) => Outcome::Done(
             view.step_ctx()
                 .alloc_type_pure(KType::Record(Box::new(Record::from_pairs(pairs)))),
