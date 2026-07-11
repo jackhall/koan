@@ -795,6 +795,7 @@ digraph {
     "koan::machine::execute::finalize" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::finalize" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::execute::lift" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::lift" -> "koan::machine::core" [label="uses", style="dashed"];

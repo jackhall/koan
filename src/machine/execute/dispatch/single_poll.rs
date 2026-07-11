@@ -220,7 +220,9 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
             .transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 Residence::Copied,
-                |value, region, _brand| copy_carried(value, FoldingBrand::in_fold_closure(region)),
+                |value, region, token| {
+                    copy_carried(value, FoldingBrand::in_fold_closure(region, token))
+                },
             ))
     });
     Await::on(Deps::from_owned([dep])).finish_witnessed(finish)

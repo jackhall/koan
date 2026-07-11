@@ -28,9 +28,9 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Delivered, Erased, FamilyArena, Reattachable, Region, RegionHandle, RegionHandleFamily,
-    RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile, Stored, WitnessRegion,
-    Witnessed,
+    Delivered, Erased, FamilyArena, FoldToken, Reattachable, Region, RegionHandle,
+    RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
+    Stored, WitnessRegion, Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -418,9 +418,10 @@ impl<'a> Scope<'a> {
 /// (`transfer_into` / `merge_pinned` / `map_pinned` / [`KoanStepContextExt::alloc_carried_with`])
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
 /// operands* is covered by the fold without a per-value audit. Carries the folded-placement
-/// methods [`RegionBrand`] deliberately lacks; everything else derefs. Minted only two ways (see
-/// [`Self::in_fold_closure`] and [`KoanStepContextExt::alloc_carried_with`]'s impl) — `grep
-/// FoldingBrand` is the complete list of trust points a value can reach this capability through.
+/// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldToken`] is the sole
+/// key to its one constructor ([`Self::in_fold_closure`]): only a fold engine can mint a token, and
+/// the token's `'b` brand keeps it from escaping the closure, so this capability is reachable only
+/// at a fresh fold brand — enforced by the type, not by a prose audit list.
 #[derive(Clone, Copy)]
 pub(crate) struct FoldingBrand<'a>(RegionBrand<'a>);
 
@@ -432,13 +433,16 @@ impl<'a> std::ops::Deref for FoldingBrand<'a> {
 }
 
 impl<'a> FoldingBrand<'a> {
-    /// Named trust point for a closure under a *library* fold combinator (`transfer_into` /
-    /// `merge_pinned` / `map_pinned`), which hands raw handle-headed operands by design and so
-    /// cannot itself mint a `FoldingBrand`. `grep in_fold_closure(` is the complete audit list of
-    /// every such trust point; the caller's obligation is that the value it builds through the
-    /// returned brand is built only from that closure's own operands, whose reach the enclosing
-    /// combinator already folds into the result.
-    pub(crate) fn in_fold_closure(handle: RegionHandle<'a, KoanStorageProfile>) -> Self {
+    /// Mint the folded-placement capability inside a fold closure. The [`FoldToken`] is proof of
+    /// residence: a fold engine (`transfer_into` / `merge_pinned` / `map_pinned` /
+    /// [`KoanStepContextExt::alloc_carried_with`]) mints it and hands it to the closure alongside the
+    /// operands, and its `'a` brand keeps it confined there — so this constructor is callable only
+    /// where the enclosing combinator already folds the operands' reach into the result.
+    pub(crate) fn in_fold_closure(
+        handle: RegionHandle<'a, KoanStorageProfile>,
+        token: FoldToken<'a>,
+    ) -> Self {
+        let _ = token;
         FoldingBrand(RegionBrand(handle))
     }
 
@@ -903,7 +907,7 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
             deps,
-            |handle, views| build(FoldingBrand(RegionBrand(handle)), views),
+            |handle, views, token| build(FoldingBrand::in_fold_closure(handle, token), views),
         )
     }
 
@@ -938,12 +942,12 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
                 |scope_view, (handle, views), _brand| (handle, (views, scope_view)),
             );
         let frame = self.frame();
-        operands.map_pinned::<CarriedFamily, _>(&frame, |(handle, (views, scope)), _brand| {
-            // Audit obligation extending the `grep in_fold_closure(` list: the value `build` returns
+        operands.map_pinned::<CarriedFamily, _>(&frame, |(handle, (views, scope)), token| {
+            // The fold token proves this closure runs at a fresh fold brand; the value `build` returns
             // comes only from this fold's own operands — the dep views and the crossed scope envelope,
             // both re-anchored at this brand — whose reach the enclosing fold already composes into the
             // result's witness. No ambient-lifetime borrow reaches this closure.
-            build(FoldingBrand::in_fold_closure(handle), views, scope)
+            build(FoldingBrand::in_fold_closure(handle, token), views, scope)
         })
     }
 

@@ -305,7 +305,10 @@ fn alloc_with_folds_dep_reach_before_result_read() {
     let own = frame();
     let ctx: StepContext<ShapeFrame> = StepContext::new(Rc::clone(&own));
     let built: Witnessed<RefValFamily, Carrier<ShapeFrame>> = ctx
-        .alloc_with::<RefValFamily, RefValFamily, ShapeProfile>(&[&dep], |_region, views| views[0]);
+        .alloc_with::<RefValFamily, RefValFamily, ShapeProfile>(
+            &[&dep],
+            |_region, views, _token| views[0],
+        );
     drop(dep);
     drop(dep_frame);
     assert_eq!(built.with_pinned(&own, |r| **r), 3);

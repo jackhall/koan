@@ -146,6 +146,65 @@ pub(crate) fn with_branded_ref<T: Reattachable, R>(
     f(branded)
 }
 
+/// Proof of being inside a fold combinator's `for<'b>` closure. Minted only by the fold engines
+/// ([`Witnessed::map`] / [`Witnessed::map_pinned`] / [`Witnessed::merge_composed`] /
+/// [`Delivered::transfer_into`](delivered::Delivered::transfer_into) /
+/// [`StepContext::alloc_with`](step_ctx::StepContext::alloc_with)); the private field keeps an
+/// embedder from forging one, and the `'b` brand keeps it from escaping the closure — so a
+/// capability gated on it is usable only at a fresh fold brand.
+///
+/// It doubles as the `E0582` witness the fold closures need — an input mentioning `'b`, without
+/// which `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected — so the same argument that proves
+/// fold-closure residence also anchors the brand.
+///
+/// `Copy` is safe: the token cannot outlive its closure (`'b` is unnameable outside), so
+/// duplicating it inside the closure grants nothing new.
+///
+/// ```compile_fail
+/// use workgraph::witnessed::FoldToken;
+/// use std::marker::PhantomData;
+/// // The field is private outside the crate — a fold token cannot be forged by construction.
+/// let _t: FoldToken<'static> = FoldToken(PhantomData);
+/// ```
+///
+/// ```compile_fail
+/// use workgraph::witnessed::FoldToken;
+/// // `mint` is crate-internal — only the fold engines mint a token.
+/// let _t: FoldToken<'static> = FoldToken::mint();
+/// ```
+///
+/// ```
+/// use workgraph::witnessed::doctest_fixture::{Cart, RefFamily};
+/// use workgraph::witnessed::Witnessed;
+/// // A combinator hands the token to its closure — the only way to obtain one.
+/// let cart = Cart(vec![5]);
+/// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
+/// let mapped = w.map::<RefFamily>(|r, _token| r);
+/// assert_eq!(mapped.with(|r| **r), 5);
+/// ```
+#[derive(Clone, Copy)]
+pub struct FoldToken<'b>(PhantomData<&'b ()>);
+
+impl<'b> FoldToken<'b> {
+    /// Mint a fold token — crate-internal, so only the fold engines can produce one.
+    pub(crate) fn mint() -> Self {
+        FoldToken(PhantomData)
+    }
+}
+
+/// A forged fold token for the embedder's white-box tests, gated off production (like
+/// [`region_metrics`]). An embedder unit test that drives a folded-placement hook in isolation —
+/// outside a real fold combinator — sources its token here. Compiled out of production **and** out
+/// of the external-crate `compile_fail` fixtures (which do not enable `test-hooks`), so it never
+/// weakens the confinement the private field enforces.
+#[cfg(any(test, feature = "test-hooks"))]
+impl<'b> FoldToken<'b> {
+    /// Forge a fold token for a test that has no enclosing fold engine to mint one.
+    pub fn forge_for_test() -> Self {
+        FoldToken::mint()
+    }
+}
+
 /// Generic owner of an erased carrier: a one-lifetime-family value with its lifetime forgotten to
 /// `'static` for storage on a lifetime-free node slot. [`Self::erase`] stores; the value is
 /// re-anchored either through a [`Witnessed`] that bundles its witness, or transiently through the
@@ -424,12 +483,12 @@ impl<T: Reattachable, W> Witnessed<T, W> {
     /// [`Witnessed::map`] under an **externally supplied pin** — consume, re-anchor at a `for<'b>`
     /// brand, transform, and re-seal under the same witness, for a carrier whose bundled witness
     /// pins nothing (the reference-only [`Carrier`]). `pin` is held for the whole call and keeps
-    /// the carrier's pointee live; the `PhantomData<&'b ()>` argument is load-bearing exactly as in
+    /// the carrier's pointee live; the [`FoldToken<'b>`] argument is load-bearing exactly as in
     /// `map` (`E0582`).
     pub fn map_pinned<P: Reattachable, Pin: Witness>(
         self,
         pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+        f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, W> {
         let Witnessed { value, witness } = self;
         // SAFETY: `reattach`'s contract — the borrowed `pin` keeps the carrier's pointee live and
@@ -438,7 +497,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         // `for<'b>` closure cannot leak), and the projection is immediately re-erased to `'static`
         // for storage under the carried witness.
         let live: T::At<'_> = unsafe { value.reattach() };
-        let projected = f(live, PhantomData);
+        let projected = f(live, FoldToken::mint());
         let _ = pin;
         Witnessed {
             value: Erased::erase(projected),
@@ -459,7 +518,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         self,
         other: Witnessed<B, W>,
         pin: &Pin,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, W>
     where
         W: ComposeWitness<B>,
@@ -478,7 +537,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         other: Witnessed<B, W>,
         pin: &Pin,
         compose: impl for<'b> FnOnce(&W, &W, &B::At<'b>) -> W,
-        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, W> {
         let Witnessed {
             value: left,
@@ -499,7 +558,7 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         let live_left: T::At<'_> = unsafe { left.reattach() };
         let live_right: B::At<'_> = unsafe { right.reattach() };
         let witness = compose(&left_witness, &right_witness, &live_right);
-        let projected = f(live_left, live_right, PhantomData);
+        let projected = f(live_left, live_right, FoldToken::mint());
         let _ = pin;
         Witnessed {
             value: Erased::erase(projected),
@@ -618,9 +677,9 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// witness. Re-sealing is what lets a *branded* value be kept, unlike [`Self::with`], which only
     /// lets a brand-free `R` out.
     ///
-    /// The `PhantomData<&'b ()>` argument is load-bearing, not decoration: without an input
-    /// mentioning `'b`, `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected (`E0582`), since the brand
-    /// would appear only in the output GAT projection. This is exactly `yoke::map_project`'s shape.
+    /// The [`FoldToken<'b>`] argument is load-bearing, not decoration: without an input mentioning
+    /// `'b`, `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected (`E0582`), since the brand would
+    /// appear only in the output GAT projection. This is exactly `yoke::map_project`'s shape.
     ///
     /// The brand also seals `map`: a projection cannot stash a branded reference into an outer slot
     /// to be read after the witness drops — the `for<'b>` quantifier rejects it at compile time.
@@ -632,7 +691,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// let cart = Cart(vec![5]);
     /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
     /// // Project within the brand and re-seal — the compiling twin of the guard below.
-    /// let mapped = w.map::<RefFamily>(|r, _brand| r);
+    /// let mapped = w.map::<RefFamily>(|r, _token| r);
     /// assert_eq!(mapped.with(|r| **r), 5);
     /// ```
     ///
@@ -644,7 +703,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// let w: Witnessed<RefFamily, Cart> = Witnessed::yoke(cart, |region| &region[0]);
     /// let mut stolen: Option<&u32> = None;
     /// // Try to capture the branded `&'b u32` into a longer-lived slot — rejected by `for<'b>`.
-    /// let _ = w.map::<RefFamily>(|r, _brand| {
+    /// let _ = w.map::<RefFamily>(|r, _token| {
     ///     stolen = Some(r);
     ///     r
     /// });
@@ -652,7 +711,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
     /// ```
     pub fn map<P: Reattachable>(
         self,
-        f: impl for<'b> FnOnce(T::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+        f: impl for<'b> FnOnce(T::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, W> {
         let Witnessed { value, witness } = self;
         // SAFETY: `reattach`'s contract — the destructured `witness` is held across `f` and pins the
@@ -660,7 +719,7 @@ impl<T: Reattachable, W: Witness> Witnessed<T, W> {
         // closure cannot leak), and the projection is immediately re-erased to `'static` for storage
         // under that same witness.
         let live: T::At<'_> = unsafe { value.reattach() };
-        let projected = f(live, PhantomData);
+        let projected = f(live, FoldToken::mint());
         Witnessed {
             value: Erased::erase(projected),
             witness,

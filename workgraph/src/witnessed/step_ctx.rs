@@ -10,8 +10,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Carrier, Delivered, PinsRegion, Reattachable, Region, RegionHandle, RegionOwner, Residence,
-    StorageProfile, Witnessed,
+    Carrier, Delivered, FoldToken, PinsRegion, Reattachable, Region, RegionHandle, RegionOwner,
+    Residence, StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -106,7 +106,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let cart = Rc::new(RegionCart(fresh_region()));
     /// let ctx: StepContext<RegionCart> = StepContext::new(Rc::clone(&cart));
     /// let w: Witnessed<RefFamily, Carrier<RegionCart>> =
-    ///     ctx.alloc_with(&[&dep], |_region, views| views[0]);
+    ///     ctx.alloc_with(&[&dep], |_region, views, _token| views[0]);
     /// assert_eq!(w.with_pinned(&cart, |r| **r), 10);
     /// ```
     ///
@@ -126,7 +126,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     /// let ctx: StepContext<RegionCart> = StepContext::new(cart);
     /// let mut escaped: Option<&u32> = None;
     /// // Try to smuggle a dep view OUT of `alloc_with`'s closure — rejected by the `for<'b>` brand.
-    /// let _: Witnessed<RefFamily, Carrier<RegionCart>> = ctx.alloc_with(&[&dep], |_region, views| {
+    /// let _: Witnessed<RefFamily, Carrier<RegionCart>> = ctx.alloc_with(&[&dep], |_region, views, _token| {
     ///     escaped = Some(views[0]);
     ///     views[0]
     /// });
@@ -135,7 +135,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     pub fn alloc_with<T, V, P>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>) -> T::At<'b>,
+        build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
         T: Reattachable,
@@ -176,7 +176,7 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     pub fn alloc_with_handle<P, T, V>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(RegionHandle<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
+        build: impl for<'b> FnOnce(RegionHandle<'b, P>, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
         P: StorageProfile + 'static,
@@ -186,8 +186,8 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         V::At<'static>: Copy,
         super::RegionSet<F>: super::Stored<P> + for<'r> Reattachable<At<'r> = super::RegionSet<F>>,
     {
-        self.alloc_with::<T, V, P>(deps, |region, views| {
-            build(RegionHandle::new(region), views)
+        self.alloc_with::<T, V, P>(deps, |region, views, token| {
+            build(RegionHandle::new(region), views, token)
         })
     }
 }
@@ -204,15 +204,10 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
 /// [`Residence::Kept`], so every view's producer host is a member of the accumulator's minted set,
 /// pinned by the consumer's own arena for the built value's life.
 #[allow(clippy::type_complexity)]
-fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>() -> impl for<'b> FnOnce(
-    V::At<'b>,
-    (&'b R, Vec<V::At<'b>>),
-    PhantomData<&'b ()>,
-) -> (
-    &'b R,
-    Vec<V::At<'b>>,
-) {
-    |view, (region, mut views), _brand| {
+fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>(
+) -> impl for<'b> FnOnce(V::At<'b>, (&'b R, Vec<V::At<'b>>), FoldToken<'b>) -> (&'b R, Vec<V::At<'b>>)
+{
+    |view, (region, mut views), _token| {
         views.push(view);
         (region, views)
     }
@@ -223,9 +218,9 @@ fn fold_dep_view<V: Reattachable, R: ?Sized + 'static>() -> impl for<'b> FnOnce(
 /// `alloc_with`'s `V::At<'static>: Copy` scope.
 #[allow(clippy::type_complexity)]
 fn finalize_alloc_with<F: RegionOwner, T: Reattachable, V: Reattachable>(
-    build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>) -> T::At<'b>,
-) -> impl for<'b> FnOnce((&'b F::Region, Vec<V::At<'b>>), PhantomData<&'b ()>) -> T::At<'b> {
-    |(region, views), _brand| build(region, views)
+    build: impl for<'b> FnOnce(&'b F::Region, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
+) -> impl for<'b> FnOnce((&'b F::Region, Vec<V::At<'b>>), FoldToken<'b>) -> T::At<'b> {
+    |(region, views), token| build(region, views, token)
 }
 
 /// `alloc_with`'s fold accumulator: the context's own region reference paired with the dep views

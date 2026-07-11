@@ -13,8 +13,7 @@ use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 use crate::machine::KFunction;
-use crate::witnessed::{Delivered, Erased, Residence, Witnessed};
-use std::marker::PhantomData;
+use crate::witnessed::{Delivered, Erased, FoldToken, Residence, Witnessed};
 
 /// Test-only destination-region operand: the library's [`RegionHandleFamily`], the
 /// `HasRegionHandle` mint target a `merge`/`transfer_into` composition needs — the same family
@@ -318,7 +317,7 @@ fn envelope_transfer_folds_an_independent_foreign_value() {
         .transfer_into::<BrandFamily, CarriedFamily, _>(
             here_dest,
             Residence::Kept,
-            |foreign, _brand, _b: PhantomData<&_>| foreign,
+            |foreign, _brand, _b: FoldToken<'_>| foreign,
         );
     drop(delivered);
     drop(foreign_frame); // the minted member in `here_frame`'s arena is now the sole foreign owner.
@@ -349,7 +348,7 @@ fn pass_through_duplicate_keeps_reach_pointer_and_mints_nothing() {
             .transfer_into::<BrandFamily, CarriedFamily, _>(
                 here_dest,
                 Residence::Kept,
-                |foreign, _brand, _b: PhantomData<&_>| foreign,
+                |foreign, _brand, _b: FoldToken<'_>| foreign,
             );
 
     let reach_ptr = merged
@@ -453,8 +452,8 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     // Allocate the list node from the carried dest region; the cells ride borrows into both foreign
     // regions, both now minted as members into the dest arena.
     let list: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_frame, |(region, cells), _brand| {
-            let region = FoldingBrand::in_fold_closure(region);
+        acc2.map_pinned(&dest_frame, |(region, cells), token| {
+            let region = FoldingBrand::in_fold_closure(region, token);
             Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
         });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
@@ -729,8 +728,8 @@ fn multi_region_list_of_closures_survives_frame_free() {
     // the scheduler seeds at finalize.
     let dest_storage = dest_frame.storage_rc();
     let list: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
-            let region = FoldingBrand::in_fold_closure(region);
+        acc2.map_pinned(&dest_storage, |(region, cells), token| {
+            let region = FoldingBrand::in_fold_closure(region, token);
             Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
         });
 
@@ -808,8 +807,8 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         .transfer_into::<AggBuildFamily, CarriedFamily, _>(
         acc2,
         Residence::Kept,
-        |outer_v, (region, cells), _brand| {
-            let region = FoldingBrand::in_fold_closure(region);
+        |outer_v, (region, cells), token| {
+            let region = FoldingBrand::in_fold_closure(region, token);
             if let KObject::KFunction(kf) = outer_v.object() {
                 let list_obj = region.alloc_object_folded(KObject::list_of_held(cells));
                 kf.captured_scope()
@@ -888,8 +887,8 @@ fn multi_region_record_of_closures_survives_frame_free() {
     );
     let dest_storage = dest_frame.storage_rc();
     let record: Witnessed<CarriedFamily, CarrierWitness> =
-        acc2.map_pinned(&dest_storage, |(region, cells), _brand| {
-            let region = FoldingBrand::in_fold_closure(region);
+        acc2.map_pinned(&dest_storage, |(region, cells), token| {
+            let region = FoldingBrand::in_fold_closure(region, token);
             Carried::Object(
                 region.alloc_object_folded(KObject::record_of_held(Record::from_pairs(cells))),
             )

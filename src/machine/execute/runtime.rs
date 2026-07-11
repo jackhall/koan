@@ -156,7 +156,9 @@ impl<'run> KoanRuntime<'run> {
             delivered.transfer_into::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 crate::witnessed::Residence::Copied,
-                |value, region, _brand| copy_carried(value, FoldingBrand::in_fold_closure(region)),
+                |value, region, token| {
+                    copy_carried(value, FoldingBrand::in_fold_closure(region, token))
+                },
             ),
         )
     }

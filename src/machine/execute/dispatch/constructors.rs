@@ -278,8 +278,8 @@ fn finish_witnessed<'step>(
                 .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     Residence::Copied,
-                    move |value, (region, identity_ty), _brand| {
-                        let region = FoldingBrand::in_fold_closure(region);
+                    move |value, (region, identity_ty), token| {
+                        let region = FoldingBrand::in_fold_closure(region, token);
                         let inner = if collapse {
                             WrappedPayload::peel(value.object())
                         } else {
@@ -335,8 +335,8 @@ fn finish_witnessed<'step>(
             Ok(fields.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
                 home,
                 &dest_frame,
-                |(_region, fields), (region, identity_ty), _brand| {
-                    let region = FoldingBrand::in_fold_closure(region);
+                |(_region, fields), (region, identity_ty), token| {
+                    let region = FoldingBrand::in_fold_closure(region, token);
                     let record = Record::from_pairs(fields);
                     Carried::Object(region.alloc_object_folded(KObject::Wrapped {
                         inner: WrappedPayload::hold(&KObject::record(record)),
@@ -381,8 +381,8 @@ fn finish_witnessed<'step>(
                 .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     Residence::Copied,
-                    move |value, (region, identity_ty), _brand| {
-                        let region = FoldingBrand::in_fold_closure(region);
+                    move |value, (region, identity_ty), token| {
+                        let region = FoldingBrand::in_fold_closure(region, token);
                         let (set, index) = match identity_ty {
                             KType::SetRef { set, index } => (Rc::clone(set), *index),
                             _ => unreachable!("a Tagged identity is always a SetRef"),

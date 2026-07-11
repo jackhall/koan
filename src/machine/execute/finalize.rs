@@ -98,8 +98,8 @@ impl NodeFinalize for KoanRuntime<'_> {
                 let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
                     home_operand,
                     Residence::Copied,
-                    |value, (home_region, declared_type), _brand| {
-                        let home_region = FoldingBrand::in_fold_closure(home_region);
+                    |value, (home_region, declared_type), token| {
+                        let home_region = FoldingBrand::in_fold_closure(home_region, token);
                         let object = value.object();
                         if !declared_type.matches_value(object) {
                             mismatch = Some(return_type_mismatch(

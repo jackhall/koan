@@ -8,7 +8,6 @@
 //! [`Witnessed::merge_pinned`].
 
 use std::cell::Cell;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::*;
@@ -176,7 +175,7 @@ fn continuation_binds_cart_coherent_value_via_map() {
     };
     // At the brand, bind pool[2] into the invariant scope slot — sound only because scope and bound
     // value share the brand — then re-seal.
-    let post: Witnessed<ScopeFamily, Rc<Vec<u32>>> = pre.map(|c, _brand: PhantomData<&_>| {
+    let post: Witnessed<ScopeFamily, Rc<Vec<u32>>> = pre.map(|c, _token: FoldToken<'_>| {
         c.scope.set(Some(&c.pool[2]));
         c
     });
@@ -251,7 +250,7 @@ fn merge_pinned_binds_ancestor_ref_into_descendant_scope() {
         .merge_pinned::<RefFamily, ScopeFamily, _>(
             fn_w,
             &descendant,
-            |scope, func, _brand: PhantomData<&_>| {
+            |scope, func, _token: FoldToken<'_>| {
                 scope.scope.set(Some(func));
                 scope
             },
@@ -287,7 +286,7 @@ fn merge_pinned_keeps_unrelated_carts_as_a_two_member_set() {
     let wb: Witnessed<RefFamily, RegionSet<TestCart>> =
         Witnessed::yoke(Rc::clone(&b), |r| &r[0]).rewitness(RegionSet::singleton(Rc::clone(&b)));
     let merged =
-        wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _brand: PhantomData<&_>| l);
+        wa.merge_pinned::<RefFamily, RefFamily, _>(wb, &a, |l, _r, _token: FoldToken<'_>| l);
     assert_eq!(
         merged.witness().members().len(),
         2,
@@ -451,7 +450,7 @@ fn step_context_alloc_with_mints_dep_hosts_and_preserves_dep_order() {
     let w: Witnessed<RefFamily, Carrier<StepFrame>> = ctx
         .alloc_with::<RefFamily, RefFamily, StepProfile>(
             &[&delivered_a, &delivered_b],
-            |_region, views| {
+            |_region, views, _token| {
                 assert_eq!(views.iter().map(|v| **v).collect::<Vec<_>>(), vec![1, 2]);
                 &ONE
             },

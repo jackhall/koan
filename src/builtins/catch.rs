@@ -90,8 +90,8 @@ pub fn body<'a>(
             Ok(carrier) => carrier.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
                 home,
                 Residence::Copied,
-                |value, (region, identity), _brand| {
-                    let region = FoldingBrand::in_fold_closure(region);
+                |value, (region, identity), token| {
+                    let region = FoldingBrand::in_fold_closure(region, token);
                     Carried::Object(region.alloc_object_folded(build_result(
                         "Ok",
                         identity,
@@ -114,8 +114,8 @@ pub fn body<'a>(
                 payload.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     &frame,
-                    |payload, (region, identity), _brand| {
-                        let region = FoldingBrand::in_fold_closure(region);
+                    |payload, (region, identity), token| {
+                        let region = FoldingBrand::in_fold_closure(region, token);
                         Carried::Object(region.alloc_object_folded(build_result(
                             "Error",
                             identity,

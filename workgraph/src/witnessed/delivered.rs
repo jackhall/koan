@@ -25,12 +25,11 @@
 //! core. [`Delivered::adopt_into`] fuses that mint with the re-anchor it justifies into one
 //! copy-free adoption verb, so a caller cannot split the pin from the reattach it pins.
 
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Carrier, Erased, HasRegionHandle, PinsRegion, Reattachable, Region, RegionHandle, RegionOwner,
-    RegionSet, Residence, Sealed, StorageProfile, Stored, Witnessed,
+    Carrier, Erased, FoldToken, HasRegionHandle, PinsRegion, Reattachable, Region, RegionHandle,
+    RegionOwner, RegionSet, Residence, Sealed, StorageProfile, Stored, Witnessed,
 };
 
 /// A sealed carrier paired with the retained frame owner that pins its value's backing in transit.
@@ -191,7 +190,7 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
         &self,
         dest: Witnessed<B, Carrier<F>>,
         mode: Residence,
-        relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, PhantomData<&'b ()>) -> P::At<'b>,
+        relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>,
     ) -> Witnessed<P, Carrier<F>>
     where
         Pr: StorageProfile + 'static,

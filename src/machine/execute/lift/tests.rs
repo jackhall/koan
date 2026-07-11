@@ -11,6 +11,7 @@ use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
+use crate::witnessed::FoldToken;
 use std::rc::Rc;
 
 /// A `KFunction` allocated into `home`'s region (its captured scope lives there), for the
@@ -54,7 +55,7 @@ fn object_top_node_relocates_into_dest() {
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
     let relocated = copy_carried(
         Carried::Object(obj),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     match relocated {
         Carried::Object(r) => {
@@ -93,7 +94,7 @@ fn list_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(list),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     match relocated {
         Carried::Object(r @ KObject::List(out, _)) => {
@@ -144,7 +145,7 @@ fn dict_relocation_shares_inner_rc() {
 
     let relocated = copy_carried(
         Carried::Object(dict),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     match relocated {
         Carried::Object(r @ KObject::Dict(out, _, _)) => {
@@ -195,7 +196,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
 
     let relocated = copy_carried(
         Carried::Object(tagged),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     match relocated {
         Carried::Object(
@@ -237,7 +238,7 @@ fn kfunction_borrow_preserved_verbatim() {
 
     let relocated = copy_carried(
         Carried::Object(obj),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     match relocated {
         Carried::Object(r @ KObject::KFunction(f)) => {
@@ -285,7 +286,7 @@ fn type_recursive_setref_relocates_and_navigates() {
 
     let relocated = copy_carried(
         Carried::Type(&type_value),
-        FoldingBrand::in_fold_closure(dest.brand().handle()),
+        FoldingBrand::in_fold_closure(dest.brand().handle(), FoldToken::forge_for_test()),
     );
     assert_eq!(
         Rc::strong_count(&set),

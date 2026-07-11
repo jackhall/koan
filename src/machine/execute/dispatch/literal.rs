@@ -149,8 +149,8 @@ impl<'step> KoanRuntime<'step> {
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
             Ok(
-                acc.map_pinned(&dest_frame, move |(region, value_helds), _brand| {
-                    let region = FoldingBrand::in_fold_closure(region);
+                acc.map_pinned(&dest_frame, move |(region, value_helds), token| {
+                    let region = FoldingBrand::in_fold_closure(region, token);
                     Carried::Object(region.alloc_object_folded(assemble(keys, value_helds)))
                 }),
             )
