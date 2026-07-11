@@ -336,8 +336,9 @@ caller-supplied audit returns true — nothing lands on a decline):
 - **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit, sound
   only because `FoldingBrand` is mintable exactly two ways: inside a library fold combinator's closure
   (`transfer_into` / `merge_pinned` / `map_pinned`, whose enclosing combinator has already composed the
-  operands' reach into the result witness) or via `KoanStepContextExt::alloc_carried_with`'s own
-  construction. A value built through a folded veneer must be built only from that closure's own
+  operands' reach into the result witness) or via `KoanStepContextExt::alloc_carried_with` /
+  `alloc_carried_with_scope`'s own construction (the latter crosses the consumer's scope as its own
+  delivered operand, so a field-list re-walk's scope reads resolve at the brand rather than ambiently). A value built through a folded veneer must be built only from that closure's own
   operands — an obligation the type confines *where* folded placement happens, not *what* the closure
   captures (an open gap — see
   [scheduler_library's Unplanned work](../roadmap/scheduler_library/README.md#unplanned-work)).

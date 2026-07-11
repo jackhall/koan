@@ -13,10 +13,10 @@ parts read ambiently and store it through the audit rather than building at a
 brand from declared operands — `build_carrier`'s synchronous arm
 ([parameterized_types.rs](../../src/builtins/parameterized_types.rs)), the
 `Signature` composition in
-[type_ops/with.rs](../../src/builtins/type_ops/with.rs), and (once
-[field-list re-walk provenance](field-list-rewalk-provenance.md) ships)
+[type_ops/with.rs](../../src/builtins/type_ops/with.rs), and
 `elaborate_record_value`'s synchronous arm
-([field_list.rs](../../src/machine/execute/dispatch/field_list.rs)). For the
+([field_list.rs](../../src/machine/execute/dispatch/field_list.rs)), whose
+deferred sibling already builds at a brand. For the
 composition class the runtime audit is a backstop where compile-time
 enforcement is achievable: the same at-brand doors the deferred paths use.
 
@@ -45,8 +45,6 @@ enforcement is achievable: the same at-brand doors the deferred paths use.
 
 ## Dependencies
 
-**Requires:**
+**Requires:** none — the at-brand construction door it reuses (the scope
+envelope + dep views) has shipped.
 
-- [Field-list re-walk type provenance](field-list-rewalk-provenance.md) —
-  the at-brand construction door (scope envelope + dep views) synchronous
-  composition reuses.

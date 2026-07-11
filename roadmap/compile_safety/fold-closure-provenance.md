@@ -42,9 +42,6 @@ shrink what fold closures build, so it lands first when both are in flight.
 
 **Requires:**
 
-- [Field-list re-walk type provenance](field-list-rewalk-provenance.md) —
-  the record/function-carrier finalizes must build from declared operands
-  before the fold surface can reject captures.
 - [Sparse-carrier correlation in parameterized-type constructors](sparse-carrier-correlation.md)
   — the constructor sites must correlate views to args before their captures
   can move inside the brand.
