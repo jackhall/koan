@@ -333,15 +333,21 @@ caller-supplied audit returns true — nothing lands on a decline):
   evidence, ambient coverage, and destination region together by construction. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
   compose from.
-- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit, sound
-  only because `FoldingBrand` is mintable exactly two ways: inside a library fold combinator's closure
-  (`transfer_into` / `merge_pinned` / `map_pinned`, whose enclosing combinator has already composed the
-  operands' reach into the result witness) or via `KoanStepContextExt::alloc_carried_with` /
-  `alloc_carried_with_scope`'s own construction (the latter crosses the consumer's scope as its own
-  delivered operand, so a field-list re-walk's scope reads resolve at the brand rather than ambiently). A value built through a folded veneer must be built only from that closure's own
-  operands — an obligation the type confines *where* folded placement happens, not *what* the closure
-  captures (an open gap — see
-  [scheduler_library's Unplanned work](../roadmap/scheduler_library/README.md#unplanned-work)).
+- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit made
+  sound by signature: each sink takes its input at the brand lifetime (`KType<'b>` / `KObject<'b>` on
+  `FoldingBrand<'b>`), and inside a fold combinator's `for<'b>` closure the only inhabitants of that
+  lifetime are values derived from the fold's declared operand views, the brand's own allocations, and
+  owned/`'static` data — all named by the witness the enclosing combinator composes. An
+  ambient-lifetime capture cannot coerce to `'b` (which has no outlives relation to any enclosing
+  lifetime), so smuggling a captured borrow past a folded sink is a compile error rather than a
+  runtime-audited obligation. `FoldingBrand`'s sole constructor
+  ([`in_fold_closure`](../src/machine/core/arena.rs)) takes a
+  [`FoldToken`](../workgraph/src/witnessed.rs), which only a fold engine (`transfer_into` /
+  `merge_pinned` / `map_pinned` / `KoanStepContextExt::alloc_carried_with` /
+  `alloc_carried_with_scope`) mints and whose `'b` brand keeps it from escaping the closure — so the
+  capability is reachable only at a fresh fold brand. `alloc_carried_with_scope` additionally crosses
+  the consumer's scope as its own delivered operand, so a field-list re-walk's scope reads resolve at
+  the brand rather than ambiently.
 
 `KObject::resident_in` is honest-partial: a `Wrapped { type_id }`'s raw `&KType` pointer is
 un-answerable (`KType` opts out of the address side-table the `owns_module` / `owns_signature` /

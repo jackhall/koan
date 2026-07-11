@@ -48,8 +48,6 @@ bypassing every veneer; eleven reaches exist across `src/machine`.
 
 **Requires:**
 
-- [Fold-closure capture provenance](fold-closure-provenance.md) — the
-  folded-tier retype that replaces the two always-true fold doors.
 - [Witness-derived binding](witness-derived-binding.md) — the fused bind
   doors that replace the evidence-tier audits.
 - [Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) — types

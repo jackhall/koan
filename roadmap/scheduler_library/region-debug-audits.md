@@ -12,7 +12,7 @@ frame B while region B's set retains frame A — is expressible in safe code,
 defeats the refcount-driven region free, and nothing detects it short of the
 Miri leak slate. Reach over-approximation: folding a dep a value did not
 actually borrow from keeps that dep's region alive as long as the carrier
-lives; the scalar gates in `alloc_type_with` / `alloc_object_with`
+lives; the scalar gates in `alloc_type_of` / `alloc_object_scalar`
 ([arena.rs](../../src/machine/core/arena.rs)) counter the known cases, and
 the wrong direction of the `borrows_into_home` bit (`true` when false) is
 the same hole — a retiring tail-call frame riding the fresh frame's

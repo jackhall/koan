@@ -13,12 +13,12 @@ or omit under-pins, and a later read rebuilds a carrier from the stored lie.
 Upstream, the move-in audits verify a value's borrows against the evidence
 the caller *passed*, but nothing couples that evidence to what ultimately
 pins the stored reference: the alloc and the pin are separate acts paired
-only by call-site adjacency. Eighteen call sites ride the two methods —
+only by call-site adjacency. Nineteen call sites ride the two methods —
 `bind_value` ×4 ([nodes.rs](../../src/machine/execute/nodes.rs),
 [let_binding.rs](../../src/builtins/let_binding.rs),
 [branch_walk.rs](../../src/builtins/branch_walk.rs),
 [kfunction/exec.rs](../../src/machine/core/kfunction/exec.rs)) and
-`resident_type_carrier` ×14 across the builtins and dispatch. The same
+`resident_type_carrier` ×15 across the builtins and dispatch. The same
 free-form reach also over-pins silently: folding a region the value never
 borrowed from passes every audit.
 
@@ -49,9 +49,8 @@ borrowed from passes every audit.
 ## Dependencies
 
 Soft ordering with
-[Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) and
-[Fold-closure capture provenance](fold-closure-provenance.md) is noted in
-those items.
+[Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) is noted in
+that item.
 
 **Requires:**
 
