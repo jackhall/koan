@@ -423,7 +423,7 @@ impl<'a> Scope<'a> {
 /// the token's `'b` brand keeps it from escaping the closure, so this capability is reachable only
 /// at a fresh fold brand — enforced by the type, not by a prose audit list.
 #[derive(Clone, Copy)]
-pub(crate) struct FoldingBrand<'a>(RegionBrand<'a>);
+pub struct FoldingBrand<'a>(RegionBrand<'a>);
 
 impl<'a> std::ops::Deref for FoldingBrand<'a> {
     type Target = RegionBrand<'a>;

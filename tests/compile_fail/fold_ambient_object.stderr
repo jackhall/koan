@@ -1,0 +1,22 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/compile_fail/fold_ambient_object.rs:10:40
+   |
+ 8 |     with_ambient_object(|ambient| {
+   |                          ------- `ambient` declared here, outside of the closure body
+ 9 |         drive_object_fold(&[], |brand, _views| {
+   |                                 ----- `brand` is a reference that is only valid in the closure body
+10 |             store_folded_object(brand, ambient.deep_clone())
+   |                                        ^^^^^^^^^^^^^^^^^^^^ `brand` escapes the closure body here
+   |
+   = note: requirement occurs because of the type `KObject<'_>`, which makes the generic argument `'_` invariant
+   = note: the enum `KObject<'a>` is invariant over the parameter `'a`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/compile_fail/fold_ambient_object.rs:10:13
+   |
+ 8 |     with_ambient_object(|ambient| {
+   |                          ------- has type `&KObject<'1>`
+ 9 |         drive_object_fold(&[], |brand, _views| {
+10 |             store_folded_object(brand, ambient.deep_clone())
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

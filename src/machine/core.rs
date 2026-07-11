@@ -19,11 +19,11 @@ mod tests;
 #[cfg(test)]
 pub(crate) use arena::KoanRegionTestExt;
 pub use arena::{
-    run_root_storage, CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily,
+    run_root_storage, CallFrame, FoldingBrand, FrameSet, FrameStorage, KoanRegion, RegionBrand,
+    RegionTypeFamily,
 };
 pub(crate) use arena::{
-    FoldingBrand, FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile,
-    Residence, TypeOperand,
+    FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile, Residence, TypeOperand,
 };
 pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,

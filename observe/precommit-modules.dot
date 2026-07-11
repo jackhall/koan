@@ -37,6 +37,7 @@ digraph {
     "koan::builtins::union" [label="koan::builtins::union"];
     "koan::builtins::using_scope" [label="koan::builtins::using_scope"];
     "koan::builtins::val_decl" [label="koan::builtins::val_decl"];
+    "koan::fold_fixture" [label="koan::fold_fixture"];
     "koan::machine" [label="koan::machine"];
     "koan::machine::core" [label="koan::machine::core"];
     "koan::machine::core::arena" [label="koan::machine::core::arena"];
@@ -114,6 +115,7 @@ digraph {
     "koan::parse::whitespace" [label="koan::parse::whitespace"];
     "koan::source" [label="koan::source"];
     "koan" -> "koan::builtins" [label="owns", style="solid"];
+    "koan" -> "koan::fold_fixture" [label="owns", style="solid"];
     "koan" -> "koan::machine" [label="owns", style="solid"];
     "koan" -> "koan::parse" [label="owns", style="solid"];
     "koan" -> "koan::source" [label="owns", style="solid"];
@@ -500,6 +502,11 @@ digraph {
     "koan::builtins::val_decl" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::source" [label="uses", style="dashed"];
+    "koan::fold_fixture" -> "koan" [label="uses", style="dashed"];
+    "koan::fold_fixture" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::fold_fixture" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::fold_fixture" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::fold_fixture" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine" [label="uses", style="dashed"];

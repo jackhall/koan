@@ -3,6 +3,11 @@
 //! [`machine::interpret_with_writer`].
 
 pub mod builtins;
+/// Guard-fixture surface for the fold-provenance `compile_fail` tests, which compile as
+/// external crates and so cannot name the `pub(crate)` fold machinery directly. Hidden from
+/// docs; not part of koan's real API.
+#[doc(hidden)]
+pub mod fold_fixture;
 pub mod machine;
 pub mod parse;
 pub mod source;

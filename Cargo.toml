@@ -25,3 +25,4 @@ workgraph = { path = "workgraph" }
 
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }
+trybuild = "1.0"

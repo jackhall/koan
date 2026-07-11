@@ -1,0 +1,13 @@
+error[E0624]: associated function `in_fold_closure` is private
+ --> tests/compile_fail/fold_brand_forge.rs:9:32
+  |
+9 |       let _forge = FoldingBrand::in_fold_closure;
+  |                                  ^^^^^^^^^^^^^^^ private associated function
+  |
+ ::: src/machine/core/arena.rs
+  |
+  | /     pub(crate) fn in_fold_closure(
+  | |         handle: RegionHandle<'a, KoanStorageProfile>,
+  | |         token: FoldToken<'a>,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here
