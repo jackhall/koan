@@ -59,7 +59,7 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
-pub(crate) use constructors::build_type_operand;
+pub(crate) use constructors::{build_type_operand, seal_type_operand};
 pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::defer_field_list_action;
 #[cfg(test)]

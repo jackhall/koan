@@ -16,7 +16,9 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{Carried, KObject, Record};
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
+use crate::machine::{
+    CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily,
+};
 use crate::source::Spanned;
 use crate::witnessed::Residence;
 use crate::witnessed::{reattachable, RegionHandle, Witnessed};
@@ -210,6 +212,44 @@ pub(crate) fn build_type_operand<'step>(
             (brand, kt)
         },
     )
+}
+
+/// Seal a declaration's nominal identity as a `Carried::Type` terminal, folding each carrier dep's
+/// reach — and its residence host, at [`Residence::Kept`] — onto the placement's witness. The
+/// finalize-path twin of [`finish_witnessed`]'s construction fold: the identity crosses the build
+/// brand as a [`RegionTypeFamily`] operand ([`build_type_operand`]) rather than captured into a fold
+/// closure, so the placement's witness folds the identity's own reach as a declared operand. Reach =
+/// the dest region ∪ the identity's own reach ∪ every carrier's reach-and-host — the coverage
+/// [`alloc_type_with`](crate::machine::core::KoanStepContextExt::alloc_type_with) produces for the
+/// same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
+///
+/// `reach` is the identity's own home-omitted foreign reach (empty while a `RecursiveSet` is
+/// heap-`Rc`'d and its members reach no region); `dest_frame` owns the destination scope's region and
+/// pins the operand's backing for the synchronous re-anchor.
+pub(crate) fn seal_type_operand<'a>(
+    scope: &'a Scope<'a>,
+    dest_frame: Rc<FrameStorage>,
+    identity: &'a KType<'a>,
+    reach: Option<&FrameSet>,
+    carriers: &[&DeliveredCarried],
+) -> Witnessed<CarriedFamily, CarrierWitness> {
+    let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, reach);
+    // Fold each carrier's reach onto the identity operand at `Residence::Kept` — the dep keeps living
+    // in its producer region, so its host materializes as a member — the per-dep envelope fold
+    // `alloc_type_with` runs. The relocate closure discards the carrier's value and threads the
+    // identity operand through unchanged; only its reach folds onto the composed witness.
+    let operand = carriers.iter().fold(operand, |operand, carrier| {
+        carrier.transfer_into::<RegionTypeFamily, RegionTypeFamily, KoanStorageProfile>(
+            operand,
+            Residence::Kept,
+            |_value, operand, _brand| operand,
+        )
+    });
+    // Drop the destination handle and re-seal the identity as a `Carried::Type` under the composed
+    // witness; `dest_frame` pins the operand's backing for the transient re-anchor.
+    operand.map_pinned::<CarriedFamily, _>(&dest_frame, |(_region, identity_ty), _brand| {
+        Carried::Type(identity_ty)
+    })
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the

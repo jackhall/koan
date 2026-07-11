@@ -24,5 +24,5 @@ pub(in crate::machine::execute) use outcome::{
 };
 pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
 
-pub(crate) use dispatch::{build_type_operand, defer_field_list_action};
+pub(crate) use dispatch::{build_type_operand, defer_field_list_action, seal_type_operand};
 pub use dispatch::{DispatchOutcome, NameOutcome, Resolved};

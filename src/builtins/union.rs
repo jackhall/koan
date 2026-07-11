@@ -2,7 +2,8 @@ use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::{KoanStepContextExt, NameLookup, ScopeId, StoredReach};
+use crate::machine::core::{NameLookup, ScopeId, StoredReach};
+use crate::machine::execute::seal_type_operand;
 use crate::machine::model::types::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
 };
@@ -80,7 +81,20 @@ fn finalize_union<'a>(
     let n = fields.len();
 
     let set = match recover_union(scope, &name, scope_id, n) {
-        UnionRecovery::Sealed(kt) => return Ok(fctx.ctx.alloc_type_with(carriers, kt)),
+        // Idempotent re-finalize: the union is already bound. Cross its identity as a declared
+        // operand — allocate a reference for the recovered union (region-pure over its heap-`Rc`
+        // set, so empty evidence suffices) and fold the carriers' reach onto the placement, the
+        // same coverage the register-success path produces.
+        UnionRecovery::Sealed(kt) => {
+            let kt_ref = scope.alloc_ktype_reaching(kt, &StoredReach::empty())?;
+            return Ok(seal_type_operand(
+                scope,
+                fctx.ctx.frame(),
+                kt_ref,
+                None,
+                carriers,
+            ));
+        }
         UnionRecovery::Reuse(set) => set,
         UnionRecovery::Fresh => Rc::new(RecursiveSet::new(
             fields
@@ -122,13 +136,17 @@ fn finalize_union<'a>(
             })
             .collect(),
     );
-    match scope.register_type_upsert(
-        name.clone(),
-        union_ty.clone(),
-        bind_index,
-        StoredReach::empty(),
-    ) {
-        Ok(_) => Ok(fctx.ctx.alloc_type_with(carriers, union_ty)),
+    match scope.register_type_upsert(name.clone(), union_ty, bind_index, StoredReach::empty()) {
+        // `register_type_upsert` hands back the region-allocated `&KType`. Cross it as a declared
+        // operand and fold the variant carriers' reach onto the placement's witness, rather than
+        // capturing the union type into a fold closure.
+        Ok(kt_ref) => Ok(seal_type_operand(
+            scope,
+            fctx.ctx.frame(),
+            kt_ref,
+            None,
+            carriers,
+        )),
         Err(e) => Err(e),
     }
 }

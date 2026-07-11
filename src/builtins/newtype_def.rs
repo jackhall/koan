@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::core::{ApplyOutcome, KoanStepContextExt};
+use crate::machine::execute::seal_type_operand;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
@@ -71,7 +72,15 @@ fn finalize_newtype<'a>(
     {
         Ok(ApplyOutcome::Applied) => {
             let sealed = match carrier {
-                Some(c) => fctx.ctx.alloc_type_with(&[c], kt_ref.clone()),
+                // Cross the identity across the build brand as a declared operand, folding the
+                // carrier's reach onto the placement's witness — rather than capturing `kt_ref`
+                // into a fold closure. `stored.foreign` is the identity's own foreign reach (the
+                // carrier's host reach `kt_ref` was audited against).
+                Some(c) => {
+                    seal_type_operand(fctx.scope, fctx.ctx.frame(), kt_ref, stored.foreign, &[c])
+                }
+                // A bare-leaf name reaches no foreign region: `kt_ref` is region-pure over its own
+                // set, so it seals with no carrier to fold and no capture to cross.
                 None => fctx.ctx.alloc_type_pure(kt_ref.clone())?,
             };
             Ok(sealed)
@@ -127,7 +136,16 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(fctx.ctx.alloc_type_with(carriers, kt_ref.clone())),
+        // Cross the sealed identity as a declared operand and fold the field carriers' reach onto
+        // the placement's witness — `kt_ref` seals over its own set (empty foreign reach), the
+        // carriers supply whatever the record fields reach.
+        SealOutcome::Sealed(kt_ref) => Ok(seal_type_operand(
+            scope,
+            fctx.ctx.frame(),
+            kt_ref,
+            None,
+            carriers,
+        )),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
