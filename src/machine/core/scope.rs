@@ -923,10 +923,9 @@ impl<'a> Scope<'a> {
     pub(crate) fn seal_scope_ref_delivered(
         &'a self,
     ) -> Delivered<ScopeRefFamily, CarrierWitness, FrameStorage> {
-        let home = self
-            .region_owner()
-            .upgrade()
-            .expect("the sealed scope's region owner is held while it is sealed for a brand crossing");
+        let home = self.region_owner().upgrade().expect(
+            "the sealed scope's region owner is held while it is sealed for a brand crossing",
+        );
         Delivered::seal(Witnessed::resident(self), home)
     }
 

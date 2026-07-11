@@ -388,7 +388,9 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             None,
             None,
             Vec::new(),
-            Box::new(|_brand, pairs, _extras| Ok(KType::Record(Box::new(Record::from_pairs(pairs))))),
+            Box::new(|_brand, pairs, _extras| {
+                Ok(KType::Record(Box::new(Record::from_pairs(pairs))))
+            }),
         ),
     }
 }

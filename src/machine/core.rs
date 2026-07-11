@@ -22,7 +22,8 @@ pub use arena::{
     run_root_storage, CallFrame, FrameSet, FrameStorage, KoanRegion, RegionBrand, RegionTypeFamily,
 };
 pub(crate) use arena::{
-    FoldingBrand, FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile, Residence,
+    FoldingBrand, FrameStorageExt, KoanRegionExt, KoanStepContextExt, KoanStorageProfile,
+    Residence, TypeOperand,
 };
 pub use bindings::{
     ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,

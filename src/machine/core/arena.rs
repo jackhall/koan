@@ -460,6 +460,16 @@ impl<'a> FoldingBrand<'a> {
     }
 }
 
+/// One positional operand of a brand-composed type build: the total, embedding-ordered form of
+/// the sparse `deps` list [`KoanStepContextExt::alloc_type_with`] takes. `Reaching` folds the
+/// carrier's reach + host into the result's witness and surfaces as a view; `Pure` is a
+/// region-free type rebuilt at the brand through the region's own `'static` door, contributing no
+/// reach.
+pub(crate) enum TypeOperand<'x> {
+    Reaching(&'x DeliveredCarried),
+    Pure(KType<'static>),
+}
+
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
@@ -853,6 +863,19 @@ pub(crate) trait KoanStepContextExt {
         kt: KType<'_>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
+    /// [`Self::alloc_type_with`]'s correlated twin: `operands` lists **every** type the composite
+    /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
+    /// at the same position — so the composite is built at the brand from declared operands only.
+    /// `compose` is a plain `fn` so it cannot capture: an ambient-lifetime `KType` smuggled past
+    /// the operand list is a compile error, not an audit obligation. Reach = own region ∪ every
+    /// `Reaching` operand's reach and host; `Pure` operands add none (the scalar gate's
+    /// exact-reach behavior, by construction).
+    fn alloc_type_composed(
+        &self,
+        operands: Vec<TypeOperand<'_>>,
+        compose: for<'b> fn(FoldingBrand<'b>, &[&'b KType<'b>]) -> KType<'b>,
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+
     /// [`Self::alloc_carried_with`] specialized to the one-`KObject`-carrier shape: reach = own
     /// region unioned with every listed dep's reach. For a `value` built from (or projected out
     /// of) a dep terminal's value — its borrows may reach into the dep's region, so the dep's
@@ -959,6 +982,49 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
             );
         }
         self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype_folded(kt)))
+    }
+
+    fn alloc_type_composed(
+        &self,
+        operands: Vec<TypeOperand<'_>>,
+        compose: for<'b> fn(FoldingBrand<'b>, &[&'b KType<'b>]) -> KType<'b>,
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        // One pass keeps the invariant the compose relies on: the deps list is exactly the
+        // `Reaching` subsequence of `operands`, in order, and `plan` holds each `Pure` value at
+        // its operand position (`None` = "take the next view").
+        let mut deps: Vec<&DeliveredCarried> = Vec::new();
+        let mut plan: Vec<Option<KType<'static>>> = Vec::with_capacity(operands.len());
+        for operand in operands {
+            match operand {
+                TypeOperand::Reaching(dep) => {
+                    deps.push(dep);
+                    plan.push(None);
+                }
+                TypeOperand::Pure(kt) => plan.push(Some(kt)),
+            }
+        }
+        self.alloc_carried_with(&deps, move |brand, views| {
+            // Captures: `plan` (owned 'static data) and `compose` (fn pointer). Neither can carry
+            // an ambient-lifetime borrow; the composed value comes only from the views and the
+            // brand's own 'static allocs.
+            let mut view_iter = views.into_iter();
+            let parts: Vec<&KType> = plan
+                .into_iter()
+                .map(|slot| match slot {
+                    Some(kt) => brand.alloc_ktype(kt),
+                    None => match view_iter.next().expect(
+                        "alloc_type_composed: one view per Reaching operand, by the partition above",
+                    ) {
+                        Carried::Type(kt) => kt,
+                        Carried::Object(_) => unreachable!(
+                            "alloc_type_composed precondition: every Reaching operand \
+                             is the carrier of a value the call site proved to be a type",
+                        ),
+                    },
+                })
+                .collect();
+            Carried::Type(brand.alloc_ktype_folded(compose(brand, &parts)))
+        })
     }
 
     fn alloc_object_with(

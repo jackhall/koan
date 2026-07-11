@@ -61,7 +61,9 @@ mod tests;
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
 pub(crate) use constructors::{build_type_operand, seal_type_operand};
 pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
-pub(crate) use field_list::{defer_field_list_action, defer_field_list_action_composed, BrandCompose};
+pub(crate) use field_list::{
+    defer_field_list_action, defer_field_list_action_composed, BrandCompose,
+};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};

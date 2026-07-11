@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use super::KFunction;
-use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope};
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, TypeOperand};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{CarriedFamily, Held};
@@ -205,6 +205,26 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
     pub fn arg_carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
         self.arg_carriers.get(name).copied()
+    }
+
+    /// The total-operand form of argument `name` for
+    /// [`KoanStepContextExt::alloc_type_composed`](crate::machine::core::KoanStepContextExt::alloc_type_composed):
+    /// its reach carrier when it arrived as a resolved value, else the region-free type rebuilt
+    /// from its `'static` form. A type that reaches a region but arrived carrier-less cannot cross
+    /// the fold as an operand, so it errors loudly.
+    pub(crate) fn type_operand(
+        &self,
+        name: &str,
+        kt: &KType<'_>,
+    ) -> Result<TypeOperand<'c>, KError> {
+        if let Some(carrier) = self.arg_carrier(name) {
+            return Ok(TypeOperand::Reaching(carrier));
+        }
+        kt.to_static().map(TypeOperand::Pure).ok_or_else(|| {
+            KError::new(KErrorKind::ShapeError(format!(
+                "type argument `{name}` reaches a region but arrived without a carrier",
+            )))
+        })
     }
 
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its

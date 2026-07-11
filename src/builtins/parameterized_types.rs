@@ -81,34 +81,39 @@ mod action_bodies {
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::core::KoanStepContextExt;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
-    use crate::machine::DeliveredCarried;
 
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
 
-    /// LIST / MAP / AS fold the carrier(s) of the arg(s) their result `KType` embeds by clone:
-    /// `elem` / `k` / `v` / `applied` / `ctor` can be any caller-supplied type (a bound `KFunctor`,
-    /// a `SetRef` into a nominal set, ...), so the clone can carry a borrow into the argument's own
-    /// producer region — [`BodyCtx::arg_carrier`] names that reach, folded in via `alloc_type_with`
-    /// (`None` — a scalar-literal argument — folds nothing, matching `alloc_type`).
+    /// LIST / MAP / AS build their composite `KType` at the fold brand from a total,
+    /// embedding-ordered operand list: one operand per embedded arg (`elem` / `k` / `v` /
+    /// `applied` / `ctor`), each produced by [`BodyCtx::type_operand`]. An arg that resolved to
+    /// a carrier-bearing value crosses the fold as that carrier's view, folding its reach into
+    /// the result's witness; a region-free arg (a scalar-literal type token) rebuilds at the
+    /// brand with no reach contribution. The `compose` function receives one `&KType` per
+    /// operand, positionally, and assembles the composite type from those parts alone.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let carriers: Vec<&DeliveredCarried> = ctx.arg_carrier("elem").into_iter().collect();
+        let operands = vec![crate::try_action!(ctx.type_operand("elem", &elem))];
         Action::Done(Ok(ctx
             .ctx
-            .alloc_type_with(&carriers, KType::List(Box::new(elem)))))
+            .alloc_type_composed(operands, |_brand, parts| {
+                KType::List(Box::new(parts[0].clone()))
+            })))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let carriers: Vec<&DeliveredCarried> = [ctx.arg_carrier("k"), ctx.arg_carrier("v")]
-            .into_iter()
-            .flatten()
-            .collect();
+        let operands = vec![
+            crate::try_action!(ctx.type_operand("k", &k)),
+            crate::try_action!(ctx.type_operand("v", &v)),
+        ];
         Action::Done(Ok(ctx
             .ctx
-            .alloc_type_with(&carriers, KType::Dict(Box::new(k), Box::new(v)))))
+            .alloc_type_composed(operands, |_brand, parts| {
+                KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+            })))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -137,16 +142,15 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        let carriers: Vec<&DeliveredCarried> =
-            [ctx.arg_carrier("applied"), ctx.arg_carrier("ctor")]
-                .into_iter()
-                .flatten()
-                .collect();
-        Action::Done(Ok(ctx.ctx.alloc_type_with(
-            &carriers,
-            KType::ConstructorApply {
-                ctor: Box::new(ctor),
-                args: vec![applied],
+        let operands = vec![
+            crate::try_action!(ctx.type_operand("applied", &applied)),
+            crate::try_action!(ctx.type_operand("ctor", &ctor)),
+        ];
+        Action::Done(Ok(ctx.ctx.alloc_type_composed(
+            operands,
+            |_brand, parts| KType::ConstructorApply {
+                ctor: Box::new(parts[1].clone()),
+                args: vec![parts[0].clone()],
             },
         )))
     }
@@ -585,5 +589,68 @@ mod tests {
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),);
         assert_round_trips(scope, expected);
+    }
+
+    /// `:(MAP Str -> Wrapped)` correlates a scalar-literal key with no carrier (`k`) and a
+    /// reaching value type (`v`) by total operand position, not by carrier presence: the scalar
+    /// lands in `k` and the reaching type survives the carrier-view crossing into `v`.
+    #[test]
+    fn map_scalar_key_reaching_value_correlates() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE Wrapped = :{a :Number}");
+        let result = run_one_type(scope, parse_one(":(MAP Str -> Wrapped)"));
+        match result {
+            KType::Dict(k, v) => {
+                assert_eq!(**k, KType::Str, "scalar key must lower to Str");
+                assert_eq!(
+                    v.name(),
+                    "Wrapped",
+                    "reaching value type must survive the carrier-view crossing",
+                );
+            }
+            other => panic!("expected a Dict carrier, got {other:?}"),
+        }
+    }
+
+    /// Mirror of `map_scalar_key_reaching_value_correlates`: the reaching type lands in `k` and
+    /// the scalar lands in `v`, proving the correlation is positional, not carrier-presence-based.
+    #[test]
+    fn map_reaching_key_scalar_value_correlates() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE Wrapped = :{a :Number}");
+        let result = run_one_type(scope, parse_one(":(MAP Wrapped -> Str)"));
+        match result {
+            KType::Dict(k, v) => {
+                assert_eq!(
+                    k.name(),
+                    "Wrapped",
+                    "reaching key type must survive the carrier-view crossing",
+                );
+                assert_eq!(**v, KType::Str, "scalar value must lower to Str");
+            }
+            other => panic!("expected a Dict carrier, got {other:?}"),
+        }
+    }
+
+    /// `:(LIST OF Wrapped)` lowers with the reaching elem type surviving the carrier-view
+    /// crossing (the single-operand analog of the MAP correlation tests above).
+    #[test]
+    fn list_of_reaching_elem_lowers() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE Wrapped = :{a :Number}");
+        let result = run_one_type(scope, parse_one(":(LIST OF Wrapped)"));
+        match result {
+            KType::List(elem) => {
+                assert_eq!(
+                    elem.name(),
+                    "Wrapped",
+                    "reaching elem type must survive the carrier-view crossing",
+                );
+            }
+            other => panic!("expected a List carrier, got {other:?}"),
+        }
     }
 }

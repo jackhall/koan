@@ -1017,6 +1017,143 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     );
 }
 
+/// **`alloc_type_composed`'s correlation, exercised through the actual door.** A mixed operand
+/// list — a region-free `Pure` value at position 0, a region-reaching `Reaching` carrier at
+/// position 1 — composes into a `Dict` whose `k`/`v` land at the same positions as the operands,
+/// and the `v` side (the dep's functor type) survives dropping the dep envelope and the producer
+/// frame: the fold, not ambient capture, is what keeps it alive. This is the pin the builtin-level
+/// tests can't provide — before this door existed the same surface behavior came from ambient
+/// capture, which this test would not catch.
+#[test]
+fn alloc_type_composed_correlates_mixed_operands() {
+    let root = run_root_storage();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+
+    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let kt: &KType = alloc_home_functor_type(&producer_frame);
+    let expected_id = match kt {
+        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
+        other => panic!("expected a KFunctor with a body, got {}", other.name()),
+    };
+    let dep: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
+        producer_frame.storage_rc(),
+    );
+
+    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let operands = vec![
+        TypeOperand::Pure(KType::Number),
+        TypeOperand::Reaching(&dep),
+    ];
+    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
+        .alloc_type_composed(operands, |_brand, parts| {
+            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        });
+
+    let consumer_storage = consumer_frame.storage_rc();
+    drop(dep);
+    drop(producer_frame);
+    drop(consumer_frame);
+
+    let (k_is_number, read_id) = composed.with_pinned(&consumer_storage, |c| match c {
+        Carried::Type(KType::Dict(k, v)) => {
+            let k_is_number = matches!(k.as_ref(), KType::Number);
+            let id = match v.as_ref() {
+                KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
+                other => panic!(
+                    "expected v to be a KFunctor with a body, got {}",
+                    other.name()
+                ),
+            };
+            (k_is_number, id)
+        }
+        other => panic!("expected a Dict type, got {}", other.summarize()),
+    });
+    assert!(k_is_number, "Pure operand at position 0 lands in k");
+    assert_eq!(
+        read_id, expected_id,
+        "Reaching operand at position 1 lands in v and survives producer frame free"
+    );
+}
+
+/// Swapping the two operands' positions from
+/// [`alloc_type_composed_correlates_mixed_operands`] swaps which side of the composed `Dict` they
+/// land in — correlation is purely positional, not by operand kind.
+#[test]
+fn alloc_type_composed_operand_order_is_positional() {
+    let root = run_root_storage();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+
+    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let kt: &KType = alloc_home_functor_type(&producer_frame);
+    let expected_id = match kt {
+        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
+        other => panic!("expected a KFunctor with a body, got {}", other.name()),
+    };
+    let dep: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
+        producer_frame.storage_rc(),
+    );
+
+    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let operands = vec![
+        TypeOperand::Reaching(&dep),
+        TypeOperand::Pure(KType::Number),
+    ];
+    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
+        .alloc_type_composed(operands, |_brand, parts| {
+            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        });
+
+    let consumer_storage = consumer_frame.storage_rc();
+    drop(dep);
+    drop(producer_frame);
+    drop(consumer_frame);
+
+    let (read_id, v_is_number) = composed.with_pinned(&consumer_storage, |c| match c {
+        Carried::Type(KType::Dict(k, v)) => {
+            let id = match k.as_ref() {
+                KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
+                other => panic!(
+                    "expected k to be a KFunctor with a body, got {}",
+                    other.name()
+                ),
+            };
+            let v_is_number = matches!(v.as_ref(), KType::Number);
+            (id, v_is_number)
+        }
+        other => panic!("expected a Dict type, got {}", other.summarize()),
+    });
+    assert_eq!(
+        read_id, expected_id,
+        "Reaching operand now at position 0 lands in k and survives producer frame free"
+    );
+    assert!(v_is_number, "Pure operand now at position 1 lands in v");
+}
+
+/// An all-`Pure` operand list folds no dep — reach = own region only, the same exact-reach result
+/// [`alloc_type_with`](KoanStepContextExt::alloc_type_with)'s scalar gate produces elsewhere, here
+/// without needing a gate at all: `Pure` operands simply add nothing to `deps`.
+#[test]
+fn alloc_type_composed_all_pure_seals_empty_reach() {
+    let root = run_root_storage();
+    let ctx = StepContext::<FrameStorage>::new(Rc::clone(&root));
+    let operands = vec![
+        TypeOperand::Pure(KType::Str),
+        TypeOperand::Pure(KType::Number),
+    ];
+    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
+        .alloc_type_composed(operands, |_brand, parts| {
+            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        });
+    assert!(
+        composed.witness().is_empty(),
+        "all-Pure operand list folds no dep: empty reach"
+    );
+}
+
 // `RegionSet::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
 // Each test below pins one rule of the mint's composition (home-omission, borrows-host
 // materialization, outer-chain subsumption, precise reads, teardown release).
@@ -1231,17 +1368,19 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
                 .resolve_type("Number")
                 .expect("Number resolves in the default scope")
                 .clone();
-            let record = Record::from_pairs([
-                ("flag".to_string(), flag),
-                ("count".to_string(), count),
-            ]);
+            let record =
+                Record::from_pairs([("flag".to_string(), flag), ("count".to_string(), count)]);
             Carried::Type(brand.alloc_ktype_folded(KType::Record(Box::new(record))))
         });
 
     // The record lives in `run_storage`'s region; `producer` still pins the `Bool` leaf it embeds.
     sealed.with_pinned(&run_storage, |c| match c {
         Carried::Type(KType::Record(r)) => {
-            assert_eq!(r.get("flag"), Some(&KType::Bool), "flag folded from the dep view");
+            assert_eq!(
+                r.get("flag"),
+                Some(&KType::Bool),
+                "flag folded from the dep view"
+            );
             assert_eq!(
                 r.get("count"),
                 Some(&KType::Number),
