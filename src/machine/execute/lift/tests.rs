@@ -49,8 +49,8 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
 fn object_top_node_relocates_into_dest() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
 
     let obj: &KObject = source.brand().alloc_object(KObject::Number(2.5));
     let relocated = copy_carried(
@@ -79,8 +79,8 @@ fn object_top_node_relocates_into_dest() {
 fn list_relocation_shares_inner_rc() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
 
     let items = Rc::new(vec![
         Held::Object(KObject::Number(1.0)),
@@ -125,8 +125,8 @@ fn dict_relocation_shares_inner_rc() {
     use std::collections::HashMap;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
 
     let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
     map.insert(
@@ -171,8 +171,8 @@ fn tagged_relocation_shares_value_and_set_rc() {
     use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
 
     let inner = Rc::new(KObject::Number(42.0));
     let set = RecursiveSet::singleton(
@@ -227,8 +227,8 @@ fn tagged_relocation_shares_value_and_set_rc() {
 fn kfunction_borrow_preserved_verbatim() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let source = CallFrame::new_test(scope, None);
-    let dest = CallFrame::new_test(scope, None);
+    let source = CallFrame::new(scope);
+    let dest = CallFrame::new(scope);
 
     let kf_ref = alloc_local_kf(&source);
     let obj: &KObject = source
@@ -266,7 +266,7 @@ fn type_recursive_setref_relocates_and_navigates() {
     use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let dest = CallFrame::new_test(scope, None);
+    let dest = CallFrame::new(scope);
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.

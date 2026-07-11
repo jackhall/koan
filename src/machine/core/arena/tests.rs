@@ -98,7 +98,7 @@ fn single_owner_exposes_region_and_frameset_members() {
 fn with_scope_opens_child_scope_at_brand() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope);
     // Scalar copy-out: matches `scope_id`.
     let id = frame.with_scope(|s| s.id);
     assert_eq!(id, frame.scope_id());
@@ -131,7 +131,7 @@ fn with_scope_relocates_seed_value_into_brand() {
         .deep_clone();
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
         // `alloc_object_checked` erases the caller-`'a` input and re-homes it at the frame region,
         // so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
@@ -158,7 +158,7 @@ fn with_scope_relocates_seed_value_into_brand() {
 fn call_frame_scope_survives_subsequent_alloc() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame = CallFrame::new_test(scope, None);
+    let frame = CallFrame::new(scope);
     frame.with_scope(|s| {
         let _new = s.brand().alloc_object(KObject::Number(1.0));
         assert!(std::ptr::eq(s.region(), frame.region()));
@@ -172,7 +172,7 @@ fn call_frame_scope_survives_subsequent_alloc() {
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
         let region_ptr: *const KoanRegion = child.region();
         let scope_ptr: *const Scope<'_> = child;
@@ -200,10 +200,9 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 fn call_frame_chained_outer_frame_walkable() {
     let region = run_root_storage();
     let run_scope = default_scope(&region, Box::new(std::io::sink()));
-    let outer = CallFrame::new_test(run_scope, None);
+    let outer = CallFrame::new(run_scope);
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
-    let inner =
-        outer.with_scope(|outer_child| CallFrame::new_test(outer_child, Some(outer.storage_rc())));
+    let inner = outer.with_scope(CallFrame::new);
     drop(outer);
     inner.with_scope(|inner_child| {
         let outer_scope = inner_child
@@ -215,6 +214,57 @@ fn call_frame_chained_outer_frame_walkable() {
         ));
         assert!(outer_scope.outer().is_some());
     });
+}
+
+/// Derivation, top-level case: a per-call frame built directly under a **root-region** scope chains
+/// no ancestor pin. `parent_frame_pin` returns `None` for a root-region scope, so the frame's
+/// storage has no `outer` — matching the former hand-passed `outer_frame == None` at top level.
+#[test]
+fn builtin_frame_at_top_level_chains_nothing() {
+    let region = run_root_storage();
+    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    assert!(run_scope.parent_frame_pin().is_none());
+    let frame = CallFrame::new(run_scope);
+    assert!(frame.storage_rc().outer().is_none());
+}
+
+/// Derivation, nested case: a per-call frame whose parent scope lives in an ancestor **per-call**
+/// region chains that region's owning storage — the pin `parent_frame_pin` reads off the parent
+/// scope's own `region_owner`, so a caller cannot mis-wire it.
+#[test]
+fn builtin_frame_under_per_call_parent_chains_region_owner() {
+    let region = run_root_storage();
+    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let outer = CallFrame::new(run_scope);
+    let inner = outer.with_scope(|outer_child| {
+        // `outer_child` lives in `outer`'s per-call region, so it derives `Some(outer.storage)`.
+        assert!(Rc::ptr_eq(
+            &outer_child
+                .parent_frame_pin()
+                .expect("a per-call parent scope pins its region owner"),
+            &outer.storage_rc(),
+        ));
+        CallFrame::new(outer_child)
+    });
+    assert!(Rc::ptr_eq(
+        inner
+            .storage_rc()
+            .outer()
+            .expect("a frame under a per-call parent chains that parent's storage"),
+        &outer.storage_rc(),
+    ));
+}
+
+/// The reserved tail door chains nothing **even** when its parent scope is per-call: a fresh-tail
+/// cart strong-owns no ancestor, so tail recursion stays constant-space and no back-edge forms —
+/// the one deliberate no-chain shape, distinct from the derived `CallFrame::new`.
+#[test]
+fn new_tail_chains_nothing_under_per_call_parent() {
+    let region = run_root_storage();
+    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let outer = CallFrame::new(run_scope);
+    let tail = outer.with_scope(CallFrame::new_tail);
+    assert!(tail.storage_rc().outer().is_none());
 }
 
 /// Allocating records the stored address into the `membership` side-table via
@@ -254,7 +304,7 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
     // escaped closure pins. The frame shell and the borrowing scope drop at the block boundary.
     let escapee = {
         let scope = default_scope(&run_root, Box::new(std::io::sink()));
-        let frame = CallFrame::new_test(scope, None);
+        let frame = CallFrame::new(scope);
         frame.storage_rc()
     };
     assert_eq!(
@@ -563,7 +613,7 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
 fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let outer_region = run_root_storage();
     let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
-    let frame: Rc<CallFrame> = CallFrame::new_test(outer_scope, None);
+    let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
     // Born reference-only: the active frame is excluded at the alloc site.
     let carrier: Witnessed<CarriedFamily, CarrierWitness> = frame
@@ -702,7 +752,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let reader_a_scope = run_root_bare(&reader_a);
     let reader_b = run_root_storage();
     let reader_b_scope = run_root_bare(&reader_b);
-    let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None); // the list node lands here.
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope); // the list node lands here.
 
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
         (region.handle(), Vec::new())
@@ -775,9 +825,9 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     // A capturing frame and two capture-target frames — three distinct regions forming a reach tree.
-    let frame_outer: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let frame_1: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let frame_2: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_outer: Rc<CallFrame> = CallFrame::new(scope);
+    let frame_1: Rc<CallFrame> = CallFrame::new(scope);
+    let frame_2: Rc<CallFrame> = CallFrame::new(scope);
 
     // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
     // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
@@ -864,9 +914,9 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     // Two independent frames whose closures the record's fields reach, plus the dest it lands in.
-    let frame_a: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let frame_b: Rc<CallFrame> = CallFrame::new_test(scope, None);
-    let dest_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let frame_a: Rc<CallFrame> = CallFrame::new(scope);
+    let frame_b: Rc<CallFrame> = CallFrame::new(scope);
+    let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
 
     // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
     // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
@@ -971,7 +1021,7 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
 
     // Producer: a KFunctor type (wrapping a KFunction) resident in its own frame's region — the
     // stand-in for a dep terminal delivered to the finish.
-    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let kt: &KType = alloc_home_functor_type(&producer_frame);
     let expected_id = match kt {
         KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
@@ -984,7 +1034,7 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
 
     // Consumer: a StepContext over a *different* frame — the finish surface's own region.
     // `alloc_type_of` rebuilds `kt` at the brand from the dep's view and folds the producer's reach.
-    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let sealed: Witnessed<CarriedFamily, CarrierWitness> =
         ctx.alloc_type_of(&dep).into_witnessed_for_test();
@@ -1019,14 +1069,14 @@ fn alloc_type_of_scalar_gate_seals_empty_reach() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     // A region-free scalar type sealed as a dep terminal, its envelope naming a producer frame.
-    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let kt: &KType = producer_frame.brand().alloc_ktype(KType::Number);
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
     );
 
-    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let sealed: Witnessed<CarriedFamily, CarrierWitness> =
         ctx.alloc_type_of(&dep).into_witnessed_for_test();
@@ -1054,7 +1104,7 @@ fn alloc_type_composed_correlates_mixed_operands() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
-    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let kt: &KType = alloc_home_functor_type(&producer_frame);
     let expected_id = match kt {
         KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
@@ -1065,7 +1115,7 @@ fn alloc_type_composed_correlates_mixed_operands() {
         producer_frame.storage_rc(),
     );
 
-    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let operands = vec![
         TypeOperand::Pure(KType::Number),
@@ -1111,7 +1161,7 @@ fn alloc_type_composed_operand_order_is_positional() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
-    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let kt: &KType = alloc_home_functor_type(&producer_frame);
     let expected_id = match kt {
         KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
@@ -1122,7 +1172,7 @@ fn alloc_type_composed_operand_order_is_positional() {
         producer_frame.storage_rc(),
     );
 
-    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let operands = vec![
         TypeOperand::Reaching(&dep),

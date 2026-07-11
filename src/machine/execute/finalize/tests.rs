@@ -51,7 +51,7 @@ fn resident_scalar(
 fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
     assert!(
@@ -94,7 +94,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, true);
     assert!(
@@ -225,7 +225,7 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
     let runtime = KoanRuntime::new();
@@ -277,7 +277,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
 
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
     let carrier = producer.with_scope(|child| {
         let evidence = crate::machine::core::StoredReach {
@@ -334,7 +334,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
 fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
 
     let (carrier, birth_addr) = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
@@ -395,7 +395,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
 
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new_test(scope, None);
+    let producer = CallFrame::new(scope);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
     // `borrows_into_home = true` marks the value as home-borrowing; the type channel must pass the
     // carrier through with the bit and the reach untouched either way.

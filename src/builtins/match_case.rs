@@ -74,13 +74,7 @@ pub fn body<'a>(
         } else {
             ItSource::Pure(value.deep_clone())
         };
-    arm_tail(
-        ctx.scope,
-        ctx.frame.map(|f| f.storage_rc()),
-        it_source,
-        selected.body,
-        contract,
-    )
+    arm_tail(ctx.scope, it_source, selected.body, contract)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

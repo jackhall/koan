@@ -341,7 +341,7 @@ mod erased_continuation_tests {
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the open below.
-        let cart = Rc::new(CallFrame::new_test(scope, None));
+        let cart = Rc::new(CallFrame::new(scope));
 
         let continuation: NodeContinuation = Box::new(move |_view, _results, _idx| {
             // Read the run-lived capture through the reattached box.

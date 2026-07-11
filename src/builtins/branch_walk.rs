@@ -80,7 +80,6 @@ pub(crate) enum ItSource<'a> {
 /// `contract`.
 pub(crate) fn arm_tail<'a>(
     root: &'a Scope<'a>,
-    outer_frame: Option<Rc<crate::machine::core::FrameStorage>>,
     it_source: ItSource<'a>,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
@@ -88,7 +87,7 @@ pub(crate) fn arm_tail<'a>(
     use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::core::kfunction::action::FramePlacement;
     use crate::machine::{BindingIndex, CallFrame};
-    let frame: Rc<CallFrame> = CallFrame::new(root, outer_frame);
+    let frame: Rc<CallFrame> = CallFrame::new(root);
     // Bind `it` into the frame's own scope: `alloc_object` erases the caller-`'a` input and
     // re-homes it at the frame region, so no pre-shortening is needed. Either source is a deep copy
     // living in the arm frame, so the stored reach is the copy's (`adopted_reach_of` — a

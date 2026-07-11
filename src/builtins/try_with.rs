@@ -34,7 +34,6 @@ pub fn body<'a>(
     // Body runs in a fresh `child_under` scope so a `LET` inside it stays local and reads still
     // chain out to the call-site scope.
     let body_scope: &'a Scope<'a> = ctx.scope.brand().alloc_scope(Scope::child_under(ctx.scope));
-    let outer_frame = ctx.frame.map(|f| f.storage_rc());
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // On success `it` is the watched value, adopted from its sealed carrier at bind time. On
         // error `it` is the per-variant payload unwrapped from `KError::to_tagged`; that Tagged is
@@ -69,7 +68,7 @@ pub fn body<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(fctx.scope, outer_frame, it_source, body_expr, contract)
+        arm_tail(fctx.scope, it_source, body_expr, contract)
     });
     Action::Catch {
         watched: DepRequest::Dispatch {

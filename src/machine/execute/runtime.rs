@@ -444,7 +444,7 @@ impl<'run> KoanRuntime<'run> {
         placement: FramePlacement<'x>,
     ) -> Option<Rc<CallFrame>> {
         match placement {
-            FramePlacement::FreshTail { outer } => Some(CallFrame::new(outer, None)),
+            FramePlacement::FreshTail { outer } => Some(CallFrame::new_tail(outer)),
             FramePlacement::FreshChild { frame } => Some(frame),
             FramePlacement::Inherit => None,
         }

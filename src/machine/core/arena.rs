@@ -1102,18 +1102,6 @@ impl KoanRegionTestExt for KoanRegion {
     }
 }
 
-#[cfg(test)]
-impl CallFrame {
-    /// Test alias for [`CallFrame::new`], kept so the many frame-construction tests share one
-    /// construction name distinct from production call sites.
-    pub(crate) fn new_test<'a>(
-        outer: &'a Scope<'a>,
-        outer_frame: Option<Rc<FrameStorage>>,
-    ) -> Rc<CallFrame> {
-        CallFrame::new(outer, outer_frame)
-    }
-}
-
 /// Koan's per-call region owner: the library's [`RegionHost`], instantiated for the Koan family
 /// set. `RegionHost` lazily mints its region on first allocation — reached by the child `Scope`
 /// [`CallFrame::new`] builds immediately, so a constructed frame's region is minted by the time
@@ -1193,10 +1181,12 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         // `'static` and its liveness is not the reach-witness system's business to name: it is
         // guaranteed instead by `FrameStorage`'s own `outer` `Rc` chain (see this fn's doc), a
         // structural invariant this construction door alone upholds by always chaining `storage`'s
-        // `outer` to the same frame that owns `outer_b`'s region. The audit here is therefore
-        // unconditional — there is no address to check against `handle_b`'s region, only the
-        // caller-side (this function's sole caller, `CallFrame::new`) obligation that `storage`'s
-        // `outer_frame` already pins the ancestor. Storage can't fail here.
+        // `outer` to the same frame that owns `outer_b`'s region. That chain is **derived**, not
+        // asserted: `CallFrame::new` computes it from the parent scope's own `region_owner`
+        // (`Scope::parent_frame_pin`), root-region parents chain nothing, and the one deliberate
+        // no-chain frame is the reserved `CallFrame::new_tail`. The audit here is therefore
+        // unconditional — there is no address to check against `handle_b`'s region, and no caller can
+        // pass the wrong pin. Storage can't fail here.
         let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
         let live = handle_b
             .alloc_resident_audited::<Scope<'static>>(child, |_region, _value| true)
@@ -1237,11 +1227,32 @@ pub struct CallFrame {
 }
 
 impl CallFrame {
-    /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
-    /// `outer_frame` must hold the parent frame's `FrameStorage` Rc when the parent is per-call;
-    /// `None` when the parent is run-root — a dispatched frame strong-owns no ancestor, so an
-    /// escaping value kept alive by a consumer scope's reach-set forms no back-edge.
-    pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<FrameStorage>>) -> Rc<CallFrame> {
+    /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link. The
+    /// storage pin chained for the parent is **derived** from `outer` via
+    /// [`Scope::parent_frame_pin`]: the parent scope's own region owner when it is per-call, or no
+    /// chain when the parent lives in the run-root region (which outlives the run). No caller can
+    /// under-pin — there is no pin parameter to mis-wire; the one deliberate no-chain frame is the
+    /// TCO fresh-tail cart, minted by the reserved [`Self::new_tail`].
+    pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallFrame> {
+        Self::with_parent_pin(outer, outer.parent_frame_pin())
+    }
+
+    /// The TCO fresh-tail cart: a frame that strong-owns no ancestor (`outer_frame = None`), so tail
+    /// recursion stays constant-space and no back-edge forms. The captured scope's liveness rides the
+    /// closure value's carrier and the return contract's witness, not the `FrameStorage.outer` chain
+    /// (see `design/tail-call-optimization.md`). `pub(in crate::machine)` reserves it to the
+    /// fresh-tail placement (`resolve_frame_placement`, in `crate::machine`); builtins live in
+    /// `crate::builtins` and cannot name it, so the no-chain shape is unreachable to them.
+    pub(in crate::machine) fn new_tail<'p>(outer: &'p Scope<'p>) -> Rc<CallFrame> {
+        Self::with_parent_pin(outer, None)
+    }
+
+    /// Shared body of [`Self::new`] and [`Self::new_tail`]: build the frame with `outer_frame` as the
+    /// parent pin the fresh storage's `outer` chain holds.
+    fn with_parent_pin<'p>(
+        outer: &'p Scope<'p>,
+        outer_frame: Option<Rc<FrameStorage>>,
+    ) -> Rc<CallFrame> {
         // The storage is heap-pinned behind its own `Rc` from this point on (its region minted
         // lazily, on the child scope's allocation below), so the erased child-scope pointer stays
         // valid as the storage Rc moves into the shell.

@@ -34,7 +34,7 @@ pub fn body<'a>(
     // new frame's `outer` pointer) — matching a normal call frame. The tail is the whole quoted
     // expression run in the fresh frame's own scope (`BlockScope::None`): no block push, no seed,
     // and — unlike an arm — no split, so a parenthesized group evaluates as one expression.
-    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope, ctx.frame.map(|f| f.storage_rc()));
+    let frame: Rc<CallFrame> = CallFrame::new(ctx.scope);
     block_tail(
         FramePlacement::FreshChild { frame },
         BlockScope::None,
