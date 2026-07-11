@@ -38,9 +38,11 @@ fn body_binary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_
         crate::try_action!(ctx.type_operand("left", &left)),
         crate::try_action!(ctx.type_operand("right", &right)),
     ];
-    Action::Done(Ok(ctx.ctx.alloc_type_composed(operands, |_brand, parts| {
-        KType::union_of(vec![parts[0].clone(), parts[1].clone()])
-    })))
+    Action::Done(Ok(ctx
+        .ctx
+        .alloc_type_composed(operands, |_brand, parts| {
+            KType::union_of(vec![parts[0].clone(), parts[1].clone()])
+        })))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
@@ -80,9 +82,11 @@ fn body_nary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>)
                 crate::try_action!(expect_type_terminal(&results, position, MEMBERS_SLOT));
             operands.push(TypeOperand::Reaching(carrier));
         }
-        Action::Done(Ok(fctx.ctx.alloc_type_composed(operands, |_brand, parts| {
-            KType::union_of(parts.iter().map(|part| (*part).clone()).collect())
-        })))
+        Action::Done(Ok(fctx
+            .ctx
+            .alloc_type_composed(operands, |_brand, parts| {
+                KType::union_of(parts.iter().map(|part| (*part).clone()).collect())
+            })))
     });
     Action::AwaitDeps { deps, finish }
 }

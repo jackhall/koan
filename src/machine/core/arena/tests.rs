@@ -1022,8 +1022,8 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
 /// position 1 — composes into a `Dict` whose `k`/`v` land at the same positions as the operands,
 /// and the `v` side (the dep's functor type) survives dropping the dep envelope and the producer
 /// frame: the fold, not ambient capture, is what keeps it alive. This is the pin the builtin-level
-/// tests can't provide — before this door existed the same surface behavior came from ambient
-/// capture, which this test would not catch.
+/// tests can't provide — an ambient capture would reproduce the same read-back surface without the
+/// reach-fold, so only this door-level test distinguishes the two.
 #[test]
 fn alloc_type_composed_correlates_mixed_operands() {
     let root = run_root_storage();
