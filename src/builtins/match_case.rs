@@ -23,11 +23,13 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use super::branch_walk::{arm_tail, resolve_arm_contract};
+    use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
     use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
 
+    // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
+    // upfront copy is made.
     let value = match arg_object(ctx.args, "value") {
-        Some(v) => v.deep_clone(),
+        Some(v) => v,
         None => {
             return Action::Done(Err(KError::new(KErrorKind::MissingArg(
                 "value".to_string(),
@@ -37,7 +39,7 @@ pub fn body<'a>(
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", "branches"));
     let selected =
-        match find_branch_body_by_type(&branches_expr, &value, ctx.scope, ctx.chain.clone()) {
+        match find_branch_body_by_type(&branches_expr, value, ctx.scope, ctx.chain.clone()) {
             Ok(Some(arm)) => arm,
             Ok(None) => {
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -47,33 +49,35 @@ pub fn body<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-    // Selection returns which sub-value `it` binds (ruling F3); realize it here as the deep copy
-    // the arm frame owns. A variant/tag arm binds the wrapped payload; a boolean arm over a `Bool`
-    // scrutinee binds `Null` (a boolean carries no payload); every other arm binds the scrutinee
-    // unchanged.
-    let it_value = if selected.binds_payload {
-        match &value {
-            crate::machine::model::KObject::Tagged { value, .. } => (**value).deep_clone(),
-            crate::machine::model::KObject::Wrapped { inner, .. } => inner.get().deep_clone(),
-            other => other.deep_clone(),
-        }
-    } else if matches!(value, crate::machine::model::KObject::Bool(_)) {
-        crate::machine::model::KObject::Null
-    } else {
-        value.deep_clone()
-    };
-    // The scrutinee's envelope travels to the `it` binding: `it` is a clone of the matched value
-    // (or its payload), so it reaches every region the scrutinee does, and the envelope's retained
-    // host is the pin the copy's reach mints under. A region-pure scrutinee has no carrier → empty
-    // reach.
-    let scrutinee = ctx.arg_carrier("value").map(|carrier| carrier.duplicate());
+    // The scrutinee reaches its `it` binding through the same carrier door TRY's success arm uses:
+    // the envelope's retained host pins the producer until the single bind-time copy, and the
+    // projection (ruling F3) picks the scrutinee itself or its wrapped payload. A boolean arm over
+    // a `Bool` scrutinee binds `Null` (a boolean carries no payload); a region-pure scrutinee (e.g.
+    // a plain Number) has no carrier, so the copy is region-pure and audited as such in `arm_tail`.
+    let it_source =
+        if !selected.binds_payload && matches!(value, crate::machine::model::KObject::Bool(_)) {
+            ItSource::Pure(crate::machine::model::KObject::Null)
+        } else if let Some(carrier) = ctx.arg_carrier("value") {
+            let projection = if selected.binds_payload {
+                ItProjection::Payload
+            } else {
+                ItProjection::Scrutinee
+            };
+            ItSource::Carrier(carrier.duplicate(), projection)
+        } else if selected.binds_payload {
+            let payload = match value {
+                crate::machine::model::KObject::Tagged { value, .. } => (**value).deep_clone(),
+                crate::machine::model::KObject::Wrapped { inner, .. } => inner.get().deep_clone(),
+                other => other.deep_clone(),
+            };
+            ItSource::Pure(payload)
+        } else {
+            ItSource::Pure(value.deep_clone())
+        };
     arm_tail(
         ctx.scope,
         ctx.frame.map(|f| f.storage_rc()),
-        super::branch_walk::ItSource::Value {
-            value: it_value,
-            delivered: scrutinee,
-        },
+        it_source,
         selected.body,
         contract,
     )

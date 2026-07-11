@@ -23,7 +23,7 @@ use super::{arg, kw, sig};
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use super::branch_walk::{arm_tail, resolve_arm_contract, ItSource};
+    use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
     use crate::machine::core::kfunction::action::{
         require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
     };
@@ -41,21 +41,18 @@ pub fn body<'a>(
         // region-pure, so its reach is the empty set.
         let (tag, it_source, original_error): (String, ItSource<'a>, Option<KError>) = match result
         {
-            Ok(carrier) => ("Ok".to_string(), ItSource::Carrier(carrier), None),
+            Ok(carrier) => (
+                "Ok".to_string(),
+                ItSource::Carrier(carrier, ItProjection::Scrutinee),
+                None,
+            ),
             Err(e) => {
                 let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand());
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
                 };
-                (
-                    tag,
-                    ItSource::Value {
-                        value: payload,
-                        delivered: None,
-                    },
-                    Some(e),
-                )
+                (tag, ItSource::Pure(payload), Some(e))
             }
         };
         let body_expr = match find_branch_body_by_tag(&branches_expr, &tag, true) {

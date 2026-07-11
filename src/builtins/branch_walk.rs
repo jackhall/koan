@@ -53,19 +53,24 @@ pub(crate) fn resolve_arm_contract<'a>(
     })
 }
 
+/// Which part of a carrier's carried value the arm's `it` binds.
+pub(crate) enum ItProjection {
+    /// `it` binds the carried value itself — `TRY`'s success arm, and a general-type `MATCH` arm.
+    Scrutinee,
+    /// `it` binds the carried value's wrapped payload — a variant/tag `MATCH` arm (ruling F3).
+    Payload,
+}
+
 /// How the matched scrutinee reaches the arm's `it` binding.
 pub(crate) enum ItSource<'a> {
-    /// An owned value plus the delivery envelope it was read out of — `MATCH`'s resolved argument
-    /// (the envelope supplies the copy's stored reach and its producer pin) and `TRY`'s error
-    /// payload (`None`: the payload is region-pure, reaching nothing).
-    Value {
-        value: crate::machine::model::KObject<'a>,
-        delivered: Option<crate::machine::DeliveredCarried>,
-    },
-    /// The watched producer's delivery envelope — `TRY`'s success arm. Cloned once, directly into
-    /// the arm frame at bind time; the envelope's retained host pins the producer until then and
-    /// supplies the binding's stored reach.
-    Carrier(crate::machine::DeliveredCarried),
+    /// A region-pure owned value — `TRY`'s error payload, `MATCH`'s region-pure scrutinee (or its
+    /// payload), and a boolean arm's `Null`. No carrier, no foreign reach: the copy's purity is an
+    /// audit at bind time.
+    Pure(crate::machine::model::KObject<'a>),
+    /// The delivery envelope plus which part of its carried value `it` binds. Cloned once, directly
+    /// into the arm frame at bind time; the envelope's retained host pins the producer until then
+    /// and supplies the binding's stored reach.
+    Carrier(crate::machine::DeliveredCarried, ItProjection),
 }
 
 /// Build the matched-arm tail shared by the `Action`-harness `MATCH` and `TRY` bodies: the
@@ -91,39 +96,33 @@ pub(crate) fn arm_tail<'a>(
     // binding), and a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
         let (it_object, reach) = match it_source {
-            // `delivered` supplies this value's reach evidence; `None` is `TRY`'s
-            // region-pure error payload, whose purity is an audit now instead of a comment.
-            ItSource::Value {
-                value,
-                delivered: Some(d),
-            } => {
-                let reach = child.adopted_reach_of(&d);
-                let object = child
-                    .alloc_object_delivered(value, std::slice::from_ref(&reach))
-                    .expect("ItSource::Value's delivered carrier must cover its own reach");
-                (object, reach)
-            }
-            ItSource::Value {
-                value,
-                delivered: None,
-            } => {
+            // A region-pure value reaches nothing; its purity is an audit at the bind brand.
+            ItSource::Pure(value) => {
                 let object = child
                     .brand()
                     .alloc_object_checked(value)
-                    .expect("ItSource::Value with no delivered carrier must be region-pure");
+                    .expect("ItSource::Pure must be region-pure");
                 (object, Default::default())
             }
-            ItSource::Carrier(carrier) => {
+            ItSource::Carrier(carrier, projection) => {
                 // Adopt at the bind brand: one structural copy, made directly into the arm frame's
                 // region inside the envelope's pinned open; the binding stores the copy's reach,
-                // minted first so the copy's own residence audit can see it.
+                // minted first so the copy's own residence audit can see it. The projection selects
+                // which sub-object of the carried value feeds that copy — the payload lives inside
+                // the carried value, so its reach is a subset of the envelope's, still covered by
+                // `adopted_reach_of`.
                 let reach = child.adopted_reach_of(&carrier);
                 let object = carrier.open(|live| {
+                    let source = match projection {
+                        ItProjection::Scrutinee => live.object(),
+                        ItProjection::Payload => match live.object() {
+                            KObject::Wrapped { inner, .. } => inner.get(),
+                            KObject::Tagged { value, .. } => &**value,
+                            other => other,
+                        },
+                    };
                     child
-                        .alloc_object_delivered(
-                            live.object().deep_clone(),
-                            std::slice::from_ref(&reach),
-                        )
+                        .alloc_object_delivered(source.deep_clone(), std::slice::from_ref(&reach))
                         .expect("ItSource::Carrier's own reach must cover its deep copy")
                 });
                 (object, reach)
