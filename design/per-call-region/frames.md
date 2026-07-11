@@ -44,12 +44,23 @@ new frame's child scope's `outer` is the FN's *captured* scope
 Builtins that build their own per-call frame don't always have that
 property. The frame-chain `Rc` on `FrameStorage` (`outer:
 Option<Rc<FrameStorage>>`) keeps the parent frame's storage alive
-whenever the child's `outer` points into per-call memory. The builtin
-threads the chain by passing the call-site frame's `storage_rc()` into
-`CallFrame::new`, which stores it on the new frame's `FrameStorage.outer`.
+whenever the child's `outer` points into per-call memory.
 
-Each builtin clones `sched.current_frame()` into its `CallFrame::new`
-call:
+That pin is **derived**, not threaded by the caller. `CallFrame::new`
+reads it off the parent scope via
+[`Scope::parent_frame_pin`](../../src/machine/core/scope.rs): the parent
+scope's own `region_owner` when the parent lives in a per-call region, or
+no pin when it lives in the run-root region (which outlives the run — a
+root chain plus an escaping value's reach-set pin would close a
+`region → value → frame` cycle). There is no pin parameter for a caller
+to mis-wire; the one deliberate no-chain frame is the TCO fresh-tail
+cart, minted by the reserved `CallFrame::new_tail`. A frame built under a
+run-root parent (a top-level invoke) therefore chains nothing and TCO
+recursion stays bounded, while one built under a per-call parent chains
+that parent's storage automatically.
+
+The builtins that build their own per-call frame — MATCH and TRY through
+`branch_walk.rs`'s `arm_tail`, EVAL directly:
 
 - `match_case.rs` — MATCH constructs a frame whose child scope's
   `outer` is the **call-site** scope so free names in the arm body
@@ -59,13 +70,11 @@ call:
   resolve through the surrounding call.
 - `eval.rs` — EVAL builds a per-call frame for the evaluated
   expression.
-- `module_def.rs` — MODULE captures `sched.current_frame()` so the
-  module's child scope chains through the call site (relevant when a
-  functor body declares an inner MODULE).
 
-Top-level FN invokes pass `None` to `CallFrame::new` (their captured
-chain ends in run-root, which outlives the run; no chain is needed and
-TCO recursion stays bounded). Field declaration order on `FrameStorage`
+(MODULE builds no per-call frame — its declarations are a same-region
+child of the call site, so nothing chains.)
+
+Field declaration order on `FrameStorage`
 is load-bearing: `region` is declared before `outer`, so the
 auto-derived `Drop` tears down this frame's region *before* releasing
 the parent storage Rc — inner pointers die before the outer storage they

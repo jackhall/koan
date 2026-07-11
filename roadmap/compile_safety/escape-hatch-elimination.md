@@ -46,12 +46,15 @@ bypassing every veneer; eleven reaches exist across `src/machine`.
 
 ## Dependencies
 
+The typed frame parenting the frame-child door's replacement rests on has
+shipped — `CallFrame::new` derives the parent pin and `new_tail` reserves the
+no-chain case
+([design/per-call-region/frames.md § Outer-frame chain](../../design/per-call-region/frames.md)).
+
 **Requires:**
 
 - [Witness-derived binding](witness-derived-binding.md) — the fused bind
   doors that replace the evidence-tier audits.
-- [Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) — types
-  the frame parenting the frame-child door's replacement rests on.
 
 **Unblocks:**
 

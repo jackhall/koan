@@ -142,7 +142,10 @@ for implementors:
    through their members, every region those sets name.
 3. A carrier holds no pin of its own. Its `&WitnessSet` is covered externally: by
    the **container's** liveness when the carrier is resident, by the scheduler's
-   **frame-retention** when it is walking.
+   **frame-retention** when it is walking. The within-step case is typed: a Done-arm
+   carrier rides a step brand ([`StepCarried`](../src/machine/execute/step_carried.rs))
+   at the step's `'step` lifetime, so the borrow checker enforces that it cannot outlive
+   the step whose frame-retention covers it.
 4. **Frame-retention.** The scheduler holds a producer frame's owner `Rc` until
    every destination has pulled its terminal; the frame is released when that
    pull-count reaches zero. Release is a function of deliveries only — never of any

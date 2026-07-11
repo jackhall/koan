@@ -48,10 +48,6 @@ borrowed from passes every audit.
 
 ## Dependencies
 
-Soft ordering with
-[Scheduler-owned lifetime tokens](scheduler-lifetime-tokens.md) is noted in
-that item.
-
 **Requires:**
 
 

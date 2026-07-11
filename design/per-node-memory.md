@@ -129,7 +129,11 @@ carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/w
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
 within-step transient, the producing frame folded in at close ([`reseal_under`](../workgraph/src/witnessed.rs))
-before the carrier is stored. A node's own value terminal is witnessed the same way — a region-pure
+before the carrier is stored. That transient is **typed**, not merely disciplined: the step doors return
+the carrier wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's
+`'step` lifetime, so the borrow checker rejects any attempt to stash it past its construction step, and
+its sole exit to node storage is [`StepCarried::seal_at_step`](../src/machine/execute/step_carried.rs)
+into finalize's fold. A node's own value terminal is witnessed the same way — a region-pure
 result (a spliced value, a builtin's synchronous result) through `resident`, a dep-reaching result by
 folding its delivered dep carriers — so [`NodeStep::DoneWitnessed`](../src/machine/execute/nodes.rs) is
 the sole value terminal and [`finalize_terminal`](../src/machine/execute/finalize.rs) folds the

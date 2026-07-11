@@ -24,8 +24,10 @@ allocation can close a region↔value cycle, so the allocation engine carries no
 
 `FrameStorage` itself carries `outer: Option<Rc<FrameStorage>>`, which chains the parent per-call
 frame's storage when a builtin-built frame's child scope's `outer` points into per-call memory (MATCH
-/ TRY / EVAL / MODULE under a functor call). This is distinct from escaping-value liveness: `outer`
-keeps a region alive for an *outer-scope lookup* the new frame's child scope performs at run time.
+/ TRY / EVAL). The pin is derived inside `CallFrame::new` from the parent scope's own `region_owner`
+([`Scope::parent_frame_pin`](../../src/machine/core/scope.rs)), never passed by the builtin. This is
+distinct from escaping-value liveness: `outer` keeps a region alive for an *outer-scope lookup* the
+new frame's child scope performs at run time.
 
 ## Consumer-pull node-output lift
 
@@ -110,7 +112,8 @@ terminal's full witness set into the run-root scope's own arena, so a value reac
 list of closures, a module over a functor-result region) keeps every one, read straight off its carrier
 rather than reconstructed from the value. The mint is guarded by `pins_region`, so a region the consumer
 or an ancestor already pins is not re-added, and the minted set dedups by region. No cycle forms: a
-dispatched frame's `outer` is `None`, so a minting descendant never strong-refs back into the chain that
+frame's `outer` chain points only toward its lexical ancestor (or `None` at run-root), never back
+toward a descendant, so a minting descendant never strong-refs back into the chain that
 would close a loop.
 
 The allocation engine therefore needs **no cycle gate**. A stored value holds no owning `Rc` back to

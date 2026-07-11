@@ -90,7 +90,9 @@ data, and a single harness method applies them. The three pieces:
   every producer and finish returns (the dispatch-side peer of the builtin
   [`Action`](../../src/machine/core/kfunction/action.rs)). It is AST-free — no
   variant names a `KFunction` or a `KExpression`. Its single lifetime `'step` is the
-  per-step cart-scale frame lifetime the `Done` value is born at; the consumer pull-lifts it
+  per-step cart-scale frame lifetime the `Done` value is born at — the `Done` carrier rides it as a
+  [`StepCarried`](../../src/machine/execute/step_carried.rs), confined to the step until it exits
+  through `seal_at_step` into finalize; the consumer pull-lifts it
   across each dep edge ([per-call-region/lifecycle.md § Consumer-pull node-output lift](../per-call-region/lifecycle.md#consumer-pull-node-output-lift)).
   Four variants: `Done` (the node's terminal value at `'step`, or an
   error), `Continue` (replace this slot's work and frame,

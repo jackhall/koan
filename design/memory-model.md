@@ -304,10 +304,14 @@ invariants make the ownership unit coherent:
 
 ### Move-in residence audits
 
-A bare move-in surface — `RegionBrand::alloc_object` / `alloc_ktype` / `KoanStepContextExt::alloc_type`,
+A bare move-in surface — `RegionBrand::alloc_object` / `alloc_ktype` / `StepAllocator::alloc_type`,
 and the library's own [`RegionHandle::alloc_resident`](../workgraph/src/witnessed/region.rs) it
 routes through — takes `K::At<'static>`: region-purity is compile-enforced there, so a value carrying
-any region borrow is rejected before it ever reaches the pins-nothing empty witness. A value that
+any region borrow is rejected before it ever reaches the pins-nothing empty witness. That empty
+witness pins nothing, so its carrier is sound only as a within-step transient; the step doors return
+it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's `'step`
+lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
+sole exit to node storage is finalize's fold. A value that
 cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines a
 module-family pointer, a bound `KFunctor`'s captured body, or an `Rc`-shared set — `SetRef` / `Variant`
 / `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three
@@ -343,7 +347,7 @@ caller-supplied audit returns true — nothing lands on a decline):
   runtime-audited obligation. `FoldingBrand`'s sole constructor
   ([`in_fold_closure`](../src/machine/core/arena.rs)) takes a
   [`FoldToken`](../workgraph/src/witnessed.rs), which only a fold engine (`transfer_into` /
-  `merge_pinned` / `map_pinned` / `KoanStepContextExt::alloc_carried_with` /
+  `merge_pinned` / `map_pinned` / `StepAllocator::alloc_carried_with` /
   `alloc_carried_with_scope`) mints and whose `'b` brand keeps it from escaping the closure — so the
   capability is reachable only at a fresh fold brand. `alloc_carried_with_scope` additionally crosses
   the consumer's scope as its own delivered operand, so a field-list re-walk's scope reads resolve at
