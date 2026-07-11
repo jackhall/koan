@@ -8,12 +8,14 @@ covered only for values built from the closure's own operands — but a `move`
 closure can capture any outside reference and embed it in the built value.
 Everything unifies at the brand lifetime and compiles clean; the composed
 witness never names the smuggled borrow. The fold-capability type confines
-*where* folded placements happen, not *what* the closure captures. Fourteen
+*where* folded placements happen, not *what* the closure captures. Six
 sites ride the fold surface today: one `map_pinned`
 ([dispatch/literal.rs](../../src/machine/execute/dispatch/literal.rs)), one
 direct `alloc_carried_with` ([attr.rs](../../src/builtins/attr.rs)), and
-twelve `alloc_type_with` / `alloc_object_with` calls across the builtins and
-dispatch.
+four `alloc_type_with` / `alloc_object_with` calls across the builtins. The
+parameterized-type and union constructors already build through the
+capture-free `fn`-pointer door `alloc_type_composed` — the shape direction
+(a) generalizes.
 
 **Acceptance criteria.**
 
@@ -40,11 +42,7 @@ dispatch.
 Soft ordering: [Witness-derived binding](witness-derived-binding.md) may
 shrink what fold closures build, so it lands first when both are in flight.
 
-**Requires:**
-
-- [Sparse-carrier correlation in parameterized-type constructors](sparse-carrier-correlation.md)
-  — the constructor sites must correlate views to args before their captures
-  can move inside the brand.
+**Requires:** none — prerequisites shipped.
 
 **Unblocks:**
 
