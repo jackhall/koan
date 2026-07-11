@@ -86,6 +86,19 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             // context, so self-references are pre-resolved to `RecursiveRef` carriers first
             // (see `rewrite_threaded_self_refs`).
             ExpressionPart::SigiledTypeExpr(boxed) => {
+                // `:(Tree Leaf)` while `Tree` is the binder under seal: a sibling-variant
+                // reference. It cannot sub-dispatch (parking would deadlock on this very
+                // seal's producer), so it lowers straight to the transient `RecursiveRef`
+                // that `seal_union_refs` resolves to the member's `SetLocal`.
+                if let [first, second] = boxed.parts.as_slice() {
+                    if let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
+                        (&first.value, &second.value)
+                    {
+                        if elaborator.threaded.contains(head.as_str()) {
+                            return Ok(KType::RecursiveRef(tag.render()));
+                        }
+                    }
+                }
                 match results.as_mut().and_then(|feed| feed.pop()) {
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that
                     // resolved to a value-by-expression.

@@ -271,3 +271,60 @@ fn value_context_union_builds_a_type_value() {
     // No PRINT — just assert the program runs to completion binding the type value.
     let _ = run_capture(&region, "LET number_or_string = (Number | Str)");
 }
+
+// -- Phase 3: a union schema field typed as a sibling variant via `:(Tree Leaf)` -----------
+
+/// AC bullet 5: a field can be typed as a sibling variant of the union being sealed via the
+/// qualified sigil `:(Tree Leaf)` — `Tree` is the binder under seal, `Leaf` one of its
+/// variants. The union constructs, a `Node` wrapping a nested `Leaf` matches its `Node` arm,
+/// and the whole value projects (`PRINT` renders it structurally).
+#[test]
+fn sibling_variant_sigil_types_a_field() {
+    let region = run_root_storage();
+    let out = run_capture(
+        &region,
+        "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
+         LET tree = (Tree (Node (Tree (Leaf 1))))\n\
+         MATCH (tree) -> :Str WITH (Node -> (PRINT \"node\") Leaf -> (PRINT \"leaf\"))",
+    );
+    assert_eq!(
+        out, "node\n",
+        "the outer value is a `Node`, so its MATCH arm fires; got {out:?}"
+    );
+
+    let region = run_root_storage();
+    let projected = run_capture(
+        &region,
+        "UNION Tree = (Leaf :Number Node :(Tree Leaf))\n\
+         LET tree = (Tree (Node (Tree (Leaf 1))))\n\
+         PRINT tree",
+    );
+    assert_eq!(
+        projected, "Node(1)\n",
+        "the constructed sibling-typed value projects structurally; got {projected:?}"
+    );
+}
+
+/// A misspelled sibling variant `:(Tree Bogus)` seals against the union's member set via
+/// `index_of` and surfaces the standard unsealed-reference error naming the bad tag.
+#[test]
+fn sibling_variant_typo_references_unsealed_type() {
+    let region = run_root_storage();
+    let err = run_expect_err(&region, "UNION Tree = (Leaf :Number Node :(Tree Bogus))");
+    assert!(
+        err.contains("UNION `Tree` schema references unsealed type `Bogus`"),
+        "a misspelled sibling variant names the bad tag; got {err}",
+    );
+}
+
+/// AC bullet 5 (rejection half): a *bare* sibling tag `Node :Leaf` is NOT the qualified sigil
+/// and stays an unknown-type error — only `:(Tree Leaf)` reaches a sibling variant.
+#[test]
+fn bare_sibling_tag_stays_unknown_type_error() {
+    let region = run_root_storage();
+    let err = run_expect_err(&region, "UNION Tree = (Leaf :Number Node :Leaf)");
+    assert!(
+        err.contains("unknown type name `Leaf` in UNION schema for `Node`"),
+        "a bare sibling tag stays an unknown-type error; got {err}",
+    );
+}
