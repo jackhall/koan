@@ -323,7 +323,13 @@ caller-supplied audit returns true — nothing lands on a decline):
   [`KType::resident_in`](../src/machine/model/types/ktype.rs) /
   [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walk the value's own structure and
   confirm every region pointer it carries points into the destination region, checking an `Rc`-shared
-  set's members by address rather than rebuilding them.
+  set's members by address rather than rebuilding them. Confined to identity-preserving stores: a
+  caller reaches here only to store a value whose identity a `'static` rebuild would break (a
+  module-family pointer, a signature pointer, an `Rc`-shared set). A site assembling a *new* composite
+  `KType` from ambiently-read parts does not land here — synchronous composition builds at a brand
+  instead, through the field-list fold ([`fold_field_list_sync`](../src/machine/execute/dispatch/field_list.rs)),
+  `StepAllocator::alloc_carried_with` (`WITH`'s pinned `Signature`), or `alloc_type_composed` — so no
+  from-scratch composite rides the runtime audit.
 - **reaching / delivered** (`Scope::alloc_ktype_reaching` / `alloc_module_reaching` /
   `alloc_object_delivered`) — widens the dest-only check with reach evidence the scope already minted
   (a bind's `host_reach_of` / `adopted_reach_of`), *plus* the regions the mint's own omission policy
