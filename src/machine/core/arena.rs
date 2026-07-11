@@ -485,6 +485,20 @@ reattachable! {
 pub struct RegionTypeFamily;
 reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
 
+/// [`KoanStepContextExt::alloc_carried_with_scope`]'s dep-fold accumulator: the destination region
+/// handle paired with the dep views folded in so far. The handle heads the tuple so the library
+/// [`HasRegionHandle`](crate::witnessed::HasRegionHandle) blanket for `(RegionHandle<'b, P>, T)`
+/// discharges each fold's composition seam. Layout-invariant in `'r`: a thin handle and a `Vec` of
+/// the layout-invariant [`CarriedFamily`] are each layout-invariant, so the pair is too.
+struct ScopeFoldViews;
+reattachable!(ScopeFoldViews => (RegionHandle<'r, KoanStorageProfile>, Vec<Carried<'r>>));
+
+/// [`KoanStepContextExt::alloc_carried_with_scope`]'s final accumulator: the [`ScopeFoldViews`] pair
+/// with the crossed scope envelope re-anchored at the brand nested alongside. Same handle-first
+/// nesting so the `(RegionHandle<'b, P>, T)` blanket still applies.
+struct ScopeFoldOperands;
+reattachable!(ScopeFoldOperands => (RegionHandle<'r, KoanStorageProfile>, (Vec<Carried<'r>>, &'r Scope<'r>)));
+
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
 // closure / future / module is a bare borrow into its defining region, kept alive by its carrier's
@@ -784,6 +798,19 @@ pub(crate) trait KoanStepContextExt {
         build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>) -> Carried<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
+    /// [`Self::alloc_carried_with`] plus the consumer's scope crossed as its own delivered envelope:
+    /// the build closure receives the scope re-anchored at the fold brand, so scope reads are
+    /// declared operands rather than ambient captures. Reach = own region ∪ the scope's host ∪ every
+    /// dep's reach and host. Scope reads resolving to *ancestor* bindings stay covered by the
+    /// destination's ambient coverage, exactly as everywhere else — folding the immediate scope host
+    /// is strictly more coverage than folding the deps alone, never less.
+    fn alloc_carried_with_scope<'sc>(
+        &self,
+        deps: &[&DeliveredCarried],
+        scope: &'sc Scope<'sc>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>, &'b Scope<'b>) -> Carried<'b>,
+    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+
     /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
     /// only. `kt`'s `'static` bound is region-purity, compile-enforced — the common case for a
     /// bind-time or synchronously-resolved type. A `kt` that borrows another region takes
@@ -855,6 +882,46 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
             deps,
             |handle, views| build(FoldingBrand(RegionBrand(handle)), views),
         )
+    }
+
+    fn alloc_carried_with_scope<'sc>(
+        &self,
+        deps: &[&DeliveredCarried],
+        scope: &'sc Scope<'sc>,
+        build: impl for<'b> FnOnce(FoldingBrand<'b>, Vec<Carried<'b>>, &'b Scope<'b>) -> Carried<'b>,
+    ) -> Witnessed<CarriedFamily, CarrierWitness> {
+        // Hand-rolls `StepContext::alloc_with`'s fold shape, extended with the scope operand: yoke the
+        // dest-region handle up front, fold each dep view onto it at `Residence::Kept` (the dep keeps
+        // living in its producer region, so that host materializes as a member), then fold the scope's
+        // own delivered envelope so the build brand receives it re-anchored at `'b`.
+        let acc0 = KoanRegion::yoke_branded::<ScopeFoldViews, _>(self.frame(), |brand| {
+            (brand.handle(), Vec::with_capacity(deps.len()))
+        });
+        let views = deps.iter().fold(acc0, |acc, dep| {
+            dep.transfer_into::<ScopeFoldViews, ScopeFoldViews, KoanStorageProfile>(
+                acc,
+                crate::witnessed::Residence::Kept,
+                |view, (handle, mut views), _brand| {
+                    views.push(view);
+                    (handle, views)
+                },
+            )
+        });
+        let operands = scope
+            .seal_scope_ref_delivered()
+            .transfer_into::<ScopeFoldViews, ScopeFoldOperands, KoanStorageProfile>(
+                views,
+                crate::witnessed::Residence::Kept,
+                |scope_view, (handle, views), _brand| (handle, (views, scope_view)),
+            );
+        let frame = self.frame();
+        operands.map_pinned::<CarriedFamily, _>(&frame, |(handle, (views, scope)), _brand| {
+            // Audit obligation extending the `grep in_fold_closure(` list: the value `build` returns
+            // comes only from this fold's own operands — the dep views and the crossed scope envelope,
+            // both re-anchored at this brand — whose reach the enclosing fold already composes into the
+            // result's witness. No ambient-lifetime borrow reaches this closure.
+            build(FoldingBrand::in_fold_closure(handle), views, scope)
+        })
     }
 
     fn alloc_type(&self, kt: KType<'static>) -> Witnessed<CarriedFamily, CarrierWitness> {

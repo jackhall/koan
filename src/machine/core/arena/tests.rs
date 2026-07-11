@@ -1202,3 +1202,52 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
         "a rejected checked seal must store nothing"
     );
 }
+
+/// `alloc_carried_with_scope` crosses two operands to the fold brand at once: a delivered dep view
+/// and the consumer's own scope, re-anchored as `&'b Scope<'b>`. The build closure composes a
+/// `KType::Record` whose `flag` field is a type read out of the dep view and whose `count` field is
+/// a type read out of the crossed scope — proving the scope arrives as a declared operand usable at
+/// the brand, not an ambient capture. The composed carrier round-trips through its own witness.
+#[test]
+fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
+    let run_storage = run_root_storage();
+    // The consumer scope, built inside `run_storage` so its region owner is held — the pin
+    // `seal_scope_ref_delivered`'s `expect` requires. Builtins register `Number` as a readable type.
+    let scope = default_scope(&run_storage, Box::new(std::io::sink()));
+    let step_ctx: StepContext<FrameStorage> = StepContext::new(Rc::clone(&run_storage));
+
+    // A dep view carrying a `Bool` type, delivered from an unrelated producer frame.
+    let producer = run_root_storage();
+    let bool_ty: Carried = Carried::Type(producer.brand().alloc_ktype(KType::Bool));
+    let dep: DeliveredCarried = delivered_with_host(bool_ty, Rc::clone(&producer));
+
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
+        step_ctx.alloc_carried_with_scope(&[&dep], scope, |brand, views, scope| {
+            let flag = match views[0] {
+                Carried::Type(kt) => kt.clone(),
+                Carried::Object(_) => panic!("dep view is a type"),
+            };
+            let count = scope
+                .resolve_type("Number")
+                .expect("Number resolves in the default scope")
+                .clone();
+            let record = Record::from_pairs([
+                ("flag".to_string(), flag),
+                ("count".to_string(), count),
+            ]);
+            Carried::Type(brand.alloc_ktype_folded(KType::Record(Box::new(record))))
+        });
+
+    // The record lives in `run_storage`'s region; `producer` still pins the `Bool` leaf it embeds.
+    sealed.with_pinned(&run_storage, |c| match c {
+        Carried::Type(KType::Record(r)) => {
+            assert_eq!(r.get("flag"), Some(&KType::Bool), "flag folded from the dep view");
+            assert_eq!(
+                r.get("count"),
+                Some(&KType::Number),
+                "count read from the crossed scope"
+            );
+        }
+        _ => panic!("expected a Record type"),
+    });
+}

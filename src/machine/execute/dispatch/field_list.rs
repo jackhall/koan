@@ -11,7 +11,9 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::{DepPlacement, FinishCtx};
-use crate::machine::core::{KoanStepContextExt, LexicalFrame, PendingBinderGuard};
+use crate::machine::core::{
+    FoldingBrand, FrameStorage, KoanStepContextExt, LexicalFrame, PendingBinderGuard,
+};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
@@ -20,7 +22,7 @@ use crate::machine::model::values::{Carried, CarriedFamily};
 use crate::machine::model::{KType, Record};
 use crate::machine::{CarrierWitness, KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
-use crate::witnessed::Witnessed;
+use crate::witnessed::{StepContext, Witnessed};
 
 use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::TerminalDepFinish;
@@ -28,20 +30,20 @@ use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::DeliveredCarried;
 
-/// Folds the elaborated `(name, KType)` pairs into the caller's carrier on the dep-finish's
-/// `Done` arm. The scheduler-currency variant, returning [`Outcome`] — used by
-/// [`defer_field_list`]. Takes the [`SchedulerView`] (not a bare `Scope`) so a `finalize` that
-/// builds a born-pure carrier can construct it through `view.step_ctx().alloc_carried(…)`.
-pub(crate) type FieldListFinalize<'step> = Box<
-    dyn for<'view> FnOnce(
-            &SchedulerView<'step, 'view>,
-            Vec<(String, KType<'step>)>,
-            &[&DeliveredCarried],
-        ) -> Outcome<'step>
+/// Composes the final `KType` at the fold brand from the elaborated pairs and any extra operand
+/// views (e.g. the FN/FUNCTOR return type's carrier view). Runs inside the fold closure of
+/// [`fold_fields_at_brand`]; everything it builds from is a declared operand of that fold — the
+/// pairs cloned out of brand-delivered views, plus the `extras` views.
+pub(crate) type BrandCompose<'step> = Box<
+    dyn for<'b> FnOnce(
+            FoldingBrand<'b>,
+            Vec<(String, KType<'b>)>,
+            &[Carried<'b>],
+        ) -> Result<KType<'b>, KError>
         + 'step,
 >;
 
-/// `Action`-path twin of [`FieldListFinalize`], returning a witnessed carrier — used by
+/// `Action`-path finalize, returning a witnessed carrier — used by
 /// [`defer_field_list_action`], whose finish lifts the result straight into
 /// [`Action::Done(Ok)`](crate::machine::core::kfunction::action::Action::Done). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
@@ -89,12 +91,18 @@ struct FieldListRewalk<'step> {
 }
 
 impl<'step> FieldListRewalk<'step> {
-    fn run(
+    /// Re-walk the field list at the fold brand `'b`: the sub-Dispatch carriers arrive as brand
+    /// views in `feed`, and each elaborated field type is cloned out at `'b`. The expression stays
+    /// at `'step` (only walked, never embedded), while the output pairs are `KType<'b>` — phase 1's
+    /// lifetime split is what lets these two diverge. `ResultFeed` is always installed: a
+    /// `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer resolved
+    /// sub-dispatches" error inside the walker.
+    fn run<'b>(
         self,
-        scope: &Scope<'step>,
-        owned: &[Carried<'step>],
-    ) -> Result<Vec<(String, KType<'step>)>, KError> {
-        let mut feed = ResultFeed::new(owned);
+        scope: &Scope<'b>,
+        feed: &[Carried<'b>],
+    ) -> Result<Vec<(String, KType<'b>)>, KError> {
+        let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
             .with_chain(self.chain.clone());
@@ -103,7 +111,7 @@ impl<'step> FieldListRewalk<'step> {
             self.context,
             self.name_kind,
             &mut elaborator,
-            Some(&mut feed),
+            Some(&mut result_feed),
         ) {
             FieldListOutcome::Done(fields) => Ok(fields),
             FieldListOutcome::Err(msg) => {
@@ -118,6 +126,51 @@ impl<'step> FieldListRewalk<'step> {
                 self.context
             )))),
         }
+    }
+}
+
+/// The ONE at-brand construction site both deferral currencies call: fold `[carriers ++ extras]`
+/// and the consumer scope through the phase-2 door, then — inside the fold closure, at the store's
+/// own brand `'b` — re-walk the field list against the brand-delivered feed views, compose the
+/// result `KType`, and store it folded.
+///
+/// Dep ORDER contract: `deps` is `[parks.., owned.., extras..]`. `carriers` is `[parks.., owned..]`
+/// in terminal order, `park_count` splits its park prefix from its owned suffix, and `extras` are
+/// compose-only operands (e.g. the FN/FUNCTOR return type's carrier). Inside the fold the walk feed
+/// is `views[park_count..carriers.len()]` (the owned suffix), and the extras are
+/// `views[carriers.len()..]`. Every operand's reach and residence host fold into the result's
+/// witness, so a field or return type reaching a producer region carries that reach forward.
+fn fold_fields_at_brand<'step>(
+    step_ctx: &StepContext<FrameStorage>,
+    scope: &'step Scope<'step>,
+    rewalk: FieldListRewalk<'step>,
+    carriers: &[&DeliveredCarried],
+    park_count: usize,
+    extras: &[&DeliveredCarried],
+    compose: BrandCompose<'step>,
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    let deps: Vec<&DeliveredCarried> = carriers.iter().chain(extras).copied().collect();
+    let walk_len = carriers.len();
+    // The fold closure must return a `Carried`, so a walk/compose error is stashed here and
+    // surfaced after the alloc, storing a throwaway placeholder in its place.
+    let mut error: Option<KError> = None;
+    let sealed = step_ctx.alloc_carried_with_scope(&deps, scope, |brand, views, scope| {
+        let feed_views = &views[park_count..walk_len];
+        let extra_views = &views[walk_len..];
+        match rewalk
+            .run(scope, feed_views)
+            .and_then(|fields| compose(brand, fields, extra_views))
+        {
+            Ok(kt) => Carried::Type(brand.alloc_ktype_folded(kt)),
+            Err(e) => {
+                error = Some(e);
+                Carried::Type(brand.alloc_ktype_folded(KType::Any))
+            }
+        }
+    });
+    match error {
+        Some(e) => Err(e),
+        None => Ok(sealed),
     }
 }
 
@@ -137,7 +190,8 @@ pub(crate) fn defer_field_list<'step>(
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'step>>,
     error_frame: Option<TraceFrame>,
-    finalize: FieldListFinalize<'step>,
+    extras: Vec<DeliveredCarried>,
+    compose: BrandCompose<'step>,
 ) -> Outcome<'step> {
     let rewalk = FieldListRewalk {
         expr,
@@ -150,15 +204,25 @@ pub(crate) fn defer_field_list<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // Every terminal's carrier — parks then owned — folds into the result so a field type
-        // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
-        // that producer's reach forward; the owned values, read live at the step brand
-        // (un-relocated), feed the re-walk, which clones each type into the folded field list.
+        // Every terminal's carrier — parks then owned — folds into the result at the store's own
+        // brand, so a field type that embeds a park's forward-referenced type or an owned
+        // sub-Dispatch's type carries that producer's reach forward. The owned suffix is the walk's
+        // feed; the parks are notify-only. `fold_fields_at_brand` re-walks against the brand views
+        // rather than the ambient step lifetime.
         let carriers: Vec<&DeliveredCarried> =
             terminals.all().iter().map(|t| &t.delivered).collect();
-        let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
-        match rewalk.run(view.current_scope(), &owned) {
-            Ok(fields) => finalize(view, fields, &carriers),
+        let park_count = carriers.len() - terminals.owned_slice().len();
+        let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
+        match fold_fields_at_brand(
+            &view.step_ctx(),
+            view.current_scope(),
+            rewalk,
+            &carriers,
+            park_count,
+            &extra_refs,
+            compose,
+        ) {
+            Ok(sealed) => Outcome::Done(Ok(sealed)),
             Err(e) => Outcome::Done(Err(e)),
         }
     });
@@ -233,16 +297,6 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     fields: KExpression<'step>,
     chain: Option<Rc<LexicalFrame>>,
 ) -> Outcome<'step> {
-    fn fold<'step>(
-        view: &SchedulerView<'step, '_>,
-        pairs: Vec<(String, KType<'step>)>,
-        carriers: &[&DeliveredCarried],
-    ) -> Outcome<'step> {
-        let record = Record::from_pairs(pairs);
-        Outcome::Done(Ok(view
-            .step_ctx()
-            .alloc_type_with(carriers, KType::Record(Box::new(record)))))
-    }
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
         &fields,
@@ -251,7 +305,13 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         &mut elaborator,
         None,
     ) {
-        FieldListOutcome::Done(pairs) => fold(view, pairs, &[]),
+        // Sync `Done`: the single ambient walk resolved everything, so store the composed record
+        // through the audited non-fold tier (`alloc_type_pure`) — no folded placement. Migrating
+        // synchronous composition onto a brand is `checked-tier-confinement`'s job, not this one's.
+        FieldListOutcome::Done(pairs) => Outcome::Done(
+            view.step_ctx()
+                .alloc_type_pure(KType::Record(Box::new(Record::from_pairs(pairs)))),
+        ),
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
@@ -266,7 +326,8 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             chain,
             None,
             None,
-            Box::new(fold),
+            Vec::new(),
+            Box::new(|_brand, pairs, _extras| Ok(KType::Record(Box::new(Record::from_pairs(pairs))))),
         ),
     }
 }

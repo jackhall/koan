@@ -11,6 +11,7 @@ use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
+use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::{KFunction, NodeId};
 use crate::machine::model::values::{Carried, CarriedFamily, KObject};
 use crate::machine::DeliveredCarried;
@@ -910,6 +911,23 @@ impl<'a> Scope<'a> {
             .upgrade()
             .expect("the resident scope's region owner is held while its value is sealed");
         Delivered::seal(witnessed, home)
+    }
+
+    /// The [`ScopeRefFamily`] twin of [`Self::seal_resident_delivered`]: seal a `&'a Scope<'a>`
+    /// reference to this scope into a [`Delivered`] envelope pinned by its own region owner, so the
+    /// scope crosses a fold brand as a declared operand rather than an ambient capture. Takes
+    /// `&'a self` — the `At<'a> = &'a Scope<'a>` form [`Witnessed::resident`] seals (a single unified
+    /// lifetime), the same shape [`Self::resident_type_carrier`]'s `&'a KType<'a>` argument carries.
+    /// The witness is the empty (resident) default; the host pin comes from [`Delivered::seal`],
+    /// exactly as the resident-value twin.
+    pub(crate) fn seal_scope_ref_delivered(
+        &'a self,
+    ) -> Delivered<ScopeRefFamily, CarrierWitness, FrameStorage> {
+        let home = self
+            .region_owner()
+            .upgrade()
+            .expect("the sealed scope's region owner is held while it is sealed for a brand crossing");
+        Delivered::seal(Witnessed::resident(self), home)
     }
 
     /// Adopt a sealed dep carrier into this scope, copy-free: [`Delivered::adopt_into`] mints its

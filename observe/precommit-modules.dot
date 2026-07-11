@@ -602,6 +602,7 @@ digraph {
     "koan::machine::core::scope" -> "koan::machine::core::lexical_frame" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::pending" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
+    "koan::machine::core::scope" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::core::scope_id" -> "koan::machine::core" [label="uses", style="dashed"];
