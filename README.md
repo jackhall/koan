@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND` (chained runs like `1 < 2 < 3` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN (args) -> Out)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -145,16 +145,17 @@ src/
 │   ├── fn_def/return_type.rs    return-type slot elaboration
 │   ├── fn_def/param_refs.rs     parameter-reference resolution
 │   ├── fn_def/finalize.rs       seal the function once its slots resolve
-│   ├── match_case.rs
+│   ├── match_case.rs         MATCH — branch by the scrutinee's runtime type
 │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
 │   ├── catch.rs              CATCH — error-handling primitive
-│   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
+│   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
 │   ├── result.rs             Result tagged-union builtin
 │   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
 │   ├── type_ops.rs           TEMPLATE / WITH
 │   ├── type_ops/type_constructor.rs   TEMPLATE — parameterized type constructor
 │   ├── type_ops/with.rs               WITH — type-constructor application
-│   ├── union.rs              UNION — tagged-union declaration
+│   ├── union.rs              UNION — sum-type declaration (dissolves to one newtype per variant, joined by an anonymous union)
+│   ├── type_union.rs         `|` — the `:(A | B)` anonymous-union type constructor
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
 │   ├── newtype_def.rs        NEWTYPE — scalar repr and the `:{…}` record repr (the product-side nominal form)

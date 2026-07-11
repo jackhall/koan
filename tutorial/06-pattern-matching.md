@@ -1,9 +1,10 @@
 # Pattern matching
 
-`MATCH` branches on the tag of a [tagged-union](05-tagged-unions.md) value (or a
-boolean) and runs exactly one branch. Unlike [variant
-dispatch](05-tagged-unions.md#dispatching-on-a-variant), a match gives you the
-payload to work with.
+`MATCH` branches on the **runtime type** of a value and runs exactly one branch —
+most often a [tagged-union](05-tagged-unions.md) variant, but any value works
+(a boolean, a plain `Number`, an untagged `:(Number | Str)`). Unlike [variant
+dispatch](05-tagged-unions.md#dispatching-on-a-variant), a match over a variant
+gives you the payload to work with.
 
 ## The shape of a match
 
@@ -23,8 +24,9 @@ declares the type the whole `MATCH` expression produces, and every branch body
 must produce a value of that type (just like a function's return type). Each
 branch is `<Tag> -> (<body>)`.
 
-Only the branch whose tag matches runs. Inside it, the name `it` is bound to the
-matched value's payload, so a match is also how you *unwrap* a union:
+The branch whose type matches runs; when several match, the most specific one
+wins. Inside a variant branch, the name `it` is bound to the matched value's
+payload, so a match is also how you *unwrap* a union:
 
 ```koan
 UNION Maybe = (Some :Number None :Null)
@@ -55,8 +57,8 @@ yes
 
 ## Every case must be covered
 
-A match has no implicit fallthrough. If the value's tag has no branch, it's an
-error:
+A match has no implicit fallthrough. If no branch matches the value's type, it's
+an error:
 
 ```koan
 UNION Maybe = (Some :Number None :Null)
@@ -65,7 +67,7 @@ MATCH (m) -> :Str WITH (Some -> (PRINT "got"))
 ```
 
 ```text
-error: shape error: inexhaustive match = no branch for `None`
+error: shape error: inexhaustive match = no branch for value of type `None`
 ```
 
 Cover every variant the value could hold. (For catching *errors* with a

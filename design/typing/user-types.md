@@ -23,16 +23,17 @@ Three `KType` variants reference set members:
   is the first-class handle to a whole set, bound by a `RECURSIVE TYPES` group
   name. It is inert in value dispatch — it names a group of types, not a value
   type — and is reserved for value-language cycle construction.
-- [`KType::Variant { set: Rc<RecursiveSet>, index, tag }`](../../src/machine/model/types/ktype.rs)
-  is a **refinement** of a `Tagged`-kind member: `(set, index)` names the union,
-  `tag` selects one variant within it. It is what a user-`UNION` value's `ktype()`
-  reports, and what a `:(Maybe Some)` slot carries — see
-  [Tagged-union variants](#tagged-union-variants) below.
+
+A user `UNION` is not its own member family: it seals one `NewType` member per
+variant and binds the union name to the anonymous
+[`KType::Union`](../../src/machine/model/types/ktype.rs) of those members' `SetRef`s
+— see [Unions dissolve into per-variant newtypes](#unions-dissolve-into-per-variant-newtypes)
+below.
 
 A member's nominal family is one of
-[`KKind::{Tagged, Newtype, TypeConstructor}`](../../src/machine/model/types/kkind.rs)
-— the three families sitting strictly below `Proper` in the kind lattice
-(`Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`). The family
+[`KKind::{Newtype, TypeConstructor}`](../../src/machine/model/types/kkind.rs)
+— the two families sitting strictly below `Proper` in the kind lattice
+(`Any > {Module, Signature, Proper > {Newtype, TypeConstructor}}`). The family
 is stored on the set member (`set.member(index).kind`), payload-free and `Copy`, with a
 `surface_keyword()` accessor. A slot that wants "any user-declared type of family X" is an
 [`KType::OfKind(KKind)`](../../src/machine/model/types/ktype.rs) carrying that family;
@@ -89,12 +90,14 @@ every dispatch admit pass runs.
 
 ## Value carriers and the type / value partition
 
-The tagged-union instance carrier [`KObject::Tagged`](../../src/machine/model/values/kobject.rs)
-carries `(set, index)` directly, populated at finalize time. `ktype()`
+The [`KObject::Tagged`](../../src/machine/model/values/kobject.rs) carrier
+carries `(set, index)` directly, populated at finalize time — it now backs only the
+`TypeConstructor` family (`Result`, and the `CATCH` / `TRY` error machinery). `ktype()`
 synthesizes `KType::SetRef { set, index }` by `Rc::clone`ing the carried set — the
-dispatch identity is the set pointer and index, not the schema. Record-repr and
-other newtype instances instead ride [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs),
-which carries a `type_id: &KType`. Module and
+dispatch identity is the set pointer and index, not the schema. Newtype instances —
+scalar, record-repr, *and every user-`UNION` variant* — instead ride
+[`KObject::Wrapped`](../../src/machine/model/values/kobject.rs), which carries a
+`type_id: &KType` (the member `SetRef`). Module and
 signature values ride the value channel's `Type` arm as
 [`KType::Module { .. }`](../../src/machine/model/types/ktype.rs) /
 `KType::Signature { .. }` ([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
@@ -106,53 +109,60 @@ nominal type token (passing `Outcome` to a constructor or ATTR call) surfaces th
 on demand via `Scope::resolve_type_identifier` — no
 value-side schema carrier exists for newtype / union / module / Result.
 
-## Tagged-union variants
+## Unions dissolve into per-variant newtypes
 
-A declared `UNION` variant is its own dispatchable type. A user-`UNION`
-(`KKind::Tagged`) value's `ktype()` reports
-[`KType::Variant { set, index, tag }`](../../src/machine/model/types/ktype.rs) —
-a refinement of the union member at `(set, index)` selecting the inhabited `tag` —
-rather than the bare `SetRef`
-([kobject.rs](../../src/machine/model/values/kobject.rs)). Variant tags are
-capitalized [`Type` tokens](tokens.md): `UNION Maybe = (Some :Number None :Null)`,
-not `some` / `none`. The `UNION` schema field-list runs under
+A user `UNION` has no nominal family of its own: it is the anonymous-union join of
+one `NewType` per variant — the sum-side counterpart of the struct → record-repr
+`NEWTYPE` collapse.
+`UNION Maybe = (Some :Number None :Null)` seals a `RecursiveSet` of two
+`KKind::NewType` members (`Some` over `Number`, `None` over `Null`) and binds `Maybe`
+to [`KType::union_of([SetRef Some, SetRef None])`](../../src/machine/model/types/ktype_resolution.rs)
+([union.rs](../../src/builtins/union.rs)). Variant tags are capitalized
+[`Type` tokens](tokens.md): the `UNION` schema field-list runs under
 [`FieldNameKind::Type`](../../src/parse/triple_list.rs), so a lowercase tag is a
-parse error — the tokenizer keys `Type` vs `Identifier` purely on capitalization,
-and a variant has to be type-classified to flow through dispatch.
+parse error — a variant name is a nominal type, not a field.
 
-**Identity is `(set ptr, index, tag)`** — manual `PartialEq` / `Hash` arms keyed
-on the set pointer, member index, and tag string, never the (cyclic) schema
-([ktype.rs](../../src/machine/model/types/ktype.rs)). Two same-payload variants
-of one union stay distinct because the tag is part of identity, and a variant of
-union A never equals a variant of union B. The whole set rides every `Variant`,
-so lifting one is `Rc::clone` of the group, exactly as for `SetRef`.
-
-**Variants slot into the specificity stratification** below their union: a
-concrete `Variant` ≺ its union's `SetRef` ≺ `OfKind(Tagged)` ≺
-`Any` ([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)).
-So a slot typed `:(Maybe Some)` admits only `Some` values and a `:Maybe` slot admits
-*any* variant (the union `SetRef` arm explicitly matches any `Tagged`-kind value
-of that union) — and a variant-typed overload wins over a union-typed sibling that also
-admits the value. The `OfKind(Tagged)` family kind is type-channel-only, so it admits a
-Tagged *type value* by `kind_of`, never a runtime instance.
+**A variant value is an ordinary `KObject::Wrapped`** over its member `SetRef`, so its
+`ktype()` reports that `SetRef` — there is no distinct tagged-value carrier and no
+variant `KType`. A slot typed `:(Maybe Some)` is that member `SetRef`; a `:Maybe` slot
+is the anonymous union, which admits any member via
+[`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs)'s
+per-member delegation. Each member `SetRef` is strictly more specific than the union
+(each member is a subtype of the union), so a variant-typed overload wins over a
+union-typed sibling that admits the same value.
 
 **The variant-reference surface is the union-qualified sigil `:(Maybe Some)`** —
-a variant type reached through its union, with no global `:Some` name and no `.`
-path operator. The dispatcher's `Tagged` constructor arm
+a variant reached through its union, with no global `:Some` name and no `.`
+path operator. The dispatcher's union constructor arm
 ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs))
 disambiguates by body shape: a bare `Type`-token body (`Maybe Some`) yields the
-variant `KType` value, while a payload body (`Maybe (Some 42)`) constructs. An
-unknown tag at the reference surface is a schema error listing the union's
-variants. The variant renders back to `:(Maybe Some)` so it round-trips.
+member `SetRef` type value, while a payload body (`Maybe (Some 42)`) newtype-constructs
+that member. An unknown variant name in either form is a schema error listing the
+union's members. The member `SetRef` renders as its member name (`Some`), so
+`:(Maybe Some)` round-trips.
+
+**Nesting survives** because the wrap chooses between two payload dispositions
+([`WrappedPayload`](../../src/machine/model/values/kobject.rs)): a transparent re-tag
+(a `NEWTYPE` over a value already of that exact repr) *peels* one wrapper layer so
+identities never stack, while a genuine variant construction *holds* the payload
+verbatim — so a recursive union variant nesting another variant (`Succ (Zero null)`)
+keeps every layer. This relaxes the older single-layer newtype-collapse invariant: the
+`Wrapped` payload is no longer statically guaranteed non-`Wrapped`.
+
+**`MATCH` selects by type** ([match_case.rs](../../src/builtins/match_case.rs) via
+[`find_branch_body_by_type`](../../src/builtins/branch_walk.rs)). A member-name head
+over a variant value admits by member `SetRef` identity and binds the wrapped payload
+to `it`; a general type head resolves through the scope and binds the scrutinee
+unchanged; the strictly most-specific admitting arm wins, and two arms with no strict
+winner are an ambiguity error (ruling F1/F3). See
+[unions and match-by-type](type-language-via-dispatch.md#anonymous-union-sigil).
 
 The `TypeConstructor` carve-out: a `Result` value (`KKind::TypeConstructor`)
-keeps the bare/applied union identity (`SetRef` / `ConstructorApply`), so the
-`Result` / `CATCH` / `TRY` error machinery is untouched — only `Tagged`-kind
-values report a `Variant`. See [error-handling.md](../error-handling.md). Routing
-`MATCH` itself through ordinary type-dispatch (instead of its current distinct
-fast-track form) and recursive variant references inside a schema are open work,
-tracked under
-[tagged-union variants as dispatchable types](../../roadmap/compile_safety/tagged-variant-types.md).
+keeps the bare/applied ctor identity (`SetRef` / `ConstructorApply`) on its
+`KObject::Tagged` carrier, so the `Result` / `CATCH` / `TRY` error machinery is
+untouched, and `TRY` still selects arms by error-tag string
+([try_with.rs](../../src/builtins/try_with.rs) via `find_branch_body_by_tag`). See
+[error-handling.md](../error-handling.md).
 
 ## Type-only nominal install
 
@@ -191,8 +201,8 @@ valid surface — every tagged value carries a real per-declaration identity.
 Each set member carries its schema in a two-phase
 [`RefCell`](../../src/machine/model/types/recursive_set.rs) cell: the set is sealed
 with its membership and each member's `kind` known eagerly, but the
-[`NominalSchema`](../../src/machine/model/types/recursive_set.rs) (`Tagged` tag→type map,
-`NewType` repr, or `TypeConstructor` schema + param names)
+[`NominalSchema`](../../src/machine/model/types/recursive_set.rs) (`NewType` repr — one
+per variant for a `UNION` — or a `TypeConstructor` schema + param names)
 is filled at the member's own finalize. A member's schema names its siblings as
 `SetLocal` indices.
 
@@ -281,10 +291,11 @@ selected by the repr part-kind:
   ([`Elaborator::with_threaded`](../../src/machine/model/types/resolver.rs)) through
   [`parse_typed_field_list_via_elaborator`](../../src/machine/model/types/typed_field_list.rs),
   so a self-reference (`NEWTYPE Node = :{value :Number, next :Node}`) lowers to a
-  transient `RecursiveRef` and seals — via the shared
-  [`finalize_nominal_member`](../../src/machine/model/types/recursive_set.rs) /
-  [`seal_recursive_refs`](../../src/machine/model/types/recursive_set.rs) path `UNION`
-  uses — to a `SetLocal` back-edge into the declaring member's set. A `:(LIST OF Self)`
+  transient `RecursiveRef` and seals — via
+  [`seal_recursive_refs`](../../src/machine/model/types/recursive_set.rs) (a `UNION` uses
+  the sibling [`seal_union_refs`](../../src/machine/model/types/recursive_set.rs), which
+  additionally maps the union's own name to the join of its variant members, ruling F2)
+  — to a `SetLocal` back-edge into the declaring member's set. A `:(LIST OF Self)`
   field threads the same way, sealing `List(SetLocal)`, and a nested record field type
   (`:{inner :{owner :Node}}`) elaborates inline through the same walker so it threads
   too. A `NEWTYPE` member of a `RECURSIVE TYPES` block routes through this path,
@@ -296,16 +307,22 @@ which branches on the resolved member's `kind` — into
 [`newtype_def::newtype_construct`](../../src/builtins/newtype_def.rs), which
 schedules the value sub-expression via `dispatch_in_scope` and waits on it via a
 dep-finish whose finish closure type-checks against `repr` and produces a
-[`KObject::Wrapped { inner: NonWrappedRef<'a>, type_id: &'a KType }`](../../src/machine/model/values/kobject.rs)
+[`KObject::Wrapped { inner: WrappedPayload<'a>, type_id: &'a KType }`](../../src/machine/model/values/kobject.rs)
 carrier.
 
-**Newtype-over-newtype collapse is encoded in the field type.**
-[`NonWrappedRef`](../../src/machine/model/values/kobject.rs) is a copy-newtype
-around `&'a KObject<'a>` whose sole constructor `peel` collapses any `Wrapped`
-layer at construction time. `Bar(some_foo)` runs through
-`NonWrappedRef::peel(some_foo)` and rewraps with `Bar`'s `type_id` — at most one
-layer of wrapping at any point, and the invariant is a `cargo check` guarantee
-rather than a caller-discipline contract.
+**The wrap chooses peel-or-hold by the payload's identity.**
+[`WrappedPayload`](../../src/machine/model/values/kobject.rs) is a copy-newtype
+around `Rc<KObject<'a>>` with two constructors that record the wrapper's intent.
+A **re-tag** — the constructed value's identity is exactly this repr, e.g.
+`Bar(some_foo)` where `some_foo` is already a `Foo` and `NEWTYPE Bar = Foo` — takes
+`WrappedPayload::peel`, collapsing one `Wrapped` layer so identities never stack.
+A **genuine construction** — the payload is a *member* of the type being built, whose
+identity differs from the repr, e.g. a `UNION` variant `Succ :Nat` wrapping another
+`Nat` variant — takes `WrappedPayload::hold`, preserving the payload verbatim so the
+recursion the dissolved-union model needs survives (`Succ (Zero null)` keeps both
+layers). `check_newtype_repr` decides which by comparing the payload's `ktype()` to the
+projected `repr` before the witness build. The choice replaces the older single-layer
+collapse invariant, which peeled unconditionally.
 
 The construction path is driven from the `type_call` fast lane (which resolves the
 verb through `scope.resolve_type_with_chain` first and branches on the resolved
@@ -325,8 +342,8 @@ ATTR over a `KObject::Wrapped` falls through to `inner` via
 [`access_field`'s `Wrapped` arm](../../src/builtins/attr.rs). A runtime `Wrapped` lhs is
 matched by a *type*, never by a kind: it lands in the least-specific `s: Any` ATTR
 overload, and `access_field` validates the `Wrapped` shape in the body (a non-`Wrapped`
-value errors "a value with fields"), descending exactly one level by the collapse
-invariant. Specificity (`Any` ≺ `OfKind` ≺ `Identifier`) keeps this unambiguous with the
+value errors "a value with fields"), descending one level per access.
+Specificity (`Any` ≺ `OfKind` ≺ `Identifier`) keeps this unambiguous with the
 sibling overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 wins its `OfKind` overload, and only a bare runtime value falls through here. Missing-field
 diagnostics name the inner record (`b: Boxed = Point; b.z` reports the field miss on

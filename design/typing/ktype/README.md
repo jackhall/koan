@@ -32,19 +32,19 @@
   flowing in the value channel's `Type` arm is classified by `KType::kind_of` and matched
   against it by subsumption. `OfKind` is **type-channel-only**: it admits a type value, never
   a runtime instance — a value is matched by a type, never by a kind. The kinds form one
-  subsumption lattice, `Any > {Module, Signature, Proper > {Tagged, Newtype, TypeConstructor}}`:
+  subsumption lattice, `Any > {Module, Signature, Proper > {Newtype, TypeConstructor}}`:
   a parsed type-name slot is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, the
-  `:Module` / `:Signature` wildcards are `OfKind(Module)` / `OfKind(Signature)`, and the three
+  `:Module` / `:Signature` wildcards are `OfKind(Module)` / `OfKind(Signature)`, and the two
   nominal families sit strictly below `Proper`. `KKind::admits` is reflexive subsumption (a
   `Proper` / `Any` slot admits any proper-subtree type value, while the module/signature wall
   keeps each of those families to itself); `KKind::strictly_below` orders specificity, so an
-  `OfKind(Tagged)` slot out-specifies an `OfKind(Proper)` sibling. See
+  `OfKind(Newtype)` slot out-specifies an `OfKind(Proper)` sibling. See
   [Type-position slot kinds](slots-and-signatures.md#type-position-slot-kinds).
 - First-class type values: a type flows raw as a `&KType` in the value channel's `Type`
   arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
   `OfKind(Any)` likewise) admits any *proper* type value: bare builtin type tokens (`Number`,
-  `Str`, `Bool`, `Null`), tagged-union and newtype nominal tokens, and any other non-module /
-  non-signature type. Modules and signatures route through the dedicated `OfKind(Module)` /
+  `Str`, `Bool`, `Null`), newtype and union nominal tokens, an anonymous `Union` type value, and
+  any other non-module / non-signature type. Modules and signatures route through the dedicated `OfKind(Module)` /
   `OfKind(Signature)` / `Signature { .. }` slots so the `:Type` vs `:Module` overload
   distinction stays intact — see
   [`KType::accepts_part`](../../../src/machine/model/types/ktype_predicates.rs)
@@ -61,10 +61,11 @@
     `(Rc::as_ptr(set), index)` — never the schema, which may be cyclic. Two
     distinct nominals sit at distinct `(set ptr, index)` pairs, giving the
     per-declaration-distinctness dispatch keys on. The member's `kind` (read via
-    `set.member(index).kind`) is one of the nominal families `KKind::{Tagged, Newtype,
+    `set.member(index).kind`) is one of the nominal families `KKind::{Newtype,
     TypeConstructor}` — `kind_of` reads it off the `SetRef` to classify the nominal type
-    value. Lift `Rc::clone`s the whole set, so the recursive group
-    travels as one cycle-aware unit.
+    value. A user `UNION` seals one `NewType` member per variant, so each variant is a
+    `SetRef`; the union name binds the anonymous `Union` of those `SetRef`s. Lift
+    `Rc::clone`s the whole set, so the recursive group travels as one cycle-aware unit.
   - `SetLocal(index)` — the **intra-set sibling** reference inside a member's
     schema, a bare index resolved against the ambient set during deep traversal.
     It carries no `Rc` (so the set holds no internal refcount cycle) and never
@@ -73,25 +74,27 @@
   - `RecursiveGroup(Rc<RecursiveSet>)` — the first-class handle to a whole set,
     bound by a `RECURSIVE TYPES` group name. Identity is the set pointer
     (`Rc::ptr_eq`); inert in value dispatch.
-  - `Variant { set: Rc<RecursiveSet>, index, tag }` — a **refinement** of a
-    `Tagged`-kind member: `(set, index)` names the union, `tag` selects one
-    variant. Identity is `(Rc::as_ptr(set), index, tag)` — the union member plus
-    tag, never the schema. It is what a user-`UNION` value's `ktype()` reports and
-    what a `:(Maybe Some)` slot carries; a variant is strictly more specific than
-    its union's `SetRef`. Lift `Rc::clone`s the whole set like `SetRef`. Variant
-    tags are capitalized `Type` tokens, so a variant is type-classified
-    everywhere. See [user-types.md § Tagged-union variants](../user-types.md#tagged-union-variants).
-
   A slot that wants "any user-declared type of family X" is an `OfKind(KKind)`
-  carrying the nominal family (`OfKind(Tagged)` / `OfKind(Newtype)` /
-  `OfKind(TypeConstructor)`). Because `OfKind` is type-channel-only, such a slot
+  carrying the nominal family (`OfKind(Newtype)` / `OfKind(TypeConstructor)`).
+  Because `OfKind` is type-channel-only, such a slot
   admits the *type value* of that family, not a runtime instance — a builtin that
   dispatches on a runtime representation (ATTR's newtype field access) takes the
   least-specific `Any` slot and validates the `KObject::Wrapped` shape in its body
   (`access_field`), never matching the value by a kind. The nominal-family surface
-  keywords (`Tagged` / `Newtype` / `TypeConstructor`) are pinned for diagnostic
+  keywords (`Newtype` / `TypeConstructor`) are pinned for diagnostic
   rendering only — none is registered as a writable surface name (no entry in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)).
+- `Union(Vec<KType>)` — an **untagged structural disjunction**, the type `:(A | B)`.
+  Not a set-member reference: it composes any member types, canonicalized by
+  [`KType::union_of`](../../../src/machine/model/types/ktype_resolution.rs) —
+  flattened, deduplicated, and collapsed to the lone member when only one survives
+  (`:(A | A)` is `:A`). Identity is order-blind: `PartialEq` / `Hash` are set-based, so
+  `:(A | B)` equals `:(B | A)`. A union admits any value one of its members admits, and
+  each member is strictly more specific than the union
+  ([`is_more_specific_than`](../../../src/machine/model/types/ktype_predicates.rs)), so a
+  union-typed slot dispatches by the value's own runtime type. `kind_of` reports
+  `Proper`. A user `UNION` binds the anonymous union of its per-variant `NewType`
+  `SetRef`s. See [user-types.md § Unions dissolve into per-variant newtypes](../user-types.md#unions-dissolve-into-per-variant-newtypes).
 - `RecursiveRef(String)` — a **definition-time transient only**: a self or
   forward-sibling reference lowers to it during elaboration and the member's
   finalize seals it to `SetLocal(index)`. It never appears in a sealed type and

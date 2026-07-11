@@ -89,22 +89,49 @@ way, and render back through `KType::name()`. FUNCTOR's capitalized
 `Type`-token parameter names (`Ty`, `Er`) are admitted by the
 field-list parser's `FieldNameKind::IdentifierOrType` policy. A `UNION`
 schema's variant tags go one step further — they *must* be capitalized
-`Type` tokens (`FieldNameKind::Type`), since a variant is itself a type
-(see [user-types.md § Tagged-union variants](user-types.md#tagged-union-variants));
+`Type` tokens (`FieldNameKind::Type`), since a variant is itself a nominal type
+(see [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes));
 record fields stay `Identifier`-only.
+
+## Anonymous-union sigil
+
+`:(A | B | C)` is the untagged structural disjunction — a first-class type value,
+distinct from a nominal `UNION`. The `|` is a single-member `Unary`-mode
+[operator group](../expressions-and-parsing.md#operator-chains), so a run
+`A | B | C` reduces to `[Keyword("|"), ListLiteral([A B C])]` and folds every member
+in one pass; a two-member run `A | B` stays a plain keyworded call. Both forms are
+overloads of the `|` union builtin
+([type_union.rs](../../src/builtins/type_union.rs)) that fold their resolved members
+through [`KType::union_of`](../../src/machine/model/types/ktype_resolution.rs), so
+order never matters and `:(A | A)` collapses to `:A`. A member arrives raw — a bare
+`Type` token resolves against scope (parking on a forward reference), a `:(...)`
+member sub-dispatches — via a `:KExpression` slot that also admits the reduced
+`ListLiteral` ([`accepts_part`](../../src/machine/model/types/ktype_predicates.rs)).
+The run has no precedence: `:(LIST OF Number | Str)` does not chain (it is not
+slot/keyword-alternating) and must be parenthesized, `:((LIST OF Number) | Str)`.
+
+Untagged union *values* need no construction: a `Number` **is** a valid
+`:(Number | Str)` — the builtin constructs only the union *type*. A union-typed slot
+admits any value one of its members admits, and a union used as an FN or arm return
+type validates but never re-tags, so the value keeps its own runtime type for
+downstream type-dispatch (ruling F4,
+[finalize.rs](../../src/machine/execute/finalize.rs)). `MATCH` eliminates a union by
+that runtime type: each arm head resolves to a `KType`, the admitting arms compete in
+a most-specific-wins tournament, and the winner runs (ruling F1,
+[find_branch_body_by_type](../../src/builtins/branch_walk.rs)).
 
 ## Variant-reference sigil
 
-A single tagged-union variant is named through its union: `:(Maybe Some)` — a
-union head followed by a bare variant `Type` token, resolving to the variant
-`KType` ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
+A single `UNION` variant is named through its union: `:(Maybe Some)` — a
+union head followed by a bare variant `Type` token, resolving to the variant's member
+`SetRef` ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
 The same `(Union Tag …)` head-call shape constructs (`Maybe (Some 42)`); the two
 are disambiguated by body shape — a bare `Type`-token body with no payload is the
-variant *reference*, a paren-group payload (`(Some 42)`) is *construction*. An
-unknown tag at the reference surface is a schema error listing the union's
-variants. There is no global `:Some` name and no `.` path operator; the variant
+variant *reference*, a paren-group payload (`(Some 42)`) newtype-constructs that
+member. An unknown variant name at either surface is a schema error listing the
+union's members. There is no global `:Some` name and no `.` path operator; the variant
 is reachable only through its union. See
-[user-types.md § Tagged-union variants](user-types.md#tagged-union-variants).
+[user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes).
 
 ## Record-type sigil
 
@@ -180,8 +207,8 @@ inner expression's parts decide its shape:
   [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
   shared resolver bridge.
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
-  Struct / Tagged / Newtype head through its construction primitive
-  (`:(MyStruct {x = 1})`) and a `KType::KFunctor { body: Some }` head
+  newtype, union, or `Result` head through its construction primitive
+  (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) and a `KType::KFunctor { body: Some }` head
   through functor application (`:(MyFunctor {T = IntOrd})`), both via the
   shared apply-a-callable tail.
 

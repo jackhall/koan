@@ -154,7 +154,13 @@ registry miss surfaced as a structured `DispatchFailed`; the user resolves a
 cross-group mix (`a + b * c`) with explicit parentheses (`a + (b * c)`). The
 builtin comparison (pairwise), additive, and multiplicative (both fold-left)
 groups and their binary bodies are seeded by `register_builtin_operator_groups`
-in [`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs); the `OP`/`GROUP`
+in [`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs). The type-union `|`
+operator is its own single-member **Unary** group, seeded alongside its builtin in
+[`builtins/type_union.rs`](../src/builtins/type_union.rs) so the operator and its
+target live together, so `:(A | B | C)` reduces to one keyword-first call over the
+whole member run (see
+[typing/type-language-via-dispatch.md § Anonymous-union sigil](typing/type-language-via-dispatch.md#anonymous-union-sigil)).
+The `OP`/`GROUP`
 declaration surface that lets user modules populate the registry is owned by
 [user-defined operator modules](../roadmap/operator_chaining/user-defined-operator-modules.md).
 

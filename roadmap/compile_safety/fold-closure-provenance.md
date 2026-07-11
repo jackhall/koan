@@ -48,8 +48,6 @@ shrink what fold closures build, so it lands first when both are in flight.
 - [Sparse-carrier correlation in parameterized-type constructors](sparse-carrier-correlation.md)
   — the constructor sites must correlate views to args before their captures
   can move inside the brand.
-- [Anonymous structural unions](anonymous-unions.md) — its nominal-finalize
-  rewrite carries the seal-identity operand-crossing off the fold.
 
 **Unblocks:**
 

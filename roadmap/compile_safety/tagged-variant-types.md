@@ -2,7 +2,7 @@
 
 Converge tagged-union `MATCH` onto the ordinary type-dispatch that now eliminates
 every other typed value — the deferred half of the variant work whose identity,
-dispatch, and surface already [shipped](../../design/typing/user-types.md#tagged-union-variants).
+dispatch, and surface already [shipped](../../design/typing/user-types.md#unions-dissolve-into-per-variant-newtypes).
 
 **Problem.** A user-`UNION` value's `ktype()` now reports a
 `KType::Variant { set, index, tag }`, so variants fill typed slots and dispatch
@@ -20,7 +20,7 @@ form, so recursive variant references inside a schema are unsupported (external
 **Acceptance criteria.**
 
 - `MATCH` lowers to ordinary type-dispatch — the same mechanism that eliminates
-  [anonymous structural unions](anonymous-unions.md) by runtime type — rather
+  [anonymous structural unions](../../design/typing/type-language-via-dispatch.md#anonymous-union-sigil) by runtime type — rather
   than the parallel name-matching `branch_walk` form, so the two elimination
   paths converge.
 - A `MATCH` arm whose head names a non-variant of the scrutinee's union is a
@@ -42,7 +42,7 @@ form, so recursive variant references inside a schema are unsupported (external
   namespace option (c), no global variant names. A variant is strictly more
   specific than its union's `SetRef` and than `AnyUserType { kind: Tagged }`;
   discrimination keys on `(set, index, tag)`, so same-payload variants stay
-  distinct. See [user-types.md § Tagged-union variants](../../design/typing/user-types.md#tagged-union-variants).
+  distinct. See [user-types.md § Unions dissolve into per-variant newtypes](../../design/typing/user-types.md#unions-dissolve-into-per-variant-newtypes).
 - *Tag lexing / capitalization — decided, shipped.* Tags are capitalized `Type`
   tokens (`some`→`Some`, `ok`→`Ok`/`Error`), keyed by the tokenizer's
   capitalization rule via `FieldNameKind::Type` (`src/parse/triple_list.rs`); a
@@ -54,7 +54,7 @@ form, so recursive variant references inside a schema are unsupported (external
   payload. No general `.` path operator. Variant-led construction (`(Some 42)`
   with the union inferred) stays deferred — it presumes a reachable bare variant
   name this namespace does not provide.
-- *MATCH vs dispatch — deferred to [anonymous-unions](anonymous-unions.md).*
+- *MATCH vs dispatch — deferred to [anonymous structural unions](../../design/typing/type-language-via-dispatch.md#anonymous-union-sigil).*
   `MATCH` shipped as a distinct fast-track form (option B): it selects the arm by
   the carried tag, now validated as a `Type` token, with O(1) variant admission
   on the dispatch fast path. Full lowering to type-dispatch / removing the
@@ -70,8 +70,6 @@ form, so recursive variant references inside a schema are unsupported (external
 
 - [Branch-arm return contract](../../design/execution/calls-and-values.md#arms-as-own-blocks)
   — the `MATCH` arm machinery the remaining work lowers into type-dispatch.
-- [Anonymous structural unions](anonymous-unions.md) — owns the match-by-type
-  lowering this item's `MATCH` convergence criterion completes through.
 
 **Unblocks:**
 
