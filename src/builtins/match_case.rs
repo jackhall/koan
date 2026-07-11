@@ -47,6 +47,21 @@ pub fn body<'a>(
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
+    // Selection returns which sub-value `it` binds (ruling F3); realize it here as the deep copy
+    // the arm frame owns. A variant/tag arm binds the wrapped payload; a boolean arm over a `Bool`
+    // scrutinee binds `Null` (a boolean carries no payload); every other arm binds the scrutinee
+    // unchanged.
+    let it_value = if selected.binds_payload {
+        match &value {
+            crate::machine::model::KObject::Tagged { value, .. } => (**value).deep_clone(),
+            crate::machine::model::KObject::Wrapped { inner, .. } => inner.get().deep_clone(),
+            other => other.deep_clone(),
+        }
+    } else if matches!(value, crate::machine::model::KObject::Bool(_)) {
+        crate::machine::model::KObject::Null
+    } else {
+        value.deep_clone()
+    };
     // The scrutinee's envelope travels to the `it` binding: `it` is a clone of the matched value
     // (or its payload), so it reaches every region the scrutinee does, and the envelope's retained
     // host is the pin the copy's reach mints under. A region-pure scrutinee has no carrier → empty
@@ -56,7 +71,7 @@ pub fn body<'a>(
         ctx.scope,
         ctx.frame.map(|f| f.storage_rc()),
         super::branch_walk::ItSource::Value {
-            value: selected.it_value,
+            value: it_value,
             delivered: scrutinee,
         },
         selected.body,
@@ -303,6 +318,71 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ambiguous") && msg.contains("`Number`")),
             "expected ambiguity ShapeError naming the tied arms, got {err}",
+        );
+    }
+
+    #[test]
+    fn match_bogus_head_over_variant_scrutinee_lists_variants() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
+        );
+        // `Bogus` is not a member name and resolves to no type; the error names the scrutinee's
+        // union variants in declaration order.
+        let err = run_one_err(
+            scope,
+            parse_one("MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "match arm type `Bogus` is not a known type; the scrutinee's union variants are `Some`, `None`"),
+            "expected the variants-hint message, got {err}",
+        );
+    }
+
+    #[test]
+    fn match_bogus_head_over_non_variant_scrutinee_stays_short() {
+        // A non-variant scrutinee (a plain Number) resolves heads through the scope; a bogus head
+        // keeps the short unresolved-type message with no variants hint.
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(
+            scope,
+            parse_one("MATCH (42) -> :Str WITH (Bogus -> (PRINT \"x\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "match arm type `Bogus` is not a known type"),
+            "expected the short unresolved-type message with no hint, got {err}",
+        );
+    }
+
+    #[test]
+    fn match_on_bool_falls_through_to_typed_arm() {
+        // No boolean literal admits the `false` scrutinee, so selection falls through to the
+        // typed `Bool` arm.
+        let bytes = run_program(
+            "MATCH false -> :Str WITH (true -> (PRINT \"yes\") Bool -> (PRINT \"boolean\"))",
+        );
+        assert_eq!(bytes, b"boolean\n");
+    }
+
+    #[test]
+    fn match_on_bool_two_admitting_literal_heads_are_ambiguous() {
+        // Two `true ->` heads both admit the `true` scrutinee as exact matches with no strict
+        // winner → ambiguity.
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(
+            scope,
+            parse_one("MATCH true -> :Str WITH (true -> (PRINT \"a\") true -> (PRINT \"b\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("ambiguous") && msg.contains("`true`")),
+            "expected ambiguity ShapeError naming the tied exact heads, got {err}",
         );
     }
 
