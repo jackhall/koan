@@ -446,9 +446,14 @@ impl<'a> FoldingBrand<'a> {
         FoldingBrand(RegionBrand(handle))
     }
 
-    /// Store a `t` built from the fold's own operands — the always-true audit is sound only
-    /// because the capability itself is confined to a fold closure (see the type doc).
-    pub(crate) fn alloc_ktype_folded(self, t: KType<'_>) -> &'a KType<'a> {
+    /// Store a value built at this fold's own brand. Sound without a per-value audit: the input is
+    /// typed at the brand lifetime, and inside a `for<'b>` fold closure the only inhabitants of
+    /// `KType<'b>` are values derived from the fold's declared operand views, the brand's own
+    /// allocations, and owned/`'static` data — all named by the witness the enclosing combinator
+    /// composes. An ambient-lifetime capture is a compile error at this signature (a `KType<'ambient>`
+    /// cannot coerce to `KType<'b>`, since `'b` has no outlives relation to any enclosing lifetime),
+    /// so the always-true audit is discharged by the type, not by a runtime check.
+    pub(crate) fn alloc_ktype_folded(self, t: KType<'a>) -> &'a KType<'a> {
         (self.0)
             .0
             .alloc_resident_audited::<KType<'static>>(t, |_, _| true)
@@ -456,7 +461,7 @@ impl<'a> FoldingBrand<'a> {
     }
 
     /// Object twin of [`Self::alloc_ktype_folded`].
-    pub(crate) fn alloc_object_folded(self, o: KObject<'_>) -> &'a KObject<'a> {
+    pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
         (self.0)
             .0
             .alloc_resident_audited::<KObject<'static>>(o, |_, _| true)
@@ -465,7 +470,7 @@ impl<'a> FoldingBrand<'a> {
 }
 
 /// One positional operand of a brand-composed type build: the total, embedding-ordered form of
-/// the sparse `deps` list [`KoanStepContextExt::alloc_type_with`] takes. `Reaching` folds the
+/// the sparse `deps` list [`KoanStepContextExt::alloc_type_composed`] partitions. `Reaching` folds the
 /// carrier's reach + host into the result's witness and surfaces as a view; `Pure` is a
 /// region-free type rebuilt at the brand through the region's own `'static` door, contributing no
 /// reach.
@@ -857,17 +862,13 @@ pub(crate) trait KoanStepContextExt {
         }
     }
 
-    /// [`Self::alloc_carried_with`] specialized to the one-`KType`-carrier shape: reach = own
-    /// region unioned with every listed dep's reach. For a `kt` built from a dep terminal's value
-    /// — the type's own borrows may reach into the dep's region, so the dep's carrier must fold
-    /// into the result's witness. The dep views are unused here; the fold is what matters.
-    fn alloc_type_with(
-        &self,
-        deps: &[&DeliveredCarried],
-        kt: KType<'_>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+    /// Seal a delivered *type* terminal's value as this step's own carrier. The type is rebuilt at
+    /// the fold brand from the dep's view — never captured at an ambient lifetime — so reach = own
+    /// region ∪ the dep's reach and host. Scalar gate: a region-free scalar type references no
+    /// region, so it routes to the no-fold path and seals with an empty reach.
+    fn alloc_type_of(&self, dep: &DeliveredCarried) -> Witnessed<CarriedFamily, CarrierWitness>;
 
-    /// [`Self::alloc_type_with`]'s correlated twin: `operands` lists **every** type the composite
+    /// The correlated multi-operand type build: `operands` lists **every** type the composite
     /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
     /// at the same position — so the composite is built at the brand from declared operands only.
     /// `compose` is a plain `fn` so it cannot capture: an ambient-lifetime `KType` smuggled past
@@ -880,16 +881,14 @@ pub(crate) trait KoanStepContextExt {
         compose: for<'b> fn(FoldingBrand<'b>, &[&'b KType<'b>]) -> KType<'b>,
     ) -> Witnessed<CarriedFamily, CarrierWitness>;
 
-    /// [`Self::alloc_carried_with`] specialized to the one-`KObject`-carrier shape: reach = own
-    /// region unioned with every listed dep's reach. For a `value` built from (or projected out
-    /// of) a dep terminal's value — its borrows may reach into the dep's region, so the dep's
-    /// carrier must fold into the result's witness. The dep views are unused here; the fold is
-    /// what matters.
-    fn alloc_object_with(
+    /// The no-fold arm for a shallow scalar (Number / KString / Bool / Null): such a value embeds
+    /// no borrow, so it rebuilds owned and seals with an empty reach instead of over-retaining a
+    /// producer arena. `None` when the value is not a shallow scalar (the caller takes a fold door
+    /// instead).
+    fn alloc_object_scalar(
         &self,
-        deps: &[&DeliveredCarried],
-        value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness>;
+        value: &KObject<'_>,
+    ) -> Option<Witnessed<CarriedFamily, CarrierWitness>>;
 }
 
 impl KoanStepContextExt for StepContext<FrameStorage> {
@@ -970,22 +969,23 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         Ok(Witnessed::resident(Carried::Type(stored)))
     }
 
-    fn alloc_type_with(
-        &self,
-        deps: &[&DeliveredCarried],
-        kt: KType<'_>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        // Scalar gate: a region-free scalar type references none of `deps`, so folding their reach in
+    fn alloc_type_of(&self, dep: &DeliveredCarried) -> Witnessed<CarriedFamily, CarrierWitness> {
+        // Scalar gate: a region-free scalar type references no region, so folding the dep's reach in
         // would only over-retain. Route it to the no-fold path so it seals with an empty reach.
         // `is_region_free_scalar` is exactly `to_static`'s owned-leaf class, so the rebuild always
         // succeeds.
-        if kt.is_region_free_scalar() {
-            return self.alloc_type(
-                kt.to_static()
-                    .expect("is_region_free_scalar implies to_static() is Some"),
-            );
+        if let Some(owned) = dep.open(|c| match c {
+            Carried::Type(kt) if kt.is_region_free_scalar() => kt.to_static(),
+            _ => None,
+        }) {
+            return self.alloc_type(owned);
         }
-        self.alloc_carried_with(deps, |b, _views| Carried::Type(b.alloc_ktype_folded(kt)))
+        self.alloc_carried_with(&[dep], |b, views| match views[0] {
+            Carried::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
+            Carried::Object(_) => {
+                unreachable!("alloc_type_of precondition: the dep terminal is a type")
+            }
+        })
     }
 
     fn alloc_type_composed(
@@ -1031,32 +1031,28 @@ impl KoanStepContextExt for StepContext<FrameStorage> {
         })
     }
 
-    fn alloc_object_with(
+    fn alloc_object_scalar(
         &self,
-        deps: &[&DeliveredCarried],
-        value: KObject<'_>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        // Scalar gate: a shallow scalar embeds no borrow into any dep, so the dep-witness union is
-        // pure over-retention. Route it to the no-fold path so an escaped scalar seals with an empty
-        // reach and stops pinning its producer arena. Aggregates keep the fold (their reaches are
-        // exact, so the residual is only a borrow the value could have embedded but did not).
-        // `is_shallow_scalar`'s four variants hold only owned payloads, so rebuilding fresh (rather
-        // than coercing the `'_`-tagged `value`) is always valid at `'static` — `KObject` has no
-        // general `to_static` (unlike `KType`; see `KType::to_static`'s doc), so this is a
-        // by-hand rebuild scoped to exactly the owned variants `is_shallow_scalar` names.
-        if value.is_shallow_scalar() {
-            let value = match value {
-                KObject::Number(n) => KObject::Number(n),
-                KObject::KString(s) => KObject::KString(s),
-                KObject::Bool(b) => KObject::Bool(b),
-                KObject::Null => KObject::Null,
-                _ => unreachable!("is_shallow_scalar guarantees one of the four owned variants"),
-            };
-            return self.alloc_carried(|b| Carried::Object(b.alloc_object(value)));
+        value: &KObject<'_>,
+    ) -> Option<Witnessed<CarriedFamily, CarrierWitness>> {
+        // A shallow scalar embeds no borrow, so the dep-witness union would be pure over-retention:
+        // route it to the no-fold path so an escaped scalar seals with an empty reach and stops
+        // pinning its producer arena. `is_shallow_scalar`'s four variants hold only owned payloads,
+        // so rebuilding fresh (rather than coercing the `'_`-tagged `value`) is always valid at
+        // `'static` — `KObject` has no general `to_static` (unlike `KType`; see `KType::to_static`'s
+        // doc), so this is a by-hand rebuild scoped to exactly the owned variants `is_shallow_scalar`
+        // names. `None` when the value is not a shallow scalar, so the caller takes a fold door.
+        if !value.is_shallow_scalar() {
+            return None;
         }
-        self.alloc_carried_with(deps, |b, _views| {
-            Carried::Object(b.alloc_object_folded(value))
-        })
+        let owned = match value {
+            KObject::Number(n) => KObject::Number(*n),
+            KObject::KString(s) => KObject::KString(s.clone()),
+            KObject::Bool(b) => KObject::Bool(*b),
+            KObject::Null => KObject::Null,
+            _ => unreachable!("is_shallow_scalar guarantees one of the four owned variants"),
+        };
+        Some(self.alloc_carried(|b| Carried::Object(b.alloc_object(owned))))
     }
 }
 

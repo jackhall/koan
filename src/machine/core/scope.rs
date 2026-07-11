@@ -853,6 +853,32 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// Resolve `name` down the outer chain like [`Self::lookup`], and seal the hit as a resident
+    /// delivered operand of its declaring scope — the fold-operand form of a binding read, its
+    /// stored reach and home bit riding the envelope. Walks the same chain as
+    /// [`Self::resolve_with_chain`] (the value-side `lookup_value_carrier` twin of `lookup_value`,
+    /// so shadowing agrees with `lookup`), wraps the hit at its **binding** scope via
+    /// [`Self::resident_value_carrier`], then seals it into a [`DeliveredCarried`] envelope pinned by
+    /// that scope's home frame. A still-finalizing placeholder collapses to `None`, exactly as
+    /// [`Self::lookup`].
+    pub(crate) fn lookup_value_delivered(&self, name: &str) -> Option<DeliveredCarried> {
+        self.walk_chain(|scope| {
+            scope
+                .bindings()
+                .lookup_value_carrier(name, scope.binding_cutoff(None))
+                .map(|hit| {
+                    hit.map(|value| {
+                        scope.seal_resident_delivered(scope.resident_value_carrier(
+                            value.obj,
+                            value.reach,
+                            value.borrows_into_home,
+                        ))
+                    })
+                })
+        })
+        .and_then(NameLookup::bound)
+    }
+
     /// Build the terminal carrier for a value living **in this scope's region** from its binding's
     /// stored reach: the reference-only `{ bit, ref }` over `foreign` (the value's home-omitted
     /// foreign reach, captured at bind time). The carrier pins nothing — the value and its reach

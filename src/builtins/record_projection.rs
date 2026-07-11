@@ -16,6 +16,7 @@ use std::rc::Rc;
 use crate::machine::core::KoanStepContextExt;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::Record;
+use crate::machine::model::values::Carried;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -55,8 +56,8 @@ pub fn body<'a>(
         }
     }
 
-    let (fields, types) = match arg_object(ctx.args, "record") {
-        Some(KObject::Record(fields, types)) => (fields, types),
+    let record_obj = match arg_object(ctx.args, "record") {
+        Some(obj @ KObject::Record(_, _)) => obj,
         // The `:{}` slot shape-gates to records, so a non-record argument is a
         // dispatch non-match that never reaches the body. Defensive arm only.
         Some(other) => {
@@ -72,26 +73,67 @@ pub fn body<'a>(
         }
     };
 
-    let mut narrowed_pairs: Vec<(String, KType<'a>)> = Vec::with_capacity(names.len());
+    // Ambient probe: every named field must exist in the record's type map (the error arm stays
+    // here). The at-brand rebuild below re-reads the same map from the operand view, so the two
+    // cannot disagree on which fields the narrowed carrier keeps.
+    let types = match record_obj {
+        KObject::Record(_, types) => types,
+        _ => unreachable!("record_obj is shape-gated to a Record above"),
+    };
     for name in &names {
-        match types.get(name) {
-            Some(kt) => narrowed_pairs.push((name.clone(), kt.clone())),
-            None => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FROM: record has no field `{name}`",
-                )))));
-            }
+        if types.get(name).is_none() {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "FROM: record has no field `{name}`",
+            )))));
         }
     }
 
-    let narrowed = Record::from_pairs(narrowed_pairs);
-    let result = KObject::record_with_type(Rc::clone(fields), narrowed);
-    let deps: Vec<_> = ctx.arg_carrier("record").into_iter().collect();
+    // Cross the record as the projection's lhs operand. A carrier-less record literal (region-pure)
+    // rebuilds into the read-site region and seals resident — coverage-equivalent to an empty-reach
+    // seal.
+    let resident;
+    let lhs: &crate::machine::DeliveredCarried = match ctx.arg_carrier("record") {
+        Some(c) => c,
+        None => {
+            resident = match ctx
+                .scope
+                .brand()
+                .alloc_object_checked(record_obj.deep_clone())
+            {
+                Ok(obj) => ctx
+                    .scope
+                    .seal_resident_delivered(ctx.scope.resident_value_carrier(obj, None, true)),
+                Err(e) => return Action::Done(Err(e)),
+            };
+            &resident
+        }
+    };
     // The projection `Rc`-shares the record's backing field values, so it reaches whatever the
-    // `record` operand reaches. Built through the step context with the record's carrier
-    // as a dep, so the result's witness names the read-site home frame plus that reach by
-    // construction.
-    Action::Done(Ok(ctx.ctx.alloc_object_with(&deps, result)))
+    // `record` operand reaches. Built at the fold brand from the operand's own view — the narrowed
+    // type map re-read from the view, the backing fields `Rc`-shared whole — so the result's witness
+    // names the read-site home frame plus that reach by construction.
+    Action::Done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
+        let record = match views[0] {
+            Carried::Object(o) => o,
+            Carried::Type(_) => unreachable!("the `record` slot shape-gates to records"),
+        };
+        let (fields, types) = match record {
+            KObject::Record(fields, types) => (fields, types),
+            _ => unreachable!("the `record` slot shape-gates to records"),
+        };
+        let narrowed = Record::from_pairs(names.iter().map(|name| {
+            (
+                name.clone(),
+                types
+                    .get(name)
+                    .expect("probed ambient: field exists in the record")
+                    .clone(),
+            )
+        }));
+        Carried::Object(
+            b.alloc_object_folded(KObject::record_with_type(Rc::clone(fields), narrowed)),
+        )
+    })))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

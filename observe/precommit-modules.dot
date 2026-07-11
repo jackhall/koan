@@ -405,6 +405,7 @@ digraph {
     "koan::builtins::record_projection" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::record_projection" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::recursive_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::recursive_types" -> "koan::builtins::await_body" [label="uses", style="dashed"];
     "koan::builtins::recursive_types" -> "koan::machine" [label="uses", style="dashed"];

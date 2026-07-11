@@ -39,7 +39,9 @@ use crate::machine::DeliveredCarried;
 /// Composes the final `KType` at the fold brand from the elaborated pairs and any extra operand
 /// views (e.g. the FN/FUNCTOR return type's carrier view). Runs inside the fold closure of
 /// [`fold_fields_at_brand`]; everything it builds from is a declared operand of that fold — the
-/// pairs cloned out of brand-delivered views, plus the `extras` views.
+/// pairs cloned out of brand-delivered views, plus the `extras` views. The composed `KType<'b>` can
+/// only inhabit the brand from those views or owned data, since the fold's sink
+/// ([`FoldingBrand::alloc_ktype_folded`]) ties its input to the brand lifetime.
 pub(crate) type BrandCompose<'step> = Box<
     dyn for<'b> FnOnce(
             FoldingBrand<'b>,

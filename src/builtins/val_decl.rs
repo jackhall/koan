@@ -162,7 +162,12 @@ fn finalize_val<'a>(
         return Action::Done(Err(e));
     }
     let sealed = match carrier {
-        Some(c) => fctx.ctx.alloc_type_with(&[c], declared_kt),
+        // Seal the carrier's own type terminal. `alloc_type_of` rebuilds the type from the dep's
+        // view at the fold brand — the built value equals `declared_kt` because both callers source
+        // `kt` from this carrier's own terminal (`expect_type_terminal` clones `Carried::Type(kt)`;
+        // the `Direct` arm's `ty` argument is the spliced sub-dispatch this carrier delivers), so
+        // the view and the ambient `declared_kt` are the same delivered type.
+        Some(c) => fctx.ctx.alloc_type_of(c),
         None => match fctx.ctx.alloc_type_pure(declared_kt) {
             Ok(sealed) => sealed,
             Err(e) => return Action::Done(Err(e)),

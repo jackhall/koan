@@ -24,7 +24,7 @@ impl<'a> KType<'a> {
     /// `Null`, `Identifier`) that embeds neither a `&'a` region pointer (the `Module` / `Signature` /
     /// `AbstractType` / `KFunctor { body }` variants do) nor a nested `KType` box (`List` / `Dict` /
     /// `Record` / `KFunction` might carry one transitively). Such a type references no dep the
-    /// construction fold was handed, so [`alloc_type_with`](crate::machine::core::KoanStepContextExt::alloc_type_with)
+    /// construction fold was handed, so [`alloc_type_of`](crate::machine::core::KoanStepContextExt::alloc_type_of)
     /// routes it to the no-fold path and it seals with an empty reach. Conservative by design: a
     /// composite whose parameters happen to be region-free still keeps the fold rather than risk a
     /// deep walk (its reach is exact regardless, so the residual is only lost precision, never a

@@ -220,8 +220,8 @@ pub(crate) fn build_type_operand<'step>(
 /// brand as a [`RegionTypeFamily`] operand ([`build_type_operand`]) rather than captured into a fold
 /// closure, so the placement's witness folds the identity's own reach as a declared operand. Reach =
 /// the dest region ∪ the identity's own reach ∪ every carrier's reach-and-host — the coverage
-/// [`alloc_type_with`](crate::machine::core::KoanStepContextExt::alloc_type_with) produces for the
-/// same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
+/// [`alloc_carried_with`](crate::machine::core::KoanStepContextExt::alloc_carried_with) produces for
+/// the same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
 ///
 /// `reach` is the identity's own home-omitted foreign reach (empty while a `RecursiveSet` is
 /// heap-`Rc`'d and its members reach no region); `dest_frame` owns the destination scope's region and
@@ -236,7 +236,7 @@ pub(crate) fn seal_type_operand<'a>(
     let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, reach);
     // Fold each carrier's reach onto the identity operand at `Residence::Kept` — the dep keeps living
     // in its producer region, so its host materializes as a member — the per-dep envelope fold
-    // `alloc_type_with` runs. The relocate closure discards the carrier's value and threads the
+    // `alloc_carried_with` runs. The relocate closure discards the carrier's value and threads the
     // identity operand through unchanged; only its reach folds onto the composed witness.
     let operand = carriers.iter().fold(operand, |operand, carrier| {
         carrier.transfer_into::<RegionTypeFamily, RegionTypeFamily, KoanStorageProfile>(

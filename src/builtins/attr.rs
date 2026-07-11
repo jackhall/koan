@@ -29,10 +29,10 @@ use crate::machine::DeliveredCarried;
 
 /// Lift an `access_*` result into its terminal [`Action`]: a projected member — object or type —
 /// seals as a [`Witnessed`] carrier naming its reach ([`Action::Done(Ok)`]), an error as a
-/// [`Action::Done(Err)`]. Both channels are witnessed: an object value sealed by the step
-/// context's `alloc_object_with`, its dep carriers' reach folded by construction, a type
-/// identity witnessed in place from its stored reach via [`Scope::resident_type_carrier`] (or,
-/// for a projected type field, sealed under the folded dep reach).
+/// [`Action::Done(Err)`]. Both channels are witnessed: an object value re-projected at the fold
+/// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
+/// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
+/// field, re-projected and sealed under the folded lhs reach).
 fn route<'a>(
     result: Result<Witnessed<CarriedFamily, CarrierWitness>, KError>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -82,10 +82,19 @@ pub fn body_identifier<'a>(
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
-    // `s` is a bound name: the target lives in its (ancestor) binding scope, transitively pinned by
-    // the read-site scope's home frame, so the field read folds no dep carrier (`&[]`).
+    // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
+    // projected field folds every region the bound value reaches (its stored reach and home). A
+    // binding whose carrier does not resolve (defensive) seals the target resident of the read-site
+    // scope — coverage-equivalent to an empty-reach seal.
     if let Some(target) = ctx.scope.lookup(&s_name) {
-        return route(access_field(&ctx.ctx, target, &field_name, &[]));
+        let lhs = ctx
+            .scope
+            .lookup_value_delivered(&s_name)
+            .unwrap_or_else(|| {
+                ctx.scope
+                    .seal_resident_delivered(ctx.scope.resident_value_carrier(target, None, true))
+            });
+        return route(access_field(&ctx.ctx, target, &field_name, &lhs));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         match kt {
@@ -160,10 +169,22 @@ pub fn body_newtype<'a>(
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     // The lhs `s` is a computed `Wrapped` value delivered to this call (e.g. `seg.finish.x`), so its
-    // carrier names regions the read-site frame may not pin; fold the lhs carrier as the field
-    // read's dep so the projected field outlives every region the lhs reaches.
-    let deps: Vec<_> = ctx.arg_carrier("s").into_iter().collect();
-    route(access_field(&ctx.ctx, target, &field_name, &deps))
+    // carrier names regions the read-site frame may not pin; cross the lhs carrier as the field
+    // read's operand so the projected field outlives every region the lhs reaches. A carrier-less
+    // `s` (region-pure) rebuilds into the read-site region and seals resident —
+    // coverage-equivalent to an empty-reach seal.
+    match ctx.arg_carrier("s") {
+        Some(lhs) => route(access_field(&ctx.ctx, target, &field_name, lhs)),
+        None => {
+            let resident = match ctx.scope.brand().alloc_object_checked(target.deep_clone()) {
+                Ok(obj) => ctx
+                    .scope
+                    .seal_resident_delivered(ctx.scope.resident_value_carrier(obj, None, true)),
+                Err(e) => return Action::Done(Err(e)),
+            };
+            route(access_field(&ctx.ctx, target, &field_name, &resident))
+        }
+    }
 }
 
 /// Projects the field off a module identity riding the type channel (the lhs is the `Type` arm).
@@ -236,42 +257,88 @@ fn access_type_member<'a>(
     }
 }
 
-fn access_field<'a>(
-    step: &StepContext<FrameStorage>,
-    target: &KObject<'a>,
-    field: &str,
-    deps: &[&DeliveredCarried],
-) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+/// Walk nested `Wrapped` layers to the record member named `field`, returning its held cell.
+/// Lifetime-generic: the ambient classification probe and the at-brand rebuild both run this exact
+/// walk, so they cannot disagree on which member a projection resolves to.
+///
+/// A record-repr newtype (an ex-struct) wraps a `KObject::Record`; the member reads straight off
+/// it, naming the nominal type in the miss diagnostic so `b.z` on a `Point` still reports `Point`.
+/// `Wrapped.inner` is invariantly not a `Wrapped` (the construction-time collapse rule peels any
+/// `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which has no fields)
+/// falls to the `other` arm.
+fn wrapped_field<'v, 'w>(target: &'v KObject<'w>, field: &str) -> Result<&'v Held<'w>, KError> {
     match target {
-        // NEWTYPE fall-through. A record-repr newtype (an ex-struct) wraps a
-        // `KObject::Record`; read the field straight off it, naming the nominal type in the
-        // miss diagnostic so `b.z` on a `Point` still reports `Point`. `Wrapped.inner` is
-        // invariantly not a `Wrapped` (the construction-time collapse rule peels any
-        // `Wrapped` before re-wrapping), so a scalar inner (a NEWTYPE-over-`Number`, which
-        // has no fields) falls to the `other` arm. The field value is deep-cloned into the
-        // read-site region and sealed under that region's home frame; the `deps` slice — the
-        // computed lhs carrier, when the lhs was a delivered value — folds its reach so a field
-        // of a multi-region value keeps every region it borrows into alive.
         KObject::Wrapped { inner, type_id } => match inner.get() {
             KObject::Record(values, _) => match values.get(field) {
-                Some(Held::Object(value)) => Ok(step.alloc_object_with(deps, value.deep_clone())),
-                // A projected type field of the `Wrapped` record — born region-pure and sealed under
-                // the home frame plus the `deps` slice's folded reach (which pins a nested module's
-                // region, since the `Wrapped` physically contains it), mirroring the Object arm above.
-                Some(Held::Type(kt)) => Ok(step.alloc_type_with(deps, kt.clone())),
+                Some(held) => Ok(held),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "`{}` has no field `{}`",
                     type_id.name(),
                     field
                 )))),
             },
-            inner => access_field(step, inner, field, deps),
+            inner => wrapped_field(inner, field),
         },
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a value with fields".to_string(),
             got: other.ktype().name().to_string(),
         })),
+    }
+}
+
+/// Project `field` off the `Wrapped` runtime lhs `target`, whose carrier is the declared operand
+/// `lhs`. The ambient `target` classifies the member (scalar? object? type? field present?); the
+/// projected value is then re-built **at the fold brand** from `lhs`'s own view — the same value
+/// `target` names — so the field carrier folds the lhs's reach by construction rather than
+/// laundering an ambient-lifetime clone. A shallow-scalar or region-free-scalar member embeds no
+/// borrow, so it seals with an empty reach through the no-fold door.
+fn access_field<'a>(
+    step: &StepContext<FrameStorage>,
+    target: &KObject<'a>,
+    field: &str,
+    lhs: &DeliveredCarried,
+) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    match wrapped_field(target, field)? {
+        Held::Object(value) => {
+            if let Some(sealed) = step.alloc_object_scalar(value) {
+                return Ok(sealed);
+            }
+            Ok(step.alloc_carried_with(&[lhs], |b, views| {
+                let target = match views[0] {
+                    Carried::Object(o) => o,
+                    Carried::Type(_) => unreachable!("probed ambient: lhs is a value"),
+                };
+                match wrapped_field(target, field)
+                    .expect("probed ambient: field exists on this value")
+                {
+                    Held::Object(v) => Carried::Object(b.alloc_object_folded(v.deep_clone())),
+                    Held::Type(_) => unreachable!("probed ambient: member is an object"),
+                }
+            }))
+        }
+        Held::Type(kt) => {
+            // A region-free scalar type references no region, so it seals with an empty reach
+            // through the no-fold door, mirroring the shallow-scalar object arm above.
+            if kt.is_region_free_scalar() {
+                return Ok(step.alloc_type(
+                    kt.to_static()
+                        .expect("is_region_free_scalar implies to_static() is Some"),
+                ));
+            }
+            Ok(step.alloc_carried_with(&[lhs], |b, views| {
+                let target = match views[0] {
+                    Carried::Object(o) => o,
+                    Carried::Type(_) => unreachable!("probed ambient: lhs is a value"),
+                };
+                match wrapped_field(target, field)
+                    .expect("probed ambient: field exists on this value")
+                {
+                    Held::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
+                    Held::Object(_) => unreachable!("probed ambient: member is a type"),
+                }
+            }))
+        }
     }
 }
 
@@ -331,25 +398,36 @@ fn access_module_member<'a>(
             borrows_into_home,
         }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
-                // The re-tag allocates in the module region (not the read site's): `obj` is a
-                // pre-existing reference into that region, so it crosses as a fold operand — its
-                // carrier (named by the member's own `reach`) unions into the wrapped result's
-                // witness via `alloc_carried_with`.
+                // The re-tag allocates in the module region (not the read site's): both the value
+                // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
+                // is a pre-existing reference into the module region, sealed resident with the
+                // member's own `reach`; `tag` allocates once into the module region via
+                // `alloc_ktype_pure` (it borrows at most the module's own region, so the checked
+                // tier passes) and is sealed resident — the same region as the built `Wrapped`'s
+                // placement (the `StepContext` targets the module's frame), so the built value is
+                // unchanged. Both carriers union into the wrapped result's witness via
+                // `alloc_carried_with`. `reach: None, borrows_into_home: true` for the tag mirrors
+                // the conservative home-materializing reseal a type operand takes.
                 let obj_carrier = module_scope.seal_resident_delivered(
                     module_scope.resident_value_carrier(obj, reach, borrows_into_home),
                 );
+                let tag_reference: &'a KType<'a> = module_scope.brand().alloc_ktype_pure(tag)?;
+                let tag_carrier = module_scope.seal_resident_delivered(
+                    module_scope.resident_type_carrier(tag_reference, None, true),
+                );
                 let ctx = StepContext::new(scope_frame(module_scope));
-                return Ok(
-                    ctx.alloc_carried_with(&[&obj_carrier], |b, views| match views[0] {
-                        Carried::Object(o) => {
+                return Ok(ctx.alloc_carried_with(
+                    &[&obj_carrier, &tag_carrier],
+                    |b, views| match (views[0], views[1]) {
+                        (Carried::Object(o), Carried::Type(tag)) => {
                             Carried::Object(b.alloc_object_folded(KObject::Wrapped {
                                 inner: WrappedPayload::peel(o),
-                                type_id: b.alloc_ktype_folded(tag),
+                                type_id: tag,
                             }))
                         }
-                        Carried::Type(_) => unreachable!("a module value member is always Object"),
-                    }),
-                );
+                        _ => unreachable!("operand order: [value member, re-tag identity]"),
+                    },
+                ));
             }
             Ok(module_scope.resident_value_carrier(obj, reach, borrows_into_home))
         }

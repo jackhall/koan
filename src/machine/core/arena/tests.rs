@@ -953,13 +953,13 @@ fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run>
     })
 }
 
-/// **`alloc_type_with`'s reach fold, exercised through the actual finish-surface helper.** Mirrors
-/// what a field-list finish now does: a dep terminal's `KType::KFunctor { body: Some(&f) }` — the
-/// stand-in for `t.value`/`t.carrier` — is cloned into a fresh `Record` type built in a *different*
-/// frame's region via `alloc_type_with`, the same clone-embedding shape `field_list.rs`'s re-walk
-/// performs. The fold unions the producer's reach into the result's witness; every producer-frame
-/// handle then drops, and reading the record's embedded functor body must not dangle. Fails on UB,
-/// not values — the closing case for the reach hole `alloc_type` (no fold) leaves open.
+/// **`alloc_type_of`'s reach fold, exercised through the actual finish-surface helper.** A dep
+/// terminal's `KType::KFunctor { body: Some(&f) }` — the stand-in for `t.value`/`t.carrier` — is
+/// sealed as the step's own carrier via `alloc_type_of`, rebuilt at the fold brand from the dep's
+/// view in a *different* frame's region. The fold unions the producer's reach into the result's
+/// witness; every producer-frame handle then drops, and reading the sealed functor body must not
+/// dangle. Fails on UB, not values — the closing case for the reach hole `alloc_type` (no fold)
+/// leaves open.
 #[test]
 fn functor_field_reach_fold_survives_producer_frame_free() {
     let root = run_root_storage();
@@ -978,17 +978,11 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
         producer_frame.storage_rc(),
     );
 
-    // Consumer: a StepContext over a *different* frame — the finish surface's own region. The fold
-    // clones `kt` in exactly as the field-list re-walk clones a sub-dispatch terminal's `t.value`.
+    // Consumer: a StepContext over a *different* frame — the finish surface's own region.
+    // `alloc_type_of` rebuilds `kt` at the brand from the dep's view and folds the producer's reach.
     let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
     let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
-    let record: Witnessed<CarriedFamily, CarrierWitness> = ctx.alloc_type_with(
-        &[&dep],
-        KType::Record(Box::new(Record::from_pairs(vec![(
-            "f".to_string(),
-            kt.clone(),
-        )]))),
-    );
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> = ctx.alloc_type_of(&dep);
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
     // producer's region alive, through the set minted into the consumer arena — itself pinned by
@@ -998,22 +992,48 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    // Read back through the record carrier into the embedded functor's captured scope.
-    let read_id = record.with_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::Record(fields)) => match fields.get("f") {
-            Some(KType::KFunctor { body: Some(f), .. }) => f.captured_scope().id,
-            Some(other) => panic!(
-                "expected a KFunctor field with a body, got {}",
-                other.name()
-            ),
-            None => panic!("expected field \"f\" in the record"),
-        },
-        other => panic!("expected a Record type, got {}", other.summarize()),
+    // Read back through the sealed carrier into the functor's captured scope.
+    let read_id = sealed.with_pinned(&consumer_storage, |c| match c {
+        Carried::Type(KType::KFunctor { body: Some(f), .. }) => f.captured_scope().id,
+        Carried::Type(other) => panic!("expected a KFunctor with a body, got {}", other.name()),
+        other => panic!("expected a KFunctor type, got {}", other.summarize()),
     });
     assert_eq!(
         read_id, expected_id,
-        "functor field's captured scope read back after producer frame freed"
+        "functor type read back after producer frame freed"
     );
+}
+
+/// **`alloc_type_of`'s scalar gate.** A region-free scalar type (`Number`) delivered as a dep
+/// terminal seals with an **empty** reach — it references no region, so the fold is skipped and the
+/// carrier pins nothing, even though the dep envelope names a producer frame. The complement of the
+/// fold arm above: reach = own region ∪ dep reach for a region-reaching type, empty for a scalar.
+#[test]
+fn alloc_type_of_scalar_gate_seals_empty_reach() {
+    let root = run_root_storage();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+
+    // A region-free scalar type sealed as a dep terminal, its envelope naming a producer frame.
+    let producer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let kt: &KType = producer_frame.brand().alloc_ktype(KType::Number);
+    let dep: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
+        producer_frame.storage_rc(),
+    );
+
+    let consumer_frame: Rc<CallFrame> = CallFrame::new_test(scope, None);
+    let ctx = StepContext::<FrameStorage>::new(consumer_frame.storage_rc());
+    let sealed: Witnessed<CarriedFamily, CarrierWitness> = ctx.alloc_type_of(&dep);
+
+    assert!(
+        sealed.witness().is_empty(),
+        "a region-free scalar type folds no dep: empty reach"
+    );
+    // The scalar value rebuilds owned at the brand, so the sealed carrier is the same `Number`.
+    let is_number = sealed.with_pinned(&consumer_frame.storage_rc(), |c| {
+        matches!(c, Carried::Type(KType::Number))
+    });
+    assert!(is_number, "alloc_type_of seals the scalar's own value");
 }
 
 /// **`alloc_type_composed`'s correlation, exercised through the actual door.** A mixed operand
@@ -1133,7 +1153,7 @@ fn alloc_type_composed_operand_order_is_positional() {
 }
 
 /// An all-`Pure` operand list folds no dep — reach = own region only, the same exact-reach result
-/// [`alloc_type_with`](KoanStepContextExt::alloc_type_with)'s scalar gate produces elsewhere, here
+/// [`alloc_type_of`](KoanStepContextExt::alloc_type_of)'s scalar gate produces elsewhere, here
 /// without needing a gate at all: `Pure` operands simply add nothing to `deps`.
 #[test]
 fn alloc_type_composed_all_pure_seals_empty_reach() {
