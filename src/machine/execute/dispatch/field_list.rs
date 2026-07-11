@@ -287,6 +287,60 @@ pub(crate) fn defer_field_list_action<'a>(
     Action::AwaitDeps { deps, finish }
 }
 
+/// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] vector,
+/// but its finish runs the re-walk at the store's own fold brand through [`fold_fields_at_brand`]
+/// rather than folding an ambient `finalize`. `extras` are compose-only operand carriers (e.g. the
+/// FN/FUNCTOR return type's carrier), and `compose` folds the elaborated pairs plus those extra
+/// brand views into the result `KType` inside the fold closure. Used by `build_carrier`
+/// (`src/builtins/parameterized_types.rs`); `nominal_schema` keeps the ambient-`finalize` twin.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn defer_field_list_action_composed<'a>(
+    expr: KExpression<'a>,
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<KExpression<'a>>,
+    context: &'static str,
+    name_kind: FieldNameKind,
+    threaded: Vec<String>,
+    chain: Option<Rc<LexicalFrame>>,
+    pending_guard: Option<PendingBinderGuard<'a>>,
+    error_frame: Option<TraceFrame>,
+    extras: Vec<DeliveredCarried>,
+    compose: BrandCompose<'a>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{Action, AwaitContinue};
+    // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
+    // park_producers; the scheduler feeds results as [park.. , owned..].
+    let deps = field_list_deps(park_producers, sub_dispatches);
+    let rewalk = FieldListRewalk {
+        expr,
+        context,
+        name_kind,
+        threaded,
+        chain,
+        error_frame,
+    };
+    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
+        // The guard's Drop clears the in-flight `pending_types` entry on every arm.
+        let _pending_guard = pending_guard;
+        // Every terminal's carrier — parks then owned — folds into the result at the store's own
+        // brand; the owned suffix is the walk feed, the parks are notify-only, and `extras` are
+        // compose-only operands. `fold_fields_at_brand` re-walks against the brand views.
+        let carriers: Vec<&DeliveredCarried> = results.all().iter().map(|t| &t.delivered).collect();
+        let park_count = carriers.len() - results.owned_slice().len();
+        let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
+        Action::Done(fold_fields_at_brand(
+            &fctx.ctx,
+            fctx.scope,
+            rewalk,
+            &carriers,
+            park_count,
+            &extra_refs,
+            compose,
+        ))
+    });
+    Action::AwaitDeps { deps, finish }
+}
+
 /// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record(_))`.
 /// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
 /// value/type position declares no binder, so the elaborator threads no self-reference; a

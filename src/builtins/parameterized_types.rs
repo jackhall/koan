@@ -15,11 +15,12 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
+use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::execute::defer_field_list_action;
+use crate::machine::execute::{defer_field_list_action_composed, BrandCompose};
 
 /// Which carrier the shared field-list path builds. All three ride the same parser and
 /// dep-finish/defer machinery; they differ only in the `KType` they fold their fields into,
@@ -189,21 +190,53 @@ fn build_carrier<'a>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_field_list_action(
-            sig_expr,
-            park_producers,
-            sub_dispatches,
-            kind.context(),
-            kind.field_name_kind(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            Box::new(move |fctx, fields, carriers| {
-                let kt = finalize_carrier(fields, ret, kind);
-                Ok(fctx.ctx.alloc_type_with(carriers, kt))
-            }),
-        ),
+        } => {
+            // The return type folds into the composed carrier as a compose-only operand: when it
+            // arrived as a resolved value it carries a reach carrier (duplicated so the producer
+            // keeps its terminal); a region-free token like `Bool` has none and rebuilds from its
+            // `'static` value at the brand. A ret that reaches a region but arrived carrier-less
+            // cannot be crossed as an operand, so it errors loudly.
+            let ret_carrier: Option<DeliveredCarried> =
+                ctx.arg_carrier(ret_slot).map(|d| d.duplicate());
+            let ret_static: Option<KType<'static>> = ret.to_static();
+            if ret_carrier.is_none() && ret_static.is_none() {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(
+                    "FN/FUNCTOR return type reaches a region but arrived without a carrier".into(),
+                ))));
+            }
+            let extras: Vec<DeliveredCarried> = ret_carrier.into_iter().collect();
+            let compose: BrandCompose<'a> = Box::new(move |brand, fields, extra_views| {
+                let ret = match extra_views.first().copied() {
+                    // The ret crossed as a dep view: its type is already at the brand, and its
+                    // reach/host fold into the result's witness.
+                    Some(Carried::Type(kt)) => kt.clone(),
+                    Some(other @ Carried::Object(_)) => {
+                        return Err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN/FUNCTOR return slot resolved to non-type value `{}`",
+                            other.summarize(),
+                        ))))
+                    }
+                    // Region-free ret with no carrier (a builtin type token like `Bool`): rebuild
+                    // it at the brand through the region's own `'static` alloc door and clone it
+                    // back out at the fold lifetime.
+                    None => brand.alloc_ktype(ret_static.expect("gated above")).clone(),
+                };
+                Ok(finalize_carrier(fields, ret, kind))
+            });
+            defer_field_list_action_composed(
+                sig_expr,
+                park_producers,
+                sub_dispatches,
+                kind.context(),
+                kind.field_name_kind(),
+                Vec::new(),
+                None,
+                None,
+                None,
+                extras,
+                compose,
+            )
+        }
     }
 }
 
