@@ -71,14 +71,45 @@ impl<'step, T: Reattachable> StepCarried<'step, T> {
         Delivered::seal(self.inner, host)
     }
 
-    /// Unwrap to the raw carrier for a unit test that inspects a door product's reach directly.
-    /// `#[cfg(test)]`-gated, so it is absent from every production build: the compile guarantee AC 1
-    /// names (no stash past the step) holds for all non-test code, pinned by the `compile_fail`
+    /// Borrow the carrier the door built and read its pointee under an externally supplied `pin`,
+    /// exactly as [`Witnessed::with_pinned`] does — the borrowed inspection a door test uses to
+    /// assert a product's contents without ever extracting the carrier. `read` sees a `for<'b>`
+    /// re-anchored view and returns owned data; the lifetime-free [`Witnessed`] never leaves the
+    /// wrapper. `#[cfg(test)]`-gated, so it is absent from every production build: the no-stash
+    /// compile guarantee AC 1 names holds for all non-test code, pinned by the `compile_fail`
     /// fixtures. A `machine::core` door test cannot reach the `pub(super)` [`Self::seal_at_step`]
-    /// exit, so this is how it reads back the carrier the door built.
+    /// exit, so this borrowed read is how it inspects the carrier the door built.
     #[cfg(test)]
-    pub(crate) fn into_witnessed_for_test(self) -> Witnessed<T, CarrierWitness> {
-        self.inner
+    pub(crate) fn inspect_pinned<Pin, R>(
+        &self,
+        pin: &Pin,
+        read: impl for<'b> FnOnce(&'b <T as Reattachable>::At<'b>) -> R,
+    ) -> R
+    where
+        Pin: crate::witnessed::Witness,
+    {
+        self.inner.with_pinned(pin, read)
+    }
+
+    /// Whether the carrier's bundled witness names no reach — the reference-only born shape pins
+    /// nothing. `#[cfg(test)]`-gated borrowed inspection: reads the witness, returns a `bool`, and
+    /// hands back neither the carrier nor its witness.
+    #[cfg(test)]
+    pub(crate) fn reach_is_empty(&self) -> bool {
+        self.inner.witness().is_empty()
+    }
+
+    /// Consume the wrapper through the [`Self::seal_at_step`] exit under a `#[cfg(test)]` gate, so a
+    /// `machine::core` door test (outside `super`, where `seal_at_step` is reachable) can drive the
+    /// finalize shape it exercises. Returns the [`Delivered`] envelope, never the lifetime-free
+    /// [`Witnessed`]: sealing only ever *adds* the storage pin, so it cannot leak a reattachable
+    /// carrier.
+    #[cfg(test)]
+    pub(crate) fn seal_for_test(
+        self,
+        host: Rc<FrameStorage>,
+    ) -> Delivered<T, CarrierWitness, FrameStorage> {
+        self.seal_at_step(host)
     }
 }
 

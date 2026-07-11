@@ -584,15 +584,12 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
     // `alloc_object_witnessed` routes the engine's brand-confined `alloc`, storing `value` and
     // letting only the erased carrier escape — `Witnessed::resident` (the empty-witness constructor)
     // names no `'b`.
-    let carrier: Witnessed<CarriedFamily, CarrierWitness> = storage
-        .brand()
-        .alloc_object_witnessed(KObject::Number(1.0))
-        .into_witnessed_for_test();
+    let carrier: StepCarried = storage.brand().alloc_object_witnessed(KObject::Number(1.0));
     // A sibling alloc into the same region coexists — the membership-table write and the prior store
     // do not alias under tree borrows.
     let sibling = storage.brand().alloc_object(KObject::Number(2.0));
     // Read the escaped carrier back while `storage` (its backing) is live — the pin the read names.
-    let got = carrier.with_pinned(&storage, |c| match *c {
+    let got = carrier.inspect_pinned(&storage, |c| match *c {
         Carried::Object(KObject::Number(n)) => *n,
         _ => panic!("expected a Number object"),
     });
@@ -616,18 +613,15 @@ fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
     // Born reference-only: the active frame is excluded at the alloc site.
-    let carrier: Witnessed<CarriedFamily, CarrierWitness> = frame
-        .brand()
-        .alloc_object_witnessed(KObject::Number(7.0))
-        .into_witnessed_for_test();
+    let carrier: StepCarried = frame.brand().alloc_object_witnessed(KObject::Number(7.0));
     assert!(
-        carrier.witness().is_empty(),
+        carrier.reach_is_empty(),
         "a region-pure carrier is born under the empty reach",
     );
 
     // The finalize shape: seal as-is; the retention hold (the producer's storage Rc) rides the
     // delivery envelope, never the carrier.
-    let envelope: DeliveredCarried = Delivered::seal(carrier, frame.storage_rc());
+    let envelope: DeliveredCarried = carrier.seal_for_test(frame.storage_rc());
 
     // Drop the producer shell outright — the envelope holds the *storage* Rc, not the shell,
     // so the region stays alive under the drop.
@@ -1036,8 +1030,7 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     // `alloc_type_of` rebuilds `kt` at the brand from the dep's view and folds the producer's reach.
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
-        ctx.alloc_type_of(&dep).into_witnessed_for_test();
+    let sealed: StepCarried = ctx.alloc_type_of(&dep);
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
     // producer's region alive, through the set minted into the consumer arena — itself pinned by
@@ -1048,7 +1041,7 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     drop(consumer_frame);
 
     // Read back through the sealed carrier into the functor's captured scope.
-    let read_id = sealed.with_pinned(&consumer_storage, |c| match c {
+    let read_id = sealed.inspect_pinned(&consumer_storage, |c| match c {
         Carried::Type(KType::KFunctor { body: Some(f), .. }) => f.captured_scope().id,
         Carried::Type(other) => panic!("expected a KFunctor with a body, got {}", other.name()),
         other => panic!("expected a KFunctor type, got {}", other.summarize()),
@@ -1078,15 +1071,14 @@ fn alloc_type_of_scalar_gate_seals_empty_reach() {
 
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> =
-        ctx.alloc_type_of(&dep).into_witnessed_for_test();
+    let sealed: StepCarried = ctx.alloc_type_of(&dep);
 
     assert!(
-        sealed.witness().is_empty(),
+        sealed.reach_is_empty(),
         "a region-free scalar type folds no dep: empty reach"
     );
     // The scalar value rebuilds owned at the brand, so the sealed carrier is the same `Number`.
-    let is_number = sealed.with_pinned(&consumer_frame.storage_rc(), |c| {
+    let is_number = sealed.inspect_pinned(&consumer_frame.storage_rc(), |c| {
         matches!(c, Carried::Type(KType::Number))
     });
     assert!(is_number, "alloc_type_of seals the scalar's own value");
@@ -1121,18 +1113,16 @@ fn alloc_type_composed_correlates_mixed_operands() {
         TypeOperand::Pure(KType::Number),
         TypeOperand::Reaching(&dep),
     ];
-    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
-        .alloc_type_composed(operands, |_brand, parts| {
-            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        })
-        .into_witnessed_for_test();
+    let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
+        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+    });
 
     let consumer_storage = consumer_frame.storage_rc();
     drop(dep);
     drop(producer_frame);
     drop(consumer_frame);
 
-    let (k_is_number, read_id) = composed.with_pinned(&consumer_storage, |c| match c {
+    let (k_is_number, read_id) = composed.inspect_pinned(&consumer_storage, |c| match c {
         Carried::Type(KType::Dict(k, v)) => {
             let k_is_number = matches!(k.as_ref(), KType::Number);
             let id = match v.as_ref() {
@@ -1178,18 +1168,16 @@ fn alloc_type_composed_operand_order_is_positional() {
         TypeOperand::Reaching(&dep),
         TypeOperand::Pure(KType::Number),
     ];
-    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
-        .alloc_type_composed(operands, |_brand, parts| {
-            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        })
-        .into_witnessed_for_test();
+    let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
+        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+    });
 
     let consumer_storage = consumer_frame.storage_rc();
     drop(dep);
     drop(producer_frame);
     drop(consumer_frame);
 
-    let (read_id, v_is_number) = composed.with_pinned(&consumer_storage, |c| match c {
+    let (read_id, v_is_number) = composed.inspect_pinned(&consumer_storage, |c| match c {
         Carried::Type(KType::Dict(k, v)) => {
             let id = match k.as_ref() {
                 KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
@@ -1221,13 +1209,11 @@ fn alloc_type_composed_all_pure_seals_empty_reach() {
         TypeOperand::Pure(KType::Str),
         TypeOperand::Pure(KType::Number),
     ];
-    let composed: Witnessed<CarriedFamily, CarrierWitness> = ctx
-        .alloc_type_composed(operands, |_brand, parts| {
-            KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-        })
-        .into_witnessed_for_test();
+    let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
+        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+    });
     assert!(
-        composed.witness().is_empty(),
+        composed.reach_is_empty(),
         "all-Pure operand list folds no dep: empty reach"
     );
 }
@@ -1436,8 +1422,8 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
     let bool_ty: Carried = Carried::Type(producer.brand().alloc_ktype(KType::Bool));
     let dep: DeliveredCarried = delivered_with_host(bool_ty, Rc::clone(&producer));
 
-    let sealed: Witnessed<CarriedFamily, CarrierWitness> = step_ctx
-        .alloc_carried_with_scope(&[&dep], scope, |brand, views, scope| {
+    let sealed: StepCarried =
+        step_ctx.alloc_carried_with_scope(&[&dep], scope, |brand, views, scope| {
             let flag = match views[0] {
                 Carried::Type(kt) => kt.clone(),
                 Carried::Object(_) => panic!("dep view is a type"),
@@ -1449,11 +1435,10 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
             let record =
                 Record::from_pairs([("flag".to_string(), flag), ("count".to_string(), count)]);
             Carried::Type(brand.alloc_ktype_folded(KType::Record(Box::new(record))))
-        })
-        .into_witnessed_for_test();
+        });
 
     // The record lives in `run_storage`'s region; `producer` still pins the `Bool` leaf it embeds.
-    sealed.with_pinned(&run_storage, |c| match c {
+    sealed.inspect_pinned(&run_storage, |c| match c {
         Carried::Type(KType::Record(r)) => {
             assert_eq!(
                 r.get("flag"),

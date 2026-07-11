@@ -369,7 +369,7 @@ mod tests {
             super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
         // The short-circuit returns the bound union type unchanged.
         let is_union = second.map(|carrier| {
-            carrier.into_witnessed_for_test().with_pinned(
+            carrier.inspect_pinned(
                 &crate::machine::FrameSet::empty(),
                 |c| matches!(c, Carried::Type(KType::Union(members)) if members.len() == 2),
             )
