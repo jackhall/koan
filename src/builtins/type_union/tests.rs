@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{parse_one, run_one_type, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::operators::ReductionMode;
 use crate::machine::model::KType;
@@ -88,4 +88,52 @@ fn parenthesized_compound_member() {
         *result,
         KType::union_of(vec![KType::List(Box::new(KType::Number)), KType::Str]),
     );
+}
+
+/// The two-member keyworded form `:(Wrapped | Number)` correlates a reaching member (a `NEWTYPE`
+/// alias, carried through `type_operand`'s `Reaching` arm) with a scalar-literal member (`Number`,
+/// which has no carrier and rebuilds at the brand via the `Pure` arm) into a flat union.
+#[test]
+fn binary_union_with_reaching_member_correlates() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, "NEWTYPE Wrapped = :{a :Number}");
+    let result = run_one_type(scope, parse_one(":(Wrapped | Number)"));
+    match result {
+        KType::Union(members) => {
+            assert_eq!(members.len(), 2, "expected a flat two-member union");
+            assert!(
+                members.iter().any(|m| m.name() == "Wrapped"),
+                "the reaching member must survive the carrier-view crossing, got {members:?}",
+            );
+            assert!(
+                members.contains(&KType::Number),
+                "the scalar member must lower to Number, got {members:?}",
+            );
+        }
+        other => panic!("expected a Union carrier, got {other:?}"),
+    }
+}
+
+/// The reduced n-ary form `:(Wrapped | Number | Str)` folds all three members — each crossing as
+/// a `TypeOperand::Reaching` operand, since `expect_type_terminal` yields a carrier for every
+/// sub-dispatched member — into a flat three-member union.
+#[test]
+fn nary_union_with_reaching_member_correlates() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, "NEWTYPE Wrapped = :{a :Number}");
+    let result = run_one_type(scope, parse_one(":(Wrapped | Number | Str)"));
+    match result {
+        KType::Union(members) => {
+            assert_eq!(members.len(), 3, "expected a flat three-member union");
+            assert!(
+                members.iter().any(|m| m.name() == "Wrapped"),
+                "the reaching member must survive the carrier-view crossing, got {members:?}",
+            );
+            assert!(members.contains(&KType::Number), "got {members:?}");
+            assert!(members.contains(&KType::Str), "got {members:?}");
+        }
+        other => panic!("expected a Union carrier, got {other:?}"),
+    }
 }

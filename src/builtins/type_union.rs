@@ -13,12 +13,12 @@
 use crate::machine::core::kfunction::action::{
     arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest,
 };
-use crate::machine::core::KoanStepContextExt;
+use crate::machine::core::{KoanStepContextExt, TypeOperand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
-use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
 use super::resolve_or_await::expect_type_terminal;
 use super::{arg, kw, sig};
@@ -26,26 +26,30 @@ use super::{arg, kw, sig};
 const MEMBERS_SLOT: &str = "`|` members";
 
 /// The two-member keyworded form `A | B`: both operands ride resolved-type slots (the shared
-/// parameterized-type slot shape), so the body folds two `KType`s directly — mirroring
-/// `parameterized_types::body_map`.
+/// parameterized-type slot shape), so the body builds its composite `KType` at the fold brand
+/// from a total, embedding-ordered operand list — mirroring `parameterized_types::body_map`. Each
+/// member crosses via [`crate::machine::core::kfunction::action::BodyCtx::type_operand`]: a
+/// carrier-bearing member folds its reach into the result's witness, a region-free member
+/// rebuilds at the brand with no reach contribution.
 fn body_binary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, "left"));
     let right = crate::try_action!(require_ktype(ctx.args, "right"));
-    let carriers: Vec<&DeliveredCarried> = [ctx.arg_carrier("left"), ctx.arg_carrier("right")]
-        .into_iter()
-        .flatten()
-        .collect();
-    Action::Done(Ok(ctx
-        .ctx
-        .alloc_type_with(&carriers, KType::union_of(vec![left, right]))))
+    let operands = vec![
+        crate::try_action!(ctx.type_operand("left", &left)),
+        crate::try_action!(ctx.type_operand("right", &right)),
+    ];
+    Action::Done(Ok(ctx.ctx.alloc_type_composed(operands, |_brand, parts| {
+        KType::union_of(vec![parts[0].clone(), parts[1].clone()])
+    })))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
 /// raw as a one-per-part `KExpression` (the `:KExpression` slot captures it unevaluated). Each
 /// member part is sub-dispatched on its own — a bare type leaf resolves against scope and parks on
 /// a forward reference, a `:(...)` member sub-dispatches to its `KType` — so every member-part kind
-/// rides the ordinary type-resolution machinery. Their resolved `KType`s fold through
-/// [`KType::union_of`].
+/// rides the ordinary type-resolution machinery. `expect_type_terminal` yields a carrier for every
+/// member, so each crosses the fold as a [`TypeOperand::Reaching`] operand and the composite union
+/// builds at the brand through [`KType::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>) -> Action<'a> {
     let members = match arg_object(ctx.args, "members") {
         Some(KObject::KExpression(e)) => e.clone(),
@@ -70,17 +74,15 @@ fn body_nary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>)
         })
         .collect();
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let mut resolved: Vec<KType<'a>> = Vec::with_capacity(count);
-        let mut carriers: Vec<&DeliveredCarried> = Vec::with_capacity(count);
+        let mut operands: Vec<TypeOperand> = Vec::with_capacity(count);
         for position in 0..count {
-            let (kt, carrier) =
+            let (_kt, carrier) =
                 crate::try_action!(expect_type_terminal(&results, position, MEMBERS_SLOT));
-            resolved.push(kt);
-            carriers.push(carrier);
+            operands.push(TypeOperand::Reaching(carrier));
         }
-        Action::Done(Ok(fctx
-            .ctx
-            .alloc_type_with(&carriers, KType::union_of(resolved))))
+        Action::Done(Ok(fctx.ctx.alloc_type_composed(operands, |_brand, parts| {
+            KType::union_of(parts.iter().map(|part| (*part).clone()).collect())
+        })))
     });
     Action::AwaitDeps { deps, finish }
 }
