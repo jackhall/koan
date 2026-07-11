@@ -35,7 +35,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Field-list re-walk type provenance](compile_safety/field-list-rewalk-provenance.md)
 - [Scheduler-owned lifetime tokens](compile_safety/scheduler-lifetime-tokens.md)
 - [Sparse-carrier correlation in parameterized-type constructors](compile_safety/sparse-carrier-correlation.md)
-- [Tagged-union variants as dispatchable types](compile_safety/tagged-variant-types.md)
+- [MATCH as ordinary type-dispatch](compile_safety/tagged-variant-types.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [User-defined operator modules](operator_chaining/user-defined-operator-modules.md)
