@@ -1,10 +1,8 @@
-//! Residual type-operation builtins — `TEMPLATE` (a higher-kinded type-constructor
-//! parameter) and the infix `WITH` signature specialization. The container and module
-//! type operations read as their plain-English surfaces instead: `:(LIST OF T)` /
-//! `:(MAP K -> V)` (see [`super::parameterized_types`]) and the dotted `M.T` access (see
-//! [`super::attr`]). See [design/typing/scheduler.md](../../design/typing/scheduler.md).
+//! The infix `WITH` signature specialization. The container and module type operations read
+//! as their plain-English surfaces instead: `:(LIST OF T)` / `:(MAP K -> V)` (see
+//! [`super::parameterized_types`]) and the dotted `M.T` access (see [`super::attr`]). See
+//! [design/typing/scheduler.md](../../design/typing/scheduler.md).
 
-mod type_constructor;
 mod with;
 
 use crate::machine::model::types::KKind;
@@ -15,15 +13,6 @@ use crate::machine::Scope;
 use super::{arg, kw, sig};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let template_sig = || {
-        sig(
-            KType::OfKind(KKind::ProperType),
-            vec![
-                kw("TEMPLATE"),
-                arg("param", KType::OfKind(KKind::ProperType)),
-            ],
-        )
-    };
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
     // keyword classifies as `Keyworded` (leading-slot signature like `FROM` / `:|`), and
     // the record-literal `bindings` operand eager-evaluates so its `(name, Held::Type)`
@@ -38,6 +27,5 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "TEMPLATE", template_sig(), type_constructor::body);
     crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body);
 }
