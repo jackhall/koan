@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::{FoldingBrand, FrameStorageExt, KoanRegionExt, KoanStorageProfile};
+use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
@@ -149,11 +149,9 @@ impl<'step> KoanRuntime<'step> {
             // The pin: the destination frame, whose arena holds the set the folds minted — through
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
-            let dest_region = dest_frame.brand().region();
             Ok(StepCarried::born(
                 acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
                     &dest_frame,
-                    dest_region,
                     move |(_region, value_helds), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
                         Carried::Object(region.alloc_object_folded(assemble(keys, value_helds)))

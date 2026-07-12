@@ -588,30 +588,36 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         }
     }
 
-    /// [`Self::map_pinned`] that hands the closure a [`FoldedPlacement`] over the engine-supplied
-    /// `region` instead of a bare [`FoldToken`]. The placement is minted at the same fresh `for<'b>`
-    /// brand the operand is re-anchored under, so a value the closure folds from the operand's views
-    /// stores through the placement with no per-value audit. Because `region` is handed in by the
-    /// engine — never captured from the closure's environment — the placement's destination cannot be
-    /// substituted by caller code; the covariance a bare handle would admit is closed.
+    /// [`Self::map_pinned`] that hands the closure a [`FoldedPlacement`] over the operand's **own
+    /// head handle** (its [`HasRegionHandle`] projection) instead of a bare [`FoldToken`]. The
+    /// placement is minted at the same fresh `for<'b>` brand the operand is re-anchored under, so a
+    /// value the closure folds from the operand's views stores through the placement with no
+    /// per-value audit. Because the handle comes from the operand itself — the handle its witness
+    /// was yoked over at birth, never a caller argument or a closure capture — the placement's
+    /// destination cannot be substituted by caller code; the covariance a bare handle would admit
+    /// is closed.
     pub fn map_pinned_placing<P: Reattachable, PP: StorageProfile, Pin: Witness>(
         self,
         pin: &Pin,
-        region: &Region<PP>,
         f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, PP>) -> P::At<'b>,
-    ) -> Witnessed<P, W> {
+    ) -> Witnessed<P, W>
+    where
+        for<'b> T::At<'b>: HasRegionHandle<'b, PP>,
+    {
         let Witnessed { value, witness } = self;
         // SAFETY: `reattach`'s contract, exactly as in `map_pinned` — the borrowed `pin` keeps the
         // carrier's pointee live and fixed-address for the whole call, the re-anchor is transient (the
         // fresh `for<'b>` brand the closure cannot leak), and the projection is immediately re-erased
-        // to `'static` for storage under the carried witness. The placement is minted over `region`
-        // at that same brand, so the destination is exactly the engine-supplied region. The mint is
-        // co-located with the re-anchor because the placement carries `region`'s lifetime: routing it
-        // through a shared reattach helper universally quantifies the fold brand and rejects the
-        // region coercion (and a brand-free helper closure trips `E0582`, since `T::At<'b>` alone does
-        // not witness `'b`).
+        // to `'static` for storage under the carried witness. The placement is minted over the
+        // operand's own projected handle at that same brand, so the destination is exactly the region
+        // the operand carries — the one its witness covers. The mint is co-located with the re-anchor
+        // because the placement carries the re-anchored operand's lifetime: routing it through a
+        // shared reattach helper universally quantifies the fold brand and rejects the region
+        // coercion (and a brand-free helper closure trips `E0582`, since `T::At<'b>` alone does not
+        // witness `'b`).
         let live: T::At<'_> = unsafe { value.reattach() };
-        let projected = f(live, FoldedPlacement::mint(RegionHandle::new(region)));
+        let placement = FoldedPlacement::mint(live.region_handle());
+        let projected = f(live, placement);
         let _ = pin;
         Witnessed {
             value: Erased::erase(projected),

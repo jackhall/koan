@@ -1024,7 +1024,11 @@ unsafe impl AuditedStored<KoanStorageProfile> for Scope<'static> {
 
 // SAFETY: `audit` returns true only when the stored `Module`'s child scope's region is `region`
 // itself, covered by `context`'s reach evidence, or covered by the destination scope's ambient
-// coverage — the `Module` borrows that child scope, so its region must be covered.
+// coverage — the `Module` borrows that child scope, so its region must be covered. Honest-partial:
+// the audit does not walk the `type_members` / opaque-slot maps, which also carry region-borrowing
+// `KType`s — sound because every store site allocates the module maps-empty (`Module::new`), with
+// entries installed only post-store through `RefCell` interior mutability, a channel no store-time
+// audit can see (the hotspot map's "Module member installs" row).
 unsafe impl AuditedStored<KoanStorageProfile> for Module<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &Module<'_>, context: ResidenceEvidence<'_>) -> bool {
@@ -1175,12 +1179,12 @@ impl<'step> StepAllocator<'step> {
                 crate::witnessed::Residence::Kept,
                 |scope_view, (handle, views), _brand| (handle, (views, scope_view)),
             );
-        // The placement is minted by the engine over the frame's own region; the build value comes
-        // only from this fold's declared operands — the dep views and the crossed scope envelope,
-        // both re-anchored at this brand — whose reach the enclosing fold already composes into the
-        // result's witness. No ambient-lifetime borrow reaches this closure. The carried `_handle`
-        // is ignored for minting; it stays in the operand tuple only because the fold seam produced
-        // it.
+        // The engine mints the placement from the operand's own head handle — the handle yoked over
+        // the frame's region that heads `ScopeFoldOperands` — so the destination is the region the
+        // accumulated witness covers, by construction. The build value comes only from this fold's
+        // declared operands — the dep views and the crossed scope envelope, both re-anchored at this
+        // brand — whose reach the enclosing fold already composes into the result's witness. No
+        // ambient-lifetime borrow reaches this closure.
         StepCarried::born(
             self.context
                 .map_pinned_placing::<ScopeFoldOperands, CarriedFamily, KoanStorageProfile>(

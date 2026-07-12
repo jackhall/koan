@@ -198,13 +198,13 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         })
     }
 
-    /// [`Witnessed::map_pinned`] that hands the build closure a [`FoldedPlacement`] over **this
-    /// context's own frame region** instead of a bare [`FoldToken`]. The engine mints the placement
-    /// over exactly the region the result's [`Carrier<F>`] witness covers — the held frame
-    /// (guarantee 4) — so a value the closure folds from `operand`'s declared views stores through
-    /// the placement with no per-value audit and no caller-supplied handle. The covariance door
-    /// fork 2 rejected is closed because koan never supplies the destination handle: the engine
-    /// mints it over [`Self::region`].
+    /// [`Witnessed::map_pinned_placing`] pinned by **this context's own held frame** (guarantee 4):
+    /// the build closure receives a [`FoldedPlacement`] over the operand's own head handle — the
+    /// handle its [`Carrier<F>`] witness was yoked over — instead of a bare [`FoldToken`], so a
+    /// value the closure folds from `operand`'s declared views stores through the placement with no
+    /// per-value audit and no caller-supplied handle. The covariance door fork 2 rejected is closed
+    /// because koan never supplies the destination handle: the placement is minted from the
+    /// operand's own [`HasRegionHandle`](super::HasRegionHandle) projection.
     pub fn map_pinned_placing<T, P2, P>(
         &self,
         operand: Witnessed<T, Carrier<F>>,
@@ -214,9 +214,9 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         T: Reattachable,
         P2: Reattachable,
         P: StorageProfile + 'static,
-        F: RegionOwner<Region = Region<P>>,
+        for<'b> T::At<'b>: super::HasRegionHandle<'b, P>,
     {
-        operand.map_pinned_placing::<P2, P, _>(&self.frame, self.region(), f)
+        operand.map_pinned_placing::<P2, P, _>(&self.frame, f)
     }
 }
 
