@@ -23,6 +23,10 @@ a hash cannot encode, so matching still walks every time.
   structurally.
 - The cache lives in the type's registry entry (one per distinct type), shared across all
   `KType` instances of that type, and merges up on lift with the rest of the entry.
+- Overload specificity orders two distinct SIG-declared signature types structurally: a
+  `:A` slot is more specific than a `:B` slot iff `A`'s schema is a strict `sig_subtype` of
+  `B`'s (pin agreement included), with the outcome cached like every other subtype check —
+  two different SIGs are no longer incomparable in dispatch tie-breaking.
 
 **Directions.**
 
@@ -36,6 +40,11 @@ a hash cannot encode, so matching still walks every time.
   registry entry when this item ships, leaving `Module` cache-free.
 - *`Collided` bypass — decided.* A `Collided` digest is not a reliable key; fall back to the
   structural walk, as equality does.
+- *Cross-SIG specificity lands here, not earlier — decided.* The shipped
+  [self-sig and empty-signature specificity arms](../../design/typing/modules.md#first-class-modules)
+  order a module against a `Declared` signature or the `Empty` top; ordering two distinct
+  `Declared` signatures needs a per-pair `sig_subtype` walk, which is only affordable once this
+  item's cache memoizes it.
 - *Phasing — decided.* Foundation phase (carries the risk): the cache home in the registry
   entry, with the `Collided`-bypass contract. Mechanical phases, each leaving the
   verify-koan slate green: wiring the predicate call sites, growth-bound tuning.

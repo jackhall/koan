@@ -34,7 +34,8 @@
   a runtime instance — a value is matched by a type, never by a kind. The kinds form one
   subsumption lattice, `Any > {Module, Signature, Proper > {Newtype, TypeConstructor}}`:
   a parsed type-name slot is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, the
-  `:Module` / `:Signature` wildcards are `OfKind(Module)` / `OfKind(Signature)`, and the two
+  `:Signature` wildcard is `OfKind(Signature)` (`:Module` instead lowers to the empty
+  signature — see the module / signature carriers below), and the two
   nominal families sit strictly below `Proper`. `KKind::admits` is reflexive subsumption (a
   `Proper` / `Any` slot admits any proper-subtree type value, while the module/signature wall
   keeps each of those families to itself); `KKind::strictly_below` orders specificity, so an
@@ -44,8 +45,9 @@
   arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
   `OfKind(Any)` likewise) admits any *proper* type value: bare builtin type tokens (`Number`,
   `Str`, `Bool`, `Null`), newtype and union nominal tokens, an anonymous `Union` type value, and
-  any other non-module / non-signature type. Modules and signatures route through the dedicated `OfKind(Module)` /
-  `OfKind(Signature)` / `Signature { .. }` slots so the `:Type` vs `:Module` overload
+  any other non-module / non-signature type. A signature value routes through the dedicated
+  `OfKind(Signature)` slot, and a module value (riding the value channel's Object arm as
+  `KObject::Module`) through a `Signature { .. }` slot, so the `:Type` vs `:Module` overload
   distinction stays intact — see
   [`KType::accepts_part`](../../../src/machine/model/types/ktype_predicates.rs)
   and the pin test
@@ -101,11 +103,15 @@
   never reaches the predicates. Equality is by name only.
 - Module / signature carriers (the [module system](../modules.md) rests on
   these): `Module { module: &'a Module<'a>, frame: Option<Rc<FrameStorage>> }`
-  is the first-class module value's type — the region-pinned `&Module`
-  pointer plus the per-call frame anchor for functor-built modules;
-  `Signature { sig: &'a Signature<'a>, pinned_slots: Vec<(String, KType)> }`
-  serves both signature roles in one variant — the introspectable value
-  (carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
+  is a module's **type-position** identity — the region-pinned `&Module`
+  pointer plus the per-call frame anchor for functor-built modules — held by
+  `bindings.types` and read during type-path elaboration; a module *value* rides
+  the value channel's Object arm as `KObject::Module`, typed by its self-sig.
+  `Signature { sig: SigSource<'a>, pinned_slots: Vec<(String, KType)> }`
+  serves both signature roles in one variant — its `sig` names one of three
+  module-lattice points ([`SigSource`](../../../src/machine/model/types/ktype.rs):
+  `Declared` SIG, `SelfOf` module self-sig, `Empty`) — the introspectable value
+  (a `Declared`, carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
   module satisfying this signature"); `AbstractType { source:
   AbstractSource<'a>, name: String }` is the per-abstract-type-member tag.
   `AbstractSource` is `Sig(ScopeId) | Module(&'a Module<'a>)`: a
@@ -115,19 +121,21 @@
   mint `:|` opaque ascription produces (`Foo.Type`, with a module to project
   further members off). Manual `PartialEq` keys identity on
   `module.scope_id()` for `KType::Module`, `sig.sig_id()` + `pinned_slots`
-  for `KType::Signature` (`sig.path` is diagnostic-only), and
+  for `KType::Signature` (the `SigSource`'s `path()` is diagnostic-only), and
   `(source.scope_id(), name)` for `KType::AbstractType` — so two
   opaque ascriptions of the same source module produce distinct
   `KType::Module` identities (the abstraction barrier) but their
   `AbstractType` minting for the same slot name compares equal, and a
   per-call `Module`-rooted mint stays distinct from the `Sig`-rooted member it
   was threaded from.
-  Companion wildcards `OfKind(Module)` and `OfKind(Signature)` admit any module
-  or signature value respectively; the surface keywords `Module` and
-  `Signature` lower to them in
-  [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs).
+  The companion wildcard `OfKind(Signature)` admits any signature value; the
+  surface keyword `Signature` lowers to it in
+  [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs),
+  while `Module` lowers to the empty signature (`Signature { SigSource::Empty }`),
+  the module-lattice top every module value satisfies.
   The single `Signature` variant is **disambiguated by position**: a
-  `Signature { .. }` *slot* matches a *module* whose self-sig structurally
+  `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
+  arm) whose self-sig structurally
   satisfies `sig` (the constraint role — what `Er :OrderedSig`
   lowers to in a FUNCTOR parameter slot, so `:OrderedSig` means "module
   satisfying OrderedSig," never "the signature value itself"), while a

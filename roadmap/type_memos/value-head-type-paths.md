@@ -14,8 +14,9 @@ lifetime-entangled with `Module`.
 
 - Elaboration resolves a type path whose head is a module by projecting the type member off
   the value-channel module value.
-- `KType` has no `Module` variant; `KKind::Module` is retired; the `Module` surface keyword
-  lowers to the empty signature, which admits every module.
+- `KType` has no `Module` variant; `KKind::Module` is retired. (The `Module` surface
+  keyword already lowers to the empty signature; this item removes the remaining
+  type-position `KType::Module` arms and retires the now-unused `KKind::Module`.)
 - `AbstractType`'s source is id-keyed and carries no `&Module`; further-member projection
   reads value-channel receivers.
 
@@ -25,15 +26,12 @@ lifetime-entangled with `Module`.
   projection in elaboration — the `SigiledTypeExpr` deferral is the entry point; prototype
   the mechanics against the functor deferred-return tests before committing to an approach.
   Mechanical phases, each leaving the verify-koan slate green: compiler-guided deletion of
-  `KType::Module` match arms, `KKind::Module` retirement, the empty-signature lowering in
-  `KType::from_name`, and swapping `AbstractSource::Module(&Module)` to an id-keyed source.
+  `KType::Module` match arms, `KKind::Module` retirement, and swapping
+  `AbstractSource::Module(&Module)` to an id-keyed source.
 
 ## Dependencies
 
-**Requires:**
-
-- [KObject module carrier](kobject-module-carrier.md) — elaboration projects through the
-  Object-arm carrier.
+**Requires:** none — its prerequisite (the `KObject::Module` value carrier) has shipped.
 
 **Unblocks:**
 

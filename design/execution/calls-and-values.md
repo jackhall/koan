@@ -14,12 +14,12 @@ runtime value type — the `Object` arm of the scheduler's value currency
 (`Number`, `KString`, `Bool`, `List`, `Dict`, `KExpression`, `Tagged`,
 `Record`, `Null`) carry no references into
 [`machine::core`](../../src/machine/core.rs). The runtime-reference
-variants do — `KFunction` and `Wrapped`
-embed `&'a KFunction<'a>`, `&'a KType`, and an
-`Option<Rc<FrameStorage>>` lifecycle anchor. (A module / signature value
-travels the `Type` arm as `KType::Module { &Module, .. }` /
-`KType::Signature { &Signature, .. }`, so those references live on `KType`,
-not `KObject`.) These references are why `model::values::kobject`
+variants do — `KFunction`, `Module`, and `Wrapped`
+embed `&'a KFunction<'a>`, `&'a Module<'a>`, `&'a KType`, and an
+`Option<Rc<FrameStorage>>` lifecycle anchor. (A module *value* rides the
+`Object` arm as `KObject::Module(&Module)`; a signature value travels the
+`Type` arm as `KType::Signature { &Signature, .. }`, that reference living on
+`KType`.) These references are why `model::values::kobject`
 imports from `core::{region, kfunction, scope, scope_id}`.
 
 The references are structural, not incidental. Three hot consumers
@@ -29,11 +29,12 @@ read the concrete runtime shape directly:
   `f.captured_scope().region` and `m.child_scope().region` against the
   dying frame to decide whether a per-call function or module needs
   its `Rc<CallFrame>` anchor cloned onto the lifted value — `lift_kobject`
-  for the `Object` arm, `lift_ktype` for a `Type`-arm module/signature.
+  for the `Object` arm (a function or module), `lift_ktype` for a `Type`-arm
+  signature.
 - [`KObject::ktype()`](../../src/machine/model/values/kobject.rs)
-  reports each value's runtime tag, while a `Type`-arm carrier *is* its own
-  `KType` identity — a module value reports `KType::Module { module, .. }`,
-  a signature value reports `KType::Signature { sig, .. }` — so the
+  reports each value's runtime tag — a module value (`KObject::Module`) reports
+  its principal signature `KType::Signature { SigSource::SelfOf(m), .. }` — while
+  a `Type`-arm signature carrier *is* its own `KType` identity, so the
   dispatcher reads the same identity the carrier holds rather than
   a synthesized shadow.
 - `Parseable::summarize` and `deep_clone` recurse into the variants
