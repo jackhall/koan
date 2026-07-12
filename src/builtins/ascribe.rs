@@ -265,28 +265,24 @@ fn resolve_module_and_signature<'a>(
 /// Verify a module satisfies `sig` through the signature-subtyping relation: the module's
 /// self-sig must be a subtype of the signature's bare schema (every member present, manifest
 /// members equal, abstract members at the right kind/arity, value slots covariantly compatible
-/// after abstract-member substitution). Memoized per `sig.sig_id()` on the module — a pure
-/// cache, since types are immutable; a satisfying result short-circuits, a failure re-runs the
-/// walk to rebuild the diagnostic (the cold path).
+/// after abstract-member substitution). The decision (and its memoization) lives in
+/// [`Module::structurally_satisfies`], the shared entry point dispatch also routes through; this
+/// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
 fn check_satisfies<'a>(
     m: &Module<'a>,
     s: &crate::machine::model::values::ModuleSignature<'a>,
 ) -> Result<(), KError> {
-    let sig_id = s.sig_id();
-    if m.satisfaction_memo.borrow().get(&sig_id) == Some(&true) {
+    if m.structurally_satisfies(s) {
         return Ok(());
     }
-    let result = sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[]));
-    m.satisfaction_memo
-        .borrow_mut()
-        .insert(sig_id, result.is_ok());
-    result.map_err(|failure| {
-        KError::new(KErrorKind::ShapeError(format!(
+    match sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[])) {
+        Ok(()) => unreachable!("memoized false must re-fail on the diagnostic walk"),
+        Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
             s.path,
             failure.render_fragment()
-        )))
-    })
+        )))),
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -4,16 +4,18 @@ use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, 
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 
-/// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned
-/// `type_members["Type"] = Number` rejects modules whose pin disagrees, is absent,
-/// or whose `compatible_sigs` set doesn't contain the slot's `sig.sig_id()`.
+/// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Type = Number}` admits a
+/// module iff its self-sig satisfies the signature *and* every pin names a manifest member
+/// fixed equal. The signature's decl scope is empty, so every module bare-satisfies it and pin
+/// agreement alone decides: `Type = Number` admitted, `Type = Str` rejected (pin disagrees),
+/// no `Type` rejected (pin absent). Admission is structural, so ascription is never required.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::values::{Module, ModuleSignature};
     use crate::machine::model::KType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
+    // An empty signature: every module bare-satisfies it, so the pins alone gate.
     let sig_scope = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
@@ -23,7 +25,6 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
-    let sig_id = sig.sig_id();
 
     let child_a = region
         .brand()
@@ -38,7 +39,6 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .type_members
         .borrow_mut()
         .insert("Type".into(), KType::Number);
-    m_num.mark_satisfies(sig_id);
     let m_num_obj = region
         .brand()
         .alloc_ktype_checked(KType::Module { module: m_num })
@@ -57,7 +57,6 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .type_members
         .borrow_mut()
         .insert("Type".into(), KType::Str);
-    m_str.mark_satisfies(sig_id);
     let m_str_obj = region
         .brand()
         .alloc_ktype_checked(KType::Module { module: m_str })
@@ -72,7 +71,6 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_none: &Module<'_> = region
         .brand()
         .alloc_module(Module::new("NoTypePin".into(), child_c));
-    m_none.mark_satisfies(sig_id);
     let m_none_obj = region
         .brand()
         .alloc_ktype_checked(KType::Module { module: m_none })
@@ -90,28 +88,26 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_str_obj))));
     assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_none_obj))));
 
+    // A second `Type = Number` module never ascribed to anything: admission is structural, so
+    // it is behaviorally identical to `m_num` — pin agreement alone decides, no ascription.
     let child_d = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
             scope,
-            "Unascribed".into(),
+            "NumBare".into(),
         ));
-    let m_unascribed: &Module<'_> = region
+    let m_num_bare: &Module<'_> = region
         .brand()
-        .alloc_module(Module::new("Unascribed".into(), child_d));
-    m_unascribed
+        .alloc_module(Module::new("NumBare".into(), child_d));
+    m_num_bare
         .type_members
         .borrow_mut()
         .insert("Type".into(), KType::Number);
-    // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
-    // before the pin comparison.
-    let m_unascribed_obj = region
+    let m_num_bare_obj = region
         .brand()
-        .alloc_ktype_checked(KType::Module {
-            module: m_unascribed,
-        })
-        .expect("m_unascribed was just allocated into region's own region");
-    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_unascribed_obj))));
+        .alloc_ktype_checked(KType::Module { module: m_num_bare })
+        .expect("m_num_bare was just allocated into region's own region");
+    assert!(slot.accepts_part(&spliced_part(Carried::Type(m_num_bare_obj))));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -185,10 +181,10 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     }
 }
 
-/// Return-type admissibility rejects a body whose module fails the
-/// `Signature { .. }` constraint check — here via an unascribed body module (empty
-/// `compatible_sigs`), which trips the sig-membership gate before pin comparison.
-/// The pin comparison itself is covered by `sharing_constraint_rejects_mismatched_module_type`.
+/// Return-type admissibility rejects a body whose module fails the `Signature { .. }`
+/// constraint check — here the body module bare-satisfies `SetSig` but its `Elt = Str`
+/// disagrees with the `{Elt = Number}` pin, so `satisfies_pins` rejects it. The positive
+/// counterpart is `functor_return_with_matching_sharing_constraint_passes`.
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
     use crate::machine::execute::KoanRuntime;
@@ -214,9 +210,43 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype()));
     assert!(
         res.is_err(),
-        "MAKEBAD must fail return-type check (mismatched pin or unascribed module), \
-         got Ok({:?})",
+        "MAKEBAD must fail return-type check (mismatched pin), got Ok({:?})",
         res.ok(),
+    );
+}
+
+/// Return-type admissibility passes an unascribed body module that structurally satisfies the
+/// pinned return signature: the body binds `Elt = Number` and `insert`, so it bare-satisfies
+/// `SetSig` and its `Elt` manifest member agrees with the `{Elt = Number}` pin — no ascription
+/// required. Counterpart to `functor_return_with_mismatched_sharing_constraint_errors`.
+#[test]
+fn functor_return_with_matching_sharing_constraint_passes() {
+    use crate::machine::execute::KoanRuntime;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
+         MODULE IntOrd = (LET compare = 7)\n\
+         LET IntOrdView = (IntOrd :! OrderedSig)",
+    );
+    run(
+        scope,
+        "FN (MAKEGOOD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
+         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
+    );
+    let mut runtime = KoanRuntime::new();
+    let id = runtime.dispatch_in_scope(parse_one("MAKEGOOD IntOrdView"), scope);
+    runtime
+        .execute()
+        .expect("execute does not surface per-slot errors");
+    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype()));
+    assert!(
+        res.is_ok(),
+        "MAKEGOOD must pass return-type check — the unascribed body module structurally \
+         satisfies `SetSig WITH {{Elt = Number}}`, got Err({:?})",
+        res.err(),
     );
 }
 

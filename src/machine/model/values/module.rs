@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::{Scope, ScopeId};
 
-use super::super::types::{KType, SigSchema};
+use super::super::types::{sig_subtype, KType, SigSchema};
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`). Opaque-ascription members mint `KType::AbstractType { source:
@@ -50,8 +50,11 @@ pub struct Module<'a> {
     /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
     /// installed after the surrounding value is alloc'd.
     self_sig: OnceCell<SigSchema<'a>>,
-    /// Caches `self_sig <: bare-schema(sig)` keyed by `sig.sig_id()`. A pure cache — types are
-    /// immutable, so entries are never invalidated. Pinned checks are never memoized here.
+    /// Caches `self_sig <: bare-schema(sig)` keyed by `sig.sig_id()`, written by
+    /// [`Module::structurally_satisfies`] — the shared entry point both dispatch and ascription
+    /// route through. A pure cache — types are immutable, so entries are never invalidated. Pinned
+    /// checks are never memoized here (they vary per `KType::Signature` value; see
+    /// [`Module::satisfies_pins`]).
     pub satisfaction_memo: RefCell<HashMap<ScopeId, bool>>,
 }
 
@@ -100,6 +103,21 @@ impl<'a> Module<'a> {
         if !s.contains(&sig_id) {
             s.push(sig_id);
         }
+    }
+
+    /// Structural satisfaction: `self_sig <: bare-schema(sig)` under [`sig_subtype`] — the
+    /// admission rule for a signature-typed dispatch slot and the check `:|` / `:!` assert.
+    /// Memoized per `sig.sig_id()` in `satisfaction_memo`, both outcomes; a `WITH`-pinned
+    /// slot's residue is checked separately via [`Module::satisfies_pins`].
+    pub fn structurally_satisfies(&self, sig: &ModuleSignature<'a>) -> bool {
+        let sig_id = sig.sig_id();
+        let hit = self.satisfaction_memo.borrow().get(&sig_id).copied();
+        if let Some(hit) = hit {
+            return hit;
+        }
+        let ok = sig_subtype(self.self_sig(), &SigSchema::of_sig(sig, &[])).is_ok();
+        self.satisfaction_memo.borrow_mut().insert(sig_id, ok);
+        ok
     }
 
     pub fn child_scope(&self) -> &'a Scope<'a> {

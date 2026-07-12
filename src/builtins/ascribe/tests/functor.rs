@@ -101,10 +101,12 @@ fn functor_application_is_generative() {
     );
 }
 
-/// Dispatch admissibility rejects an unascribed module against a
-/// `Signature { sig, .. }` (constraint-role) slot.
+/// An unascribed module is admitted by a constraint-role `Signature { sig, .. }` slot iff its
+/// self-sig structurally satisfies the signature — no ascription required. `IntOrd = (LET
+/// compare = 7)` structurally satisfies `OrderedSig = (VAL compare :Number)`, so the call
+/// succeeds and produces the generated module.
 #[test]
-fn functor_rejects_unascribed_module_argument() {
+fn functor_admits_unascribed_module_structurally() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -121,8 +123,46 @@ fn functor_rejects_unascribed_module_argument() {
     // to ride Type-classified names (design/typing/elaboration.md § Binding-map
     // partition).
     run(scope, "LET Unascribed = IntOrd");
+    run(scope, "LET SetValue = (MAKESET Unascribed)");
+
+    let m = match scope.resolve_type("SetValue") {
+        Some(KType::Module { module: m }) => *m,
+        _ => panic!(
+            "SetValue should be a module identity in types — the structural admission failed"
+        ),
+    };
+    let inner = m
+        .child_scope()
+        .bindings()
+        .data()
+        .get("inner")
+        .map(|(o, _, _)| *o);
+    assert!(
+        matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
+        "generated module should carry inner=1, got {:?}",
+        inner.map(|o| o.ktype())
+    );
+}
+
+/// A module that does *not* structurally satisfy the slot's signature is a dispatch non-match:
+/// `NoCompare = (LET other = 1)` lacks the `compare` slot `OrderedSig` requires, so `MAKESET`
+/// finds no admitting overload and the slot terminates in `DispatchFailed`.
+#[test]
+fn functor_rejects_structurally_unsatisfying_module() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE NoCompare = (LET other = 1)",
+    );
+    run(
+        scope,
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+    );
+    run(scope, "LET Arg = NoCompare");
     let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("MAKESET Unascribed"), scope);
+    let root = runtime.dispatch_in_scope(parse_one("MAKESET Arg"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -196,8 +236,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     );
 }
 
-/// `:!` (transparent) populates `compatible_sigs` the same way `:|` (opaque) does,
-/// and the body still reads the underlying member through the view.
+/// A `:!` (transparent) view structurally satisfies the slot's signature exactly as a `:|`
+/// (opaque) view does, and the body still reads the underlying member through the view.
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
     let region = run_root_storage();

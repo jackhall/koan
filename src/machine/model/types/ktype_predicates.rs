@@ -312,12 +312,14 @@ impl<'a> KType<'a> {
 
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
     /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
-    /// a module satisfying it (sig membership + pinned-slot agreement); an `OfKind` slot when
-    /// its kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type, including a
-    /// `Tagged`/`NewType`-classified nominal, while the module/sig wall keeps `Proper` from
-    /// admitting a module); `Any` by anything; a module/signature *value* slot by structural
-    /// identity. Other concrete slots compare against the `OfKind(Proper)` dispatch identity a
-    /// non-module/sig type carrier reports, so they admit no bare type value.
+    /// a module whose self-sig structurally satisfies the signature
+    /// ([`Module::structurally_satisfies`] — no ascription required), plus pinned-slot agreement
+    /// for a `WITH`-pinned slot; an `OfKind` slot when its kind subsumes `t.kind_of()` (so
+    /// `OfKind(Proper)` admits any proper type, including a `Tagged`/`NewType`-classified nominal,
+    /// while the module/sig wall keeps `Proper` from admitting a module); `Any` by anything; a
+    /// module/signature *value* slot by structural identity. Other concrete slots compare against
+    /// the `OfKind(Proper)` dispatch identity a non-module/sig type carrier reports, so they admit
+    /// no bare type value.
     pub fn matches_type(&self, t: &KType<'a>) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a module / signature
         // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
@@ -329,7 +331,7 @@ impl<'a> KType<'a> {
             KType::Any => true,
             KType::Signature { sig, pinned_slots } => match t {
                 KType::Module { module: m, .. } => {
-                    m.compatible_sigs.borrow().contains(&sig.sig_id())
+                    m.structurally_satisfies(sig)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -414,13 +416,12 @@ impl<'a> KType<'a> {
             KType::Union(members) => members.iter().any(|m| m.accepts_carried(c)),
             KType::Module { .. } => c.ktype() == *self,
             KType::AbstractType { .. } => c.ktype() == *self,
-            // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot check).
-            // Unascribed source modules carry an empty `compatible_sigs` and never match; they must
-            // pass through `:|` / `:!` first. A signature *value* is admitted by the
-            // `OfKind(Signature)` wildcard above, never here.
+            // Constraint role: a `:S` slot admits a *module* whose self-sig structurally satisfies
+            // `S` (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription required. A
+            // signature *value* is admitted by the `OfKind(Signature)` wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match c {
                 Carried::Type(KType::Module { module: m, .. }) => {
-                    m.compatible_sigs.borrow().contains(&sig.sig_id())
+                    m.structurally_satisfies(sig)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
