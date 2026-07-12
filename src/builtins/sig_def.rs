@@ -10,7 +10,6 @@
 //! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
-use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
@@ -53,12 +52,10 @@ pub fn body<'a>(
                 sig,
                 pinned_slots: Vec::new(),
             };
-            match fctx.scope.register_type_upsert(
-                name_for_finish.clone(),
-                identity,
-                bind_index,
-                StoredReach::empty(),
-            ) {
+            match fctx
+                .scope
+                .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
+            {
                 Ok(kt_ref) => Action::Done(fctx.ctx.alloc_type_checked(kt_ref.clone())),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<signature>",

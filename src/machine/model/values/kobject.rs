@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{FrameSet, KoanRegion, Residence, StoredReach};
+use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
@@ -271,15 +271,11 @@ impl<'a> KObject<'a> {
 
     /// The evidence-widened twin of [`Self::resident_in`], for a value built from (or embedding a
     /// projection of) one or more delivered carriers: every answerable borrow must point into
-    /// `dest` or be covered by some `evidence` member's reach — the object delivered tier's
-    /// coverage predicate, same partiality as [`Self::resident_in`].
-    pub(crate) fn resident_in_delivered(
-        &self,
-        dest: &KoanRegion,
-        evidence: &[StoredReach<'_>],
-    ) -> bool {
-        let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
-        self.resident_in_visiting(&Residence::with_reach(dest, &sets))
+    /// `dest` or be covered by one of `sets` — the object delivered tier's coverage predicate,
+    /// same partiality as [`Self::resident_in`]. The `StoredReach` tokens holding the reach are
+    /// opaque to this layer; core extracts the sets before calling.
+    pub(crate) fn resident_in_delivered(&self, dest: &KoanRegion, sets: &[&FrameSet]) -> bool {
+        self.resident_in_visiting(&Residence::with_reach(dest, sets))
     }
 
     pub(crate) fn resident_in_visiting(&self, residence: &Residence<'_>) -> bool {

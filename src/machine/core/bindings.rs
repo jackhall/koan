@@ -93,8 +93,8 @@ impl<T> NameLookup<T> {
 /// here — home-omitted so it never names the scope's own home frame, whose `Rc` stored in-region
 /// would close the `frame → region → scope → bindings → frame` cycle; that fact is remembered as
 /// the bit instead. `None` is the faithful encoding of the empty set (a region-pure value pins
-/// nothing), not a missing value — a read materializes the bit back into an explicit reach member
-/// (Phase-4 reads); until then a bind threads it through unread.
+/// nothing), not a missing value — a read materializes the bit back into an explicit reach member;
+/// until then a bind threads it through unread.
 ///
 /// [`Self::empty`] defaults the bit to `false`: a value delivered by a region-pure or foreign
 /// carrier borrows into no home region, which is every builtin registration and every test bind.
@@ -102,17 +102,33 @@ impl<T> NameLookup<T> {
 /// `true`.
 #[derive(Clone, Copy)]
 pub struct StoredReach<'a> {
-    pub foreign: Option<&'a FrameSet>,
-    pub borrows_into_home: bool,
+    pub(in crate::machine::core) foreign: Option<&'a FrameSet>,
+    pub(in crate::machine::core) borrows_into_home: bool,
 }
 
 impl<'a> StoredReach<'a> {
     /// The empty reach that borrows into no home — the region-pure / no-carrier default.
-    pub fn empty() -> Self {
+    pub(in crate::machine::core) fn empty() -> Self {
         StoredReach {
             foreign: None,
             borrows_into_home: false,
         }
+    }
+
+    /// Narrow test affordance: assemble a token from explicit parts for in-crate `mod tests` only.
+    #[cfg(test)]
+    pub(crate) fn for_test(foreign: Option<&'a FrameSet>, borrows_into_home: bool) -> Self {
+        StoredReach {
+            foreign,
+            borrows_into_home,
+        }
+    }
+
+    /// Whether the token names a non-empty foreign reach — a semantic query over the opaque token
+    /// for in-crate `mod tests` that assert a reach round-tripped, without decomposing the fields.
+    #[cfg(test)]
+    pub(crate) fn names_a_region(&self) -> bool {
+        self.foreign.is_some()
     }
 }
 

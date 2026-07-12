@@ -39,10 +39,7 @@ fn resident_scalar(
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         child.resident_value_carrier(
             obj,
-            crate::machine::core::StoredReach {
-                foreign: None,
-                borrows_into_home,
-            },
+            crate::machine::core::StoredReach::for_test(None, borrows_into_home),
         )
     });
     let weak = Rc::downgrade(&producer.storage_rc());
@@ -286,10 +283,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
     let producer = CallFrame::new(scope);
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
     let carrier = producer.with_scope(|child| {
-        let evidence = crate::machine::core::StoredReach {
-            foreign: Some(&foreign_reach),
-            borrows_into_home: false,
-        };
+        let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), false);
         let kt_ref = child
             .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");
@@ -348,10 +342,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         (
             child.resident_value_carrier(
                 obj,
-                crate::machine::core::StoredReach {
-                    foreign: None,
-                    borrows_into_home: false,
-                },
+                crate::machine::core::StoredReach::for_test(None, false),
             ),
             addr,
         )
@@ -415,10 +406,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
     // `borrows_into_home = true` marks the value as home-borrowing; the type channel must pass the
     // carrier through with the bit and the reach untouched either way.
     let carrier = producer.with_scope(|child| {
-        let evidence = crate::machine::core::StoredReach {
-            foreign: Some(&foreign_reach),
-            borrows_into_home: true,
-        };
+        let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), true);
         let kt_ref = child
             .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");

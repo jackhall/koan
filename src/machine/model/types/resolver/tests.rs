@@ -22,7 +22,7 @@ fn value_language_leaf_names_layering() {
             "Gee".into(),
             region.brand().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         )
         .expect("bind_value");
     let mut el = Elaborator::new(scope);

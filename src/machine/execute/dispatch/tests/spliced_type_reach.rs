@@ -36,7 +36,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         "T".to_string(),
         KType::Module { module },
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
+        StoredReach::for_test(None, false),
     );
     let foreign_hit =
         match foreign_scope.resolve_type_identifier(&TypeIdentifier::leaf("T".to_string()), None) {
@@ -67,7 +67,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         _ => panic!("expected TypeResolution::Done for a registered type"),
     };
     assert!(
-        hit.stored.foreign.is_some(),
+        hit.stored.names_a_region(),
         "the stored reach should round-trip a non-empty foreign reach",
     );
 

@@ -88,7 +88,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
             "f".to_string(),
             obj,
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         )
         .expect("bind_value should succeed");
 }
@@ -569,7 +569,7 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
             "producer_target".to_string(),
             producer_target,
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         )
         .expect("bind_value should succeed");
     let producer = runtime.dispatch_in_scope(parse_one("producer_target {y = 1}"), scope);

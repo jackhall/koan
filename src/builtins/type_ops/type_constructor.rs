@@ -53,7 +53,6 @@ pub fn body<'a>(
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
     use crate::machine::core::run_root_storage;
-    use crate::machine::core::StoredReach;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
@@ -116,11 +115,10 @@ mod tests {
     fn fn_return_type_constructor_apply_root_scope() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        scope.register_type(
+        scope.register_builtin_type(
             "Wrap".into(),
             wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
         );
         let mut runtime = KoanRuntime::new();
         let id = runtime.dispatch_in_scope(

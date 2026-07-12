@@ -16,7 +16,7 @@ use super::recursive_set::{NominalSchema, RecursiveSet};
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
-use crate::machine::core::{FrameSet, KoanRegion, Residence, StoredReach};
+use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
@@ -373,15 +373,12 @@ impl<'a> KType<'a> {
     }
 
     /// The evidence-widened twin of [`Self::resident_in`]: every region borrow in `self` must
-    /// point into `dest` **or** be covered by `reach`'s foreign reach — the reaching tier's
-    /// coverage predicate. Exact for `KType`, whose only region pointers (`&Module` /
-    /// `&ModuleSignature` / `&KFunction`) each expose their own region directly, so no
-    /// member-enumeration is needed (see [`Residence`]).
-    pub(crate) fn resident_in_reach(&self, dest: &KoanRegion, reach: &StoredReach<'_>) -> bool {
-        let sets: &[&FrameSet] = match &reach.foreign {
-            Some(fs) => std::slice::from_ref(fs),
-            None => &[],
-        };
+    /// point into `dest` **or** be covered by one of `sets` — the reaching tier's coverage
+    /// predicate over a binding's already-extracted foreign reach. The `StoredReach` token that
+    /// holds the reach is opaque to this layer; core extracts the sets before calling. Exact for
+    /// `KType`, whose only region pointers (`&Module` / `&ModuleSignature` / `&KFunction`) each
+    /// expose their own region directly, so no member-enumeration is needed (see [`Residence`]).
+    pub(crate) fn resident_in_reach(&self, dest: &KoanRegion, sets: &[&FrameSet]) -> bool {
         let residence = Residence::with_reach(dest, sets);
         let mut visited = Vec::new();
         self.resident_in_visiting(&residence, &mut visited)

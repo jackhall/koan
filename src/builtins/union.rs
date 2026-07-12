@@ -2,7 +2,7 @@ use crate::machine::model::types::KKind;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::{NameLookup, ScopeId, StoredReach};
+use crate::machine::core::{NameLookup, ScopeId};
 use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::types::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
@@ -80,16 +80,16 @@ fn finalize_union<'a>(
 
     let set = match recover_union(scope, &name, scope_id, n) {
         // Idempotent re-finalize: the union is already bound. Cross its identity as a declared
-        // operand — allocate a reference for the recovered union (region-pure over its heap-`Rc`
-        // set, so empty evidence suffices) and fold the carriers' reach onto the placement, the
-        // same coverage the register-success path produces.
+        // operand — move the recovered union's reference into this region under a checked audit that
+        // derives its stored reach, and fold the carriers' reach onto the placement, the same
+        // coverage the register-success path produces.
         UnionRecovery::Sealed(kt) => {
-            let kt_ref = scope.alloc_ktype_reaching(kt, &StoredReach::empty())?;
+            let (kt_ref, stored) = scope.alloc_ktype_checked_stored(kt)?;
             return Ok(seal_type_operand(
                 scope,
                 fctx.ctx.frame(),
                 kt_ref,
-                StoredReach::empty(),
+                stored,
                 carriers,
             ));
         }
@@ -134,7 +134,7 @@ fn finalize_union<'a>(
             })
             .collect(),
     );
-    match scope.register_type_upsert(name.clone(), union_ty, bind_index, StoredReach::empty()) {
+    match scope.register_nominal_upsert(name.clone(), union_ty, bind_index) {
         // `register_type_upsert` hands back the region-allocated `&KType`. Cross it as a declared
         // operand and fold the variant carriers' reach onto the placement's witness, rather than
         // capturing the union type into a fold closure.
@@ -142,7 +142,7 @@ fn finalize_union<'a>(
             scope,
             fctx.ctx.frame(),
             kt_ref,
-            StoredReach::empty(),
+            scope.checked_reach_of_type(kt_ref),
             carriers,
         )),
         Err(e) => Err(e),

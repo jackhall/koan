@@ -112,7 +112,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::StoredReach;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
@@ -246,12 +245,7 @@ mod tests {
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.
-        scope.register_type(
-            "Foo".into(),
-            identity,
-            BindingIndex::value(0),
-            StoredReach::empty(),
-        );
+        scope.register_builtin_type("Foo".into(), identity, BindingIndex::value(0));
         run(scope, "MODULE Foo = (LET y = 2)");
         let foo = resolve_module(scope, "Foo");
         assert!(std::ptr::eq(foo, module));

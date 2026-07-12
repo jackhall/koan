@@ -648,7 +648,7 @@ fn resident_in_false_for_set_with_foreign_signature_member() {
 /// named by `reach`'s evidence is resident.
 #[test]
 fn resident_in_reach_true_when_evidence_covers_foreign_module() {
-    use crate::machine::core::{FrameSet, StoredReach};
+    use crate::machine::core::FrameSet;
 
     let foreign = run_root_storage();
     let foreign_scope = default_scope(&foreign, Box::new(std::io::sink()));
@@ -664,9 +664,5 @@ fn resident_in_reach_true_when_evidence_covers_foreign_module() {
     );
 
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign));
-    let reach = StoredReach {
-        foreign: Some(&foreign_reach),
-        borrows_into_home: false,
-    };
-    assert!(t.resident_in_reach(dest.region(), &reach));
+    assert!(t.resident_in_reach(dest.region(), &[&foreign_reach]));
 }

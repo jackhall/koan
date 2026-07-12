@@ -358,7 +358,6 @@ mod tests {
         parse_one, run, run_one_err, run_one_type, run_root_silent,
     };
     use crate::machine::core::run_root_storage;
-    use crate::machine::core::StoredReach;
     use crate::machine::model::{KKind, KType, Record};
     use crate::machine::{KErrorKind, Scope};
 
@@ -386,14 +385,13 @@ mod tests {
                 param_names: vec!["Type".into()],
             },
         );
-        scope.register_type(
+        scope.register_builtin_type(
             "Wrap".into(),
             KType::SetRef {
                 set: wrap_set,
                 index: 0,
             },
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
         );
         let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
         match result {

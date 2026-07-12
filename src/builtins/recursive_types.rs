@@ -17,7 +17,6 @@
 //! mirrors the sealed members into the enclosing scope and binds the group handle: exiting
 //! the block guarantees every forward reference resolved.
 
-use crate::machine::core::StoredReach;
 use crate::machine::model::types::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -149,22 +148,18 @@ pub fn body<'a>(
                 set: Rc::clone(&set),
                 index,
             };
-            if let Err(e) = fctx.scope.register_type_upsert(
-                name.clone(),
-                member_ref,
-                bind_index,
-                StoredReach::empty(),
-            ) {
+            if let Err(e) = fctx
+                .scope
+                .register_nominal_upsert(name.clone(), member_ref, bind_index)
+            {
                 return Action::Done(Err(e.with_frame(frame())));
             }
         }
         let handle = KType::RecursiveGroup(Rc::clone(&set));
-        match fctx.scope.register_type_upsert(
-            group_name.clone(),
-            handle,
-            bind_index,
-            StoredReach::empty(),
-        ) {
+        match fctx
+            .scope
+            .register_nominal_upsert(group_name.clone(), handle, bind_index)
+        {
             Ok(kt_ref) => Action::Done(Ok(crate::try_action!(fctx
                 .ctx
                 .alloc_type_checked(kt_ref.clone())))),

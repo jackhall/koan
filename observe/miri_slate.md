@@ -307,7 +307,7 @@ moment a `Copied` fold re-pins a producer it copied out of. The only `unsafe` ro
 
 - `aggregate_of_call_results_releases_every_producer_frame`
 
-**`Scope::reach_of_child` seal-time union** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
+**`Scope::child_module_reach` seal-time union** ([src/machine/core/scope.rs](../src/machine/core/scope.rs))
 — a module's stored reach is minted once at seal time as the union of its child scope's own region
 plus every one of the child's **binding-entry** hosted reaches (not just the child's own region), via
 `Bindings::entry_reaches`. This test binds a member into a child scope whose stored reach names a
@@ -315,7 +315,7 @@ region foreign to both the child and the parent, then mints the parent's union a
 handle on both regions — tree borrows catches a use-after-free if the union drops a member's reach or
 the mint's home-omission fires on the wrong side.
 
-- `reach_of_child_unions_member_entry_reaches_across_regions`
+- `child_module_reach_unions_member_entry_reaches_across_regions`
 
 **Type-channel splice reach** ([src/machine/execute/dispatch/keyworded.rs](../src/machine/execute/dispatch/keyworded.rs))
 — `part_walk`'s wrap-slot arm re-consults `Scope::resolve_type_identifier` and seals the hit through
@@ -541,9 +541,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-11: 512s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 338s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 344s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 339s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 450s — 40 tests, 0 leaks, 0 UB
-- 2026-07-10: 670s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

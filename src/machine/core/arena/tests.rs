@@ -109,7 +109,7 @@ fn with_scope_opens_child_scope_at_brand() {
             "k".to_string(),
             v,
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         )
         .unwrap();
         assert!(matches!(s.lookup("k"), Some(KObject::Number(n)) if *n == 7.0));
@@ -144,7 +144,7 @@ fn with_scope_relocates_seed_value_into_brand() {
                 "it".to_string(),
                 it_obj,
                 BindingIndex::BUILTIN,
-                StoredReach::empty(),
+                StoredReach::for_test(None, false),
             )
             .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 99.0));
@@ -187,7 +187,7 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
                 "it".to_string(),
                 it_obj,
                 BindingIndex::BUILTIN,
-                StoredReach::empty(),
+                StoredReach::for_test(None, false),
             )
             .unwrap();
         assert!(matches!(child_ref.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
@@ -864,7 +864,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                         "inners".to_string(),
                         list_obj,
                         BindingIndex::BUILTIN,
-                        StoredReach::empty(),
+                        StoredReach::for_test(None, false),
                     )
                     .expect("bind the inners list into the outer closure's scope");
             }

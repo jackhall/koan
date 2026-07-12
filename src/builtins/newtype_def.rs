@@ -62,8 +62,8 @@ fn finalize_newtype<'a>(
     // Fused mint + alloc + register: the RHS carrier's reach is minted into this scope's arena (kept
     // mode) so `identity`'s SetRef (never `'static`, and possibly embedding `repr`'s foreign borrow —
     // see this fn's doc) is audited against it, the identity is allocated under it, and it is
-    // registered — one call returns the resident `&KType` plus the same token. `stored.foreign` is
-    // `None` when `carrier` is `None`, which degrades the reaching check to the dest-only case.
+    // registered — one call returns the resident `&KType` plus the same token. The token names no
+    // foreign reach when `carrier` is `None`, which degrades the reaching check to the dest-only case.
     let (kt_ref, stored) = scope.register_type_delivered(name, identity, carrier, bind_index)?;
     let sealed = match carrier {
         // Cross the identity across the build brand as a declared operand, folding the carrier's
@@ -126,7 +126,7 @@ fn finalize_record_newtype<'a>(
             scope,
             fctx.ctx.frame(),
             kt_ref,
-            crate::machine::core::StoredReach::empty(),
+            scope.checked_reach_of_type(kt_ref),
             carriers,
         )),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(

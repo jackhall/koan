@@ -335,7 +335,7 @@ impl<'a> Scope<'a> {
                 // The plain evidence-only check first (cheap, no closure alloc, and directly
                 // unit-testable in isolation); only fall back to the ambient-widened walk when it
                 // declines.
-                value.resident_in_reach(region, evidence) || {
+                value.resident_in_reach(region, sets) || {
                     let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
                     let residence = Residence::with_reach_and_ambient(region, sets, &ambient);
                     value.resident_in_visiting(&residence, &mut Vec::new())
@@ -372,7 +372,7 @@ impl<'a> Scope<'a> {
             .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
                 // The plain evidence-only check first (cheap, directly unit-testable); only fall
                 // back to the ambient-widened walk when it declines.
-                value.resident_in_delivered(region, evidence) || {
+                value.resident_in_delivered(region, &sets) || {
                     let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
                     let residence = Residence::with_reach_and_ambient(region, &sets, &ambient);
                     value.resident_in_visiting(&residence)
@@ -450,7 +450,7 @@ impl<'a> Scope<'a> {
     /// into this scope's own region ([`RegionBrand::alloc_ktype_checked`]'s dest-only audit), paired
     /// with its derived [`StoredReach`] (empty foreign reach; the home-borrow bit is the walk's
     /// saw-a-region-pointer flag).
-    fn alloc_ktype_checked_stored(
+    pub(crate) fn alloc_ktype_checked_stored(
         &self,
         t: KType<'_>,
     ) -> Result<(&'a KType<'a>, StoredReach<'a>), KError> {
@@ -477,6 +477,20 @@ impl<'a> Scope<'a> {
                 borrows_into_home: seen.get(),
             },
         ))
+    }
+
+    /// Derive a resident type's [`StoredReach`] by auditing the value in place — the read-side twin of
+    /// [`Self::alloc_ktype_checked_stored`] for a `&KType` already living in this scope's region. The
+    /// audit walk targets this region (a resident value borrows only it), so `foreign` is `None` and
+    /// `borrows_into_home` is the walk's saw-a-region-pointer flag. No allocation, no assertion.
+    pub(crate) fn checked_reach_of_type(&self, kt: &'a KType<'a>) -> StoredReach<'a> {
+        let region = self.brand().region();
+        let seen = Cell::new(false);
+        kt.resident_in_visiting(&Residence::dest_only_seen(region, &seen), &mut Vec::new());
+        StoredReach {
+            foreign: None,
+            borrows_into_home: seen.get(),
+        }
     }
 
     /// Checked alloc of a fresh object into this scope's region, derive its `(None, bit)` witness,

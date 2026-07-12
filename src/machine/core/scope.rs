@@ -749,6 +749,19 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Region-pure nominal upsert: install a nominal `SetRef` identity (STRUCT/UNION/NEWTYPE/RECURSIVE
+    /// member) whose identity is region-pure by construction — a heap-`Rc` set index carrying no region
+    /// pointer — so the stored reach is the empty token, minted here rather than asserted at the call
+    /// site. The upsert twin of [`Self::register_builtin_type`] for the nominal-finalize sites.
+    pub(crate) fn register_nominal_upsert(
+        &self,
+        name: String,
+        identity: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
+        self.register_type_upsert(name, identity, index, StoredReach::empty())
+    }
+
     /// Fused delivered type registration: derive the type's stored reach off the RHS envelope
     /// (`Residence::Kept` — a `KType` clone is shallow, so its interior borrows survive and the
     /// producer host materializes unconditionally), alloc the identity into this scope's region

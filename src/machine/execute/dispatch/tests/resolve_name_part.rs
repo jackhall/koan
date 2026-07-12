@@ -19,7 +19,7 @@ fn resolve_name_part_identifier_resolved() {
             "x".to_string(),
             bound,
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         )
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());

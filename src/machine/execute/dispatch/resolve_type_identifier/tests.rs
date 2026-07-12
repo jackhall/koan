@@ -131,7 +131,7 @@ mod bare_leaf_resolution {
             "Number".into(),
             KType::Number,
             BindingIndex::BUILTIN,
-            StoredReach::empty(),
+            StoredReach::for_test(None, false),
         );
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None) {

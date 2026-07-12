@@ -280,7 +280,7 @@ fn resident_in_true_for_same_region_kfunction() {
 fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     use crate::builtins::default_scope;
     use crate::machine::core::kfunction::Body;
-    use crate::machine::core::{run_root_storage, FrameSet, FrameStorageExt, StoredReach};
+    use crate::machine::core::{run_root_storage, FrameSet, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
@@ -309,11 +309,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     );
 
     let foreign_reach = FrameSet::singleton(Rc::clone(&foreign));
-    let evidence = [StoredReach {
-        foreign: Some(&foreign_reach),
-        borrows_into_home: false,
-    }];
-    assert!(o.resident_in_delivered(dest.region(), &evidence));
+    assert!(o.resident_in_delivered(dest.region(), &[&foreign_reach]));
 }
 
 /// A `List` of owned scalars is resident in any `dest` — no borrow to answer for.
