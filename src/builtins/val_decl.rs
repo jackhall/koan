@@ -3,13 +3,13 @@
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
 //! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
-//! `bindings.types[name]` — the same type table the SIG-local `LET <TypeIdentifier> = …` abstract
-//! members live in. A value-class slot name keeps it distinguishable from an abstract-type
-//! member (Type-class name) when ascription enumerates the table.
+//! `bindings.types[name]` — the same type table `TYPE <Name>` abstract members and
+//! `LET <Name> = <Type>` manifest members live in. A value-class slot name keeps it
+//! distinguishable from a type member (Type-class name) when ascription enumerates the table.
 //!
 //! Type resolution dispatches on the `ty` carrier shape: a [`KType::Unresolved`] leaf or a
-//! builtin leaf re-dispatch against decl_scope so a SIG-local `LET <name> = ...` shadow wins
-//! over the builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
+//! builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
+//! builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
 use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
@@ -80,11 +80,12 @@ pub fn body<'a>(
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
 
-    // Defense-in-depth: abstract-type members (Type-class names) must use `LET`, not `VAL`.
+    // Defense-in-depth: type members (Type-class names) are declared with `TYPE` (abstract)
+    // or `LET` (manifest), not `VAL`.
     if crate::parse::is_type_name(&name) {
         return done_err(KError::new(KErrorKind::ShapeError(format!(
-            "VAL slot name `{name}` classifies as a Type token; abstract-type members \
-             must use `LET {name} = <Type>` instead of `VAL`",
+            "VAL slot name `{name}` classifies as a Type token; declare an abstract type \
+             member with `TYPE {name}` or a manifest one with `LET {name} = <Type>`",
         ))));
     }
 
@@ -133,7 +134,7 @@ pub fn body<'a>(
 /// Records the value slot's declared type in `bindings.types` and returns the slot's carrier as
 /// `Action::Done`. A VAL is a *value* member whose *declared type* we keep; storing the `KType`
 /// directly (not a boxed carrier) keeps the type table the single home for everything ascription
-/// enumerates. Uses the same infallible `register_type` path as a SIG-local `LET <TypeIdentifier> = …`
+/// enumerates. Uses the same infallible `register_type` path as a SIG-local `TYPE <Name>`
 /// abstract member.
 ///
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a

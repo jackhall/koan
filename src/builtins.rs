@@ -30,6 +30,7 @@ mod resolve_or_await;
 mod result;
 mod sig_def;
 mod try_with;
+mod type_decl;
 mod type_ops;
 mod type_union;
 mod union;
@@ -213,6 +214,7 @@ pub fn default_scope<'a>(
     module_def::register(scope);
     sig_def::register(scope);
     val_decl::register(scope);
+    type_decl::register(scope);
     ascribe::register(scope);
     record_projection::register(scope);
     type_ops::register(scope);

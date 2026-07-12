@@ -10,7 +10,7 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
-use crate::machine::{KError, KErrorKind, NameLookup, Scope};
+use crate::machine::{KError, KErrorKind, NameLookup, Scope, ScopeId};
 
 use super::{arg, kw, sig};
 
@@ -49,13 +49,14 @@ pub fn body_opaque<'a>(
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();
     {
         let sig_bindings = s.decl_scope().bindings();
-        for name in abstract_type_names_of(s.decl_scope()) {
+        for name in abstract_members_of(s.decl_scope()) {
             let kt = match sig_bindings
                 .lookup_type(&name, None)
                 .and_then(NameLookup::bound)
             {
                 Some(KType::SetRef { set, index })
-                    if set.member(*index).kind == KKind::TypeConstructor =>
+                    if set.member(*index).kind == KKind::TypeConstructor
+                        && set.member(*index).scope_id == ScopeId::SENTINEL =>
                 {
                     let ProjectedSchema::TypeConstructor {
                         schema,
@@ -89,9 +90,16 @@ pub fn body_opaque<'a>(
             minted.push((name.clone(), kt));
         }
     }
-    if !minted.is_empty() {
+    // A manifest member reads concretely through the opaque view: the view scope carries no
+    // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
+    // is mirrored into `type_members` alongside the per-call abstract mints.
+    let manifest = manifest_type_members_of(s.decl_scope());
+    if !minted.is_empty() || !manifest.is_empty() {
         let mut tm = new_module.type_members.borrow_mut();
         for (n, t) in minted {
+            tm.insert(n, t);
+        }
+        for (n, t) in manifest {
             tm.insert(n, t);
         }
     }
@@ -223,9 +231,7 @@ fn shape_check<'a>(
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
     let abstract_names: std::collections::HashSet<String> =
-        abstract_type_names_of(sig.decl_scope())
-            .into_iter()
-            .collect();
+        abstract_members_of(sig.decl_scope()).into_iter().collect();
     // SIG members all live in the type table: abstract types (skipped below) and VAL value
     // slots — the names a satisfying module must supply. The module supplies them as values,
     // so the satisfaction check looks for each in the source's value table.
@@ -256,18 +262,49 @@ fn shape_check<'a>(
     Ok(())
 }
 
-/// Collect every name in `scope`'s `Bindings` that classifies as an abstract Type member.
-/// Every SIG-body declaration lives in `bindings.types`: abstract-type members
-/// (`LET <TypeIdentifier> = …`) under Type-class names and value slots (`VAL …`) under value-class
-/// names. An abstract type member is exactly a Type-class-named type-table entry, so the
-/// value slots filter out by name class.
-pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
+/// Classify a SIG type-table entry by its *representation*: an abstract member carries no
+/// concrete witness. Two abstract shapes — a `Sig`-sourced [`KType::AbstractType`] (the
+/// first-order `TYPE Elt` slot) and a sentinel [`KKind::TypeConstructor`] `SetRef` (the
+/// higher-kinded `TYPE (Type AS Wrap)` slot, `ScopeId::SENTINEL` marking it "awaiting per-call
+/// mint"). Everything else — a manifest `LET Tag = Number` binding a concrete type, a real
+/// minted constructor — is manifest.
+pub(super) fn is_abstract_sig_member(kt: &KType<'_>) -> bool {
+    match kt {
+        KType::AbstractType {
+            source: AbstractSource::Sig(_),
+            ..
+        } => true,
+        KType::SetRef { set, index } => {
+            let member = set.member(*index);
+            member.kind == KKind::TypeConstructor && member.scope_id == ScopeId::SENTINEL
+        }
+        _ => false,
+    }
+}
+
+/// Type-class-named type-table entries that classify abstract by [`is_abstract_sig_member`].
+/// Value slots (`VAL …`, value-class names) filter out by name class.
+pub(super) fn abstract_members_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
     scope
         .bindings()
         .iter_types()
         .into_iter()
+        .filter(|(n, kt)| crate::parse::is_type_name(n) && is_abstract_sig_member(kt))
         .map(|(n, _)| n)
-        .filter(|n| crate::parse::is_type_name(n))
+        .collect()
+}
+
+/// Type-class-named type-table entries that classify manifest (the concrete witness a
+/// satisfying module must match), paired with their fixed `KType`.
+pub(super) fn manifest_type_members_of<'a>(
+    scope: &crate::machine::Scope<'a>,
+) -> Vec<(String, KType<'a>)> {
+    scope
+        .bindings()
+        .iter_types()
+        .into_iter()
+        .filter(|(n, kt)| crate::parse::is_type_name(n) && !is_abstract_sig_member(kt))
+        .map(|(n, kt)| (n, kt.clone()))
         .collect()
 }
 

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::builtins::ascribe::abstract_type_names_of;
+use crate::builtins::ascribe::abstract_members_of;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -51,7 +51,7 @@ pub fn body<'a>(
     // A binding must name one of the SIG's abstract type slots — a width-subset check
     // against the slot set. Slot names are capitalized, so a lowercase / unknown key
     // simply isn't in the set; no separate name-shape check is needed.
-    let known_slots: HashSet<String> = abstract_type_names_of(s.decl_scope()).into_iter().collect();
+    let known_slots: HashSet<String> = abstract_members_of(s.decl_scope()).into_iter().collect();
     // Validation only: every pin must name a known slot and hold a type. The composed
     // `Signature` is built inside the fold closure from the crossed views, never from an
     // ambient `pinned` vec — the compiler rejects smuggling an `'a` `KType` into the fresh brand.

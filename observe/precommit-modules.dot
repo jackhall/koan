@@ -30,6 +30,7 @@ digraph {
     "koan::builtins::result" [label="koan::builtins::result"];
     "koan::builtins::sig_def" [label="koan::builtins::sig_def"];
     "koan::builtins::try_with" [label="koan::builtins::try_with"];
+    "koan::builtins::type_decl" [label="koan::builtins::type_decl"];
     "koan::builtins::type_ops" [label="koan::builtins::type_ops"];
     "koan::builtins::type_ops::type_constructor" [label="koan::builtins::type_ops::type_constructor"];
     "koan::builtins::type_ops::with" [label="koan::builtins::type_ops::with"];
@@ -146,6 +147,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::result" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::sig_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::try_with" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::type_decl" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::type_ops" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::type_union" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::union" [label="owns", style="solid"];
@@ -447,6 +449,14 @@ digraph {
     "koan::builtins::try_with" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::try_with" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::try_with" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::execute" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::type_decl" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine::model" [label="uses", style="dashed"];
