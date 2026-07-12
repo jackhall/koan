@@ -258,6 +258,18 @@ unsafe impl<W: StorageProfile> super::Witness for Region<W> {}
 /// let stored: &u32 = handle.alloc_resident::<RefFamily>(&7);
 /// assert_eq!(*stored, 7);
 /// ```
+///
+/// ```compile_fail
+/// // The closure-gated move-in is gone: storage of a region-borrowing value is gated by the
+/// // family's own declared audit, never by caller code.
+/// use std::rc::Rc;
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, RegionCart, RefFamily};
+/// use workgraph::witnessed::RegionHandle;
+/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let handle = RegionHandle::from_owner(&*cart);
+/// let local = 7u32;
+/// let _ = handle.alloc_resident_audited::<RefFamily>(&local, |_, _| true);
+/// ```
 pub struct RegionHandle<'a, W: StorageProfile> {
     region: &'a Region<W>,
 }
@@ -307,7 +319,7 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// Co-located resident allocation — see [`Region::alloc_resident`]. Move-in: `value` must carry
     /// no region borrow (`K::At<'static>`), so the store-side lifetime erasure never discards a
     /// borrow only the caller could vet. A value that legitimately borrows a region takes
-    /// [`Self::alloc_resident_audited`] instead.
+    /// [`Self::alloc_resident_checked`] instead.
     ///
     /// ```
     /// use std::rc::Rc;
@@ -333,19 +345,6 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     /// ```
     pub fn alloc_resident<K: Stored<W>>(self, value: K::At<'static>) -> &'a K::At<'a> {
         self.region.alloc_resident::<K>(value)
-    }
-
-    /// Resident move-in for a value the embedder can only vet at runtime: `audit` receives the
-    /// destination region and the value before anything is stored; the value is stored only if it
-    /// returns true. The library cannot know an embedder value's borrow structure — the audit is
-    /// the embedder's residence verifier (typically [`Region::owns_addr`] over each borrowed
-    /// payload).
-    pub fn alloc_resident_audited<K: Stored<W>>(
-        self,
-        value: K::At<'_>,
-        audit: impl FnOnce(&Region<W>, &K::At<'_>) -> bool,
-    ) -> Option<&'a K::At<'a>> {
-        audit(self.region, &value).then(|| self.region.alloc_resident::<K>(value))
     }
 
     /// Resident move-in vetted by family `K`'s own declared [`AuditedStored`] audit rather than a

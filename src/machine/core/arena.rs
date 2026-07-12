@@ -1428,13 +1428,16 @@ pub(crate) fn build_frame_child_witnessed<'p>(
         // `outer` to the same frame that owns `outer_b`'s region. That chain is **derived**, not
         // asserted: `CallFrame::new` computes it from the parent scope's own `region_owner`
         // (`Scope::parent_frame_pin`), root-region parents chain nothing, and the one deliberate
-        // no-chain frame is the reserved `CallFrame::new_tail`. The audit here is therefore
-        // unconditional — there is no address to check against `handle_b`'s region, and no caller can
-        // pass the wrong pin. Storage can't fail here.
+        // no-chain frame is the reserved `CallFrame::new_tail`.
+        //
+        // The store runs the real `Scope` family audit — the same live O(1)
+        // `ptr::eq(region, value.region())` as `alloc_scope`. `child` is built over
+        // `RegionBrand(handle_b)`, so `child.region()` is `handle_b`'s own region and the check
+        // holds by construction; the parent-liveness chain above stays typed by `CallFrame::new`.
         let child = Scope::child_for_frame_witnessed(outer_b, RegionBrand(handle_b), region_owner);
         let live = handle_b
-            .alloc_resident_audited::<Scope<'static>>(child, |_region, _value| true)
-            .expect("alloc_resident_audited with an always-true audit never returns None");
+            .alloc_resident_checked::<Scope<'static>>(child, ())
+            .expect("frame child is built over this frame's own region");
         Sealed::seal(Witnessed::<ScopeRefFamily, CarrierWitness>::resident(live))
     })
 }
