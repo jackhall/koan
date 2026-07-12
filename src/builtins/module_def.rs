@@ -40,15 +40,15 @@ pub fn body<'a>(
         body_expr,
         ChildScopeSeal::SealBeforeFinish,
         move |fctx| {
-            // Idempotent-finalize guard: a re-bound name short-circuits, witnessing the already-installed
-            // `&KType` in place from its **stored** reach.
+            // Idempotent-finalize guard: a re-bound name short-circuits, surfacing the
+            // already-installed identity from its **stored** reach as the Object-arm module value.
             if let Some(NameLookup::Bound(hit)) = fctx
                 .scope
                 .bindings()
                 .lookup_type_carrier(&name_for_finish, None)
             {
                 return Action::Done(Ok(StepCarried::born(
-                    fctx.scope.resident_type_carrier(hit.kt, hit.stored),
+                    fctx.scope.surface_type_hit(hit.kt, hit.stored),
                 )));
             }
             let module: &'a Module<'a> = fctx
@@ -71,8 +71,9 @@ pub fn body<'a>(
             // Fused MODULE-finish upsert: the module's stored reach is derived off the child scope held
             // **directly** here (never by walking the built `KType::Module`) — the home-borrow bit
             // included, `true` because the same-region child's own region owner covers this scope's
-            // region before home-omission — then upsert-installed under it, returning the resident
-            // `&KType` plus the same token so the terminal witnesses it in place with no re-clone.
+            // region before home-omission — then upsert-installed under it. The install stays
+            // type-side (`bindings.types`); the returned terminal surfaces the same identity as the
+            // Object-arm module value from that stored reach.
             match fctx.scope.register_module_upsert(
                 name_for_finish.clone(),
                 identity,
@@ -80,7 +81,7 @@ pub fn body<'a>(
                 bind_index,
             ) {
                 Ok((kt_ref, stored)) => Action::Done(Ok(StepCarried::born(
-                    fctx.scope.resident_type_carrier(kt_ref, stored),
+                    fctx.scope.surface_type_hit(kt_ref, stored),
                 ))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
@@ -149,6 +150,68 @@ mod tests {
             scope.bindings().data().get("Foo").is_none(),
             "MODULE is type-only — no value-side carrier in data",
         );
+    }
+
+    #[test]
+    fn bare_module_name_surfaces_as_object_value() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "MODULE Foo = (LET x = 1)");
+        // A module named in expression position surfaces on the value channel's Object arm.
+        match run_one(scope, parse_one("Foo")) {
+            KObject::Module(module) => assert_eq!(module.path, "Foo"),
+            other => panic!(
+                "bare module name must surface as an Object-arm module value, got {}",
+                other.ktype().name()
+            ),
+        }
+        // The binding itself stays type-side (Decision: binding doors install `KType::Module`).
+        assert!(matches!(
+            scope.resolve_type("Foo"),
+            Some(KType::Module { .. })
+        ));
+        assert!(
+            scope.bindings().data().get("Foo").is_none(),
+            "the module's value channel is a read-time surfacing, not a data binding",
+        );
+        // PRINT returns the rendered string — a bare module renders as its path.
+        match run_one(scope, parse_one("PRINT Foo")) {
+            KObject::KString(s) => assert_eq!(s, "Foo"),
+            other => panic!(
+                "PRINT Foo returns the path string, got {}",
+                other.ktype().name()
+            ),
+        }
+    }
+
+    #[test]
+    fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
+        use crate::machine::model::values::Held;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG OrderedSig = (VAL compare :Number)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        // A parenthesized module expression evaluates to the Object-arm module value, so the list
+        // element is `Held::Object` memoized as the module's self-sig (`Signature{SelfOf}`, whose
+        // name renders as the module path).
+        match run_one(scope, parse_one("[(IntOrd)]")) {
+            KObject::List(items, elem) => {
+                assert_eq!(
+                    elem.name(),
+                    "IntOrd",
+                    "element memoizes to the module self-sig"
+                );
+                assert_eq!(items.len(), 1);
+                assert!(
+                    matches!(&items[0], Held::Object(KObject::Module(m)) if m.path == "IntOrd"),
+                    "the list element is the Object-arm module value",
+                );
+            }
+            other => panic!("expected a list, got {}", other.ktype().name()),
+        }
     }
 
     #[test]

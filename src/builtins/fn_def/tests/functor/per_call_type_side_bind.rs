@@ -2,7 +2,7 @@
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
 use crate::machine::core::run_root_storage;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Parseable};
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
 /// subsequent run-root churn. End-to-end mirror of
@@ -124,13 +124,16 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
          LET OrdView = (IntOrd :! OrderedSig)\n\
          FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)",
     );
-    let result = run_one_type(scope, parse_one("MAKESET OrdView"));
+    let result = run_one(scope, parse_one("MAKESET OrdView"));
     match result {
-        KType::Module { module, .. } => {
+        KObject::Module(module) => {
             assert_eq!(module.path, "IntOrd :! OrderedSig");
         }
         other => {
-            panic!("MAKESET OrdView must return the passed-through module carrier, got {other:?}")
+            panic!(
+                "MAKESET OrdView must return the passed-through module carrier, got {}",
+                other.summarize()
+            )
         }
     }
 }

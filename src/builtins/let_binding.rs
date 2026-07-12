@@ -26,12 +26,17 @@ pub fn body<'a>(
     let mut type_for_types_map: Option<KType<'a>> = None;
     let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
         (Some(KObject::KString(s)), _) => {
-            if let Held::Type(kt) = rhs {
-                let kind = match kt {
-                    KType::Module { .. } => "module",
-                    KType::Signature { .. } => "signature",
-                    _ => "type",
-                };
+            // A type-language carrier under a value-classified name is a cross-kind error. A module
+            // rides the Object arm (`KObject::Module`) but is still type-language, so it keys the same
+            // diagnostic as a `Held::Type` module identity.
+            let type_kind = match rhs {
+                Held::Object(KObject::Module(_)) => Some("module"),
+                Held::Type(KType::Module { .. }) => Some("module"),
+                Held::Type(KType::Signature { .. }) => Some("signature"),
+                Held::Type(_) => Some("type"),
+                Held::Object(_) => None,
+            };
+            if let Some(kind) = type_kind {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET binder `{name}` is value-classified but the bound value is a \
                      {kind} (a type-language carrier); rebind under a Type-classified \
@@ -61,6 +66,10 @@ pub fn body<'a>(
             };
             type_for_types_map = Some(match rhs {
                 Held::Type(kt) => kt.clone(),
+                // A module rides the Object arm but binds type-side: install its `KType::Module`
+                // identity into `bindings.types` — today's storage shape — so `LET View = (m :| S)`
+                // keeps a type-side binding and `-> Er.Carrier` elaboration resolves through it.
+                Held::Object(KObject::Module(module)) => KType::Module { module },
                 Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => o.ktype(),
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {

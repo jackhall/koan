@@ -350,6 +350,13 @@ fn part_walk<'step>(
                             }
                         }
                         (Carried::Type(_), ExpressionPart::Type(t)) => {
+                            // A module is bound type-side, so it keeps resolving through
+                            // `resolve_type_identifier` (never the `Carried::Object` arm's
+                            // `resolve_value_carrier`, which misses a type-side binding). The hit
+                            // surfaces via `surface_type_hit`: a `KType::Module` becomes the Object-arm
+                            // module value while every other type rides the type channel. The upstream
+                            // classification probe still sees `Carried::Type`, but a module's
+                            // `Signature{Empty}` slot admits both channels, so buckets stay stable.
                             match ctx
                                 .current_scope()
                                 .resolve_type_identifier(t, ctx.active_chain())
@@ -357,7 +364,7 @@ fn part_walk<'step>(
                                 TypeResolution::Done(hit) => {
                                     let scope = ctx.current_scope();
                                     scope.seal_resident_delivered(
-                                        scope.resident_type_carrier(hit.kt, hit.stored),
+                                        scope.surface_type_hit(hit.kt, hit.stored),
                                     )
                                 }
                                 _ => {

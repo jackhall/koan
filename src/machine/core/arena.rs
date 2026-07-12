@@ -337,6 +337,39 @@ impl<'a> Scope<'a> {
             })
     }
 
+    /// The object twin of [`Self::alloc_ktype_reaching`]: for an `o` whose region borrows may reach
+    /// a *foreign* region this scope has already minted reach evidence for (a read-site's
+    /// materialized `StoredReach`). Widens [`RegionBrand::alloc_object_checked`]'s dest-only audit to
+    /// "this scope's region, `evidence`'s reach members, or a region
+    /// [`Self::covers_region_ambiently`] covers" — the same coverage predicate, honest-partial in the
+    /// one place the `KObject` walk is (`Wrapped { type_id }`). Surfacing a resolved `KType::Module`
+    /// hit as the Object-arm module value takes this door: the module child scope's region is named by
+    /// the hit's stored reach.
+    pub(crate) fn alloc_object_reaching(
+        &self,
+        o: KObject<'_>,
+        evidence: &StoredReach<'_>,
+    ) -> Result<&'a KObject<'a>, KError> {
+        let name = o.ktype().name();
+        let sets: &[&FrameSet] = match &evidence.foreign {
+            Some(fs) => std::slice::from_ref(fs),
+            None => &[],
+        };
+        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
+        self.brand()
+            .0
+            .alloc_resident_checked::<KObject<'static>>(
+                o,
+                ResidenceEvidence::reaching_ambient(sets, &ambient),
+            )
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination, evidence reach, \
+                     or the destination scope's ambient coverage"
+                )))
+            })
+    }
+
     /// The object evidence tier: for an `o` built from (or embedding a projection of) values
     /// whose reach this scope has already minted as `evidence` — a delivered arg carrier's
     /// `adopted_reach_of`/`host_reach_of`, or several for a multi-carrier fold (an args record).

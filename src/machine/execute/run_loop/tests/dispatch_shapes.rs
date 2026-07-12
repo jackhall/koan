@@ -974,7 +974,7 @@ fn head_deferred_calls_returned_function() {
 /// functor-application-as-function-call decision.
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
-    use crate::builtins::test_support::{run, run_one_type, run_root_silent};
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -982,11 +982,11 @@ fn head_deferred_applies_returned_functor_to_module() {
         "FN (GET_FUNCTOR) -> Any = \
          (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = (LET inner = x)))",
     );
-    let out = run_one_type(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
+    let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(
-        matches!(out, KType::Module { .. }),
+        matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
-        out.name(),
+        out.summarize(),
     );
 }
 
@@ -1062,7 +1062,7 @@ fn type_head_deferred_constructs_from_sigil_type() {
 /// (value-side) is empty.
 #[test]
 fn type_call_applies_let_bound_functor() {
-    use crate::builtins::test_support::{run, run_one_type, run_root_silent};
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
     use crate::machine::model::KType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
@@ -1081,11 +1081,11 @@ fn type_call_applies_let_bound_functor() {
         ),
         "ApplyIt should resolve type-side to a body-bearing KFunctor",
     );
-    let out = run_one_type(scope, parse_one("ApplyIt {x = 5}"));
+    let out = run_one(scope, parse_one("ApplyIt {x = 5}"));
     assert!(
-        matches!(out, KType::Module { .. }),
+        matches!(out, KObject::Module(_)),
         "applying a type-bound functor must yield a module; got {}",
-        out.name(),
+        out.summarize(),
     );
 }
 

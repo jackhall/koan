@@ -4,11 +4,11 @@
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::{KError, KErrorKind, Scope};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
@@ -37,11 +37,14 @@ fn functor_admits_bare_number_token_at_type_slot() {
         scope,
         "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE Generated = (LET inner = 1))",
     );
-    let result = run_one_type(scope, parse_one("MAKETREE Number"));
+    let result = run_one(scope, parse_one("MAKETREE Number"));
     match result {
-        KType::Module { .. } => {}
+        KObject::Module(_) => {}
         other => {
-            panic!("expected MAKETREE Number to dispatch and return a module, got {other:?}")
+            panic!(
+                "expected MAKETREE Number to dispatch and return a module, got {}",
+                other.summarize()
+            )
         }
     }
 }
@@ -56,11 +59,14 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     );
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
-        let result = run_one_type(scope, parse_one(&src));
+        let result = run_one(scope, parse_one(&src));
         match result {
-            KType::Module { .. } => {}
+            KObject::Module(_) => {}
             other => {
-                panic!("expected MAKETREE {token} to dispatch and return a module, got {other:?}")
+                panic!(
+                    "expected MAKETREE {token} to dispatch and return a module, got {}",
+                    other.summarize()
+                )
             }
         }
     }
@@ -75,10 +81,10 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
         "FUNCTOR (MAKETREE Elt :Type) -> Module = \
          (MODULE Generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
-    let result = run_one_type(scope, parse_one("MAKETREE Number"));
+    let result = run_one(scope, parse_one("MAKETREE Number"));
     let module = match result {
-        KType::Module { module, .. } => *module,
-        other => panic!("expected module result, got {other:?}"),
+        KObject::Module(module) => *module,
+        other => panic!("expected module result, got {}", other.summarize()),
     };
     let tm = module.type_members.borrow();
     match tm.get("ElemType") {

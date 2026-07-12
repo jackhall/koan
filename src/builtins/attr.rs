@@ -181,27 +181,31 @@ pub fn body_newtype<'a>(
     }
 }
 
-/// Projects the field off a module identity riding the type channel (the lhs is the `Type` arm).
+/// Projects the field off a module lhs riding the value channel's Object arm.
 pub fn body_module<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
-    let m = match arg_type(ctx.args, "s") {
-        Some(KType::Module { module, .. }) => *module,
-        _ => {
-            return Action::Done(Err(match arg_object(ctx.args, "s") {
-                Some(other) => KError::new(KErrorKind::TypeMismatch {
-                    arg: "s".to_string(),
-                    expected: "Module".to_string(),
-                    got: other.ktype().name(),
-                }),
-                None => KError::new(KErrorKind::TypeMismatch {
-                    arg: "s".to_string(),
-                    expected: "Module".to_string(),
-                    got: "Type".to_string(),
-                }),
-            }));
-        }
+    let m = match arg_object(ctx.args, "s") {
+        Some(KObject::Module(module)) => *module,
+        // Transitional type-side arm (deleted in Phase 3).
+        _ => match arg_type(ctx.args, "s") {
+            Some(KType::Module { module, .. }) => *module,
+            _ => {
+                return Action::Done(Err(match arg_object(ctx.args, "s") {
+                    Some(other) => KError::new(KErrorKind::TypeMismatch {
+                        arg: "s".to_string(),
+                        expected: "Module".to_string(),
+                        got: other.ktype().name(),
+                    }),
+                    None => KError::new(KErrorKind::TypeMismatch {
+                        arg: "s".to_string(),
+                        expected: "Module".to_string(),
+                        got: "Type".to_string(),
+                    }),
+                }));
+            }
+        },
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     route(access_module_member(m, &field_name))
@@ -227,7 +231,7 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
                     Ok(StepCarried::born(decl.resident_value_carrier(obj, stored)))
                 }
                 Some(MemberResolution::Type { kt, stored }) => {
-                    Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
+                    Ok(StepCarried::born(decl.surface_type_hit(kt, stored)))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
@@ -362,11 +366,11 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // (non-empty for a nested module). A member present only in the mirror is an `:|`-minted
         // abstract type; it is alloc'd fresh and sealed under the bit the checked audit derives from
         // its own walk (`true` iff the minted identity embeds a pointer into the module region).
+        // A nested `MODULE` mirrored here surfaces as the Object-arm module value, so the next ATTR
+        // step in a chained `Outer.Inner.X` recurses into the inner module's child scope.
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type_carrier(field, None) {
-                Some(NameLookup::Bound(hit)) => {
-                    module_scope.resident_type_carrier(hit.kt, hit.stored)
-                }
+                Some(NameLookup::Bound(hit)) => module_scope.surface_type_hit(hit.kt, hit.stored),
                 _ => module_scope.seal_fresh_ktype(minted)?,
             },
         ));
@@ -413,9 +417,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 module_scope.resident_value_carrier(obj, stored),
             ))
         }
-        Some(MemberResolution::Type { kt, stored }) => Ok(StepCarried::born(
-            module_scope.resident_type_carrier(kt, stored),
-        )),
+        Some(MemberResolution::Type { kt, stored }) => {
+            Ok(StepCarried::born(module_scope.surface_type_hit(kt, stored)))
+        }
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

@@ -12,7 +12,7 @@ use crate::machine::model::types::{
     abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members,
     AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
 };
-use crate::machine::model::values::Module;
+use crate::machine::model::values::{KObject, Module};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, NameLookup, Scope, ScopeId};
 
@@ -147,19 +147,21 @@ pub fn body_opaque<'a>(
     // carrier, witnessing the module in place. The opaque view's `new_scope` is a same-region child
     // of this frame, so the derived bit records the module's home borrow.
     let stored = ctx.scope.child_module_reach(new_scope);
-    // `new_module` lives in `region`'s own region (it was allocated into `new_scope`, itself
-    // `region`-resident above), so the checked audit passes on the dest-only check alone.
-    let kt_ref =
-        crate::try_action!(region.alloc_ktype_checked(KType::Module { module: new_module }));
+    // The opaque view is a returned value, not a named binding, so it surfaces as the Object-arm
+    // module value directly (`new_module` lives in `region`'s own region, so the audit passes on the
+    // dest-only check alone). LET's binding door mints the type-side identity at bind time.
+    let obj = crate::try_action!(ctx
+        .scope
+        .alloc_object_reaching(KObject::Module(new_module), &stored));
     Action::Done(Ok(StepCarried::born(
-        ctx.scope.resident_type_carrier(kt_ref, stored),
+        ctx.scope.resident_value_carrier(obj, stored),
     )))
 }
 
 /// `<m:Module> :! <s:Signature>` — transparent ascription. Shape-checks against the source's
-/// own child scope and returns the retagged view module as a witnessed [`Action::Done(Ok)`](Action::Done)
-/// carrier — [`Scope::resident_type_carrier`] pins the (foreign) source module's child-scope region
-/// the view borrows, from the token derived via [`Scope::child_module_reach`].
+/// own child scope and returns the retagged view as the Object-arm module value — the terminal is
+/// allocated reaching the token derived via [`Scope::child_module_reach`], which pins the (foreign)
+/// source module's child-scope region the view borrows.
 pub fn body_transparent<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -185,11 +187,14 @@ pub fn body_transparent<'a>(
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
     seal_view_self_sig(new_module, s);
-    let kt_ref = crate::try_action!(ctx
+    // The transparent view is a returned value, not a named binding, so it surfaces as the Object-arm
+    // module value directly under the same token that pins the reused source's (foreign) child-scope
+    // region. LET's binding door mints the type-side identity at bind time.
+    let obj = crate::try_action!(ctx
         .scope
-        .alloc_ktype_reaching(KType::Module { module: new_module }, &stored));
+        .alloc_object_reaching(KObject::Module(new_module), &stored));
     Action::Done(Ok(StepCarried::born(
-        ctx.scope.resident_type_carrier(kt_ref, stored),
+        ctx.scope.resident_value_carrier(obj, stored),
     )))
 }
 
@@ -221,8 +226,9 @@ fn seal_view_self_sig<'a>(
     module.seal_self_sig(view_sig);
 }
 
-/// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing
-/// a missing / mismatch diagnostic when an operand is absent or the wrong kind.
+/// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` record: the module off the
+/// value channel's Object arm, the signature off the type channel, producing a missing / mismatch
+/// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
 ) -> Result<
@@ -232,7 +238,7 @@ fn resolve_module_and_signature<'a>(
     ),
     KError,
 > {
-    use crate::machine::core::kfunction::action::{arg_held, arg_type};
+    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
         args: &crate::machine::model::KObject<'_>,
@@ -249,9 +255,13 @@ fn resolve_module_and_signature<'a>(
         }
     }
 
-    let m = match arg_type(args, "m") {
-        Some(KType::Module { module, .. }) => *module,
-        _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
+    let m = match arg_object(args, "m") {
+        Some(KObject::Module(module)) => *module,
+        // Transitional type-side fallthrough (deleted in Phase 3).
+        _ => match arg_type(args, "m") {
+            Some(KType::Module { module, .. }) => *module,
+            _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
+        },
     };
     let s = match arg_type(args, "s") {
         Some(KType::Signature {

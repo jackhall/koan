@@ -23,7 +23,7 @@ use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
     TypeResolution,
 };
-use crate::machine::model::values::Carried;
+use crate::machine::model::values::{Carried, KObject};
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -93,7 +93,7 @@ pub(crate) fn home_return_type<'a>(
 ) -> Result<&'a KType<'a>, KError> {
     if matches!(kt, KType::Module { .. }) {
         return Err(KError::new(KErrorKind::ShapeError(
-            "a module cannot be a function's return type; return a signature or the `:Module` kind"
+            "a module cannot be a function's return type; return a signature or `Module`"
                 .to_string(),
         )));
     }
@@ -139,6 +139,19 @@ where
         for (name, carried) in args.iter() {
             let carrier = arg_carriers.get(name).copied();
             match *carried {
+                // A module argument arrives on the Object arm but binds type-side (a module reaching
+                // a binding door installs `KType::Module` into `bindings.types`): the same fused type
+                // door the `Carried::Type` arm uses registers its identity, so a functor body still
+                // sees `Er` in the types table and `-> Er.Carrier` deferred-return elaboration resolves
+                // through it. The carrier-derived reach already names the module child scope's region.
+                Carried::Object(KObject::Module(module)) => {
+                    child.register_type_delivered(
+                        name.clone(),
+                        KType::Module { module },
+                        carrier,
+                        BindingIndex::value(0),
+                    )?;
+                }
                 Carried::Object(object) => match carrier {
                     // The projection is identity — the whole delivered value binds. The copy is a
                     // deep clone into the frame region, so the carrier's residence-only host is not

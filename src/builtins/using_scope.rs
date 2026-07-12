@@ -36,9 +36,11 @@ pub fn body<'a>(
     use crate::machine::core::kfunction::action::{
         arg_held, require_kexpression, Action, FramePlacement,
     };
-    use crate::machine::model::values::Held;
+    use crate::machine::model::values::{Held, KObject};
 
     let module = match arg_held(ctx.args, "m") {
+        // A module reaches USING on the Object arm; the type-side arm is a transitional fallthrough.
+        Some(Held::Object(KObject::Module(m))) => *m,
         Some(Held::Type(KType::Module { module: m })) => *m,
         Some(Held::Type(other)) => {
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {

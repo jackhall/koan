@@ -90,9 +90,10 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // A resolved type leaf is witnessed in place under `s` (the scope it was resolved against) from
         // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
-        // re-home, no `child_scope()` walk.
+        // re-home, no `child_scope()` walk. A `KType::Module` hit surfaces as the Object-arm module
+        // value, so a bare module name evaluates to its principal-signature-typed value.
         TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
-            s.resident_type_carrier(resolved.kt, resolved.stored),
+            s.surface_type_hit(resolved.kt, resolved.stored),
         ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS

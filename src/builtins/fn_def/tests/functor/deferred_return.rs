@@ -1,10 +1,8 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
-use crate::builtins::test_support::{
-    lookup_fn, parse_one, run, run_one, run_one_type, run_root_silent,
-};
+use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
 use crate::machine::core::run_root_storage;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Parseable};
 use crate::witnessed::region_metrics;
 
 /// Bare parameter-name return type: `-> Er` resolves per-call to the carried type via
@@ -26,11 +24,14 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = run_one_type(scope, parse_one("USE_ID OrderedSig"));
+    let result = run_one(scope, parse_one("USE_ID OrderedSig"));
     match result {
-        KType::Module { module: _ } => {}
+        KObject::Module(_) => {}
         other => {
-            panic!("expected the IntOrd view satisfying the per-call signature, got {other:?}")
+            panic!(
+                "expected the IntOrd view satisfying the per-call signature, got {}",
+                other.summarize()
+            )
         }
     }
 }
