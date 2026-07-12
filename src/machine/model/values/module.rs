@@ -83,6 +83,16 @@ impl<'a> Module<'a> {
         self.self_sig.get_or_init(|| SigSchema::raw_self_sig(self))
     }
 
+    /// Pin agreement for a `WITH`-specialized signature slot: every pinned slot names a type
+    /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
+    /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
+    /// applies to a pinned schema's residue.
+    pub fn satisfies_pins(&self, pins: &[(String, KType<'a>)]) -> bool {
+        let sig = self.self_sig();
+        pins.iter()
+            .all(|(name, expected)| sig.manifest_members.get(name) == Some(expected))
+    }
+
     /// Record that this module shape-checks against `sig_id`. Idempotent — re-ascribing
     /// (e.g. `(View :| OrderedSig)` after `(View :! OrderedSig)`) doesn't double-insert.
     pub fn mark_satisfies(&self, sig_id: ScopeId) {

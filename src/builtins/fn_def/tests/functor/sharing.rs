@@ -219,3 +219,82 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         res.ok(),
     );
 }
+
+/// The `:!` fix: a transparent view carries an empty `type_members`, so under the old
+/// `type_members`-equality pin loop it silently failed every `WITH`-pinned slot. Pin agreement
+/// now rides the self-sig, whose manifest members read the source's concrete types — so a
+/// transparent view of a module binding `Elem = Number` agrees with `{Elem = Number}` and a
+/// view binding `Elem = Str` does not.
+#[test]
+fn transparent_view_pin_agreement_reads_source_types() {
+    use crate::builtins::test_support::run_root_silent;
+    use crate::machine::model::KType;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE NumMod = ((LET Elem = Number) (LET compare = 0))\n\
+         MODULE StrMod = ((LET Elem = Str) (LET compare = 0))\n\
+         SIG OrderedSig = ((TYPE Elem) (VAL compare :Number))\n\
+         LET NumView = (NumMod :! OrderedSig)\n\
+         LET StrView = (StrMod :! OrderedSig)",
+    );
+    let sig = match scope.resolve_type("OrderedSig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("OrderedSig must bind a Signature KType"),
+    };
+    let slot = KType::Signature {
+        sig,
+        pinned_slots: vec![("Elem".to_string(), KType::Number)],
+    };
+    let num_view = scope.resolve_type("NumView").expect("NumView bound");
+    let str_view = scope.resolve_type("StrView").expect("StrView bound");
+    assert!(
+        slot.accepts_part(&spliced_part(Carried::Type(num_view))),
+        "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
+    );
+    assert!(
+        !slot.accepts_part(&spliced_part(Carried::Type(str_view))),
+        "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
+    );
+}
+
+/// An opaque view agrees with a pin naming its own per-call abstract identity: the view's
+/// self-sig fixes `Carrier` manifest to the abstract type it minted, so a slot pinned to that
+/// same identity accepts it.
+#[test]
+fn opaque_view_pin_agreement_names_its_abstract_identity() {
+    use crate::builtins::test_support::run_root_silent;
+    use crate::machine::model::KType;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
+         SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+         LET View = (IntOrd :| OrderedSig)",
+    );
+    let sig = match scope.resolve_type("OrderedSig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("OrderedSig must bind a Signature KType"),
+    };
+    let view = match scope.resolve_type("View") {
+        Some(KType::Module { module }) => module,
+        _ => panic!("View must bind a Module KType"),
+    };
+    let carrier_abstract = view
+        .type_members
+        .borrow()
+        .get("Carrier")
+        .cloned()
+        .expect("opaque view mints an abstract `Carrier`");
+    let slot = KType::Signature {
+        sig,
+        pinned_slots: vec![("Carrier".to_string(), carrier_abstract)],
+    };
+    let view_kt = scope.resolve_type("View").expect("View bound");
+    assert!(
+        slot.accepts_part(&spliced_part(Carried::Type(view_kt))),
+        "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
+    );
+}

@@ -329,18 +329,8 @@ impl<'a> KType<'a> {
             KType::Any => true,
             KType::Signature { sig, pinned_slots } => match t {
                 KType::Module { module: m, .. } => {
-                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
-                        return false;
-                    }
-                    if pinned_slots.is_empty() {
-                        return true;
-                    }
-                    let tm = m.type_members.borrow();
-                    pinned_slots.iter().all(|(name, expected)| {
-                        tm.get(name)
-                            .map(|actual| actual == expected)
-                            .unwrap_or(false)
-                    })
+                    m.compatible_sigs.borrow().contains(&sig.sig_id())
+                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
             },
@@ -430,18 +420,8 @@ impl<'a> KType<'a> {
             // `OfKind(Signature)` wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match c {
                 Carried::Type(KType::Module { module: m, .. }) => {
-                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
-                        return false;
-                    }
-                    if pinned_slots.is_empty() {
-                        return true;
-                    }
-                    let tm = m.type_members.borrow();
-                    pinned_slots.iter().all(|(name, expected)| {
-                        tm.get(name)
-                            .map(|actual| actual == expected)
-                            .unwrap_or(false)
-                    })
+                    m.compatible_sigs.borrow().contains(&sig.sig_id())
+                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
             },
