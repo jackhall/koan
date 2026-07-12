@@ -225,17 +225,61 @@ fn resolve_module_and_signature<'a>(
     Ok((m, s))
 }
 
-/// Verify every value slot (`VAL`, value-class name) declared in `sig` has a binding in
-/// `src_scope`'s value table.
+/// Verify a module supplies everything `sig` declares. Three checks run against `src_scope`,
+/// the module's child scope:
+///
+/// - Every abstract member (`TYPE Elt`, `TYPE (Type AS Wrap)`) must be *present* in the
+///   module's type table, bound to any type — abstract members are unconstrained in type, so
+///   presence alone satisfies them.
+/// - Every manifest member (`LET Tag = Number`) must be present in the type table *and* its
+///   type must equal the type the signature fixes (`KType` equality).
+/// - Every value slot (`VAL`, value-class name) must have a binding in the module's value
+///   table.
 fn shape_check<'a>(
     sig: &crate::machine::model::values::ModuleSignature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
+    let src_bindings = src_scope.bindings();
+    let lookup_type_member = |name: &str| -> Option<KType<'a>> {
+        src_bindings
+            .lookup_type(name, None)
+            .and_then(NameLookup::bound)
+            .cloned()
+    };
+
+    // Abstract members: presence only (bound to any type).
+    for name in abstract_members_of(sig.decl_scope()) {
+        if lookup_type_member(&name).is_none() {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "module does not satisfy signature `{}`: missing type member `{}`",
+                sig.path, name
+            ))));
+        }
+    }
+
+    // Manifest members: presence plus `KType` equality with the type the signature fixes.
+    for (name, expected) in manifest_type_members_of(sig.decl_scope()) {
+        let Some(got) = lookup_type_member(&name) else {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "module does not satisfy signature `{}`: missing type member `{}`",
+                sig.path, name
+            ))));
+        };
+        if got != expected {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "module does not satisfy signature `{}`: type member `{}` is `{}` but the \
+                 signature fixes it to `{}`",
+                sig.path,
+                name,
+                got.render(),
+                expected.render()
+            ))));
+        }
+    }
+
     // A SIG type-table entry is either a value slot (`VAL`, value-class name) or a type
-    // member (an abstract `TYPE` slot or a manifest `LET Tag = Number`, both type-class
-    // names). A satisfying module supplies value slots as values, so the check looks for each
-    // value-slot name in the source's value table; type members are supplied through the type
-    // table, not as values, so they are skipped here.
+    // member (handled above, type-class names). A satisfying module supplies value slots as
+    // values, so the check looks for each value-slot name in the source's value table.
     let src_names: std::collections::HashSet<String> = src_scope
         .bindings()
         .iter_data()

@@ -116,7 +116,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE Impl = (LET item = 0)\n\
+        "MODULE Impl = ((LET Elt = Number) (LET item = 0))\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
          LET View = (Impl :| Container)",
     );

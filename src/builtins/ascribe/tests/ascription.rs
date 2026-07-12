@@ -46,7 +46,7 @@ fn ascription_missing_member_errors() {
 fn opaque_ascription_mints_distinct_module_type_per_application() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    let src = "MODULE IntOrd = (LET compare = 0)\n\
+    let src = "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
          SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
          LET FirstAbstract = (IntOrd :| OrderedSig)\n\
          LET SecondAbstract = (IntOrd :| OrderedSig)";
@@ -198,5 +198,99 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
         matches!(result, KObject::Number(n) if *n == 3.0),
         "View.x on a manifest-typed slot reads the underlying Number(3), got {:?}",
         result.ktype(),
+    );
+}
+
+/// A module lacking a `TYPE`-declared abstract member fails the opaque (`:|`) satisfaction
+/// check with the "missing type member" error.
+#[test]
+fn opaque_missing_abstract_member_rejected() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE Impl = (LET item = 0)\n\
+         SIG Container = ((TYPE Elt) (VAL item :Number))",
+    );
+    let err = run_one_err(scope, parse_one("Impl :| Container"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("Container") && msg.contains("missing type member `Elt`")),
+        "expected the missing-type-member error, got {err}",
+    );
+}
+
+/// The same absent abstract member is rejected through transparent (`:!`) ascription too.
+#[test]
+fn transparent_missing_abstract_member_rejected() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE Impl = (LET item = 0)\n\
+         SIG Container = ((TYPE Elt) (VAL item :Number))",
+    );
+    let err = run_one_err(scope, parse_one("Impl :! Container"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("Container") && msg.contains("missing type member `Elt`")),
+        "expected the missing-type-member error, got {err}",
+    );
+}
+
+/// A manifest member the module supplies at the wrong type (`LET Tag = Str` against a
+/// signature fixing `LET Tag = Number`) is rejected with the "fixes it to" error.
+#[test]
+fn manifest_type_member_mismatch_rejected() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE Impl = ((LET Tag = Str) (LET item = 0))\n\
+         SIG TagSig = ((LET Tag = Number) (VAL item :Number))",
+    );
+    let err = run_one_err(scope, parse_one("Impl :| TagSig"));
+    assert!(
+        matches!(&err.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("TagSig")
+                && msg.contains("type member `Tag`")
+                && msg.contains("fixes it to")),
+        "expected the manifest fixes-it-to error, got {err}",
+    );
+}
+
+/// A manifest member the module supplies at the matching type (`LET Tag = Number` on both
+/// sides) satisfies the signature.
+#[test]
+fn manifest_type_member_match_accepted() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE Impl = ((LET Tag = Number) (LET item = 0))\n\
+         SIG TagSig = ((LET Tag = Number) (VAL item :Number))\n\
+         LET View = (Impl :| TagSig)",
+    );
+    assert!(
+        matches!(scope.resolve_type("View"), Some(KType::Module { .. })),
+        "a matching manifest member must satisfy the signature",
+    );
+}
+
+/// An abstract member is presence-only: a module supplying `LET Elt = Str` for an abstract
+/// `TYPE Elt` satisfies the signature regardless of the concrete type it chooses.
+#[test]
+fn abstract_member_bound_to_any_type_accepted() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE Impl = ((LET Elt = Str) (LET item = 0))\n\
+         SIG Container = ((TYPE Elt) (VAL item :Number))\n\
+         LET View = (Impl :| Container)",
+    );
+    assert!(
+        matches!(scope.resolve_type("View"), Some(KType::Module { .. })),
+        "an abstract member supplied at any concrete type must satisfy the signature",
     );
 }
