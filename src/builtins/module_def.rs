@@ -9,7 +9,7 @@
 //! MODULE's body returns to the dispatcher.
 
 use crate::machine::execute::StepCarried;
-use crate::machine::model::types::KKind;
+use crate::machine::model::types::{KKind, SigSchema};
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
 use crate::machine::{NameLookup, Scope, TraceFrame};
@@ -64,6 +64,9 @@ pub fn body<'a>(
                     tm.insert(member, kt.clone());
                 }
             }
+            // Seal the module's self-sig now that `type_members` reflects the body — a plain
+            // module carries no SIG, so the raw derivation is the whole signature.
+            module.seal_self_sig(SigSchema::raw_self_sig(module));
             let identity = KType::Module { module };
             // Fused MODULE-finish upsert: the module's stored reach is derived off the child scope held
             // **directly** here (never by walking the built `KType::Module`) — the home-borrow bit

@@ -14,12 +14,12 @@
 //! [`Scope::outer`](crate::machine::core::Scope) hold theirs — so `child_scope` / `decl_scope` are
 //! bare field reads with no per-pointer handle and no `unsafe` of their own.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 
 use crate::machine::core::{Scope, ScopeId};
 
-use super::super::types::KType;
+use super::super::types::{KType, SigSchema};
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`). Opaque-ascription members mint `KType::AbstractType { source:
@@ -43,6 +43,16 @@ pub struct Module<'a> {
     /// against this set. `RefCell` for the same reason as `type_members` — ascription
     /// writes after the surrounding `Module` value is already alloc'd.
     pub compatible_sigs: RefCell<Vec<ScopeId>>,
+    /// The module's principal signature (self-sig), derived from its body. Sealed exactly once
+    /// at the end of construction ([`Module::seal_self_sig`]) and immutable thereafter; a bare
+    /// [`Module::new`] with no seal derives it lazily on first read
+    /// ([`SigSchema::raw_self_sig`]). The signature-subtyping relation reads it to answer "does
+    /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
+    /// installed after the surrounding value is alloc'd.
+    self_sig: OnceCell<SigSchema<'a>>,
+    /// Caches `self_sig <: bare-schema(sig)` keyed by `sig.sig_id()`. A pure cache — types are
+    /// immutable, so entries are never invalidated. Pinned checks are never memoized here.
+    pub satisfaction_memo: RefCell<HashMap<ScopeId, bool>>,
 }
 
 impl<'a> Module<'a> {
@@ -53,7 +63,24 @@ impl<'a> Module<'a> {
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             compatible_sigs: RefCell::new(Vec::new()),
+            self_sig: OnceCell::new(),
+            satisfaction_memo: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Install the module's self-sig. Runs exactly once, at the end of construction (after the
+    /// `type_members` / `slot_type_tags` writes that feed the derivation) — a double-seal is a
+    /// construction bug.
+    pub fn seal_self_sig(&self, schema: SigSchema<'a>) {
+        if self.self_sig.set(schema).is_err() {
+            panic!("self-sig sealed twice on module `{}`", self.path);
+        }
+    }
+
+    /// The module's self-sig. Returns the sealed schema, or lazily derives it from the body for
+    /// a bare [`Module::new`] that was never sealed (e.g. a direct construction in a test).
+    pub fn self_sig(&self) -> &SigSchema<'a> {
+        self.self_sig.get_or_init(|| SigSchema::raw_self_sig(self))
     }
 
     /// Record that this module shape-checks against `sig_id`. Idempotent — re-ascribing

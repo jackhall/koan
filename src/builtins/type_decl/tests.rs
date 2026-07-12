@@ -259,16 +259,19 @@ fn monad_signature_smoke() {
 }
 
 /// `(M.Wrap)` after opaque ascription resolves through the module's `type_members` to the
-/// per-call-minted constructor variant. The module supplies the abstract `Wrap` slot with a
-/// concrete `LET Wrap = Number` (satisfaction is presence-only for abstract members).
+/// per-call-minted constructor variant. The module supplies the higher-kinded abstract `Wrap`
+/// slot with a real arity-1 constructor (`LET Wrap = Wrapper`) — a proper type would fail the
+/// slot's kind/arity check.
 #[test]
 fn module_attr_access_returns_type_constructor() {
+    use crate::builtins::test_support::register_arity1_constructor;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
+    register_arity1_constructor(scope, "Wrapper");
     run(
         scope,
         "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
-         MODULE IntList = ((LET Wrap = Number))\n\
+         MODULE IntList = ((LET Wrap = Wrapper))\n\
          LET Mo = (IntList :| MonadSig)",
     );
     let mo = match scope.resolve_type("Mo") {

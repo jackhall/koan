@@ -1,12 +1,15 @@
 //! Ascription operators `:|` (opaque) and `:!` (transparent).
 //! See [design/typing/modules.md](../../design/typing/modules.md).
 //!
-//! Shape-checking is name-presence only; full type-shape checks are deferred to
-//! the inference scheduler.
+//! Satisfaction is checked through the signature-subtyping relation: the source module's
+//! self-sig must be a subtype of the signature's schema (manifest members equal, abstract
+//! members at the right kind/arity, value slots covariantly compatible). Each view also seals
+//! its own self-sig at creation.
 
 use crate::machine::execute::StepCarried;
 use crate::machine::model::types::{
-    AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet,
+    abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members,
+    AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
 };
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
@@ -130,7 +133,10 @@ pub fn body_opaque<'a>(
         }
     }
 
-    if let Err(e) = shape_check(s, src) {
+    // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
+    seal_view_self_sig(new_module, s);
+
+    if let Err(e) = check_satisfies(m, s) {
         return Action::Done(Err(e));
     }
 
@@ -161,7 +167,7 @@ pub fn body_transparent<'a>(
     use crate::machine::core::kfunction::action::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
-    if let Err(e) = shape_check(s, m.child_scope()) {
+    if let Err(e) = check_satisfies(m, s) {
         return Action::Done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
@@ -177,6 +183,9 @@ pub fn body_transparent<'a>(
         Module::new(format!("{} :! {}", m.path, s.path), m.child_scope()),
         &stored,
     );
+    // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
+    // read the source's concrete types after substitution.
+    seal_view_self_sig(new_module, s);
     new_module.mark_satisfies(s.sig_id());
     let kt_ref = crate::try_action!(ctx
         .scope
@@ -184,6 +193,34 @@ pub fn body_transparent<'a>(
     Action::Done(Ok(StepCarried::born(
         ctx.scope.resident_type_carrier(kt_ref, stored),
     )))
+}
+
+/// Seal an ascription view's self-sig. The raw derivation captures the view's members; each
+/// SIG-declared value slot is then re-expressed in the view's own type members — the SIG's
+/// abstract-member references substituted by the view's bindings for them (an opaque view's
+/// per-call abstract mints, a transparent view's concrete source types). Without this a slot
+/// typed against an abstract member would read concrete off the underlying value and the view
+/// would not structurally satisfy its own signature.
+fn seal_view_self_sig<'a>(
+    module: &Module<'a>,
+    sig: &crate::machine::model::values::ModuleSignature<'a>,
+) {
+    let mut view_sig = SigSchema::raw_self_sig(module);
+    let member_map: std::collections::HashMap<String, KType<'a>> = view_sig
+        .manifest_members
+        .iter()
+        .map(|(n, t)| (n.clone(), t.clone()))
+        .collect();
+    for (slot_name, declared) in sig.decl_scope().bindings().iter_types() {
+        if crate::parse::is_type_name(&slot_name) {
+            continue;
+        }
+        view_sig.value_slots.insert(
+            slot_name,
+            substitute_sig_members(declared, sig.sig_id(), &member_map),
+        );
+    }
+    module.seal_self_sig(view_sig);
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` type channel, producing
@@ -225,125 +262,31 @@ fn resolve_module_and_signature<'a>(
     Ok((m, s))
 }
 
-/// Verify a module supplies everything `sig` declares. Three checks run against `src_scope`,
-/// the module's child scope:
-///
-/// - Every abstract member (`TYPE Elt`, `TYPE (Type AS Wrap)`) must be *present* in the
-///   module's type table, bound to any type — abstract members are unconstrained in type, so
-///   presence alone satisfies them.
-/// - Every manifest member (`LET Tag = Number`) must be present in the type table *and* its
-///   type must equal the type the signature fixes (`KType` equality).
-/// - Every value slot (`VAL`, value-class name) must have a binding in the module's value
-///   table.
-fn shape_check<'a>(
-    sig: &crate::machine::model::values::ModuleSignature<'a>,
-    src_scope: &Scope<'a>,
+/// Verify a module satisfies `sig` through the signature-subtyping relation: the module's
+/// self-sig must be a subtype of the signature's bare schema (every member present, manifest
+/// members equal, abstract members at the right kind/arity, value slots covariantly compatible
+/// after abstract-member substitution). Memoized per `sig.sig_id()` on the module — a pure
+/// cache, since types are immutable; a satisfying result short-circuits, a failure re-runs the
+/// walk to rebuild the diagnostic (the cold path).
+fn check_satisfies<'a>(
+    m: &Module<'a>,
+    s: &crate::machine::model::values::ModuleSignature<'a>,
 ) -> Result<(), KError> {
-    let src_bindings = src_scope.bindings();
-    let lookup_type_member = |name: &str| -> Option<KType<'a>> {
-        src_bindings
-            .lookup_type(name, None)
-            .and_then(NameLookup::bound)
-            .cloned()
-    };
-
-    // Abstract members: presence only (bound to any type).
-    for name in abstract_members_of(sig.decl_scope()) {
-        if lookup_type_member(&name).is_none() {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module does not satisfy signature `{}`: missing type member `{}`",
-                sig.path, name
-            ))));
-        }
+    let sig_id = s.sig_id();
+    if m.satisfaction_memo.borrow().get(&sig_id) == Some(&true) {
+        return Ok(());
     }
-
-    // Manifest members: presence plus `KType` equality with the type the signature fixes.
-    for (name, expected) in manifest_type_members_of(sig.decl_scope()) {
-        let Some(got) = lookup_type_member(&name) else {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module does not satisfy signature `{}`: missing type member `{}`",
-                sig.path, name
-            ))));
-        };
-        if got != expected {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module does not satisfy signature `{}`: type member `{}` is `{}` but the \
-                 signature fixes it to `{}`",
-                sig.path,
-                name,
-                got.render(),
-                expected.render()
-            ))));
-        }
-    }
-
-    // A SIG type-table entry is either a value slot (`VAL`, value-class name) or a type
-    // member (handled above, type-class names). A satisfying module supplies value slots as
-    // values, so the check looks for each value-slot name in the source's value table.
-    let src_names: std::collections::HashSet<String> = src_scope
-        .bindings()
-        .iter_data()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    for (name, _) in sig.decl_scope().bindings().iter_types() {
-        if crate::parse::is_type_name(&name) {
-            continue;
-        }
-        if !src_names.contains(&name) {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "module does not satisfy signature `{}`: missing member `{}`",
-                sig.path, name
-            ))));
-        }
-    }
-    Ok(())
-}
-
-/// Classify a SIG type-table entry by its *representation*: an abstract member carries no
-/// concrete witness. Two abstract shapes — a `Sig`-sourced [`KType::AbstractType`] (the
-/// first-order `TYPE Elt` slot) and a sentinel [`KKind::TypeConstructor`] `SetRef` (the
-/// higher-kinded `TYPE (Type AS Wrap)` slot, `ScopeId::SENTINEL` marking it "awaiting per-call
-/// mint"). Everything else — a manifest `LET Tag = Number` binding a concrete type, a real
-/// minted constructor — is manifest.
-pub(super) fn is_abstract_sig_member(kt: &KType<'_>) -> bool {
-    match kt {
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            ..
-        } => true,
-        KType::SetRef { set, index } => {
-            let member = set.member(*index);
-            member.kind == KKind::TypeConstructor && member.scope_id == ScopeId::SENTINEL
-        }
-        _ => false,
-    }
-}
-
-/// Type-class-named type-table entries that classify abstract by [`is_abstract_sig_member`].
-/// Value slots (`VAL …`, value-class names) filter out by name class.
-pub(super) fn abstract_members_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
-    scope
-        .bindings()
-        .iter_types()
-        .into_iter()
-        .filter(|(n, kt)| crate::parse::is_type_name(n) && is_abstract_sig_member(kt))
-        .map(|(n, _)| n)
-        .collect()
-}
-
-/// Type-class-named type-table entries that classify manifest (the concrete witness a
-/// satisfying module must match), paired with their fixed `KType`.
-pub(super) fn manifest_type_members_of<'a>(
-    scope: &crate::machine::Scope<'a>,
-) -> Vec<(String, KType<'a>)> {
-    scope
-        .bindings()
-        .iter_types()
-        .into_iter()
-        .filter(|(n, kt)| crate::parse::is_type_name(n) && !is_abstract_sig_member(kt))
-        .map(|(n, kt)| (n, kt.clone()))
-        .collect()
+    let result = sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[]));
+    m.satisfaction_memo
+        .borrow_mut()
+        .insert(sig_id, result.is_ok());
+    result.map_err(|failure| {
+        KError::new(KErrorKind::ShapeError(format!(
+            "module does not satisfy signature `{}`: {}",
+            s.path,
+            failure.render_fragment()
+        )))
+    })
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

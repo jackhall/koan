@@ -99,3 +99,19 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
             if source.scope_id() == scope_id && name == "Type"
     ));
 }
+
+/// A bare `Module::new` never sealed still answers `self_sig()` — the accessor lazily derives
+/// the schema from the (here empty) body via the fallback, so direct constructions in tests
+/// need no explicit seal.
+#[test]
+fn bare_module_self_sig_falls_back_to_raw_derivation() {
+    let region = run_root_storage();
+    let scope = default_scope(&region, Box::new(sink()));
+    let module = region
+        .brand()
+        .alloc_module(Module::new("Bare".into(), scope));
+    let sig = module.self_sig();
+    assert!(sig.abstract_members.is_empty());
+    assert!(sig.manifest_members.is_empty());
+    assert!(sig.value_slots.is_empty());
+}

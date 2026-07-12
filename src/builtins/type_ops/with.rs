@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::builtins::ascribe::{abstract_members_of, manifest_type_members_of};
+use crate::machine::model::types::{abstract_members_of, manifest_type_members_of};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and

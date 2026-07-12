@@ -264,11 +264,13 @@ fn functor_argument_bare_type_token_auto_wraps() {
 /// the higher-kinded analogue of `functor_application_is_generative`.
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
+    use crate::builtins::test_support::register_arity1_constructor;
     use crate::machine::model::types::KKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
+    register_arity1_constructor(scope, "Wrapper");
     let src = "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
-               MODULE IntList = ((LET Wrap = Number))\n\
+               MODULE IntList = ((LET Wrap = Wrapper))\n\
                LET First = (IntList :| MonadSig)\n\
                LET Second = (IntList :| MonadSig)";
     let exprs = parse(src).expect("parse should succeed");
