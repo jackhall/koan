@@ -36,10 +36,8 @@ bridges module identities into the value channel for ATTR receivers.
 
 ## Dependencies
 
-**Requires:**
-
-- [Structural satisfaction](structural-satisfaction.md) — value-side admission reuses the
-  structural rule.
+**Requires:** none — the structural admission rule its value-side check reuses has shipped
+([Structures and signatures](../../design/typing/modules.md#structures-and-signatures)).
 
 **Unblocks:**
 

@@ -143,9 +143,13 @@ with `Sub`'s bindings for them. Each ascription view seals its own self-sig reco
 substituted slot types, so a view structurally satisfies its own signature. The result is
 memoized per `sig_id` on the module (a pure cache — types are immutable).
 
-Each view also records `mark_satisfies(sig_id)`, and dispatch matching of a `:Sig` slot reads
-that set plus, for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig manifest
-member fixed equal ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)).
+Dispatch matching of a `:Sig` slot runs the same structural check ascription asserts
+([`Module::structurally_satisfies`](../../src/machine/model/values/module.rs), memoized per
+`sig_id`), plus, for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig
+manifest member fixed equal
+([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)). Ascription is
+assertion plus view construction, never an admission gate: an unascribed module whose self-sig
+satisfies a signature is admitted by that signature's slot directly.
 `WITH` pins abstract slots; a pin naming a manifest member is normalized away when it equals the
 fixed type (leaving signature identity unchanged) and is a type error when it differs
 ([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
@@ -224,7 +228,7 @@ admit any first-class module or signature value — the surface keywords
 The single `KType::Signature` variant serves both the constraint and the
 value role, disambiguated by **position** rather than by variant. A
 `Signature { .. }` *slot annotation* — `(PICK m :OrderedSig)` — matches a
-*module* whose `compatible_sigs` records `sig.sig_id()`, so `:OrderedSig`
+*module* whose self-sig structurally satisfies `sig`, so `:OrderedSig`
 means "any module satisfying OrderedSig." A signature *value* —
 `KType::Signature { .. }` in the `Type` arm, what `OrderedSig` evaluates to in
 expression position — is matched by the `:Signature` (`OfKind(Signature)`)

@@ -127,8 +127,8 @@
   `Signature` lower to them in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs).
   The single `Signature` variant is **disambiguated by position**: a
-  `Signature { .. }` *slot* matches a *module* whose `compatible_sigs`
-  contains `sig.sig_id()` (the constraint role — what `Er :OrderedSig`
+  `Signature { .. }` *slot* matches a *module* whose self-sig structurally
+  satisfies `sig` (the constraint role — what `Er :OrderedSig`
   lowers to in a FUNCTOR parameter slot, so `:OrderedSig` means "module
   satisfying OrderedSig," never "the signature value itself"), while a
   signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only

@@ -67,7 +67,6 @@ check is O(1).
 
 ## Open work
 
-- [Structural satisfaction](../../roadmap/type_memos/structural-satisfaction.md)
 - [KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md)
 - [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md)
 - [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)

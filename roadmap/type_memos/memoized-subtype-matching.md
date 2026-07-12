@@ -31,6 +31,9 @@ a hash cannot encode, so matching still walks every time.
   registry entry survives reconstruction and shares hits across instances.
 - *Memoize positive and negative outcomes — decided.* A failed match is as worth caching as a
   successful one, given overload resolution's many non-matching slot checks.
+- *Per-module `satisfaction_memo` folds in — decided.* `Module::satisfaction_memo` (the
+  `sig_id`-keyed structural satisfaction cache dispatch consults) migrates into the digest-keyed
+  registry entry when this item ships, leaving `Module` cache-free.
 - *`Collided` bypass — decided.* A `Collided` digest is not a reliable key; fall back to the
   structural walk, as equality does.
 - *Phasing — decided.* Foundation phase (carries the risk): the cache home in the registry

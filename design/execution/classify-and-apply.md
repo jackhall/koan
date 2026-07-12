@@ -197,8 +197,8 @@ The rails the dispatch driver feeds:
   `wrap_indices` set from `classify_for_pick` — by sub-Dispatch, the same lane as
   `Expression` / literal args, so each resolves to its `Future` carrier before
   `KFunction::bind`. The committed callable's slot admission (`accepts_part`) then
-  runs the carried-type check at bind: a `:Signature` slot consults the witness
-  module's `compatible_sigs`, exactly as the keyword-led path does. Because the
+  runs the carried-type check at bind: a `:Signature` slot runs the structural
+  satisfaction check, exactly as the keyword-led path does. Because the
   head has already selected the one callable, the keyword path's pre-pick
   `bare_outcomes` resolution (which exists to choose among co-bucket overloads) is
   unneeded here; a genuinely non-satisfying arg is a terminal `TypeMismatch`, not a

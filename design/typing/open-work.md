@@ -31,15 +31,13 @@ Future work on the type and module system. Each entry points at a
 
 ## Cross-cutting
 
-- [Structural satisfaction](../../roadmap/type_memos/structural-satisfaction.md) and the
-  module-value chain ([KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md),
+- The module-value chain ([KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md),
   then [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md),
   then [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)) — modules move to
   the value channel, typed by the creation-time principal signature under canonical signature
-  subtyping (the relation and self-sig have shipped; see
-  [Structures and signatures](modules.md#structures-and-signatures)). Dispatch still gates on
-  recorded ascriptions rather than consulting the relation; the combined end state is pinned in
-  [module-values-and-type-identity.md](module-values-and-type-identity.md).
+  subtyping (the relation, self-sig, and structural dispatch admission have shipped; see
+  [Structures and signatures](modules.md#structures-and-signatures)). The combined end state is
+  pinned in [module-values-and-type-identity.md](module-values-and-type-identity.md).
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as FUNCTORs over their element/key types. Parks the **applicative
   functor semantics** open question: the FUNCTOR binder
