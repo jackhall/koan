@@ -143,9 +143,9 @@ pub enum KType<'a> {
     RecursiveGroup(Rc<RecursiveSet<'a>>),
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
-    /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
-    /// a value (a `Signature { .. }` in the value channel's `Type` arm) it is matched by the
-    /// `OfKind(Signature)` wildcard.
+    /// parameter slot it matches a module whose self-sig structurally satisfies `sig`
+    /// ([`Module::structurally_satisfies`]); as a value (a `Signature { .. }` in the value
+    /// channel's `Type` arm) it is matched by the `OfKind(Signature)` wildcard.
     ///
     /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is

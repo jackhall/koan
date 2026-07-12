@@ -38,11 +38,6 @@ pub struct Module<'a> {
     /// Empty for unascribed and transparently-ascribed (`:!`) modules. `RefCell` for the same
     /// reason as `type_members`.
     pub slot_type_tags: RefCell<HashMap<String, KType<'a>>>,
-    /// Sigs this module shape-checks against. `accepts_part` for a
-    /// `KType::Signature { sig, .. }` slot is an O(1) `sig.sig_id()` membership check
-    /// against this set. `RefCell` for the same reason as `type_members` — ascription
-    /// writes after the surrounding `Module` value is already alloc'd.
-    pub compatible_sigs: RefCell<Vec<ScopeId>>,
     /// The module's principal signature (self-sig), derived from its body. Sealed exactly once
     /// at the end of construction ([`Module::seal_self_sig`]) and immutable thereafter; a bare
     /// [`Module::new`] with no seal derives it lazily on first read
@@ -65,7 +60,6 @@ impl<'a> Module<'a> {
             child_scope_ref: child_scope,
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
-            compatible_sigs: RefCell::new(Vec::new()),
             self_sig: OnceCell::new(),
             satisfaction_memo: RefCell::new(HashMap::new()),
         }
@@ -94,15 +88,6 @@ impl<'a> Module<'a> {
         let sig = self.self_sig();
         pins.iter()
             .all(|(name, expected)| sig.manifest_members.get(name) == Some(expected))
-    }
-
-    /// Record that this module shape-checks against `sig_id`. Idempotent — re-ascribing
-    /// (e.g. `(View :| OrderedSig)` after `(View :! OrderedSig)`) doesn't double-insert.
-    pub fn mark_satisfies(&self, sig_id: ScopeId) {
-        let mut s = self.compatible_sigs.borrow_mut();
-        if !s.contains(&sig_id) {
-            s.push(sig_id);
-        }
     }
 
     /// Structural satisfaction: `self_sig <: bare-schema(sig)` under [`sig_subtype`] — the

@@ -140,8 +140,6 @@ pub fn body_opaque<'a>(
         return Action::Done(Err(e));
     }
 
-    new_module.mark_satisfies(s.sig_id());
-
     // The view's token is derived from `new_scope` held directly here (co-located, so it names only
     // what the bulk-installed members reach and derives its home-borrow bit from the mint), stored
     // nowhere — the view is a returned value, not a named binding — and sealed onto the terminal
@@ -186,7 +184,6 @@ pub fn body_transparent<'a>(
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
     seal_view_self_sig(new_module, s);
-    new_module.mark_satisfies(s.sig_id());
     let kt_ref = crate::try_action!(ctx
         .scope
         .alloc_ktype_reaching(KType::Module { module: new_module }, &stored));
