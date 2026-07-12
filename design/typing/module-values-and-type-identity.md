@@ -67,7 +67,6 @@ check is O(1).
 
 ## Open work
 
-- [Signature subtyping and self-sigs](../../roadmap/type_memos/signature-subtyping-and-self-sigs.md)
 - [Structural satisfaction](../../roadmap/type_memos/structural-satisfaction.md)
 - [KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md)
 - [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md)

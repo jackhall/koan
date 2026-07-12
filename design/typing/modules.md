@@ -60,12 +60,12 @@ supply:
 `VAL` and `TYPE` are meaningful only inside a SIG body; outside it the
 declarator is unbound. The lowercase-name `(LET name = <value>)` form is
 rejected inside SIG bodies with a diagnostic directing to `VAL`. The implementation lives at
-[`val_decl.rs`](../../src/builtins/val_decl.rs); ascription's
-name-presence shape check ([`ascribe.rs`](../../src/builtins/ascribe.rs))
-admits any module member that supplies the named slot regardless of how
-the member was declared — full type-shape checking against the VAL slot's
-declared type is owned by
-[Signature subtyping and self-sigs](../../roadmap/type_memos/signature-subtyping-and-self-sigs.md).
+[`val_decl.rs`](../../src/builtins/val_decl.rs); ascription
+([`ascribe.rs`](../../src/builtins/ascribe.rs)) checks a module against a signature
+through the **signature-subtyping relation**
+([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)), so a VAL slot's
+declared type is checked structurally: the module's member type must be covariantly
+compatible with the slot's declared type (see §"Satisfaction and `WITH`" below).
 
 Structures can be **ascribed** to signatures via two operators that differ
 only by a whitespace gap in the visual rendering, expressing "you can see
@@ -112,9 +112,9 @@ ascription's per-call constructor mint preserves the parameterization. A manifes
 `LET Tag = Number` binds the concrete `Number` — it carries no abstract identity,
 and a `VAL x :Tag` slot reads through concretely. Classification is by
 *representation*, not name class:
-[`ascribe.rs`](../../src/builtins/ascribe.rs)'s `is_abstract_sig_member` reads the
-member's `KType` shape (a `Sig`-sourced `AbstractType` or a sentinel constructor is
-abstract; everything else is manifest). Outer aliases and builtin annotations
+[`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)'s `is_abstract_sig_member`
+reads the member's `KType` shape (a `Sig`-sourced `AbstractType` or a sentinel constructor
+is abstract; everything else is manifest). Outer aliases and builtin annotations
 (`:Number`, an outer `LET MyAlias = Number`) stay concrete.
 
 Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`)
@@ -125,12 +125,29 @@ no type entries of its own), then records on the new `Module` a `slot_type_tags`
 a `Sig`-rooted abstract member. Transparent `:!` leaves the map empty, so
 transparent reads stay concrete.
 
-**Satisfaction and `WITH`.** A module satisfies a signature (`shape_check`, run for
-both `:|` and `:!`) when it supplies every abstract member (presence only — bound to
-any type) and every manifest member at the *equal* `KType`; a value slot is
-satisfied by a value member of the same name. `WITH` pins abstract slots as before;
-a pin naming a manifest member is normalized away when it equals the fixed type
-(leaving signature identity unchanged) and is a type error when it differs
+**Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
+([`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)). Every module carries a
+principal **self-sig** — a [`SigSchema`](../../src/machine/model/types/sig_schema.rs) of its
+abstract members (always none — `TYPE` is SIG-body-only), manifest type members, and
+value-slot types — derived once at creation and sealed immutable (`Module::seal_self_sig`;
+a bare construction derives it lazily via `raw_self_sig`). A signature likewise projects to a
+`SigSchema` (`SigSchema::of_sig`, which folds any `WITH` pins in). Ascription (`check_satisfies`,
+run for both `:|` and `:!`) holds iff `module.self_sig <: sig-schema` under `sig_subtype`:
+`Sub <: Super` iff `Sub` supplies every member `Super` names (width — extra `Sub` members are
+ignored), with each manifest member *equal*, each abstract member present at the matching
+kind/arity (a first-order slot needs a proper type or first-order member; a higher-kinded
+`TYPE (Type AS Wrap)` slot needs a constructor of the same arity), and each value slot
+covariantly compatible — the module's member type must be `satisfied_by`-admissible for the
+slot's declared type, after the slot's references to `Super`'s abstract members are substituted
+with `Sub`'s bindings for them. Each ascription view seals its own self-sig recording those
+substituted slot types, so a view structurally satisfies its own signature. The result is
+memoized per `sig_id` on the module (a pure cache — types are immutable).
+
+Each view also records `mark_satisfies(sig_id)`, and dispatch matching of a `:Sig` slot reads
+that set plus, for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig manifest
+member fixed equal ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)).
+`WITH` pins abstract slots; a pin naming a manifest member is normalized away when it equals the
+fixed type (leaving signature identity unchanged) and is a type error when it differs
 ([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
 
 ATTR's `access_module_member`
@@ -188,7 +205,10 @@ demand from the type entry via
 ATTR's `body_type_lhs` routes its Type-classed receiver through that bridge rather
 than a raw `bindings.data` lookup.
 
-`KType::Module` carries the live `&Module` pointer;
+`KType::Module` carries the live `&Module` pointer. Each
+[`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
+([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
+structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
 `KType::Signature { sig, pinned_slots }`
 carries the region-pinned `&Signature` plus any `WITH` abstract-type
 pins; `KType::AbstractType { source, name }` carries an abstract-type member —

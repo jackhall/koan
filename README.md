@@ -116,6 +116,8 @@ overload-resolution walk returning a `ResolveOutcome`),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
 [recursive_set.rs](src/machine/model/types/recursive_set.rs) (`RecursiveSet`, the
 `Rc`-owned unit of nominal identity, allocation, and lift),
+[sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema` and the
+canonical signature-subtyping relation),
 [builtins.rs](src/builtins.rs) (registry),
 [tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
@@ -184,6 +186,7 @@ src/
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
     │   │   ├── recursive_set.rs   RecursiveSet — Rc-owned unit of nominal identity, allocation, and lift
+    │   │   ├── sig_schema.rs      SigSchema + sig_subtype — module self-sig and the signature-subtyping relation
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Serializable
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas

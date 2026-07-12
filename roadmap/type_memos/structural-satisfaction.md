@@ -7,8 +7,8 @@ prior ascription.
 [`matches_type`](../../src/machine/model/types/ktype_predicates.rs) checks membership in
 `compatible_sigs`, so an unascribed module never matches a signature slot, and a module's
 admissibility mutates over its lifetime as ascriptions accrue. The subtyping relation and
-the creation-time self-sig (shipped by
-[Signature subtyping and self-sigs](signature-subtyping-and-self-sigs.md)) exist, but
+the creation-time self-sig (shipped — see
+[Structures and signatures](../../design/typing/modules.md#structures-and-signatures)) exist, but
 dispatch does not consult them.
 
 **Acceptance criteria.**
@@ -32,10 +32,7 @@ dispatch does not consult them.
 
 ## Dependencies
 
-**Requires:**
-
-- [Signature subtyping and self-sigs](signature-subtyping-and-self-sigs.md) — supplies the
-  relation and the self-sig the flip consults.
+**Requires:** none — the subtyping relation and creation-time self-sig it consults have shipped.
 
 **Unblocks:**
 
