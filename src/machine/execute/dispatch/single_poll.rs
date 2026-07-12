@@ -23,8 +23,8 @@ use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome};
+use crate::machine::core::StoredReach;
 use crate::machine::model::values::CarriedFamily;
-use crate::machine::FrameSet;
 use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Residence;
 
@@ -40,7 +40,7 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     /// it names the identity's own region.
     NewType {
         identity: &'step KType<'step>,
-        reach: FrameSet,
+        reach: StoredReach<'step>,
     },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
@@ -50,17 +50,17 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     RecordNewType {
         identity: &'step KType<'step>,
         field_names: Vec<String>,
-        reach: FrameSet,
+        reach: StoredReach<'step>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'step>>>,
         set: Rc<RecursiveSet<'step>>,
         index: usize,
         tag: String,
-        /// The identity's stored per-binding type reach, folded into the construction operand's
+        /// The identity's stored per-binding type token, folded into the construction operand's
         /// witness. The `Tagged` identity is a fresh dest-region `SetRef`, so `reach` is empty
         /// today; it names the set's region once `RecursiveSet` is region-allocated.
-        reach: FrameSet,
+        reach: StoredReach<'step>,
     },
 }
 
@@ -92,7 +92,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
         TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
-            s.resident_type_carrier(resolved.kt, resolved.reach, resolved.borrows_into_home),
+            s.resident_type_carrier(resolved.kt, resolved.stored),
         ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
@@ -298,13 +298,13 @@ pub(super) fn type_call<'step>(
             })))
         }
         _ => {
-            // The identity's stored per-binding type reach (home-omitted), resolved through the same
-            // lexical chain as the identity: threaded to the construction finish so its operand names
-            // the identity's own region rather than relying on the dest frame's storage `outer` chain,
-            // which omits lexical ancestors under TCO. Empty while `RecursiveSet` is heap-`Rc`'d.
+            // The identity's stored per-binding type token (home-omitted foreign reach + home-borrow
+            // bit), resolved through the same lexical chain as the identity: threaded to the
+            // construction finish so its operand names the identity's own region rather than relying
+            // on the dest frame's storage `outer` chain, which omits lexical ancestors under TCO.
+            // Empty while `RecursiveSet` is heap-`Rc`'d.
             let reach = scope
-                .resolve_type_reach(head_t.as_str(), chain)
-                .cloned()
+                .resolve_type_stored(head_t.as_str(), chain)
                 .unwrap_or_default();
             apply_callable(
                 ctx,

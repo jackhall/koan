@@ -356,11 +356,9 @@ fn part_walk<'step>(
                             {
                                 TypeResolution::Done(hit) => {
                                     let scope = ctx.current_scope();
-                                    scope.seal_resident_delivered(scope.resident_type_carrier(
-                                        hit.kt,
-                                        hit.reach,
-                                        hit.borrows_into_home,
-                                    ))
+                                    scope.seal_resident_delivered(
+                                        scope.resident_type_carrier(hit.kt, hit.stored),
+                                    )
                                 }
                                 _ => {
                                     return Err(KError::new(KErrorKind::ShapeError(format!(

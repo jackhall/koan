@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::DepPlacement;
-use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
+use crate::machine::core::{
+    FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope, StoredReach,
+};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{CarriedFamily, WrappedPayload};
@@ -49,7 +51,7 @@ pub(in crate::machine::execute) mod tagged_union;
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     identity: &'step KType<'step>,
-    reach: FrameSet,
+    reach: StoredReach<'step>,
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     if let [Spanned {
@@ -82,7 +84,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     identity: &'step KType<'step>,
-    reach: FrameSet,
+    reach: StoredReach<'step>,
     record_fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
@@ -133,7 +135,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     set: Rc<RecursiveSet<'step>>,
     index: usize,
     schema: Rc<HashMap<String, KType<'step>>>,
-    reach: FrameSet,
+    reach: StoredReach<'step>,
     args_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
@@ -178,21 +180,19 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 
 /// Build the construction operand carrying `(dest brand, nominal identity)` across the build brand.
 /// `dest_frame`'s brand is `yoke`d into that frame's own region — witnessed by it — and `merge`d with
-/// the identity wrapped by [`Scope::resident_type_carrier`] under its stored per-binding `reach`, so
+/// the identity wrapped by [`Scope::resident_type_carrier`] under its `stored` per-binding token, so
 /// the operand's witness is the dest region's pin ∪ the identity's own reach — folded, never paired
-/// with an asserted witness. `reach` is empty while `RecursiveSet` is heap-`Rc`'d (the identity points
-/// into no region) and names the set's region once it is region-allocated.
+/// with an asserted witness. The token's foreign reach is empty while `RecursiveSet` is heap-`Rc`'d
+/// (the identity points into no region) and names the set's region once it is region-allocated; the
+/// token's home-borrow bit is replayed from its derivation, never asserted here.
 pub(crate) fn build_type_operand<'step>(
     scope: &'step Scope<'step>,
     dest_frame: Rc<FrameStorage>,
     identity: &'step KType<'step>,
-    reach: Option<&FrameSet>,
+    stored: StoredReach<'step>,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(Rc::clone(&dest_frame));
-    // The `type_id` borrow targets the identity's declaring scope; when that is this same per-call
-    // frame the home-omitted `reach` cannot record it, so materialize home back into reach (the
-    // conservative reseal — an ancestor-declared identity's home ride is redundant but harmless).
-    let identity_carrier = scope.resident_type_carrier(identity, reach, true);
+    let identity_carrier = scope.resident_type_carrier(identity, stored);
     // The dest brand is the *destination* operand (its `DestHandleFamily` live form is the
     // `HasRegionHandle` mint target the pinned merge's composition seam needs), so it rides as
     // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
@@ -224,17 +224,17 @@ pub(crate) fn build_type_operand<'step>(
 /// [`alloc_carried_with`](crate::machine::core::StepAllocator::alloc_carried_with) produces for
 /// the same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
 ///
-/// `reach` is the identity's own home-omitted foreign reach (empty while a `RecursiveSet` is
-/// heap-`Rc`'d and its members reach no region); `dest_frame` owns the destination scope's region and
-/// pins the operand's backing for the synchronous re-anchor.
+/// `stored` is the identity's own token (its home-omitted foreign reach is empty while a
+/// `RecursiveSet` is heap-`Rc`'d and its members reach no region); `dest_frame` owns the destination
+/// scope's region and pins the operand's backing for the synchronous re-anchor.
 pub(crate) fn seal_type_operand<'a>(
     scope: &'a Scope<'a>,
     dest_frame: Rc<FrameStorage>,
     identity: &'a KType<'a>,
-    reach: Option<&FrameSet>,
+    stored: StoredReach<'a>,
     carriers: &[&DeliveredCarried],
 ) -> StepCarried<'a> {
-    let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, reach);
+    let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, stored);
     // Fold each carrier's reach onto the identity operand at `Residence::Kept` — the dep keeps living
     // in its producer region, so its host materializes as a member — the per-dep envelope fold
     // `alloc_carried_with` runs. The relocate closure discards the carrier's value and threads the
@@ -275,7 +275,7 @@ fn finish_witnessed<'step>(
         CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
             let collapse = check_newtype_repr(identity, terminals[0].value.object())?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
+            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             Ok(terminals[0]
                 .delivered
                 .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
@@ -332,7 +332,7 @@ fn finish_witnessed<'step>(
                             },
                         )
                 });
-            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
+            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
             Ok(fields.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
@@ -377,7 +377,7 @@ fn finish_witnessed<'step>(
                 set: Rc::clone(set),
                 index: *index,
             })?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, Some(reach));
+            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered

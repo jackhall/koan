@@ -195,7 +195,13 @@ fn spliced_cell_classifies_by_opening() {
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
     let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
-    let carrier = scope.resident_value_carrier(obj, None, false);
+    let carrier = scope.resident_value_carrier(
+        obj,
+        crate::machine::core::StoredReach {
+            foreign: None,
+            borrows_into_home: false,
+        },
+    );
     let cell_part = ExpressionPart::Spliced {
         cell: Delivered::hosted(Sealed::seal(carrier), std::rc::Rc::clone(&storage)),
     };

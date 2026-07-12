@@ -129,25 +129,17 @@ impl Default for StoredReach<'_> {
 pub enum MemberResolution<'a> {
     Value {
         obj: &'a KObject<'a>,
-        /// The member's home-omitted foreign reach, stored on the module's own `data` entry when
-        /// the module body bound it — so an ATTR read wraps the member in a carrier built from its
-        /// stored reach rather than re-asserting single-frame co-location. `None` is the empty
-        /// reach — a copy of the reference, no clone.
-        reach: Option<&'a FrameSet>,
-        /// Whether the member borrows into the module scope's own region (threaded from the stored
-        /// row; a read materializes it as an explicit reach member).
-        borrows_into_home: bool,
+        /// The member's stored reach (home-omitted foreign reach + the home-borrow bit), copied
+        /// whole off the module's own `data` entry — so an ATTR read replays the same opaque token
+        /// into a resident carrier rather than re-asserting single-frame co-location.
+        stored: StoredReach<'a>,
     },
     Type {
         kt: &'a KType<'a>,
-        /// The member type's home-omitted foreign reach (non-empty for a nested `KType::Module`),
-        /// stored on the module's own `types` entry — so an ATTR type read witnesses the existing
-        /// `&KType` in place from its stored reach rather than walking the value. `None` is the
-        /// empty reach.
-        reach: Option<&'a FrameSet>,
-        /// Whether the member type borrows into the module scope's own region (threaded from the
-        /// stored row).
-        borrows_into_home: bool,
+        /// The member type's stored reach (non-empty foreign reach for a nested `KType::Module`),
+        /// copied whole off the module's own `types` entry — so an ATTR type read witnesses the
+        /// existing `&KType` in place from the replayed token.
+        stored: StoredReach<'a>,
     },
 }
 
@@ -158,10 +150,10 @@ pub enum MemberResolution<'a> {
 /// stored reach.
 pub struct ValueHit<'a> {
     pub obj: &'a KObject<'a>,
-    pub reach: Option<&'a FrameSet>,
-    /// Whether the bound value borrows into the binding scope's own region (threaded from the stored
-    /// row; a read materializes it as an explicit reach member).
-    pub borrows_into_home: bool,
+    /// The binding's stored reach (home-omitted foreign reach + the home-borrow bit), copied whole
+    /// off the `data` entry so the read wrapper does not hold the `RefCell` borrow across the
+    /// carrier build.
+    pub stored: StoredReach<'a>,
 }
 
 /// The type-side reach-carrying payload of a `NameLookup<TypeHit>`: the bound `&KType` witnessed in
@@ -173,10 +165,10 @@ pub struct ValueHit<'a> {
 /// `&KType` + stored reach.
 pub struct TypeHit<'a> {
     pub kt: &'a KType<'a>,
-    pub reach: Option<&'a FrameSet>,
-    /// Whether the bound type borrows into the binding scope's own region (threaded from the stored
-    /// row; a read materializes it as an explicit reach member).
-    pub borrows_into_home: bool,
+    /// The binding's stored reach (home-omitted foreign reach + the home-borrow bit), copied whole
+    /// off the `types` entry so the read wrapper does not hold the `RefCell` borrow, and reused as
+    /// the `Done` payload of the type-identifier resolution memo.
+    pub stored: StoredReach<'a>,
 }
 
 /// Outcome of a per-scope `lookup_function` call. Visibility (per
@@ -375,11 +367,7 @@ impl<'a> Bindings<'a> {
     ) -> Option<NameLookup<TypeHit<'a>>> {
         if let Some((kt, idx, reach)) = self.types.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(NameLookup::Bound(TypeHit {
-                    kt,
-                    reach: reach.foreign,
-                    borrows_into_home: reach.borrows_into_home,
-                }));
+                return Some(NameLookup::Bound(TypeHit { kt, stored: *reach }));
             }
         }
         self.type_placeholder(name, chain_cutoff)
@@ -401,18 +389,13 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(MemberResolution::Value {
                     obj,
-                    reach: reach.foreign,
-                    borrows_into_home: reach.borrows_into_home,
+                    stored: *reach,
                 });
             }
         }
         if let Some((kt, idx, reach)) = self.types.borrow().get(name) {
             if Self::visible(*idx, chain_cutoff) {
-                return Some(MemberResolution::Type {
-                    kt,
-                    reach: reach.foreign,
-                    borrows_into_home: reach.borrows_into_home,
-                });
+                return Some(MemberResolution::Type { kt, stored: *reach });
             }
         }
         None
@@ -430,8 +413,7 @@ impl<'a> Bindings<'a> {
             if Self::visible(*idx, chain_cutoff) {
                 return Some(NameLookup::Bound(ValueHit {
                     obj,
-                    reach: reach.foreign,
-                    borrows_into_home: reach.borrows_into_home,
+                    stored: *reach,
                 }));
             }
         }

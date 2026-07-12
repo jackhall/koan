@@ -151,12 +151,12 @@ fn finalize_val<'a>(
     carrier: Option<&DeliveredCarried>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::Action;
-    let stored = carrier
-        .map(|c| fctx.scope.host_reach_of(c))
-        .unwrap_or_default();
-    if let Err(e) = fctx
-        .scope
-        .register_user_type(name, declared_kt.clone(), bind_index, stored)
+    // The fused door derives the slot's stored reach off its own `carrier` (kept mode) and registers
+    // the declared type — the terminal is sealed separately below from the carrier's own view, so the
+    // returned resident `&KType` is not needed here.
+    if let Err(e) =
+        fctx.scope
+            .register_user_type_delivered(name, declared_kt.clone(), carrier, bind_index)
     {
         return Action::Done(Err(e));
     }

@@ -21,9 +21,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::StoredReach;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::ctx::SchedulerView;
@@ -37,12 +38,13 @@ use super::{
 /// branches on the body surface and launches.
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
-    /// `TypeConstructor`). `reach` is the identity's stored per-binding type reach (home-omitted),
-    /// threaded to the construction finish so the built value's operand names the identity's own
-    /// region — empty while `RecursiveSet` is heap-`Rc`'d, the set's region once it is region-allocated.
+    /// `TypeConstructor`). `reach` is the identity's stored per-binding type token (home-omitted
+    /// foreign reach + home-borrow bit), threaded to the construction finish so the built value's
+    /// operand names the identity's own region — empty while `RecursiveSet` is heap-`Rc`'d, the set's
+    /// region once it is region-allocated.
     Constructor {
         identity: &'step KType<'step>,
-        reach: FrameSet,
+        reach: StoredReach<'step>,
     },
     /// Call a `KFunction` by name — functor or not; a functor's result is a module.
     Function(&'step KFunction<'step>),
@@ -82,7 +84,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: &'step KType<'step>,
-    reach: FrameSet,
+    reach: StoredReach<'step>,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // A user `UNION` binds an anonymous union of per-variant newtype `SetRef`s. `Maybe Some`
@@ -133,7 +135,7 @@ fn apply_constructor<'step>(
 fn apply_union_construct<'step>(
     ctx: &SchedulerView<'step, '_>,
     members: &'step [KType<'step>],
-    reach: FrameSet,
+    reach: StoredReach<'step>,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached

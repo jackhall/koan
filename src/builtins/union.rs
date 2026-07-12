@@ -89,7 +89,7 @@ fn finalize_union<'a>(
                 scope,
                 fctx.ctx.frame(),
                 kt_ref,
-                None,
+                StoredReach::empty(),
                 carriers,
             ));
         }
@@ -142,7 +142,7 @@ fn finalize_union<'a>(
             scope,
             fctx.ctx.frame(),
             kt_ref,
-            None,
+            StoredReach::empty(),
             carriers,
         )),
         Err(e) => Err(e),

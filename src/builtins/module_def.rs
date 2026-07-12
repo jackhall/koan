@@ -8,7 +8,6 @@
 //! like any other forward reference, and the parent binding lands at dep-finish, not when
 //! MODULE's body returns to the dispatcher.
 
-use crate::machine::core::StoredReach;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::Module;
@@ -48,16 +47,10 @@ pub fn body<'a>(
                 .bindings()
                 .lookup_type_carrier(&name_for_finish, None)
             {
-                return Action::Done(Ok(StepCarried::born(fctx.scope.resident_type_carrier(
-                    hit.kt,
-                    hit.reach,
-                    hit.borrows_into_home,
-                ))));
+                return Action::Done(Ok(StepCarried::born(
+                    fctx.scope.resident_type_carrier(hit.kt, hit.stored),
+                )));
             }
-            // The module's home-omitted foreign reach, folded from the child scope held **directly** here
-            // (never by walking the built `KType::Module`): stored on the `types` binding and used to seal
-            // the terminal carrier.
-            let reach = fctx.scope.reach_of_child(child_scope);
             let module: &'a Module<'a> = fctx
                 .scope
                 .brand()
@@ -72,26 +65,20 @@ pub fn body<'a>(
                 }
             }
             let identity = KType::Module { module };
-            // The module's `child_scope` is a same-region child of this frame, so the identity borrows
-            // into home — the home-omitted `reach` cannot record that, so it rides the binding's bit
-            // (a downstream copied-mode mint keeps the frame the child scope lives in as a reach
-            // member).
-            match fctx.scope.register_type_upsert(
+            // Fused MODULE-finish upsert: the module's stored reach is derived off the child scope held
+            // **directly** here (never by walking the built `KType::Module`) — the home-borrow bit
+            // included, `true` because the same-region child's own region owner covers this scope's
+            // region before home-omission — then upsert-installed under it, returning the resident
+            // `&KType` plus the same token so the terminal witnesses it in place with no re-clone.
+            match fctx.scope.register_module_upsert(
                 name_for_finish.clone(),
                 identity,
+                child_scope,
                 bind_index,
-                StoredReach {
-                    foreign: reach,
-                    borrows_into_home: true,
-                },
             ) {
-                Ok(kt_ref) => {
-                    // Witness the registered `&KType` in place from the stored reach — no re-clone, no
-                    // `child_scope()` walk.
-                    Action::Done(Ok(StepCarried::born(
-                        fctx.scope.resident_type_carrier(kt_ref, reach, true),
-                    )))
-                }
+                Ok((kt_ref, stored)) => Action::Done(Ok(StepCarried::born(
+                    fctx.scope.resident_type_carrier(kt_ref, stored),
+                ))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
                     format!("MODULE {} body", name_for_finish),

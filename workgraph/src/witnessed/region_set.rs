@@ -184,6 +184,33 @@ impl<F: PinsRegion + 'static> RegionSet<F> {
             Some(dest.alloc_resident::<RegionSet<F>>(composed)) // freeze-at-store
         }
     }
+
+    /// [`Self::mint`] paired with the pre-omission destination-coverage bit: `true` iff some
+    /// `sources` set or `materialize_hosts` owner pins `dest`'s own region *before* home-omission
+    /// drops it. Home-omission (rule 1) removes `dest`'s region from the stored members, so the bit
+    /// is the only surviving record that the value's borrows reach the destination — the
+    /// multi-source generalization of the `borrows_into_dest` companion
+    /// [`Carrier::mint_into`](super::Carrier::mint_into) computes for a single carrier.
+    pub fn mint_with_dest_bit<'a, W>(
+        dest: RegionHandle<'a, W>,
+        sources: &[&RegionSet<F>],
+        materialize_hosts: &[Rc<F>],
+        omit: impl Fn(&F::Region) -> bool,
+    ) -> (Option<&'a RegionSet<F>>, bool)
+    where
+        W: StorageProfile,
+        F: RegionOwner<Region = Region<W>>,
+        RegionSet<F>: Stored<W> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+    {
+        let borrows_into_dest = sources.iter().any(|s| s.pins_region(dest.region()))
+            || materialize_hosts
+                .iter()
+                .any(|h| h.pins_region(dest.region()));
+        (
+            Self::mint(dest, sources, materialize_hosts, omit),
+            borrows_into_dest,
+        )
+    }
 }
 
 impl<F: PinsRegion> Default for RegionSet<F> {

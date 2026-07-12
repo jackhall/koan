@@ -31,7 +31,7 @@ fn data_binding_round_trips_stored_reach() {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.obj, obj));
             assert!(
-                hit.reach.is_some_and(
+                hit.stored.foreign.is_some_and(
                     |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
                 ),
                 "stored reach should round-trip the foreign frame",
@@ -62,11 +62,11 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
         .expect("value bind should succeed");
 
     let first = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.reach.expect("non-empty reach"),
+        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
         _ => panic!("expected a bound value carrier hit"),
     };
     let second = match bindings.lookup_value_carrier("x", None) {
-        Some(NameLookup::Bound(hit)) => hit.reach.expect("non-empty reach"),
+        Some(NameLookup::Bound(hit)) => hit.stored.foreign.expect("non-empty reach"),
         _ => panic!("expected a bound value carrier hit"),
     };
     assert!(
@@ -101,7 +101,7 @@ fn type_binding_round_trips_stored_reach() {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.kt, kt));
             assert!(
-                hit.reach.is_some_and(
+                hit.stored.foreign.is_some_and(
                     |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
                 ),
                 "stored type reach should round-trip the foreign frame",

@@ -17,13 +17,13 @@
 use crate::machine::DeliveredCarried;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand, StoredReach};
+use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
     TypeResolution,
 };
-use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::model::values::Carried;
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -127,63 +127,45 @@ pub fn run_user_fn<'ast, 'step>(
 where
     'ast: 'step,
 {
-    // Materialize the bound args as a record value in the frame, then bind each parameter to a
-    // reference into the record's cell (one deep-clone per field, `Carried` → owned `Held`). The
-    // record's cells double as the parameter bindings. Built at the frame brand so the seed fabricates
-    // no `&'a`; its foreign reach is pinned by the call scope's reach-set.
+    // Bind each parameter into the frame's own scope through the fused value/type doors. Each door
+    // derives the binding's stored reach off its own delivered arg carrier — copied mode for an
+    // object (`bind_delivered` deep-copies the value into the frame region under it), kept mode for a
+    // type (`register_type_delivered`; a `KType` clone is shallow, so it still points at its
+    // carrier's home) — and moves the value in under that reach, pinning it into the frame region:
+    // one mint per parameter, no hand-asserted reach. A region-pure argument has no carrier and
+    // takes the checked tier. Built at the frame brand so nothing fabricates a free `&'a`; each
+    // binding pins its own foreign reach, so no separate frame-wide record is materialized.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
-        let cells: Record<Held> = args.map(|carried| Held::from_carried(*carried));
-        // Evidence for the record's own placement: every arg carrier's reach, minted into
-        // `child`'s region up front — `Held::from_carried`'s clone is shallow-structural, so a
-        // leaf may still embed a foreign borrow from whichever carrier it came from. Mode matches
-        // each cell's own kind (mirroring the per-field binds below): an `Object` cell is a deep
-        // copy (`Copied`/`adopted_reach_of`), a `Type` cell is a shallow clone that still points at
-        // its carrier's home (`Kept`/`host_reach_of` — the same reason `register_type` below uses
-        // it), so a Copied-only evidence set would under-cover a module/signature-typed argument.
-        let evidence: Vec<StoredReach> = cells
-            .iter()
-            .filter_map(|(name, cell)| {
-                let carrier = arg_carriers.get(name)?;
-                Some(match cell {
-                    Held::Object(_) => child.adopted_reach_of(carrier),
-                    Held::Type(_) => child.host_reach_of(carrier),
-                })
-            })
-            .collect();
-        let args_record =
-            child.alloc_object_delivered(KObject::record_of_held(cells), &evidence)?;
-        if let KObject::Record(cells, _types) = args_record {
-            for (name, cell) in cells.iter() {
-                match cell {
-                    Held::Object(object) => {
-                        // Mint the parameter's reach from its delivered arg carrier (home-omitted) so
-                        // a later read rebuilds its carrier. A region-pure arg has no entry → empty reach.
-                        // The home-borrow bit is captured alongside, since the home-omitted reach drops it.
-                        // The cell is a deep copy (`Held::from_carried` above), so the carrier's
-                        // residence-only host is not part of the copy's reach — a tail call's retiring
-                        // frame must not ride the fresh frame's binding.
-                        let stored = arg_carriers
-                            .get(name)
-                            .map(|carrier| child.adopted_reach_of(carrier))
-                            .unwrap_or_default();
-                        let _ =
-                            child.bind_value(name.clone(), object, BindingIndex::value(0), stored);
+        for (name, carried) in args.iter() {
+            let carrier = arg_carriers.get(name).copied();
+            match *carried {
+                Carried::Object(object) => match carrier {
+                    // The projection is identity — the whole delivered value binds. The copy is a
+                    // deep clone into the frame region, so the carrier's residence-only host is not
+                    // part of its reach (a tail call's retiring frame must not ride this binding).
+                    Some(cell) => {
+                        child.bind_delivered(name.clone(), cell, BindingIndex::value(0), |c| {
+                            Ok(c.object())
+                        })?;
                     }
-                    // Type-denoting params (`Er`-style) register a type, not a value binding. The arg
-                    // is already a resolved type, so register it directly. A module-typed argument
-                    // reaches its child scope's region, so store the carrier's home-omitted reach.
-                    Held::Type(kt) => {
-                        let stored = arg_carriers
-                            .get(name)
-                            .map(|carrier| child.host_reach_of(carrier))
-                            .unwrap_or_default();
-                        child.register_type(
+                    None => {
+                        child.bind_checked(
                             name.clone(),
-                            kt.clone(),
+                            object.deep_clone(),
                             BindingIndex::value(0),
-                            stored,
-                        );
+                        )?;
                     }
+                },
+                // Type-denoting params (`Er`-style) register a type, not a value binding. The arg is
+                // already a resolved type; the fused door derives its reach off the carrier (a
+                // module-typed argument reaches its child scope's region) and registers it directly.
+                Carried::Type(kt) => {
+                    child.register_type_delivered(
+                        name.clone(),
+                        kt.clone(),
+                        carrier,
+                        BindingIndex::value(0),
+                    )?;
                 }
             }
         }

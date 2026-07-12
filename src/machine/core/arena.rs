@@ -219,16 +219,18 @@ impl<'a> RegionBrand<'a> {
     }
 
     /// Mint a frozen witness set into this brand's region arena — the Koan veneer over
-    /// [`RegionSet::mint`]. `omit` is the scope's home/lexical-ancestor policy predicate;
-    /// home-omission (self-cycle) is handled by the library. `None` when the composed reach is
-    /// empty (a region-pure value pins nothing).
+    /// [`RegionSet::mint_with_dest_bit`]. `omit` is the scope's home/lexical-ancestor policy
+    /// predicate; home-omission (self-cycle) is handled by the library. Returns the minted set
+    /// (`None` when the composed reach is empty — a region-pure value pins nothing) paired with the
+    /// pre-omission destination-coverage bit (`true` iff a source set or materialized host reaches
+    /// this brand's own region before home-omission drops it).
     pub(crate) fn mint(
         self,
         sources: &[&FrameSet],
         materialize_hosts: &[Rc<FrameStorage>],
         omit: impl Fn(&KoanRegion) -> bool,
-    ) -> Option<&'a FrameSet> {
-        RegionSet::mint(self.0, sources, materialize_hosts, omit)
+    ) -> (Option<&'a FrameSet>, bool) {
+        RegionSet::mint_with_dest_bit(self.0, sources, materialize_hosts, omit)
     }
 
     /// The witnessed-allocation surface for an owned object built fresh inside the brand: born
@@ -387,7 +389,7 @@ impl<'a> Scope<'a> {
     /// Placement for a `Module` whose child scope legitimately lives in a region other than this
     /// scope's own — transparent-ascribe's re-tagged `Module`, which reuses the foreign source
     /// module's child scope. `evidence` is the `StoredReach` the caller minted for that child
-    /// scope's region *before* this call ([`Scope::reach_of_child`]), so the audit widens
+    /// scope's region *before* this call ([`Scope::child_module_reach`]), so the audit widens
     /// [`RegionBrand::alloc_module`]'s dest-only check to "this scope's region, `evidence`'s
     /// reach, or a region [`Self::covers_region_ambiently`] covers" (see
     /// [`Self::alloc_ktype_reaching`]'s doc for why the last disjunct is needed).
@@ -411,6 +413,90 @@ impl<'a> Scope<'a> {
                 "alloc_module_reaching: a Module's child scope must be covered by dest, the \
                  supplied evidence reach, or the destination scope's ambient coverage",
             )
+    }
+
+    /// Checked move-in of a fresh object into this scope's own region ([`RegionBrand::alloc_object_checked`]'s
+    /// dest-only audit), paired with its derived [`StoredReach`]: `foreign` is `None` — a value that
+    /// passes the dest-only audit borrows no foreign region — and `borrows_into_home` is the audit
+    /// walk's saw-a-region-pointer flag ([`Residence::dest_only_seen`]), so the home-borrow bit is
+    /// derived from the value's own borrows, never asserted.
+    pub(crate) fn alloc_object_checked_stored(
+        &self,
+        value: KObject<'_>,
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+        let name = value.ktype().name();
+        let seen = Cell::new(false);
+        let obj = self
+            .brand()
+            .0
+            .alloc_resident_audited::<KObject<'static>>(value, |region, value| {
+                value.resident_in_visiting(&Residence::dest_only_seen(region, &seen))
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination"
+                )))
+            })?;
+        Ok((
+            obj,
+            StoredReach {
+                foreign: None,
+                borrows_into_home: seen.get(),
+            },
+        ))
+    }
+
+    /// The [`KType`] twin of [`Self::alloc_object_checked_stored`]: checked move-in of a fresh type
+    /// into this scope's own region ([`RegionBrand::alloc_ktype_checked`]'s dest-only audit), paired
+    /// with its derived [`StoredReach`] (empty foreign reach; the home-borrow bit is the walk's
+    /// saw-a-region-pointer flag).
+    fn alloc_ktype_checked_stored(
+        &self,
+        t: KType<'_>,
+    ) -> Result<(&'a KType<'a>, StoredReach<'a>), KError> {
+        let name = t.name();
+        let seen = Cell::new(false);
+        let kt = self
+            .brand()
+            .0
+            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
+                value.resident_in_visiting(
+                    &Residence::dest_only_seen(region, &seen),
+                    &mut Vec::new(),
+                )
+            })
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(format!(
+                    "{name}: borrows a region other than its seal's destination"
+                )))
+            })?;
+        Ok((
+            kt,
+            StoredReach {
+                foreign: None,
+                borrows_into_home: seen.get(),
+            },
+        ))
+    }
+
+    /// Checked alloc of a fresh object into this scope's region, derive its `(None, bit)` witness,
+    /// and seal it as the resident carrier — one call for a value born carrier-less. The home-borrow
+    /// bit is the checked audit's own saw-a-region-pointer flag, never a caller assertion.
+    pub(crate) fn seal_fresh_object(
+        &self,
+        value: KObject<'_>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+        let (obj, stored) = self.alloc_object_checked_stored(value)?;
+        Ok(self.resident_value_carrier(obj, stored))
+    }
+
+    /// The [`KType`] twin of [`Self::seal_fresh_object`].
+    pub(crate) fn seal_fresh_ktype(
+        &self,
+        t: KType<'_>,
+    ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+        let (kt, stored) = self.alloc_ktype_checked_stored(t)?;
+        Ok(self.resident_type_carrier(kt, stored))
     }
 }
 
@@ -724,6 +810,13 @@ pub(crate) struct Residence<'d> {
     dest: &'d KoanRegion,
     reach: &'d [&'d FrameSet],
     ambient: Option<&'d dyn Fn(&KoanRegion) -> bool>,
+    /// A saw-a-region-pointer recorder: each `owns_*` leaf (a `KFunction` / `Module` /
+    /// `ModuleSignature` pointer — the residence side-table's recorded region pointers) sets it. A
+    /// walk that passes the audit and set this reports a value whose borrows reach *some* region; a
+    /// value freshly stored in the scope's own region (where every pointer is home by construction)
+    /// reads it as its honest home-borrow bit ([`Scope::seal_fresh_object`]). `None` when a caller
+    /// wants the plain audit with no recording.
+    seen: Option<&'d Cell<bool>>,
 }
 
 impl<'d> Residence<'d> {
@@ -732,6 +825,18 @@ impl<'d> Residence<'d> {
             dest,
             reach: &[],
             ambient: None,
+            seen: None,
+        }
+    }
+
+    /// [`Self::dest_only`] with a saw-a-region-pointer recorder — the [`Self::seen`] flag is set
+    /// while the walk visits any `owns_*` region-pointer leaf.
+    pub(crate) fn dest_only_seen(dest: &'d KoanRegion, seen: &'d Cell<bool>) -> Self {
+        Residence {
+            dest,
+            reach: &[],
+            ambient: None,
+            seen: Some(seen),
         }
     }
 
@@ -740,6 +845,7 @@ impl<'d> Residence<'d> {
             dest,
             reach,
             ambient: None,
+            seen: None,
         }
     }
 
@@ -754,6 +860,14 @@ impl<'d> Residence<'d> {
             dest,
             reach,
             ambient: Some(ambient),
+            seen: None,
+        }
+    }
+
+    /// Record a visited region-pointer leaf into [`Self::seen`], if a recorder is attached.
+    fn note_region_pointer(&self) {
+        if let Some(seen) = self.seen {
+            seen.set(true);
         }
     }
 
@@ -773,16 +887,19 @@ impl<'d> Residence<'d> {
     /// region accessor, since a raw payload pointer's *owning* region cannot be recovered from
     /// `reach` without enumerating members.
     pub(crate) fn owns_module(&self, module: &Module<'_>) -> bool {
+        self.note_region_pointer();
         self.dest.owns_module(module as *const Module<'_>)
             || self.covers_region(module.child_scope().region())
     }
 
     pub(crate) fn owns_signature(&self, sig: &ModuleSignature<'_>) -> bool {
+        self.note_region_pointer();
         self.dest.owns_signature(sig as *const ModuleSignature<'_>)
             || self.covers_region(sig.decl_scope().region())
     }
 
     pub(crate) fn owns_function(&self, f: &KFunction<'_>) -> bool {
+        self.note_region_pointer();
         self.dest.owns_function(f as *const KFunction<'_>)
             || self.covers_region(f.captured_scope().region())
     }

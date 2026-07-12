@@ -539,7 +539,12 @@ impl<'a> Scope<'a> {
     ///
     /// Conditional-defer: direct mutation first, falls back to the `pending` queue
     /// iff a borrow conflict would otherwise panic.
-    pub fn bind_value(
+    ///
+    /// The private tail the fused value doors ([`Self::bind_delivered`], [`Self::bind_checked`])
+    /// call after deriving the value's stored reach: it takes the reach as a parameter, so it is
+    /// crate-internal — every production value bind routes through a fused door that derives the
+    /// token rather than asserting it here.
+    pub(crate) fn bind_value(
         &self,
         name: String,
         obj: &'a KObject<'a>,
@@ -575,6 +580,49 @@ impl<'a> Scope<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Fused value bind: derive the bound value's stored reach off the delivered `cell` (copied
+    /// mode — the value is deep-cloned into this scope's own region), deep-copy the `project`ed
+    /// value in under that derived evidence, bind it, and return the resident reference paired with
+    /// the same token (the caller seals its terminal carrier from it via
+    /// [`Self::resident_value_carrier`]). The mint runs *before* the copy — the copy's own residence
+    /// audit sees the evidence — exactly as the alloc-then-bind adjacency it fuses did. `project`
+    /// selects what to copy out of the delivered value (identity for a whole-value bind, the Ok/Err
+    /// payload for TRY) under the envelope's own pin. The bind itself preserves
+    /// [`Self::bind_value`]'s USING-window forwarding and conditional-defer behavior.
+    pub(crate) fn bind_delivered(
+        &self,
+        name: String,
+        cell: &DeliveredCarried,
+        index: BindingIndex,
+        project: impl for<'b> FnOnce(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+        let stored = self.adopted_reach_of(cell);
+        let allocated = cell.open(|live| {
+            let projected = project(&live)?;
+            self.alloc_object_delivered(projected.deep_clone(), std::slice::from_ref(&stored))
+        })?;
+        self.bind_value(name, allocated, index, stored)?;
+        Ok((allocated, stored))
+    }
+
+    /// Fused region-pure / fresh-value bind: checked move-in of `value` into this scope's own
+    /// region with a `(None, bit)` token derived from the checked audit's own saw-a-region-pointer
+    /// walk ([`Self::alloc_object_checked_stored`]), then bind — one call, no caller-asserted reach.
+    /// Returns the resident reference paired with the same derived token (the pure-value twin of
+    /// [`Self::bind_delivered`]'s return, so a caller seals its terminal carrier from it via
+    /// [`Self::resident_value_carrier`]). Preserves [`Self::bind_value`]'s USING-window forwarding and
+    /// conditional-defer behavior.
+    pub(crate) fn bind_checked(
+        &self,
+        name: String,
+        value: KObject<'_>,
+        index: BindingIndex,
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+        let (obj, stored) = self.alloc_object_checked_stored(value)?;
+        self.bind_value(name, obj, index, stored)?;
+        Ok((obj, stored))
     }
 
     /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature, then
@@ -621,7 +669,12 @@ impl<'a> Scope<'a> {
     /// region-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
     /// conditional-defer shape as [`Self::bind_value`]. Infallible: a name collision
     /// at builtin registration is a programming error, so the [`KError`] is dropped.
-    pub fn register_type(
+    ///
+    /// The crate-internal tail [`Self::register_builtin_type`] derives its empty token onto: it
+    /// takes the reach as a parameter, so every production type registration routes through a fused
+    /// door ([`Self::register_type_delivered`] and siblings) that derives the token rather than
+    /// asserting it here.
+    pub(crate) fn register_type(
         &self,
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
@@ -651,26 +704,6 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// User-facing type registration (`LET <TypeIdentifier> = …`, `VAL`): rejects a collision
-    /// with a builtin type before delegating to the infallible [`Self::register_type`].
-    /// Builtins are immutable and unshadowable, so a user type that names one is a
-    /// `Rebind` at any depth — including a SIG/MODULE-local abstract member — and the
-    /// [`Self::shadows_builtin_type`] consult reads the root directly. Builtin
-    /// registration itself stays on the infallible `register_type`.
-    pub fn register_user_type(
-        &self,
-        name: String,
-        ktype: crate::machine::model::types::KType<'a>,
-        index: BindingIndex,
-        reach: StoredReach<'a>,
-    ) -> Result<(), KError> {
-        if self.shadows_builtin_type(&name) {
-            return Err(KError::new(KErrorKind::Rebind { name }));
-        }
-        self.register_type(name, ktype, index, reach);
-        Ok(())
-    }
-
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
@@ -681,7 +714,12 @@ impl<'a> Scope<'a> {
     /// Finalize runs post-dep-finish, past the re-entrant queue point — a `Conflict` here
     /// is a programming error, so it panics rather than deferring (deferring would risk
     /// a window where the type resolves with the pre-install's empty payload).
-    pub fn register_type_upsert(
+    ///
+    /// The region-pure nominal finalizes (STRUCT / named UNION / Result / recursive-types / SIG)
+    /// call this directly with the empty token — their identity reaches nothing foreign — and consume
+    /// the returned `&KType`; the MODULE finish routes through the fused [`Self::register_module_upsert`],
+    /// which derives the child-scope token before delegating here.
+    pub(crate) fn register_type_upsert(
         &self,
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
@@ -709,6 +747,89 @@ impl<'a> Scope<'a> {
                  run post-dep-finish outside the re-entrant bind hot path",
             ),
         }
+    }
+
+    /// Fused delivered type registration: derive the type's stored reach off the RHS envelope
+    /// (`Residence::Kept` — a `KType` clone is shallow, so its interior borrows survive and the
+    /// producer host materializes unconditionally), alloc the identity into this scope's region
+    /// under that evidence, register it (strict insert-if-absent, conditional-defer), and return the
+    /// resident `&KType` paired with the same token so the caller seals its terminal from it.
+    /// `carrier: None` is a region-pure RHS — the empty token, derived internally.
+    pub(crate) fn register_type_delivered(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'_>,
+        carrier: Option<&DeliveredCarried>,
+        index: BindingIndex,
+    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+        if self.bindings.is_borrowed() {
+            return self
+                .write_target()
+                .register_type_delivered(name, ktype, carrier, index);
+        }
+        self.assert_open(&name);
+        let stored = match carrier {
+            Some(cell) => self.host_reach_of(cell),
+            None => StoredReach::empty(),
+        };
+        let kt_ref = self.alloc_ktype_reaching(ktype, &stored)?;
+        match self
+            .bindings
+            .get()
+            .try_register_type(&name, kt_ref, index, stored)?
+        {
+            ApplyOutcome::Applied => Ok((kt_ref, stored)),
+            ApplyOutcome::Conflict => {
+                self.pending.defer_type(name, kt_ref, index, stored);
+                Ok((kt_ref, stored))
+            }
+        }
+    }
+
+    /// User-facing twin of [`Self::register_type_delivered`] for `LET <TypeIdentifier> = …` / `VAL`:
+    /// rejects a collision with a builtin type before deriving and registering. Builtins are
+    /// immutable and unshadowable, so a user type that names one is a `Rebind` at any depth —
+    /// including a SIG/MODULE-local abstract member — and the [`Self::shadows_builtin_type`] consult
+    /// reads the root directly.
+    pub(crate) fn register_user_type_delivered(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'_>,
+        carrier: Option<&DeliveredCarried>,
+        index: BindingIndex,
+    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        self.register_type_delivered(name, ktype, carrier, index)
+    }
+
+    /// Fused MODULE-finish upsert: derive the module's stored reach off its `child` scope
+    /// ([`Self::child_module_reach`]), then run the [`Self::register_type_upsert`] install under it,
+    /// returning the resident `&KType` paired with the token so the caller seals its terminal from
+    /// the same evidence. The home-borrow bit is derived by the mint, never hand-asserted.
+    pub(crate) fn register_module_upsert(
+        &self,
+        name: String,
+        identity: crate::machine::model::types::KType<'a>,
+        child: &Scope<'a>,
+        index: BindingIndex,
+    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+        let stored = self.child_module_reach(child);
+        let kt_ref = self.register_type_upsert(name, identity, index, stored)?;
+        Ok((kt_ref, stored))
+    }
+
+    /// Builtin type registration: no reach parameter — builtins are region-pure by the pure/checked
+    /// alloc tiers, so the token is empty internally. Same infallible contract as
+    /// [`Self::register_type`] at [`BindingIndex::BUILTIN`].
+    pub(crate) fn register_builtin_type(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) {
+        self.register_type(name, ktype, index, StoredReach::empty());
     }
 
     /// Synchronous pre-install of a nominal type's identity — `name` → `ktype` (a
@@ -868,15 +989,7 @@ impl<'a> Scope<'a> {
             scope
                 .bindings()
                 .lookup_value_carrier(name, scope.binding_cutoff(chain))
-                .map(|hit| {
-                    hit.map(|value| {
-                        scope.resident_value_carrier(
-                            value.obj,
-                            value.reach,
-                            value.borrows_into_home,
-                        )
-                    })
-                })
+                .map(|hit| hit.map(|value| scope.resident_value_carrier(value.obj, value.stored)))
         })
     }
 
@@ -895,11 +1008,9 @@ impl<'a> Scope<'a> {
                 .lookup_value_carrier(name, scope.binding_cutoff(None))
                 .map(|hit| {
                     hit.map(|value| {
-                        scope.seal_resident_delivered(scope.resident_value_carrier(
-                            value.obj,
-                            value.reach,
-                            value.borrows_into_home,
-                        ))
+                        scope.seal_resident_delivered(
+                            scope.resident_value_carrier(value.obj, value.stored),
+                        )
                     })
                 })
         })
@@ -913,16 +1024,13 @@ impl<'a> Scope<'a> {
     /// travels as a [`DeliveredCarried`] envelope pinned by the home frame
     /// ([`Self::seal_resident_delivered`]). The bundle runs on the confined arena surface
     /// ([`RegionBrand::seal_resident`]), so `Witnessed::resident` is never reached from a builtin.
-    pub(crate) fn resident_value_carrier(
+    pub(crate) fn resident_value_carrier<'r>(
         &self,
         obj: &'a KObject<'a>,
-        foreign: Option<&FrameSet>,
-        borrows_into_home: bool,
+        stored: StoredReach<'r>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.brand().seal_resident(
-            Carried::Object(obj),
-            self.resident_witness(foreign, borrows_into_home),
-        )
+        self.brand()
+            .seal_resident(Carried::Object(obj), self.resident_witness(stored))
     }
 
     /// Build a resident carrier's witness: the reference-only `{ bit, ref }` over `foreign` — the
@@ -940,12 +1048,8 @@ impl<'a> Scope<'a> {
     /// `builtins/using_scope.rs`) mints the opened module's own carrier into the call-site arena at
     /// overlay construction, before any such carrier exists — so holding the call-site frame roots
     /// the module's arena one hop removed, and through it `foreign`'s pointee.
-    fn resident_witness(
-        &self,
-        foreign: Option<&FrameSet>,
-        borrows_into_home: bool,
-    ) -> CarrierWitness {
-        CarrierWitness::new(borrows_into_home, foreign)
+    fn resident_witness<'r>(&self, stored: StoredReach<'r>) -> CarrierWitness {
+        CarrierWitness::new(stored.borrows_into_home, stored.foreign)
     }
 
     /// Seal a resident carrier — a value already living in this scope's own region — into a
@@ -1043,33 +1147,38 @@ impl<'a> Scope<'a> {
     /// stored) and the bundle runs on the confined arena surface ([`RegionBrand::seal_resident`]), so
     /// a type read witnesses the existing `&'a KType` in place — no re-clone into the region, no
     /// `child_scope()` walk to rebuild the reach.
-    pub(crate) fn resident_type_carrier(
+    pub(crate) fn resident_type_carrier<'r>(
         &self,
         kt: &'a crate::machine::model::types::KType<'a>,
-        foreign: Option<&FrameSet>,
-        borrows_into_home: bool,
+        stored: StoredReach<'r>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.brand().seal_resident(
-            Carried::Type(kt),
-            self.resident_witness(foreign, borrows_into_home),
-        )
+        self.brand()
+            .seal_resident(Carried::Type(kt), self.resident_witness(stored))
     }
 
-    /// The home-omitted foreign reach a module minted in **this** scope gets from its `child` scope —
-    /// the seal-time union over the child's own **binding-entry** hosted sets (each already
-    /// home-omitted in the child's arena), plus the child's own region owner (materialized, foreign
-    /// to this parent scope). Never recovered by walking a built `KType::Module`. A co-located module
-    /// (`MODULE`, opaque `:|`) folds nothing extra; a transparent `:!` view of a source module pins
-    /// that source's (foreign) region and reach. Stored on the module's `types` binding and passed to
-    /// [`Self::resident_type_carrier`] at reads, so a module's reach is minted once at construction
-    /// and never rebuilt by walking the value.
-    pub(crate) fn reach_of_child(&self, child: &Scope<'a>) -> Option<&'a FrameSet> {
+    /// The full stored token for a module minted in **this** scope from its `child` scope — the
+    /// derivation door that folds the child's home-omitted foreign reach together with the
+    /// home-borrow bit the mint derives (`true` iff a child entry set or the child's own region
+    /// owner reaches this scope's region before home-omission). The foreign half is the seal-time
+    /// union over the child's own **binding-entry** hosted sets (each already home-omitted in the
+    /// child's arena), plus the child's own region owner (materialized, foreign to this parent
+    /// scope); never recovered by walking a built `KType::Module`. A co-located module (`MODULE`,
+    /// opaque `:|`) folds nothing extra; a transparent `:!` view of a source module pins that
+    /// source's (foreign) region and reach. Returning the whole [`StoredReach`], a MODULE finish /
+    /// `:|` view seals its terminal from a token nothing outside the derivation can forge. The omit
+    /// stays the home-pin-only half-predicate: a per-call child folds no lexical-ancestor omission,
+    /// only the home frame's own storage pin.
+    pub(crate) fn child_module_reach(&self, child: &Scope<'a>) -> StoredReach<'a> {
         let home = self.region_owner().upgrade();
         let entry_sets: Vec<&FrameSet> = child.bindings().entry_reaches();
         let hosts: Vec<Rc<FrameStorage>> = child.region_owner().upgrade().into_iter().collect();
-        self.brand().mint(&entry_sets, &hosts, |region| {
+        let (foreign, borrows_into_home) = self.brand().mint(&entry_sets, &hosts, |region| {
             home.as_ref().is_some_and(|h| h.pins_region(region))
-        })
+        });
+        StoredReach {
+            foreign,
+            borrows_into_home,
+        }
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. See
@@ -1160,32 +1269,31 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// The home-omitted foreign reach of the `types` binding `name` resolves to under `chain` — the
-    /// reach a bare-type-leaf read stores on its carrier, computed at the memo-miss so a hit rebuilds
-    /// the carrier without re-walking. Shares [`Self::resolve_type_with_chain`]'s builtin-first walk
-    /// via [`Self::resolve_builtin_first`], but probes the reach-carrying
-    /// [`Bindings::lookup_type_carrier`] and projects each hit to its stored reach. A builtin, a
-    /// `from_name` / `RecursiveRef` fallback that names no binding, or a placeholder reaches nothing
-    /// foreign, so all yield the empty set.
-    pub(crate) fn resolve_type_reach(
+    /// The whole stored token the `types` binding `name` resolves to under `chain` — the token a
+    /// bare-type-leaf read replays onto its carrier, projected off the row with its home-borrow bit
+    /// intact. Shares
+    /// [`Self::resolve_type_with_chain`]'s builtin-first walk via [`Self::resolve_builtin_first`],
+    /// probing the reach-carrying [`Bindings::lookup_type_carrier`]. `None` when the name resolves
+    /// nowhere on the chain; a builtin, a `from_name` / `RecursiveRef` fallback naming no binding,
+    /// or a placeholder yields the empty token.
+    pub(crate) fn resolve_type_stored(
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<&'a FrameSet> {
+    ) -> Option<StoredReach<'a>> {
         self.resolve_builtin_first(
             |root| root.has_builtin_type(name),
-            |_root| Some(None),
+            |_root| Some(StoredReach::empty()),
             |scope| {
                 scope
                     .bindings()
                     .lookup_type_carrier(name, scope.binding_cutoff(chain))
                     .map(|hit| match hit {
-                        NameLookup::Bound(bound) => bound.reach,
-                        NameLookup::Parked(_) => None,
+                        NameLookup::Bound(bound) => bound.stored,
+                        NameLookup::Parked(_) => StoredReach::empty(),
                     })
             },
         )
-        .unwrap_or_default()
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`

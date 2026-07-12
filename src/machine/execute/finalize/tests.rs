@@ -37,7 +37,13 @@ fn resident_scalar(
 ) {
     let carrier = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
-        child.resident_value_carrier(obj, None, borrows_into_home)
+        child.resident_value_carrier(
+            obj,
+            crate::machine::core::StoredReach {
+                foreign: None,
+                borrows_into_home,
+            },
+        )
     });
     let weak = Rc::downgrade(&producer.storage_rc());
     (carrier, weak)
@@ -287,7 +293,7 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
         let kt_ref = child
             .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");
-        child.resident_type_carrier(kt_ref, Some(&foreign_reach), false)
+        child.resident_type_carrier(kt_ref, evidence)
     });
     assert!(
         !carrier.witness().reach_covers(None, producer.region()),
@@ -339,7 +345,16 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let (carrier, birth_addr) = producer.with_scope(|child| {
         let obj = child.brand().alloc_object(KObject::Number(7.0));
         let addr = obj as *const KObject as usize;
-        (child.resident_value_carrier(obj, None, false), addr)
+        (
+            child.resident_value_carrier(
+                obj,
+                crate::machine::core::StoredReach {
+                    foreign: None,
+                    borrows_into_home: false,
+                },
+            ),
+            addr,
+        )
     });
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
@@ -407,7 +422,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
         let kt_ref = child
             .alloc_ktype_reaching(KType::Module { module }, &evidence)
             .expect("module is covered by foreign_reach");
-        child.resident_type_carrier(kt_ref, Some(&foreign_reach), true)
+        child.resident_type_carrier(kt_ref, evidence)
     });
 
     // A declared return of `Any` matches any carried type, so the merge takes the no-mismatch path;

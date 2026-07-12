@@ -1,5 +1,5 @@
 use crate::machine::core::kfunction::{BinderNameFn, Body, KFunction};
-use crate::machine::core::{BindingIndex, FrameStorageExt, Scope, StoredReach};
+use crate::machine::core::{BindingIndex, FrameStorageExt, Scope};
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
@@ -159,72 +159,41 @@ pub fn default_scope<'a>(
         .brand()
         .alloc_scope(Scope::run_root(run_storage, None, out));
 
-    scope.register_type(
-        "Number".into(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
-    scope.register_type(
-        "Str".into(),
-        KType::Str,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
-    scope.register_type(
-        "Bool".into(),
-        KType::Bool,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
-    scope.register_type(
-        "Null".into(),
-        KType::Null,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
-    scope.register_type(
+    scope.register_builtin_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Null".into(), KType::Null, BindingIndex::BUILTIN);
+    scope.register_builtin_type(
         "List".into(),
         KType::List(Box::new(KType::Any)),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
+    scope.register_builtin_type(
         "Dict".into(),
         KType::Dict(Box::new(KType::Any), Box::new(KType::Any)),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
+    scope.register_builtin_type(
         "KExpression".into(),
         KType::KExpression,
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
+    scope.register_builtin_type(
         "Type".into(),
         KType::OfKind(KKind::AnyType),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
+    scope.register_builtin_type(
         "Module".into(),
         KType::OfKind(KKind::Module),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
+    scope.register_builtin_type(
         "Signature".into(),
         KType::OfKind(KKind::Signature),
         BindingIndex::BUILTIN,
-        StoredReach::empty(),
     );
-    scope.register_type(
-        "Any".into(),
-        KType::Any,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_builtin_type("Any".into(), KType::Any, BindingIndex::BUILTIN);
 
     let_binding::register(scope);
     print::register(scope);

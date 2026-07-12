@@ -75,12 +75,11 @@ mod tests {
         let storage = run_root_storage();
         let scope = crate::builtins::test_support::run_root_bare(&storage);
 
-        let obj: &KObject = scope.brand().alloc_object(KObject::Number(7.0));
+        let witnessed = scope
+            .seal_fresh_object(KObject::Number(7.0))
+            .expect("a bare Number borrows no region, so its checked seal cannot fail");
         let spliced = ExpressionPart::Spliced {
-            cell: Delivered::hosted(
-                Sealed::seal(scope.resident_value_carrier(obj, None, false)),
-                std::rc::Rc::clone(&storage),
-            ),
+            cell: Delivered::hosted(Sealed::seal(witnessed), std::rc::Rc::clone(&storage)),
         };
         let expr = KExpression::new(vec![spliced.into()]);
         assert!(

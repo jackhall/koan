@@ -16,10 +16,11 @@
 //! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::kfunction::action::DepPlacement;
+use crate::machine::core::StoredReach;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
-use crate::machine::{FrameSet, KError, KErrorKind};
+use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 
 use super::super::TerminalDepFinish;
@@ -62,10 +63,11 @@ fn park_on_head<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
         // `reach` names the regions the resolved identity points into: a `SetRef` constructor threads
         // it to the construction finish (the operand names the identity's own region); a callable
-        // ignores it and rides the `adopt_sealed` below. Collapsed to a plain reach set — the
-        // identity is region-resident, so its witness carries only frame reach, no owned backing.
+        // ignores it and rides the `adopt_sealed` below. Derived from the head envelope's own witness
+        // under the same `Residence::Kept` mint `adopt_sealed` uses, so the token's foreign reach and
+        // home-borrow bit are the identity's, minted into the consumer scope's own arena.
         let head_terminal = terminals.owned(0);
-        let reach = head_terminal.delivered.liveness_frameset();
+        let reach = ctx.current_scope().host_reach_of(&head_terminal.delivered);
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
         let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
@@ -89,7 +91,7 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
-    reach: FrameSet,
+    reach: StoredReach<'step>,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         // A functor's result is a module, so it is admitted in both modes; a plain function is the

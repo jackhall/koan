@@ -83,7 +83,13 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
     // by the frame that owns that region.
     let obj: &KObject = producer.brand().alloc_object(KObject::Number(42.0));
     let cell = Delivered::hosted(
-        Sealed::seal(producer.resident_value_carrier(obj, None, false)),
+        Sealed::seal(producer.resident_value_carrier(
+            obj,
+            crate::machine::core::StoredReach {
+                foreign: None,
+                borrows_into_home: false,
+            },
+        )),
         std::rc::Rc::clone(&storage),
     );
 
@@ -136,13 +142,13 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     }
 }
 
-/// `reach_of_child` mints the seal-time **union** of a child scope's own region plus every one of its
-/// binding entries' hosted reaches — not just the child's own region — into the parent's arena. A
-/// member whose stored reach names a region foreign to *both* the child and the parent (the shape a
-/// transparent `:!` ascription's nested member reach has) must survive that union: the parent's own
-/// minted set becomes an independent pin once the member's source frame drops.
+/// `child_module_reach`'s foreign half mints the seal-time **union** of a child scope's own region
+/// plus every one of its binding entries' hosted reaches — not just the child's own region — into the
+/// parent's arena. A member whose stored reach names a region foreign to *both* the child and the
+/// parent (the shape a transparent `:!` ascription's nested member reach has) must survive that union:
+/// the parent's own minted set becomes an independent pin once the member's source frame drops.
 #[test]
-fn reach_of_child_unions_member_entry_reaches_across_regions() {
+fn child_module_reach_unions_member_entry_reaches_across_regions() {
     use crate::machine::core::arena::KoanRegion;
     use crate::machine::model::values::KObject;
 
@@ -170,7 +176,7 @@ fn reach_of_child_unions_member_entry_reaches_across_regions() {
 
     let parent_storage = run_root_storage();
     let parent = run_root_bare(&parent_storage);
-    let reach = parent.reach_of_child(source_scope);
+    let reach = parent.child_module_reach(source_scope).foreign;
 
     let members: Vec<*const KoanRegion> = reach
         .expect("a member reach + the child's own region must yield a non-empty union")

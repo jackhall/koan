@@ -94,14 +94,8 @@ pub fn body<'a>(
     let lhs: &crate::machine::DeliveredCarried = match ctx.arg_carrier("record") {
         Some(c) => c,
         None => {
-            resident = match ctx
-                .scope
-                .brand()
-                .alloc_object_checked(record_obj.deep_clone())
-            {
-                Ok(obj) => ctx
-                    .scope
-                    .seal_resident_delivered(ctx.scope.resident_value_carrier(obj, None, true)),
+            resident = match ctx.scope.seal_fresh_object(record_obj.deep_clone()) {
+                Ok(witnessed) => ctx.scope.seal_resident_delivered(witnessed),
                 Err(e) => return Action::Done(Err(e)),
             };
             &resident

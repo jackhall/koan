@@ -106,8 +106,8 @@ pub(super) fn resolve_name_part<'step>(
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
         Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
-            // The `&KType` rides the type channel; its reach is recomputed at the read site
-            // (`literal.rs`) via `resolve_type_reach`, since `NameOutcome` carries only the value.
+            // The `&KType` rides the type channel; its stored token is recomputed at the read site
+            // (`literal.rs`) via `resolve_type_stored`, since `NameOutcome` carries only the value.
             TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
             TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
             TypeResolution::Park(producers) => match producers.first() {

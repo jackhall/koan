@@ -208,7 +208,6 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::core::StoredReach;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::machine::BindingIndex;
@@ -222,14 +221,8 @@ mod tests {
     fn node_scope_yoked_child_erase_open_roundtrip() {
         let region = run_root_storage();
         let scope = default_scope(&region, Box::new(std::io::sink()));
-        let v = region.brand().alloc_object(KObject::Number(7.0));
         scope
-            .bind_value(
-                "k".to_string(),
-                v,
-                BindingIndex::BUILTIN,
-                StoredReach::empty(),
-            )
+            .bind_checked("k".to_string(), KObject::Number(7.0), BindingIndex::BUILTIN)
             .unwrap();
 
         let ns = NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));

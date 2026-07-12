@@ -100,40 +100,36 @@ pub(crate) fn arm_tail<'a>(
     // residence-only host is not carried; a tail loop's retiring frame must not ride the arm's
     // binding), and a later read of `it` rebuilds its carrier from it.
     let seed: BlockSeed<'a> = Box::new(move |child| {
-        let (it_object, reach) = match it_source {
-            // A region-pure value reaches nothing; its purity is an audit at the bind brand.
+        // Fused mint + copy + bind of `it` at idx 0 in the fresh arm frame. A region-pure value
+        // takes the checked tier (its purity is an audit at the bind brand); a delivered scrutinee
+        // takes the copied-adoption tier — one structural copy made directly into the arm frame's
+        // region inside the envelope's pinned open, the binding storing the copy's derived reach (a
+        // residence-only host is dropped, so a tail loop's retiring frame does not ride the arm's
+        // binding). The projection selects which sub-object of the carried value feeds the copy —
+        // the payload lives inside the carried value, so its reach is a subset of the envelope's.
+        match it_source {
             ItSource::Pure(value) => {
-                let object = child
-                    .brand()
-                    .alloc_object_checked(value)
-                    .expect("ItSource::Pure must be region-pure");
-                (object, Default::default())
+                let _ = child.bind_checked("it".to_string(), value, BindingIndex::value(0));
             }
             ItSource::Carrier(carrier, projection) => {
-                // Adopt at the bind brand: one structural copy, made directly into the arm frame's
-                // region inside the envelope's pinned open; the binding stores the copy's reach,
-                // minted first so the copy's own residence audit can see it. The projection selects
-                // which sub-object of the carried value feeds that copy — the payload lives inside
-                // the carried value, so its reach is a subset of the envelope's, still covered by
-                // `adopted_reach_of`.
-                let reach = child.adopted_reach_of(&carrier);
-                let object = carrier.open(|live| {
-                    let source = match projection {
-                        ItProjection::Scrutinee => live.object(),
-                        ItProjection::Payload => match live.object() {
-                            KObject::Wrapped { inner, .. } => inner.get(),
-                            KObject::Tagged { value, .. } => &**value,
-                            other => other,
-                        },
-                    };
-                    child
-                        .alloc_object_delivered(source.deep_clone(), std::slice::from_ref(&reach))
-                        .expect("ItSource::Carrier's own reach must cover its deep copy")
-                });
-                (object, reach)
+                let _ = child.bind_delivered(
+                    "it".to_string(),
+                    &carrier,
+                    BindingIndex::value(0),
+                    move |carried| {
+                        let object = carried.object();
+                        Ok(match projection {
+                            ItProjection::Scrutinee => object,
+                            ItProjection::Payload => match object {
+                                KObject::Wrapped { inner, .. } => inner.get(),
+                                KObject::Tagged { value, .. } => &**value,
+                                other => other,
+                            },
+                        })
+                    },
+                );
             }
-        };
-        let _ = child.bind_value("it".to_string(), it_object, BindingIndex::value(0), reach);
+        }
     });
     block_tail(
         FramePlacement::FreshChild { frame },

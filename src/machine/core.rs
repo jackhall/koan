@@ -26,7 +26,7 @@ pub(crate) use arena::{
     FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence, TypeOperand,
 };
 pub use bindings::{
-    ApplyOutcome, BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
+    BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
     PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit, ValueHit,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};

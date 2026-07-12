@@ -55,9 +55,12 @@ pub fn body<'a>(
         Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
-    // The `Result` identity's stored per-binding type reach, captured at body time so the
+    // The `Result` identity's stored per-binding type token, captured at body time so the
     // construction operand's witness names its own region. Empty while `RecursiveSet` is heap-`Rc`'d.
-    let reach = ctx.scope.resolve_type_reach("Result", None);
+    let reach = ctx
+        .scope
+        .resolve_type_stored("Result", None)
+        .unwrap_or_default();
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
         // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.

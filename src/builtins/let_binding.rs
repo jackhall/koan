@@ -102,29 +102,22 @@ pub fn body<'a>(
         } else {
             kt
         };
-        // The aliased type's stored reach: minting the delivered RHS carrier's reach into this scope's
-        // arena both computes the home-omitted foreign reach (a module alias inherits the module's
-        // child-scope reach; a region-pure / owned type has none) AND pins it for the scope's life — no
-        // separate fold, no walk of the built value.
-        let stored = ctx
-            .arg_carrier("value")
-            .map(|carrier| ctx.scope.host_reach_of(carrier))
-            .unwrap_or_default();
-        if let Err(e) = ctx
-            .scope
-            .register_user_type(name, kt.clone(), bind_index, stored)
-        {
-            return done_err(e);
-        }
-        // The terminal witnesses the aliased type in place from that stored reach. `stored` was
-        // minted into `ctx.scope`'s own region above, so it is dest-relative evidence here.
-        let kt_ref = match ctx.scope.alloc_ktype_reaching(kt, &stored) {
-            Ok(kt_ref) => kt_ref,
+        // Fused mint + alloc + register: the delivered RHS carrier's reach is minted into this scope's
+        // arena (kept mode — a `KType` clone is shallow, so a module alias inherits the module's
+        // child-scope reach and a region-pure / owned type reaches nothing), the identity is allocated
+        // under it, and it is registered — one call returns the resident `&KType` plus the same token.
+        let (kt_ref, stored) = match ctx.scope.register_user_type_delivered(
+            name,
+            kt,
+            ctx.arg_carrier("value"),
+            bind_index,
+        ) {
+            Ok(pair) => pair,
             Err(e) => return done_err(e),
         };
-        let carrier =
-            ctx.scope
-                .resident_type_carrier(kt_ref, stored.foreign, stored.borrows_into_home);
+        // The terminal witnesses the aliased type in place from that same stored reach — the
+        // reach-aware wrapper a later read uses.
+        let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
         Action::Done(Ok(StepCarried::born(carrier)))
     } else {
         let value = rhs
@@ -138,44 +131,36 @@ pub fn body<'a>(
                 suggestion = capitalize_identifier(&name),
             ))));
         }
-        // The bound value's stored reach, minted *before* the deep-clone alloc below so the copy's
-        // own residence audit can see it. The RHS was `deep_clone`d into this scope's own region, so
-        // it does *not* reside in the delivered carrier's producer region: residence there pins
-        // nothing, and the producer host materializes as a reach member only when the copy genuinely
-        // borrows back into it (the copied-adoption rule — `adopted_reach_of`, the same split the
-        // parameter and MATCH `it` binds already apply). Minting still both computes the
-        // home-omitted foreign reach (stored on the binding so a later read rebuilds the value's
-        // carrier from it) AND pins it for the scope's life — no separate fold. A region-pure RHS (no
-        // delivered carrier) reaches nothing foreign, so the reach is empty.
-        let stored = ctx
-            .arg_carrier("value")
-            .map(|carrier| ctx.scope.adopted_reach_of(carrier))
-            .unwrap_or_default();
-        let allocated: &'a KObject<'a> = match ctx
-            .scope
-            .alloc_object_delivered(value.deep_clone(), std::slice::from_ref(&stored))
-        {
-            Ok(allocated) => allocated,
-            Err(e) => return done_err(e),
-        };
-        if allocated.is_unstamped_empty_container() {
+        // An empty container has no element type to infer. The check reads the source value; a
+        // deep-clone into the region preserves the unstamped shape, so it settles here before the
+        // fused bind installs anything.
+        if value.is_unstamped_empty_container() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "empty container bound to `{name}` has no element type to infer; \
                  annotate the value's type (e.g. via a typed FN return) or use a \
                  non-empty literal",
             ))));
         }
-        if let Err(e) = ctx.scope.bind_value(name, allocated, bind_index, stored) {
-            return done_err(e);
-        }
-        // The bound value lives in this scope's region with its stored foreign reach, so its terminal
-        // carrier is built from that stored reach — the same reach-aware wrapper a later read uses —
-        // rather than handed out as a bare `Done` for the finalize forward to wrap.
-        Action::Done(Ok(StepCarried::born(ctx.scope.resident_value_carrier(
-            allocated,
-            stored.foreign,
-            stored.borrows_into_home,
-        ))))
+        // Fused mint + copy + bind. A delivered RHS carrier derives the copy's stored reach in copied
+        // mode — the deep-clone lands in this scope's own region, so a residence-only host is dropped
+        // (`adopted_reach_of`, the same split the parameter and MATCH `it` binds apply) — and copies
+        // the value in under it. A carrier-less region-pure RHS takes the checked tier, its
+        // `(None, bit)` reach derived from the checked audit's own saw-a-region-pointer walk. Either
+        // returns the resident reference plus the same token, from which the terminal witnesses the
+        // bound value in place — the same reach-aware wrapper a later read uses.
+        let bound = match ctx.arg_carrier("value") {
+            Some(carrier) => ctx
+                .scope
+                .bind_delivered(name, carrier, bind_index, |carried| Ok(carried.object())),
+            None => ctx.scope.bind_checked(name, value.deep_clone(), bind_index),
+        };
+        let (allocated, stored) = match bound {
+            Ok(pair) => pair,
+            Err(e) => return done_err(e),
+        };
+        Action::Done(Ok(StepCarried::born(
+            ctx.scope.resident_value_carrier(allocated, stored),
+        )))
     }
 }
 

@@ -714,7 +714,7 @@ fn delivered_reread_closure<'run>(
     let stored = reader_scope.host_reach_of(&bind_cell);
     drop(bind_cell);
     Delivered::seal(
-        reader_scope.resident_value_carrier(obj, stored.foreign, stored.borrows_into_home),
+        reader_scope.resident_value_carrier(obj, stored),
         Rc::clone(reader),
     )
 }

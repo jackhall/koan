@@ -32,11 +32,7 @@ impl<'step> Scope<'step> {
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
         if let Some((kt, reach)) = self.type_identifier_memo_get(te, cutoff) {
-            return TypeResolution::Done(TypeHit {
-                kt,
-                reach: reach.foreign,
-                borrows_into_home: reach.borrows_into_home,
-            });
+            return TypeResolution::Done(TypeHit { kt, stored: reach });
         }
         let chain_for_reach = chain.clone();
         let mut elaborator = Elaborator::new(self).with_chain(chain);
@@ -45,24 +41,19 @@ impl<'step> Scope<'step> {
         elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self }.pending_producers(&kt);
             if pending.is_empty() {
-                // A bare `TypeIdentifier` resolves to at most one `types` binding, so its reach is
-                // that binding's stored reach (empty for a builtin / owned type; the child-scope
-                // reach for a module) — minted *before* the alloc below so `kt`'s own residence
-                // audit can see it. Cached alongside `kt` so a hit rebuilds the read carrier.
-                let reach = self.resolve_type_reach(te.as_str(), chain_for_reach.as_deref());
-                let stored = crate::machine::core::StoredReach {
-                    foreign: reach,
-                    borrows_into_home: false,
-                };
+                // A bare `TypeIdentifier` resolves to at most one `types` binding, so its token is
+                // that binding's stored token (empty for a builtin / owned type; the child-scope
+                // reach for a module) — replayed whole with its home-borrow bit, and minted *before*
+                // the alloc below so `kt`'s own residence audit can see it. Cached alongside `kt` so a
+                // hit rebuilds the read carrier.
+                let stored = self
+                    .resolve_type_stored(te.as_str(), chain_for_reach.as_deref())
+                    .unwrap_or_default();
                 let kt_ref: &'step KType<'step> = self
                     .alloc_ktype_reaching(kt, &stored)
                     .expect("resolve_type_identifier: kt must be covered by its own stored reach");
                 self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, stored);
-                TypeResolution::Done(TypeHit {
-                    kt: kt_ref,
-                    reach,
-                    borrows_into_home: false,
-                })
+                TypeResolution::Done(TypeHit { kt: kt_ref, stored })
             } else {
                 TypeResolution::Park(pending)
             }

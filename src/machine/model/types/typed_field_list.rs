@@ -203,13 +203,17 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
                     // Minted fresh in this scope's region and spliced into a sub-dispatched
                     // expression (it crosses into another node), so it travels as a cell: a
-                    // region-resident type carrier reaching nothing foreign (empty reach).
-                    let obj = scope.brand().alloc_ktype(KType::RecursiveRef(t.render()));
-                    // A region-resident carrier: the delivery envelope's pin is this scope's own
-                    // region owner (the seal-resident veneer), not a separate producer frame.
+                    // region-resident type carrier reaching nothing foreign. A `RecursiveRef(String)`
+                    // borrows no region, so the checked seal derives the empty (bit-unset) token. The
+                    // delivery envelope's pin is this scope's own region owner (the seal-resident
+                    // veneer), not a separate producer frame.
+                    let carrier = scope
+                        .seal_fresh_ktype(KType::RecursiveRef(t.render()))
+                        .expect(
+                            "a RecursiveRef borrows no region, so its checked seal cannot fail",
+                        );
                     ExpressionPart::Spliced {
-                        cell: scope
-                            .seal_resident_delivered(scope.resident_type_carrier(obj, None, false)),
+                        cell: scope.seal_resident_delivered(carrier),
                     }
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(

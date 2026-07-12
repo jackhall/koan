@@ -20,7 +20,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::ApplyOutcome;
 use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
@@ -60,38 +59,23 @@ fn finalize_newtype<'a>(
     member.fill(NominalSchema::NewType(Box::new(repr)));
     let set = Rc::new(RecursiveSet::new(vec![member]));
     let identity = KType::SetRef { set, index: 0 };
-    // Minted before the alloc so `identity`'s SetRef (never `'static`, and possibly embedding
-    // `repr`'s foreign borrow — see this fn's doc) can be audited against it: `stored.foreign` is
+    // Fused mint + alloc + register: the RHS carrier's reach is minted into this scope's arena (kept
+    // mode) so `identity`'s SetRef (never `'static`, and possibly embedding `repr`'s foreign borrow —
+    // see this fn's doc) is audited against it, the identity is allocated under it, and it is
+    // registered — one call returns the resident `&KType` plus the same token. `stored.foreign` is
     // `None` when `carrier` is `None`, which degrades the reaching check to the dest-only case.
-    let stored = carrier.map(|c| scope.host_reach_of(c)).unwrap_or_default();
-    let kt_ref: &'a KType = scope.alloc_ktype_reaching(identity, &stored)?;
-    match scope
-        .bindings()
-        .try_register_type(&name, kt_ref, bind_index, stored)
-    {
-        Ok(ApplyOutcome::Applied) => {
-            let sealed = match carrier {
-                // Cross the identity across the build brand as a declared operand, folding the
-                // carrier's reach onto the placement's witness — rather than capturing `kt_ref`
-                // into a fold closure. `stored.foreign` is the identity's own foreign reach (the
-                // carrier's host reach `kt_ref` was audited against).
-                Some(c) => {
-                    seal_type_operand(fctx.scope, fctx.ctx.frame(), kt_ref, stored.foreign, &[c])
-                }
-                // A bare-leaf name reaches no foreign region: `kt_ref` is region-pure over its own
-                // set, so it seals with no carrier to fold and no capture to cross.
-                None => fctx.ctx.alloc_type_checked(kt_ref.clone())?,
-            };
-            Ok(sealed)
-        }
-        // Finalize sites run post-dep-finish outside the re-entrant hot path, so borrow
-        // contention here is a programming error. Surface as a structured error rather
-        // than panicking — a future re-entrant caller still gets a recoverable diag.
-        Ok(ApplyOutcome::Conflict) => Err(KError::new(KErrorKind::ShapeError(format!(
-            "NEWTYPE `{name}` registration deferred = bindings borrow contention",
-        )))),
-        Err(e) => Err(e),
-    }
+    let (kt_ref, stored) = scope.register_type_delivered(name, identity, carrier, bind_index)?;
+    let sealed = match carrier {
+        // Cross the identity across the build brand as a declared operand, folding the carrier's
+        // reach onto the placement's witness — rather than capturing `kt_ref` into a fold closure.
+        // `stored` is the identity's own token (the carrier's host reach `kt_ref` was audited
+        // against), replayed whole so the operand's witness carries the derived home-borrow bit.
+        Some(c) => seal_type_operand(fctx.scope, fctx.ctx.frame(), kt_ref, stored, &[c]),
+        // A bare-leaf name reaches no foreign region: `kt_ref` is region-pure over its own set, so it
+        // seals with no carrier to fold and no capture to cross.
+        None => fctx.ctx.alloc_type_checked(kt_ref.clone())?,
+    };
+    Ok(sealed)
 }
 
 /// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
@@ -142,7 +126,7 @@ fn finalize_record_newtype<'a>(
             scope,
             fctx.ctx.frame(),
             kt_ref,
-            None,
+            crate::machine::core::StoredReach::empty(),
             carriers,
         )),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(

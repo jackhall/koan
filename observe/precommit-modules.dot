@@ -642,6 +642,7 @@ digraph {
     "koan::machine::execute::dispatch" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::constructors" [label="uses", style="dashed"];
@@ -721,6 +722,7 @@ digraph {
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::head_deferred" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];

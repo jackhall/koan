@@ -237,10 +237,11 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
-    // allocated into `region`'s own region above, so the checked audit always passes.
-    let obj: &'a KObject<'a> = region
-        .alloc_object_checked(KObject::KFunction(f))
-        .expect("f was just allocated into region's own region");
+    // allocated into `scope`'s own region above, so the checked audit always passes; the paired
+    // token carries the home-borrow bit the audit walk derives (the captured `&Scope` into home).
+    let (obj, stored) = scope
+        .alloc_object_checked_stored(KObject::KFunction(f))
+        .expect("f was just allocated into scope's own region");
     if !matches!(kind, FnKind::Anonymous) {
         let name = match name {
             Some(n) => n,
@@ -257,9 +258,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // capture), and the captured scope — region-resident under that frame — transitively keeps every
     // foreign region its bindings reach alive through the scope's sealed reach-set. So a fresh FN
     // reaches nothing foreign (its captured scope is home or a home-pinned ancestor): its terminal
-    // carrier is built with an empty foreign reach, witnessed by that scope's home frame alone.
-    // `LET f = (FN ...)` still captures the callable via this carrier.
-    Ok(scope.resident_value_carrier(obj, None, true))
+    // carrier is built with the empty foreign reach `stored` derived, witnessed by that scope's home
+    // frame alone. `LET f = (FN ...)` still captures the callable via this carrier.
+    Ok(scope.resident_value_carrier(obj, stored))
 }
 
 /// Wrap a [`finalize_fn_with_kind`] result in the action currency. The FN value is built witnessed

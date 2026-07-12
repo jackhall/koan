@@ -80,17 +80,15 @@ pub fn body_identifier<'a>(
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     // `s` is a bound name: cross the binding's own carrier as the field read's lhs operand, so the
-    // projected field folds every region the bound value reaches (its stored reach and home). A
-    // binding whose carrier does not resolve (defensive) seals the target resident of the read-site
-    // scope — coverage-equivalent to an empty-reach seal.
+    // projected field folds every region the bound value reaches (its stored reach and home).
+    // `lookup` hit a `data` binding, and `lookup_value_delivered` walks the same chain with the
+    // reach-carrying twin of the same `data` arm, so a data-bound name always resolves to a
+    // delivered carrier.
     if let Some(target) = ctx.scope.lookup(&s_name) {
         let lhs = ctx
             .scope
             .lookup_value_delivered(&s_name)
-            .unwrap_or_else(|| {
-                ctx.scope
-                    .seal_resident_delivered(ctx.scope.resident_value_carrier(target, None, true))
-            });
+            .expect("a data-bound name always resolves to a delivered value carrier");
         return route(access_field(&ctx.ctx, target, &field_name, &lhs));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
@@ -173,10 +171,8 @@ pub fn body_newtype<'a>(
     match ctx.arg_carrier("s") {
         Some(lhs) => route(access_field(&ctx.ctx, target, &field_name, lhs)),
         None => {
-            let resident = match ctx.scope.brand().alloc_object_checked(target.deep_clone()) {
-                Ok(obj) => ctx
-                    .scope
-                    .seal_resident_delivered(ctx.scope.resident_value_carrier(obj, None, true)),
+            let resident = match ctx.scope.seal_fresh_object(target.deep_clone()) {
+                Ok(witnessed) => ctx.scope.seal_resident_delivered(witnessed),
                 Err(e) => return Action::Done(Err(e)),
             };
             route(access_field(&ctx.ctx, target, &field_name, &resident))
@@ -221,24 +217,12 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
         KType::Signature { sig: s, .. } => {
             let decl = s.decl_scope();
             match decl.bindings().lookup_member(field, None) {
-                Some(MemberResolution::Value {
-                    obj,
-                    reach,
-                    borrows_into_home,
-                }) => Ok(StepCarried::born(decl.resident_value_carrier(
-                    obj,
-                    reach,
-                    borrows_into_home,
-                ))),
-                Some(MemberResolution::Type {
-                    kt,
-                    reach,
-                    borrows_into_home,
-                }) => Ok(StepCarried::born(decl.resident_type_carrier(
-                    kt,
-                    reach,
-                    borrows_into_home,
-                ))),
+                Some(MemberResolution::Value { obj, stored }) => {
+                    Ok(StepCarried::born(decl.resident_value_carrier(obj, stored)))
+                }
+                Some(MemberResolution::Type { kt, stored }) => {
+                    Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
+                }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     s.path, field
@@ -370,17 +354,14 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
         // Prefer the child scope's own binding — witness its `&KType` in place from the stored reach
         // (non-empty for a nested module). A member present only in the mirror is an `:|`-minted
-        // abstract type reaching nothing foreign, so it is alloc'd fresh under the empty reach.
+        // abstract type; it is alloc'd fresh and sealed under the bit the checked audit derives from
+        // its own walk (`true` iff the minted identity embeds a pointer into the module region).
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type_carrier(field, None) {
                 Some(NameLookup::Bound(hit)) => {
-                    module_scope.resident_type_carrier(hit.kt, hit.reach, hit.borrows_into_home)
+                    module_scope.resident_type_carrier(hit.kt, hit.stored)
                 }
-                _ => module_scope.resident_type_carrier(
-                    module_scope.brand().alloc_ktype_checked(minted)?,
-                    None,
-                    false,
-                ),
+                _ => module_scope.seal_fresh_ktype(minted)?,
             },
         ));
     }
@@ -391,11 +372,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
     // (or its re-tag carrier) names the full reach without an embedded lhs to fold (the module
     // identity is the lhs).
     match module_scope.bindings().lookup_member(field, None) {
-        Some(MemberResolution::Value {
-            obj,
-            reach,
-            borrows_into_home,
-        }) => {
+        Some(MemberResolution::Value { obj, stored }) => {
             if let Some(tag) = m.slot_type_tags.borrow().get(field).cloned() {
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
@@ -406,15 +383,12 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // and is sealed resident — the same region as the built `Wrapped`'s
                 // placement (the `StepContext` targets the module's frame), so the built value is
                 // unchanged. Both carriers union into the wrapped result's witness via
-                // `alloc_carried_with`. `reach: None, borrows_into_home: true` for the tag mirrors
-                // the conservative home-materializing reseal a type operand takes.
-                let obj_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident_value_carrier(obj, reach, borrows_into_home),
-                );
-                let tag_reference: &'a KType<'a> = module_scope.brand().alloc_ktype_checked(tag)?;
-                let tag_carrier = module_scope.seal_resident_delivered(
-                    module_scope.resident_type_carrier(tag_reference, None, true),
-                );
+                // `alloc_carried_with`. The tag's home-borrow bit is derived from the checked alloc's
+                // own walk (it borrows at most the module's own region).
+                let obj_carrier = module_scope
+                    .seal_resident_delivered(module_scope.resident_value_carrier(obj, stored));
+                let tag_carrier =
+                    module_scope.seal_resident_delivered(module_scope.seal_fresh_ktype(tag)?);
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],
@@ -429,21 +403,13 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                     },
                 ));
             }
-            Ok(StepCarried::born(module_scope.resident_value_carrier(
-                obj,
-                reach,
-                borrows_into_home,
-            )))
+            Ok(StepCarried::born(
+                module_scope.resident_value_carrier(obj, stored),
+            ))
         }
-        Some(MemberResolution::Type {
-            kt,
-            reach,
-            borrows_into_home,
-        }) => Ok(StepCarried::born(module_scope.resident_type_carrier(
-            kt,
-            reach,
-            borrows_into_home,
-        ))),
+        Some(MemberResolution::Type { kt, stored }) => Ok(StepCarried::born(
+            module_scope.resident_type_carrier(kt, stored),
+        )),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field
