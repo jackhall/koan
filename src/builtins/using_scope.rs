@@ -21,7 +21,6 @@
 //! which anchors the call-site frame, which pins the folded region. A top-level
 //! module reaches no per-call region and needs no fold.
 
-use crate::machine::model::types::KKind;
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -87,7 +86,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         KType::Any,
         vec![
             kw("USING"),
-            arg("m", KType::OfKind(KKind::Module)),
+            arg("m", KType::empty_signature()),
             kw("SCOPE"),
             arg("body", KType::KExpression),
         ],

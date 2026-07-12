@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::machine::core::ScopeId;
-use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
+use crate::machine::model::types::{NominalSchema, Record, RecursiveSet, SigSource};
 
 // --- region-free builders -------------------------------------------------------------
 
@@ -351,7 +351,10 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
     let scope = run_root_silent(&region);
     run(scope, "SIG MySig = ((TYPE Elt) (VAL v :Number))");
     let s = match scope.resolve_type("MySig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("MySig should resolve to a signature"),
     };
     // `S WITH {Elt = Number}` fixes the abstract member manifest.
@@ -391,11 +394,17 @@ fn sig_to_sig_entailment_over_shared_abstract() {
          SIG Beta = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))",
     );
     let a = match scope.resolve_type("Alpha") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("Alpha should resolve to a signature"),
     };
     let b = match scope.resolve_type("Beta") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("Beta should resolve to a signature"),
     };
     // Two SIGs declaring the same abstract member and slot entail each other: the

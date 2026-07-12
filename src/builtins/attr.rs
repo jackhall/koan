@@ -16,6 +16,7 @@ use crate::machine::core::StepAllocator;
 use crate::machine::execute::StepCarried;
 use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
+use crate::machine::model::types::SigSource;
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::values::{Carried, Module, WrappedPayload};
 use crate::machine::model::{Held, KObject, KType};
@@ -213,8 +214,13 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
     match kt {
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
-        // member lives in that decl region, so it seals under the decl scope's home frame.
-        KType::Signature { sig: s, .. } => {
+        // member lives in that decl region, so it seals under the decl scope's home frame. Only a
+        // `Declared` signature carries a decl scope; the `SelfOf`/`Empty` sources reach here from
+        // no signature-value ATTR receiver and fall through to the mismatch below.
+        KType::Signature {
+            sig: SigSource::Declared(s),
+            ..
+        } => {
             let decl = s.decl_scope();
             match decl.bindings().lookup_member(field, None) {
                 Some(MemberResolution::Value { obj, stored }) => {
@@ -433,7 +439,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::Module)),
+                arg("s", KType::empty_signature()),
                 arg("field", KType::Identifier),
             ],
         )
@@ -482,7 +488,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             KType::Any,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::Module)),
+                arg("s", KType::empty_signature()),
                 arg("field", KType::OfKind(KKind::ProperType)),
             ],
         )

@@ -1,5 +1,6 @@
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::core::run_root_storage;
+use crate::machine::model::types::SigSource;
 use crate::machine::model::KType;
 use crate::machine::KErrorKind;
 
@@ -11,7 +12,10 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     let scope = run_root_silent(&region);
     run(scope, "SIG OrderedSig = ((VAL zero :Number))");
     let s = match scope.resolve_type("OrderedSig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let zero = s.decl_scope().bindings().expect_type("zero");
@@ -29,7 +33,10 @@ fn val_resolves_sig_local_type_shadow() {
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let s = match scope.resolve_type("WithZero") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
     let zero = s.decl_scope().bindings().expect_type("zero");
@@ -91,7 +98,10 @@ fn val_function_typed_slot() {
         "SIG OrderedSig = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
     );
     let s = match scope.resolve_type("OrderedSig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let compare = s.decl_scope().bindings().expect_type("compare");
@@ -162,7 +172,10 @@ fn val_with_abstract_type_member_declaration() {
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let s = match scope.resolve_type("WithZero") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
     let type_kt = s.decl_scope().bindings().expect_type("Carrier");

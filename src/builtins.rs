@@ -186,7 +186,7 @@ pub fn default_scope<'a>(
     );
     scope.register_builtin_type(
         "Module".into(),
-        KType::OfKind(KKind::Module),
+        KType::empty_signature(),
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(

@@ -3,7 +3,7 @@ use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{
-    AbstractSource, KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet,
+    AbstractSource, KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet, SigSource,
 };
 use crate::machine::model::KObject;
 use crate::machine::{BindingIndex, ScopeId};
@@ -15,7 +15,10 @@ fn member_type<'a>(
     member: &str,
 ) -> KType<'a> {
     let sig = match scope.resolve_type(sig_name) {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         other => panic!("{sig_name} must bind a Signature, got {other:?}"),
     };
     sig.decl_scope()
@@ -33,7 +36,10 @@ fn bare_type_binds_abstract_member() {
     let scope = run_root_silent(&region);
     run(scope, "SIG Container = ((TYPE Elt))");
     let sig = match scope.resolve_type("Container") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         other => panic!("Container must bind a Signature, got {other:?}"),
     };
     match member_type(scope, "Container", "Elt") {
@@ -231,7 +237,10 @@ fn monad_signature_smoke() {
         }
     }
     let s = match scope.resolve_type("Monad") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         other => panic!("Monad must bind a Signature KType, got {:?}", other),
     };
     let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");

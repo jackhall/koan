@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::machine::model::types::{abstract_members_of, manifest_type_members_of};
+use crate::machine::model::types::{abstract_members_of, manifest_type_members_of, SigSource};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -26,7 +26,10 @@ pub fn body<'a>(
 
     let done_err = |e: KError| Action::Done(Err(e));
     let s = match arg_type(ctx.args, "sig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         other => {
             let got = match (other, arg_held(ctx.args, "sig")) {
                 (Some(kt), _) => kt.name(),
@@ -118,7 +121,7 @@ pub fn body<'a>(
                 &[&sig_carrier, &bindings_carrier],
                 move |brand, views| {
                     let sig = match views[0] {
-                        Carried::Type(KType::Signature { sig, .. }) => sig,
+                        Carried::Type(KType::Signature { sig, .. }) => *sig,
                         _ => unreachable!("validated above: the sig arg is a Signature type"),
                     };
                     let pinned: Vec<(String, KType)> = match views[1] {
@@ -157,7 +160,7 @@ pub fn body<'a>(
                 Some(plan) => {
                     let sealed = ctx.ctx.alloc_carried_with(&[&sig_carrier], move |brand, views| {
                         let sig = match views[0] {
-                            Carried::Type(KType::Signature { sig, .. }) => sig,
+                            Carried::Type(KType::Signature { sig, .. }) => *sig,
                             _ => unreachable!("validated above: the sig arg is a Signature type"),
                         };
                         let pinned: Vec<(String, KType)> = plan
@@ -203,7 +206,7 @@ mod tests {
         match result {
             KType::Signature { sig, pinned_slots } => {
                 assert_eq!(sig.sig_id(), sig_id);
-                assert_eq!(sig.path, "OrderedSig");
+                assert_eq!(sig.path(), "OrderedSig");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Carrier");
                 assert_eq!(pinned_slots[0].1, KType::Number);

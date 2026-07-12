@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet, SigSource};
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -71,7 +71,10 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
 /// record their declared type under their value-class name.
 fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
     let s = match scope.resolve_type(sig_name) {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         other => panic!(
             "`{sig_name}` should bind a Signature KType, got {:?}",
             other
@@ -183,7 +186,7 @@ fn sigil_functor_lowers_to_kfunctor() {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params.get("Ty"), Some(&KType::OfKind(KKind::Signature)));
-            assert_eq!(*ret, KType::OfKind(KKind::Module));
+            assert_eq!(*ret, KType::empty_signature());
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }
@@ -291,7 +294,7 @@ fn sigil_functor_forward_reference_defers_via_combine() {
                 ty.name().contains("OrderedSig") || *ty == KType::OfKind(KKind::Signature),
                 "param `Ty` should carry OrderedSig identity, got {ty:?}",
             );
-            assert_eq!(*ret, KType::OfKind(KKind::Module));
+            assert_eq!(*ret, KType::empty_signature());
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }

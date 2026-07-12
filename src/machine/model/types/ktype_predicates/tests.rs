@@ -311,7 +311,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_sig: &KType<'_> = region
         .brand()
         .alloc_ktype_checked(KType::Signature {
-            sig,
+            sig: SigSource::Declared(sig),
             pinned_slots: Vec::new(),
         })
         .expect("sig was just allocated into region's own region");
@@ -417,12 +417,12 @@ fn is_type_denoting_table() {
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let sb = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: Vec::new(),
     };
     assert!(sb.is_type_denoting());
     let sb_pinned = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
@@ -489,27 +489,27 @@ fn is_more_specific_for_pinned_signature_bound() {
         .alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
 
     let bare = KType::Signature {
-        sig: ordered,
+        sig: SigSource::Declared(ordered),
         pinned_slots: Vec::new(),
     };
     let pinned_number = KType::Signature {
-        sig: ordered,
+        sig: SigSource::Declared(ordered),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     let pinned_str = KType::Signature {
-        sig: ordered,
+        sig: SigSource::Declared(ordered),
         pinned_slots: vec![("Type".into(), KType::Str)],
     };
     let pinned_two = KType::Signature {
-        sig: ordered,
+        sig: SigSource::Declared(ordered),
         pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
     };
     let other_sig = KType::Signature {
-        sig: hashed,
+        sig: SigSource::Declared(hashed),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     let pinned_elt = KType::Signature {
-        sig: ordered,
+        sig: SigSource::Declared(ordered),
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
     let any_module = KType::OfKind(KKind::Module);
@@ -904,4 +904,138 @@ fn union_specificity_ordering() {
     // Equal unions (order-blind) are not strictly more specific than each other.
     let str_or_number = KType::Union(vec![KType::Str, KType::Number]);
     assert!(!number_or_str.is_more_specific_than(&str_or_number));
+}
+
+/// A module value's `ktype()` reports `Signature { SelfOf(m) }`, and its identity keys on the
+/// module's `scope_id` (equal for the same module, distinct across modules).
+#[test]
+fn module_object_ktype_reports_self_sig() {
+    use crate::builtins::default_scope;
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::model::values::Module;
+    use crate::machine::model::KObject;
+    use crate::machine::Scope;
+    let region = run_root_storage();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+
+    let child = region
+        .brand()
+        .alloc_scope(Scope::child_under_module(scope, "Mod".into()));
+    let m: &Module = region
+        .brand()
+        .alloc_module(Module::new("Mod".into(), child));
+    let kt = KObject::Module(m).ktype();
+    assert!(matches!(
+        &kt,
+        KType::Signature { sig: SigSource::SelfOf(mm), pinned_slots }
+            if mm.scope_id() == m.scope_id() && pinned_slots.is_empty()
+    ));
+    // Identity keys on `scope_id`: same module compares equal, a distinct module does not.
+    assert_eq!(
+        kt,
+        KType::Signature {
+            sig: SigSource::SelfOf(m),
+            pinned_slots: Vec::new(),
+        }
+    );
+    let child2 = region
+        .brand()
+        .alloc_scope(Scope::child_under_module(scope, "Mod2".into()));
+    let m2: &Module = region
+        .brand()
+        .alloc_module(Module::new("Mod2".into(), child2));
+    assert_ne!(kt, KObject::Module(m2).ktype());
+}
+
+/// `matches_value` admits a module *object* into a `Signature` slot: a `Declared` slot by
+/// structural satisfaction (+ pin agreement), an `Empty` slot for any module and no non-module
+/// value.
+#[test]
+fn matches_value_admits_module_object_via_signature_slot() {
+    use crate::builtins::default_scope;
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::model::values::{Module, ModuleSignature};
+    use crate::machine::model::KObject;
+    use crate::machine::Scope;
+    let region = run_root_storage();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+
+    // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
+    let sig_scope = region
+        .brand()
+        .alloc_scope(Scope::child_under_sig(scope, "S".into()));
+    let sig = region
+        .brand()
+        .alloc_signature(ModuleSignature::new("S".into(), sig_scope));
+
+    let child = region
+        .brand()
+        .alloc_scope(Scope::child_under_module(scope, "M".into()));
+    let m: &Module = region.brand().alloc_module(Module::new("M".into(), child));
+    m.type_members
+        .borrow_mut()
+        .insert("Type".into(), KType::Number);
+
+    let declared = KType::Signature {
+        sig: SigSource::Declared(sig),
+        pinned_slots: Vec::new(),
+    };
+    assert!(declared.matches_value(&KObject::Module(m)));
+
+    let pinned_ok = KType::Signature {
+        sig: SigSource::Declared(sig),
+        pinned_slots: vec![("Type".into(), KType::Number)],
+    };
+    let pinned_bad = KType::Signature {
+        sig: SigSource::Declared(sig),
+        pinned_slots: vec![("Type".into(), KType::Str)],
+    };
+    assert!(pinned_ok.matches_value(&KObject::Module(m)));
+    assert!(!pinned_bad.matches_value(&KObject::Module(m)));
+
+    let empty = KType::empty_signature();
+    assert!(empty.matches_value(&KObject::Module(m)));
+    assert!(!empty.matches_value(&KObject::Number(1.0)));
+}
+
+/// Specificity over the module lattice: a module's `SelfOf` self-sig refines a `Declared`
+/// signature it satisfies, and any non-empty signature refines the `Empty` top.
+#[test]
+fn specificity_self_sig_refines_declared_and_empty() {
+    use crate::builtins::default_scope;
+    use crate::machine::core::{run_root_storage, FrameStorageExt};
+    use crate::machine::model::values::{Module, ModuleSignature};
+    use crate::machine::Scope;
+    let region = run_root_storage();
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+
+    let sig_scope = region
+        .brand()
+        .alloc_scope(Scope::child_under_sig(scope, "S".into()));
+    let sig = region
+        .brand()
+        .alloc_signature(ModuleSignature::new("S".into(), sig_scope));
+    let child = region
+        .brand()
+        .alloc_scope(Scope::child_under_module(scope, "M".into()));
+    let m: &Module = region.brand().alloc_module(Module::new("M".into(), child));
+
+    let self_of = KType::Signature {
+        sig: SigSource::SelfOf(m),
+        pinned_slots: Vec::new(),
+    };
+    let declared = KType::Signature {
+        sig: SigSource::Declared(sig),
+        pinned_slots: Vec::new(),
+    };
+    let empty = KType::empty_signature();
+
+    // `SelfOf(m) ≺ Declared(sig)` because `m` satisfies the (empty) signature.
+    assert!(self_of.is_more_specific_than(&declared));
+    // Any non-empty signature `≺ Empty`; `Empty` refines nothing narrower.
+    assert!(declared.is_more_specific_than(&empty));
+    assert!(self_of.is_more_specific_than(&empty));
+    assert!(!empty.is_more_specific_than(&declared));
+    // `satisfied_by` routes a memoized `SelfOf` element type through the `SelfOf ≺ Declared` arm.
+    assert!(declared.satisfied_by(&self_of));
 }

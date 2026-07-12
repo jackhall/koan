@@ -10,7 +10,7 @@
 //! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
-use crate::machine::model::types::KKind;
+use crate::machine::model::types::{KKind, SigSource};
 use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
 use crate::machine::{Scope, TraceFrame};
@@ -49,7 +49,7 @@ pub fn body<'a>(
                 .brand()
                 .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
             let identity = KType::Signature {
-                sig,
+                sig: SigSource::Declared(sig),
                 pinned_slots: Vec::new(),
             };
             match fctx
@@ -89,6 +89,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
+    use super::SigSource;
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::core::run_root_storage;
     use crate::parse::parse;
@@ -122,7 +123,10 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let sig = match scope.resolve_type("OrderedSig") {
-            Some(KType::Signature { sig, .. }) => *sig,
+            Some(KType::Signature {
+                sig: SigSource::Declared(sig),
+                ..
+            }) => *sig,
             _ => panic!("OrderedSig should be a signature"),
         };
         assert_eq!(sig.path, "OrderedSig");
@@ -137,7 +141,10 @@ mod tests {
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::types::KType;
         let sig = match scope.resolve_type("Foo") {
-            Some(KType::Signature { sig, .. }) => *sig,
+            Some(KType::Signature {
+                sig: SigSource::Declared(sig),
+                ..
+            }) => *sig,
             _ => panic!("Foo should be a signature"),
         };
         let x = sig

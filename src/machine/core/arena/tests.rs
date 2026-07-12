@@ -6,7 +6,7 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, SigSource};
 use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
 use crate::machine::BindingIndex;
@@ -1384,7 +1384,7 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
         .brand()
         .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
     let kt = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: Vec::new(),
     };
 

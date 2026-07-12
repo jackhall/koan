@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use super::kkind::KKind;
-use super::ktype::KType;
+use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
@@ -123,6 +123,27 @@ impl<'a> KType<'a> {
             // Value role: a concrete signature type is more specific than the
             // `:Signature` wildcard.
             (Signature { .. }, OfKind(KKind::Signature)) => true,
+            // A module value's self-sig (`SelfOf`) refines a `Declared` signature it structurally
+            // satisfies (plus pin agreement), so a memoized `LIST OF <modules>` element type
+            // satisfies a `:(LIST OF Ordered)` slot through `satisfied_by`.
+            (
+                Signature {
+                    sig: SigSource::SelfOf(m),
+                    ..
+                },
+                Signature {
+                    sig: SigSource::Declared(s),
+                    pinned_slots: pb,
+                },
+            ) => m.structurally_satisfies(s) && (pb.is_empty() || m.satisfies_pins(pb)),
+            // Any non-empty signature refines the empty signature (the lattice top).
+            (
+                Signature { sig: sa, .. },
+                Signature {
+                    sig: SigSource::Empty,
+                    ..
+                },
+            ) if !matches!(sa, SigSource::Empty) => true,
             // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
@@ -250,10 +271,15 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            // Constraint role: a `Signature { .. }` slot is satisfied by a *module*, which
-            // rides the type channel — no runtime `KObject` value satisfies it (the
-            // type-channel check lives in `accepts_part` / `matches_type`).
-            KType::Signature { .. } => false,
+            // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
+            // Object channel, via [`SigSource::satisfied_by_module`] plus pinned-slot agreement.
+            KType::Signature { sig, pinned_slots } => match obj {
+                KObject::Module(m) => {
+                    sig.satisfied_by_module(m)
+                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
+                }
+                _ => false,
+            },
             // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
             // value, so a value is never matched by a kind. `Proper` / `Any` keep a
             // defensive identity check for the rare case of a type carried as a value
@@ -331,7 +357,7 @@ impl<'a> KType<'a> {
             KType::Any => true,
             KType::Signature { sig, pinned_slots } => match t {
                 KType::Module { module: m, .. } => {
-                    m.structurally_satisfies(sig)
+                    sig.satisfied_by_module(m)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -416,12 +442,19 @@ impl<'a> KType<'a> {
             KType::Union(members) => members.iter().any(|m| m.accepts_carried(c)),
             KType::Module { .. } => c.ktype() == *self,
             KType::AbstractType { .. } => c.ktype() == *self,
-            // Constraint role: a `:S` slot admits a *module* whose self-sig structurally satisfies
-            // `S` (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription required. A
-            // signature *value* is admitted by the `OfKind(Signature)` wildcard above, never here.
+            // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
+            // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
+            // required. The module arrives on the Object channel; the `Carried::Type` arm is
+            // transitional plumbing for a module still riding the type channel (deleted once the
+            // read boundaries flip). A signature *value* is admitted by the `OfKind(Signature)`
+            // wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match c {
+                Carried::Object(KObject::Module(m)) => {
+                    sig.satisfied_by_module(m)
+                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
+                }
                 Carried::Type(KType::Module { module: m, .. }) => {
-                    m.structurally_satisfies(sig)
+                    sig.satisfied_by_module(m)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,

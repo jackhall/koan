@@ -331,7 +331,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::OfKind(KKind::AnyType)),
+                // `Any` (not `OfKind(AnyType)`) so a signature / module return type is admitted:
+                // `-> Module` lowers to the empty signature and `-> OrderedSig` is a signature
+                // value, both of which the `:Type` wall in `OfKind(AnyType)` would refuse.
+                // `require_ktype` still rejects a non-type in the `build_carrier` body.
+                arg("ret", KType::Any),
             ],
         ),
         action_bodies::body_fn,
@@ -345,7 +349,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FUNCTOR"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                arg("ret", KType::OfKind(KKind::AnyType)),
+                // See the `FN` `ret` note: `Any` admits a signature / module return type that the
+                // `OfKind(AnyType)` `:Type` wall would refuse.
+                arg("ret", KType::Any),
             ],
         ),
         action_bodies::body_functor,
@@ -460,7 +466,7 @@ mod tests {
             *result,
             KType::KFunctor {
                 params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
-                ret: Box::new(KType::OfKind(KKind::Module)),
+                ret: Box::new(KType::empty_signature()),
                 body: None,
             }
         );
@@ -617,7 +623,7 @@ mod tests {
         let scope = run_root_silent(&region);
         let expected = KType::KFunctor {
             params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
-            ret: Box::new(KType::OfKind(KKind::Module)),
+            ret: Box::new(KType::empty_signature()),
             body: None,
         };
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.

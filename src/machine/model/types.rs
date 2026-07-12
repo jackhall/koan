@@ -16,7 +16,7 @@ mod typed_field_list;
 
 pub use kkind::KKind;
 pub use ktraits::{Parseable, Serializable};
-pub use ktype::{AbstractSource, KType};
+pub use ktype::{AbstractSource, KType, SigSource};
 pub use record::Record;
 pub use recursive_set::{
     seal_recursive_refs, seal_union_refs, NominalMember, NominalSchema, ProjectedSchema,

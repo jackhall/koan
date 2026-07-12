@@ -23,7 +23,7 @@ impl<'a> KType<'a> {
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::OfKind(KKind::AnyType)),
-            "Module" => Some(KType::OfKind(KKind::Module)),
+            "Module" => Some(KType::empty_signature()),
             "Signature" => Some(KType::OfKind(KKind::Signature)),
             "Any" => Some(KType::Any),
             _ => None,

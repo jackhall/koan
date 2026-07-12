@@ -5,10 +5,10 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, Parseable, Record, RecursiveSet, Serializable, SignatureElement,
+    KType, Parseable, Record, RecursiveSet, Serializable, SigSource, SignatureElement,
 };
 
-use super::Held;
+use super::{Held, Module};
 
 #[cfg(test)]
 mod tests;
@@ -115,6 +115,12 @@ pub enum KObject<'a> {
         inner: WrappedPayload<'a>,
         type_id: &'a KType<'a>,
     },
+    /// First-class module value. A bare borrow into the region the module was minted in,
+    /// pinned by the value carrier's witness set — the same contract as [`Self::KFunction`].
+    /// `ktype()` reports the module's principal signature (`Signature { SelfOf(m) }`), so a
+    /// module in expression position dispatches and satisfies signature slots on the value
+    /// channel.
+    Module(&'a Module<'a>),
     Null,
 }
 
@@ -307,6 +313,7 @@ impl<'a> KObject<'a> {
                         .all(|t| t.resident_in_visiting(residence, &mut Vec::new()))
             }
             KObject::Wrapped { inner, .. } => inner.get().resident_in_visiting(residence),
+            KObject::Module(m) => residence.owns_module(m),
         }
     }
 
@@ -344,6 +351,10 @@ impl<'a> KObject<'a> {
             }
             KObject::Record(_, field_types) => KType::Record(field_types.clone()),
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
+            KObject::Module(m) => KType::Signature {
+                sig: SigSource::SelfOf(m),
+                pinned_slots: Vec::new(),
+            },
         }
     }
 
@@ -379,6 +390,7 @@ impl<'a> KObject<'a> {
                 inner: inner.clone(),
                 type_id,
             },
+            KObject::Module(m) => KObject::Module(m),
         }
     }
 
@@ -392,6 +404,13 @@ impl<'a> KObject<'a> {
     pub fn as_function(&self) -> Option<&'a KFunction<'a>> {
         match self {
             KObject::KFunction(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    pub fn as_module(&self) -> Option<&'a Module<'a>> {
+        match self {
+            KObject::Module(m) => Some(*m),
             _ => None,
         }
     }
@@ -487,6 +506,7 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::Wrapped { inner, type_id } => {
                 format!("{}({})", type_id.name(), Parseable::summarize(inner.get()),)
             }
+            KObject::Module(m) => m.path.clone(),
         }
     }
 }

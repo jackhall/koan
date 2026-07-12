@@ -495,7 +495,6 @@ digraph {
     "koan::builtins::using_scope" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::using_scope" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::using_scope" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
@@ -924,6 +923,7 @@ digraph {
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan" [label="uses", style="dashed"];

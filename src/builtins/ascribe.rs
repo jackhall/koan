@@ -7,6 +7,7 @@
 //! its own self-sig at creation.
 
 use crate::machine::execute::StepCarried;
+use crate::machine::model::types::SigSource;
 use crate::machine::model::types::{
     abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members,
     AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
@@ -253,7 +254,10 @@ fn resolve_module_and_signature<'a>(
         _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
     };
     let s = match arg_type(args, "s") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(s),
+            ..
+        }) => *s,
         _ => return Err(type_mismatch_or_missing(args, "s", "Signature")),
     };
     Ok((m, s))
@@ -287,17 +291,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // (`IntOrd :| OrderedSig`) ride the auto-wrap rails into a value-typed future, so
     // no parallel Type-Type overload is required.
     let opaque_sig = sig(
-        KType::OfKind(KKind::Module),
+        KType::empty_signature(),
         vec![
-            arg("m", KType::OfKind(KKind::Module)),
+            arg("m", KType::empty_signature()),
             kw(":|"),
             arg("s", KType::OfKind(KKind::Signature)),
         ],
     );
     let transparent_sig = sig(
-        KType::OfKind(KKind::Module),
+        KType::empty_signature(),
         vec![
-            arg("m", KType::OfKind(KKind::Module)),
+            arg("m", KType::empty_signature()),
             kw(":!"),
             arg("s", KType::OfKind(KKind::Signature)),
         ],

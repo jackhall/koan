@@ -66,7 +66,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                         sig_id,
                         "sig_id must match ModuleSignature::sig_id()"
                     );
-                    assert_eq!(sig.path, "OrderedSig");
+                    assert_eq!(sig.path(), "OrderedSig");
                     assert!(
                         pinned_slots.is_empty(),
                         "bare OrderedSig has no pinned slots"

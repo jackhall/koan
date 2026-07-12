@@ -525,7 +525,7 @@ fn to_static_none_for_signature_borrow() {
         .brand()
         .alloc_signature(ModuleSignature::new("Sig".into(), scope));
     let t = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: Vec::new(),
     };
     assert!(t.to_static().is_none());
@@ -634,7 +634,7 @@ fn resident_in_false_for_set_with_foreign_signature_member() {
 
     let member = NominalMember::pending("Wrap".into(), ScopeId::from_raw(0, 0xA2), KKind::NewType);
     member.fill(NominalSchema::NewType(Box::new(KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: Vec::new(),
     })));
     let set = Rc::new(RecursiveSet::new(vec![member]));

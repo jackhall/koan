@@ -2,6 +2,7 @@
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, spliced_part};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
+use crate::machine::model::types::SigSource;
 use crate::machine::model::Carried;
 
 /// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Type = Number}` admits a
@@ -77,7 +78,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .expect("m_none was just allocated into region's own region");
 
     let slot = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
 
@@ -134,7 +135,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::Signature { sig, pinned_slots }) => {
-            assert_eq!(sig.path, "Set");
+            assert_eq!(sig.path(), "Set");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
             assert_eq!(pinned_slots[0].1, KType::Number);
@@ -171,7 +172,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::Signature { sig, pinned_slots }) => {
-            assert_eq!(sig.path, "SetSig");
+            assert_eq!(sig.path(), "SetSig");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
@@ -270,11 +271,14 @@ fn transparent_view_pin_agreement_reads_source_types() {
          LET StrView = (StrMod :! OrderedSig)",
     );
     let sig = match scope.resolve_type("OrderedSig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let slot = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: vec![("Elem".to_string(), KType::Number)],
     };
     let num_view = scope.resolve_type("NumView").expect("NumView bound");
@@ -305,7 +309,10 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
          LET View = (IntOrd :| OrderedSig)",
     );
     let sig = match scope.resolve_type("OrderedSig") {
-        Some(KType::Signature { sig, .. }) => *sig,
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let view = match scope.resolve_type("View") {
@@ -319,7 +326,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         .cloned()
         .expect("opaque view mints an abstract `Carrier`");
     let slot = KType::Signature {
-        sig,
+        sig: SigSource::Declared(sig),
         pinned_slots: vec![("Carrier".to_string(), carrier_abstract)],
     };
     let view_kt = scope.resolve_type("View").expect("View bound");

@@ -13,7 +13,7 @@
 
 use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::types::KKind;
+use crate::machine::model::types::{KKind, SigSource};
 use crate::machine::model::{KObject, KType};
 use crate::machine::DeliveredCarried;
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
@@ -31,6 +31,9 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
         | KType::OfKind(KKind::AnyType)
         | KType::OfKind(KKind::Signature)
         | KType::OfKind(KKind::Module)
+        // `:Module` lowers to the empty signature; its `name()` is "Module", so it re-resolves
+        // against decl_scope through the same leaf path as the other builtin type names.
+        | KType::Signature { sig: SigSource::Empty, .. }
         | KType::Any
         | KType::Identifier
         | KType::KExpression

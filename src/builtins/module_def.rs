@@ -93,7 +93,7 @@ pub fn body<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let signature = sig(
-        KType::OfKind(KKind::Module),
+        KType::empty_signature(),
         vec![
             kw("MODULE"),
             arg("name", KType::OfKind(KKind::ProperType)),

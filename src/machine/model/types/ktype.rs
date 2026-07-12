@@ -13,6 +13,7 @@
 use super::kkind::KKind;
 use super::record::Record;
 use super::recursive_set::{NominalSchema, RecursiveSet};
+use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
@@ -36,6 +37,57 @@ impl<'a> AbstractSource<'a> {
         match self {
             AbstractSource::Sig(id) => *id,
             AbstractSource::Module(m) => m.scope_id(),
+        }
+    }
+}
+
+/// The source a [`KType::Signature`] draws its module-interface identity from — the three
+/// points of the module lattice. `Declared(s)` is a `SIG`-declared interface; `SelfOf(m)` is
+/// a module value's principal signature (its self-sig), the type
+/// [`KObject::Module`](crate::machine::model::values::KObject::Module) reports; `Empty` is the
+/// empty signature, the lattice top the `:Module` name lowers to (it constrains nothing, so
+/// it admits every module). Identity/hash key on [`sig_id`](SigSource::sig_id).
+#[derive(Clone, Copy)]
+pub enum SigSource<'a> {
+    Declared(&'a ModuleSignature<'a>),
+    SelfOf(&'a Module<'a>),
+    Empty,
+}
+
+impl<'a> SigSource<'a> {
+    /// Stable identity key for the enclosing `KType::Signature`. `Declared`/`SelfOf` key on
+    /// their decl/module `scope_id`; `Empty` keys on [`ScopeId::SENTINEL`]. A `Declared` never
+    /// carries `SENTINEL`, and the `KType` hash mixes the variant discriminant, so no
+    /// cross-variant collision arises.
+    pub fn sig_id(&self) -> ScopeId {
+        match self {
+            SigSource::Declared(s) => s.sig_id(),
+            SigSource::SelfOf(m) => m.scope_id(),
+            SigSource::Empty => ScopeId::SENTINEL,
+        }
+    }
+
+    /// Diagnostic path label. `Empty` renders as the `Module` surface keyword it lowers from.
+    pub fn path(&self) -> String {
+        match self {
+            SigSource::Declared(s) => s.path.clone(),
+            SigSource::SelfOf(m) => m.path.clone(),
+            SigSource::Empty => "Module".to_string(),
+        }
+    }
+
+    /// Whether module `m` satisfies this signature source — the admission rule a
+    /// `KType::Signature` slot applies to a module value (pins are checked separately by the
+    /// caller, as they live on `KType::Signature`, not here). `Empty` admits every module;
+    /// `Declared(s)` admits a module whose self-sig structurally satisfies `s`; `SelfOf(m2)`
+    /// admits `m` when it is the same module or its self-sig is a subtype of `m2`'s.
+    pub fn satisfied_by_module(&self, m: &Module<'a>) -> bool {
+        match self {
+            SigSource::Empty => true,
+            SigSource::Declared(s) => m.structurally_satisfies(s),
+            SigSource::SelfOf(m2) => {
+                m.scope_id() == m2.scope_id() || sig_subtype(m.self_sig(), m2.self_sig()).is_ok()
+            }
         }
     }
 }
@@ -141,18 +193,20 @@ pub enum KType<'a> {
     /// through the derived `Clone`. Inert in value dispatch — it names a group of types, not
     /// a value type — and reserved for value-language cycle construction.
     RecursiveGroup(Rc<RecursiveSet<'a>>),
-    /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
-    /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
-    /// parameter slot it matches a module whose self-sig structurally satisfies `sig`
-    /// ([`Module::structurally_satisfies`]); as a value (a `Signature { .. }` in the value
-    /// channel's `Type` arm) it is matched by the `OfKind(Signature)` wildcard.
+    /// A module signature — its [`SigSource`] names which of the three lattice points it draws
+    /// from. Both the introspectable signature value (a `Declared` decl-scope) and the dispatch
+    /// constraint ("any module the `sig` admits"). Disambiguated by position — as a parameter
+    /// slot it matches a module via [`SigSource::satisfied_by_module`]; as a signature value (a
+    /// `Declared` in the value channel's `Type` arm) it is matched by the `OfKind(Signature)`
+    /// wildcard. A module value's `ktype()` reports `Signature { SelfOf(m) }`.
     ///
     /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
-    /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
+    /// Identity is `sig.sig_id()` + `pinned_slots`; the [`SigSource`]'s path is
+    /// diagnostic-only.
     Signature {
-        sig: &'a ModuleSignature<'a>,
+        sig: SigSource<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
     /// First-class module value's type. A bare borrow into the region the functor call minted the
@@ -199,6 +253,16 @@ pub enum KType<'a> {
 }
 
 impl<'a> KType<'a> {
+    /// The empty signature — top of the module lattice, the type the `:Module` name lowers to.
+    /// It constrains nothing, so every module value satisfies it; a builtin module-accepting
+    /// slot or return is typed this way. Embeds no region pointer.
+    pub fn empty_signature() -> KType<'a> {
+        KType::Signature {
+            sig: SigSource::Empty,
+            pinned_slots: Vec::new(),
+        }
+    }
+
     /// Surface-syntax rendering. The rendered form parses back to the same `KType`
     /// through the dispatch-driven type-language path (see
     /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
@@ -248,14 +312,14 @@ impl<'a> KType<'a> {
             }
             KType::Signature { sig, pinned_slots } => {
                 if pinned_slots.is_empty() {
-                    sig.path.clone()
+                    sig.path()
                 } else {
                     // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
                         .map(|(name, kt)| format!("{} = {}", name, kt.name()))
                         .collect();
-                    format!("({} WITH {{{}}})", sig.path, inner.join(", "))
+                    format!("({} WITH {{{}}})", sig.path(), inner.join(", "))
                 }
             }
             KType::Module { module, .. } => module.path.clone(),
@@ -329,7 +393,13 @@ impl<'a> KType<'a> {
             }
             KType::SetLocal(i) => Some(KType::SetLocal(*i)),
             KType::RecursiveGroup(_) => None,
-            // Region pointers.
+            // The empty signature embeds no region pointer, so it rebuilds `'static` — but only
+            // with empty pins, since a pinned `KType` may itself borrow a region.
+            KType::Signature {
+                sig: SigSource::Empty,
+                pinned_slots,
+            } if pinned_slots.is_empty() => Some(KType::empty_signature()),
+            // Region pointers: a `Declared`/`SelfOf` source, or any non-empty pin set.
             KType::Signature { .. } => None,
             KType::Module { .. } => None,
             KType::AbstractType {
@@ -435,7 +505,12 @@ impl<'a> KType<'a> {
                 .iter()
                 .all(|m| m.resident_in_visiting(residence, visited)),
             KType::Signature { sig, pinned_slots } => {
-                residence.owns_signature(sig)
+                let source_ok = match sig {
+                    SigSource::Declared(s) => residence.owns_signature(s),
+                    SigSource::SelfOf(m) => residence.owns_module(m),
+                    SigSource::Empty => true,
+                };
+                source_ok
                     && pinned_slots
                         .iter()
                         .all(|(_, kt)| kt.resident_in_visiting(residence, visited))
