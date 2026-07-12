@@ -259,15 +259,15 @@ fn functor_argument_bare_type_token_auto_wraps() {
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// Two opaque ascriptions of a module satisfying a SIG with `LET Wrap =
-/// (TEMPLATE T)` mint distinct per-call `TypeConstructor` slots —
+/// Two opaque ascriptions of a module satisfying a SIG with `TYPE (Type AS Wrap)`
+/// mint distinct per-call `TypeConstructor` slots —
 /// the higher-kinded analogue of `functor_application_is_generative`.
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::types::KKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
+    let src = "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
                MODULE IntList = ((LET Wrap = Number))\n\
                LET First = (IntList :| MonadSig)\n\
                LET Second = (IntList :| MonadSig)";

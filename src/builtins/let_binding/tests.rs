@@ -322,47 +322,35 @@ fn let_value_class_with_functor_rejects() {
     );
 }
 
-/// SIG-body `LET <Type-class> = ...` keeps working — the SIG-body reject only
-/// fires for the value-route, and `LET Carrier = Number` routes through
-/// `register_type`. Inside a SIG body the bound `KType` is the name-bearing
-/// `AbstractType { source: Sig(decl_scope), name }` rather than the collapsed
-/// underlying type, so a later `VAL :Carrier` records that the slot *names* the
-/// abstract member.
+/// SIG-body `LET Tag = Number` is a *manifest* type member: the RHS type is bound
+/// verbatim (concrete `Number`), not re-tagged to an `AbstractType` identity. The
+/// SIG-body reject fires only for the value-route, so a Type-class `LET` routes
+/// through `register_type` and binds the resolved type unconditionally. `=` inside a
+/// SIG body means manifest; abstract members use `TYPE` (which has no RHS).
 #[test]
-fn let_type_class_in_sig_body_still_works() {
+fn let_type_class_in_sig_body_binds_manifest() {
     use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::types::AbstractSource;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG WithType = ((LET Carrier = Number) (VAL zero :Number))",
+        "SIG WithTag = ((LET Tag = Number) (VAL zero :Number))",
     );
-    let s = match scope.resolve_type("WithType") {
+    let s = match scope.resolve_type("WithTag") {
         Some(KType::Signature { sig, .. }) => *sig,
-        other => panic!("WithType should be a Signature KType, got {:?}", other),
+        other => panic!("WithTag should be a Signature KType, got {:?}", other),
     };
     let decl_scope = s.decl_scope();
     let bound = decl_scope
-        .resolve_type("Carrier")
-        .expect("Carrier binding should survive in SIG types map after Type-class LET");
-    match bound {
-        KType::AbstractType {
-            source: AbstractSource::Sig(id),
-            name,
-        } => {
-            assert_eq!(name, "Carrier");
-            assert_eq!(
-                *id, decl_scope.id,
-                "Sig source must key on the decl_scope id"
-            );
-        }
-        other => panic!(
-            "SIG-local `LET Carrier = Number` should bind a Sig-rooted AbstractType, got {:?}",
-            other
-        ),
-    }
+        .resolve_type("Tag")
+        .expect("Tag binding should survive in the SIG types map after manifest LET");
+    assert_eq!(
+        *bound,
+        KType::Number,
+        "SIG-local `LET Tag = Number` binds the concrete `Number`, not an AbstractType, got {:?}",
+        bound,
+    );
 }
 
 /// A Type-classified SIG alias `LET Po = OrderedSig` writes the *same* unified

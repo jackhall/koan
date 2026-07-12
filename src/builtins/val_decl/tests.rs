@@ -19,19 +19,15 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 }
 
 /// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
-/// on LET's placeholder and resumes via dep-finish, picking the SIG-local shadow over
+/// on TYPE's placeholder and resumes via dep-finish, picking the SIG-local shadow over
 /// the meta-type builtin. The shadow binds a `Sig`-rooted `AbstractType` (so the
-/// slot records that it *names* the abstract member `Type`), not the collapsed
-/// underlying `Number`.
+/// slot records that it *names* the abstract member `Carrier`).
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     use crate::machine::model::types::AbstractSource;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",
-    );
+    run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let s = match scope.resolve_type("WithZero") {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
@@ -154,7 +150,7 @@ fn val_slot_satisfied_by_module_let_member() {
     ));
 }
 
-/// Pins the canonical SIG form: abstract type via `LET Carrier = ...` plus a VAL
+/// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL
 /// slot whose declared type references it. `Carrier` lives in `bindings.types`,
 /// `zero` in `bindings.data`; both carry the `Sig`-rooted `AbstractType` identity
 /// (so opacity threads to the per-call module's `slot_type_tags`), not the
@@ -164,10 +160,7 @@ fn val_with_abstract_type_member_declaration() {
     use crate::machine::model::types::AbstractSource;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))",
-    );
+    run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let s = match scope.resolve_type("WithZero") {
         Some(KType::Signature { sig, .. }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),

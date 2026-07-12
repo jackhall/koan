@@ -52,7 +52,7 @@ fn functor_return_slot_dotted_type_member_rejects() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
+        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
     );
     let err = run_one_err(
         scope,

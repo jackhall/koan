@@ -43,7 +43,7 @@ pub fn body_opaque<'a>(
     new_scope.close();
 
     let new_module: &'a Module<'a> = region.alloc_module(Module::new(m.path.clone(), new_scope));
-    // Per-slot kind: a SIG-declared `LET Wrap = (TEMPLATE T)` mints a fresh
+    // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Type AS Wrap)`) mints a fresh
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();
@@ -225,31 +225,25 @@ fn resolve_module_and_signature<'a>(
     Ok((m, s))
 }
 
-/// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
+/// Verify every value slot (`VAL`, value-class name) declared in `sig` has a binding in
+/// `src_scope`'s value table.
 fn shape_check<'a>(
     sig: &crate::machine::model::values::ModuleSignature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
-    let abstract_names: std::collections::HashSet<String> =
-        abstract_members_of(sig.decl_scope()).into_iter().collect();
-    // SIG members all live in the type table: abstract types (skipped below) and VAL value
-    // slots — the names a satisfying module must supply. The module supplies them as values,
-    // so the satisfaction check looks for each in the source's value table.
-    let sig_names: Vec<String> = sig
-        .decl_scope()
-        .bindings()
-        .iter_types()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
+    // A SIG type-table entry is either a value slot (`VAL`, value-class name) or a type
+    // member (an abstract `TYPE` slot or a manifest `LET Tag = Number`, both type-class
+    // names). A satisfying module supplies value slots as values, so the check looks for each
+    // value-slot name in the source's value table; type members are supplied through the type
+    // table, not as values, so they are skipped here.
     let src_names: std::collections::HashSet<String> = src_scope
         .bindings()
         .iter_data()
         .into_iter()
         .map(|(n, _)| n)
         .collect();
-    for name in sig_names {
-        if abstract_names.contains(name.as_str()) {
+    for (name, _) in sig.decl_scope().bindings().iter_types() {
+        if crate::parse::is_type_name(&name) {
             continue;
         }
         if !src_names.contains(&name) {

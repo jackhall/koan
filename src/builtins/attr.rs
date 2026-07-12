@@ -653,7 +653,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+            "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
              MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :| WithZero)",
         );
@@ -674,7 +674,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+            "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
              MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
              LET IntOrdView = (IntOrd :! WithZero)",
         );

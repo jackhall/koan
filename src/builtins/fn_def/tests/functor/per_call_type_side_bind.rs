@@ -55,7 +55,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );
@@ -85,7 +85,7 @@ fn functor_closure_escape_pins_type_class_bind() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );

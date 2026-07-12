@@ -124,7 +124,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))\n\
+        "SIG Set = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
          SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
@@ -162,7 +162,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
+         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
@@ -197,7 +197,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
+         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );

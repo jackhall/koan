@@ -1,6 +1,5 @@
 use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -88,20 +87,6 @@ pub fn body<'a>(
         ))));
     }
     if let Some(kt) = type_for_types_map {
-        let is_type_constructor = matches!(
-            &kt,
-            KType::SetRef { set, index }
-                if set.member(*index).kind
-                    == crate::machine::model::types::KKind::TypeConstructor
-        );
-        let kt = if ctx.scope.is_in_sig_body() && !is_type_constructor {
-            KType::AbstractType {
-                source: AbstractSource::Sig(ctx.scope.id),
-                name: name.clone(),
-            }
-        } else {
-            kt
-        };
         // Fused mint + alloc + register: the delivered RHS carrier's reach is minted into this scope's
         // arena (kept mode — a `KType` clone is shallow, so a module alias inherits the module's
         // child-scope reach and a region-pure / owned type reaches nothing), the identity is allocated

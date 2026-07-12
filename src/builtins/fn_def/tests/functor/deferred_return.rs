@@ -46,7 +46,7 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+        "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
@@ -80,7 +80,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG WithZero = ((LET Carrier = Number) (VAL zero :Carrier))\n\
+        "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
@@ -127,8 +127,8 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
-         SIG Set = ((LET Elt = Number) (VAL insert :Number))\n\
+        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+         SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
@@ -156,7 +156,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG Seq = ((LET Carrier = :(LIST OF Any)) (VAL items :Carrier))\n\
+        "SIG Seq = ((TYPE Carrier) (VAL items :Carrier))\n\
          MODULE Ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
          LET IntsView = (Ints :! Seq)",
     );
@@ -228,7 +228,7 @@ fn deferred_expression_return_tail_chain_stays_flat() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG Seq = ((LET Carrier = Number) (VAL v :Number))\n\
+        "SIG Seq = ((TYPE Carrier) (VAL v :Number))\n\
          MODULE Ints = ((LET Carrier = Number) (LET v = 7))\n\
          LET View = (Ints :! Seq)",
     );
@@ -273,7 +273,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
+        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :| OrderedSig)",
     );

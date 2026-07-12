@@ -162,7 +162,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
         );
         let sig_id = match scope.resolve_type("OrderedSig") {
             Some(KType::Signature { sig, .. }) => sig.sig_id(),
@@ -186,10 +186,7 @@ mod tests {
     fn with_two_slots_preserve_order() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))",
-        );
+        run(scope, "SIG Set = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
         let result = run_one_type(scope, parse_one("Set WITH {Elt = Number, Ord = Str}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
@@ -213,8 +210,8 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))\n\
-             SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
+             SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+             SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
         let result = run_one_type(scope, parse_one("SetSig WITH {Elt = Elem.Carrier}"));
@@ -240,7 +237,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
         );
         let mut runtime = KoanRuntime::new();
         let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
@@ -262,7 +259,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((LET Carrier = Number) (VAL compare :Number))",
+            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
         );
         let mut runtime = KoanRuntime::new();
         let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
