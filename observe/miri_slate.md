@@ -1,6 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
+src/machine/core/arena.rs: 6
 src/machine/model/types/ktype_predicates.rs: 1
 -->
 
@@ -94,16 +95,6 @@ group just to silence the stale-anchor check.
   not by `run_step`'s `pin` alone — the real `unsafe` it exercises is the shared `retype` in
   `witnessed.rs`, routed through the `Sealed`/`SealedExtern` opens `run_step` and the dep reads
   perform.
-- `src/machine/core/arena.rs` — the file's five `unsafe impl HasRegionHandle` blocks (trivial
-  one-line delegations, `self.0.handle()`) were deleted wholesale and replaced by two generic
-  library blanket impls in `workgraph/src/witnessed/carrier.rs` (`RegionHandle` base impl and
-  `(RegionHandle<'b, P>, T)` blanket), so arena.rs now carries no `unsafe` of its own. None of the
-  groups anchored here ever pinned those trivial delegations — every group's own text already names
-  its real `unsafe` as the shared `retype` in `witnessed.rs`, `region.rs`'s
-  `region_alloc_while_prior_ref_live`, or `region_set.rs`'s `RegionSet::mint`, exercised through
-  arena.rs's koan-typed alloc/relocation surface. Those distinct UB shapes (lifetime erasure across
-  a frame drop, multi-region envelope folds, witness-set mint self-cycle, the reach-fold finish
-  surface) are unaffected by this change and still fail loud under tree borrows if regressed.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -541,9 +532,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-11: 336s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 512s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 338s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 344s — 40 tests, 0 leaks, 0 UB
 - 2026-07-11: 339s — 40 tests, 0 leaks, 0 UB
-- 2026-07-11: 450s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
