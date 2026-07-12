@@ -52,6 +52,10 @@ by local discipline rather than by construction.
 | Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_ktype_folded` / `alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
 | Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
 | [Library escape hatch](escape-hatch-elimination.md) | under-pin | closure-gated `RegionHandle::alloc_resident_audited` (`region.rs`); raw `RegionBrand::handle()` reach | 3 always-true audits in `arena.rs` (the two fold doors and the frame-child door), 10 real-audit callers in `arena.rs`, 11 raw-handle reaches across `src/machine` |
+| Resident-audit precondition | under-pin | `checked_reach_of_type` discards the audit walk's pass/fail and returns `foreign: None` ([arena.rs](../../src/machine/core/arena.rs)) | 2 region-pure seal operands (NEWTYPE, UNION) in `newtype_def.rs` / `union.rs` |
+| Region-purity by fiat | under-pin | `StoredReach::empty()` minted inside `register_nominal_upsert` / `register_builtin_type` / region-pure `seal_type_operand`, on a structural claim never audited ([scope.rs](../../src/machine/core/scope.rs)) | 5 nominal-upsert + 15 builtin-register callers |
+| Carrier reach co-location | under-pin | `resident_*_carrier` accept a `StoredReach<'r>` whose reach may be shorter-lived than the scope — co-location backed by the re-anchor pin, not the type ([scope.rs](../../src/machine/core/scope.rs)) | every `resident_type_carrier` / `resident_value_carrier` reader |
+| Module reach union breadth | over-pin | `child_module_reach` unions every child binding-entry reach, including entries the module never exposes ([scope.rs](../../src/machine/core/scope.rs), `entry_reaches` in [bindings.rs](../../src/machine/core/bindings.rs)) | MODULE finish + both ascribe views |
 
 ### Under-pinning (dangle-capable)
 
@@ -69,6 +73,35 @@ by local discipline rather than by construction.
   recording choice explicitly, and stamp regions with a generation so a
   reused address cannot false-pass; the `KType` gap needs its own ruling.
 
+- **Resident-audit precondition.** `Scope::checked_reach_of_type`
+  ([arena.rs](../../src/machine/core/arena.rs)) walks a value's borrows but
+  discards the walk's pass/fail, reading only the saw-a-region-pointer flag and
+  returning `foreign: None`. Honest only when the argument genuinely lives in the
+  scope's own region — its documented precondition, unenforced. A non-resident or
+  foreign-borrowing `&KType` would silently under-pin. Two callers today, both
+  region-pure `SetRef` identities (the NEWTYPE and UNION seal operands).
+  Candidate: `debug_assert!` the walk returned `true`, making the resident-only
+  precondition self-checking.
+
+- **Region-purity by fiat.** `register_nominal_upsert`, `register_builtin_type`,
+  and the region-pure `seal_type_operand` operands
+  ([scope.rs](../../src/machine/core/scope.rs)) mint `StoredReach::empty()` on the
+  structural claim that a nominal `SetRef` identity (an `Rc` set + index) and
+  builtin identities hold no region pointer. The claim is never audited; a nominal
+  identity that ever embedded a region borrow would under-pin. Candidate: derive
+  the empty reach through `checked_reach_of_type` (once its precondition is
+  enforced) rather than assert it.
+
+- **Carrier reach co-location.** `resident_type_carrier` / `resident_value_carrier`
+  ([scope.rs](../../src/machine/core/scope.rs)) accept a `StoredReach<'r>` whose
+  reach reference may be shorter-lived than the binding scope. Sound because
+  `Carrier::new` erases the reference and liveness rests on the pin supplied at
+  re-anchor — but the type no longer enforces that the reach outlives its reader;
+  the re-anchor-pin discipline does. A read re-anchoring under a pin narrower than
+  the reach's backing arena would dangle. Candidate: a witness bound tying the
+  carried reach to its re-anchor pin, so co-location is typed rather than
+  disciplined.
+
 ### Over-pinning (leak / retention)
 
 - **Side-table growth.** The residence `membership` vec records every
@@ -76,3 +109,12 @@ by local discipline rather than by construction.
   `owns_addr` by linear scan — cost that grows with exactly the audits the
   move-in item adds. Candidate: a sorted/hashed structure, or per-family
   tables sized to the sparse families that need them.
+
+- **Module reach union breadth.** `Scope::child_module_reach`
+  ([scope.rs](../../src/machine/core/scope.rs)) mints a module's stored reach as
+  the child scope's own region unioned with *every* binding-entry reach
+  (`Bindings::entry_reaches`, [bindings.rs](../../src/machine/core/bindings.rs)),
+  including entries the module value never exposes to a reader. A superset never
+  under-pins, but it pins more than the module's actual reach — a retention
+  candidate. Candidate: union only the entries reachable from the module's
+  exported surface.
