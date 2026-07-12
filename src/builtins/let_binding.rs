@@ -27,11 +27,10 @@ pub fn body<'a>(
     let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
         (Some(KObject::KString(s)), _) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
-            // rides the Object arm (`KObject::Module`) but is still type-language, so it keys the same
-            // diagnostic as a `Held::Type` module identity.
+            // rides the Object arm (`KObject::Module`) but is still type-language, so it keys the
+            // same diagnostic as a `Held::Type` signature identity.
             let type_kind = match rhs {
                 Held::Object(KObject::Module(_)) => Some("module"),
-                Held::Type(KType::Module { .. }) => Some("module"),
                 Held::Type(KType::Signature { .. }) => Some("signature"),
                 Held::Type(_) => Some("type"),
                 Held::Object(_) => None,

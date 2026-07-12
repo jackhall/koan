@@ -62,8 +62,9 @@ fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
 
 /// Value-then-type lookup of the `s` identifier against `ctx.scope`, returning the projected
 /// member as `Action::Done`. A FUNCTOR's signature-typed parameter is bound only into
-/// `bindings.types`, so `Er.pure(x)` inside the functor body must reach the carried `&Module`
-/// through `resolve_type` — hence value-side first, then type-side.
+/// `bindings.types`, so a lowercase (Identifier-classed) parameter member access like
+/// `elem.compare` inside the functor body reaches the carried `&Module` through `resolve_type` —
+/// hence value-side first, then type-side.
 pub fn body_identifier<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -94,6 +95,12 @@ pub fn body_identifier<'a>(
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         match kt {
+            // A lowercase (Identifier-classed) signature-typed FUNCTOR parameter — e.g. `elem` in
+            // `(MAKESET elem :OrderedSig)` — is bound only into `bindings.types` as
+            // `KType::Module`, so `elem.compare` in the body reaches the module through
+            // `resolve_type` and projects the member directly (a type-position use). This arm
+            // collapses into the value-side `lookup` above once modules bind value-side
+            // (module-naming-flip).
             KType::Module { module: m, .. } => return route(access_module_member(m, &field_name)),
             KType::AbstractType {
                 source: AbstractSource::Module(m),
@@ -185,27 +192,23 @@ pub fn body_newtype<'a>(
 pub fn body_module<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
+    use crate::machine::core::kfunction::action::{arg_object, Action};
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,
-        // Transitional type-side arm (deleted in Phase 3).
-        _ => match arg_type(ctx.args, "s") {
-            Some(KType::Module { module, .. }) => *module,
-            _ => {
-                return Action::Done(Err(match arg_object(ctx.args, "s") {
-                    Some(other) => KError::new(KErrorKind::TypeMismatch {
-                        arg: "s".to_string(),
-                        expected: "Module".to_string(),
-                        got: other.ktype().name(),
-                    }),
-                    None => KError::new(KErrorKind::TypeMismatch {
-                        arg: "s".to_string(),
-                        expected: "Module".to_string(),
-                        got: "Type".to_string(),
-                    }),
-                }));
-            }
-        },
+        Some(other) => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Module".to_string(),
+                got: other.ktype().name(),
+            })));
+        }
+        None => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Module".to_string(),
+                got: "Type".to_string(),
+            })));
+        }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
     route(access_module_member(m, &field_name))
@@ -216,6 +219,9 @@ pub fn body_module<'a>(
 /// the same TypeMismatch a static struct field access produces.
 fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     match kt {
+        // Type-position use: `body_type_lhs`'s `Unresolved` path resolves a bare module name to
+        // `KType::Module` at dispatch time and projects the member directly, never re-emitting a
+        // value-channel module.
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
         // member lives in that decl region, so it seals under the decl scope's home frame. Only a

@@ -82,9 +82,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
 
-    // A module rides the type channel, so its satisfaction of a `Signature` slot is the
-    // `accepts_part(Carried::Type(Module))` path; `matches_value` is value-only and rejects
-    // modules outright.
+    // A module reaches an overload probe on the type channel (`Carried::Type(Module)`), so its
+    // satisfaction of a `Signature` slot goes through the `accepts_part(Carried::Type(Module))`
+    // path; the built argument cell instead carries the module on the Object channel.
     assert!(slot.accepts_part(&spliced_part(Carried::Type(m_num_obj))));
     assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_str_obj))));
     assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_none_obj))));

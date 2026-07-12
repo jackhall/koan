@@ -40,9 +40,7 @@ impl<'a> KType<'a> {
         matches!(
             self,
             KType::Signature { .. }
-                | KType::OfKind(
-                    KKind::ProperType | KKind::AnyType | KKind::Module | KKind::Signature
-                )
+                | KType::OfKind(KKind::ProperType | KKind::AnyType | KKind::Signature)
         )
     }
 
@@ -53,10 +51,9 @@ impl<'a> KType<'a> {
     /// the seam to the narrower set.
     pub fn is_admissible_functor_return(&self) -> bool {
         match self {
-            KType::OfKind(KKind::Signature)
-            | KType::Signature { .. }
-            | KType::OfKind(KKind::Module)
-            | KType::Module { .. } => true,
+            KType::OfKind(KKind::Signature) | KType::Signature { .. } | KType::Module { .. } => {
+                true
+            }
             KType::KFunctor { ret, .. } => ret.is_admissible_functor_return(),
             _ => false,
         }
@@ -116,10 +113,6 @@ impl<'a> KType<'a> {
                     ..
                 },
             ) => param_record_more_specific(pa, ra, pb, rb),
-            // Constraint role: `:S` (a module satisfying `S`) is more specific than the
-            // `:Module` wildcard.
-            (Signature { .. }, OfKind(KKind::Module)) => true,
-            (Module { .. }, OfKind(KKind::Module)) => true,
             // Value role: a concrete signature type is more specific than the
             // `:Signature` wildcard.
             (Signature { .. }, OfKind(KKind::Signature)) => true,
@@ -283,11 +276,10 @@ impl<'a> KType<'a> {
             // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
             // value, so a value is never matched by a kind. `Proper` / `Any` keep a
             // defensive identity check for the rare case of a type carried as a value
-            // (`OfKind(Proper) == ktype()`); every other kind — modules / signatures (which
-            // ride the type channel) and the nominal families — admits no runtime instance.
+            // (`OfKind(Proper) == ktype()`); every other kind admits no runtime instance.
             KType::OfKind(k) => match k {
                 KKind::ProperType | KKind::AnyType => *self == obj.ktype(),
-                KKind::Module | KKind::Signature | KKind::NewType | KKind::TypeConstructor => false,
+                _ => false,
             },
             // A stamped `type_args` carrier (from ascription) takes precedence and is
             // checked structurally per-arg; an erased carrier falls back to checking the
@@ -337,15 +329,14 @@ impl<'a> KType<'a> {
     }
 
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
-    /// slot — the type-channel analog of [`matches_value`]. A `Signature` slot is satisfied by
-    /// a module whose self-sig structurally satisfies the signature
-    /// ([`Module::structurally_satisfies`] — no ascription required), plus pinned-slot agreement
-    /// for a `WITH`-pinned slot; an `OfKind` slot when its kind subsumes `t.kind_of()` (so
-    /// `OfKind(Proper)` admits any proper type, including a `Tagged`/`NewType`-classified nominal,
-    /// while the module/sig wall keeps `Proper` from admitting a module); `Any` by anything; a
-    /// module/signature *value* slot by structural identity. Other concrete slots compare against
-    /// the `OfKind(Proper)` dispatch identity a non-module/sig type carrier reports, so they admit
-    /// no bare type value.
+    /// slot — the type-channel analog of [`matches_value`]. An `OfKind` slot is satisfied when its
+    /// kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type, including a
+    /// `Tagged`/`NewType`-classified nominal, while the module/sig wall keeps `Proper` from
+    /// admitting a module); `Any` by anything; a module/signature *value* slot by structural
+    /// identity. A `Signature` slot admits no first-class type here — a module surfaces on the
+    /// Object channel and is matched by [`matches_value`]. Other concrete slots compare against the
+    /// `OfKind(Proper)` dispatch identity a non-module/sig type carrier reports, so they admit no
+    /// bare type value.
     pub fn matches_type(&self, t: &KType<'a>) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a module / signature
         // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
@@ -355,13 +346,9 @@ impl<'a> KType<'a> {
         };
         match self {
             KType::Any => true,
-            KType::Signature { sig, pinned_slots } => match t {
-                KType::Module { module: m, .. } => {
-                    sig.satisfied_by_module(m)
-                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
-                }
-                _ => false,
-            },
+            // A module surfaces on the Object channel (matched by `matches_value`); a signature
+            // *value* is admitted by the `OfKind(Signature)` wildcard, never here.
+            KType::Signature { .. } => false,
             KType::OfKind(k) => k.admits(t.kind_of()),
             // A union slot is satisfied by any type its members are satisfied by.
             KType::Union(members) => members.iter().any(|m| m.matches_type(t)),
@@ -444,9 +431,11 @@ impl<'a> KType<'a> {
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
-            // required. The module arrives on the Object channel; the `Carried::Type` arm is
-            // transitional plumbing for a module still riding the type channel (deleted once the
-            // read boundaries flip). A signature *value* is admitted by the `OfKind(Signature)`
+            // required. A built argument cell carries the module on the Object channel; the
+            // `Carried::Type` arm classifies the overload-picker probe, which resolves a bare module
+            // name to `KType::Module` on the type channel because a module binds type-side (its cell
+            // re-resolves type-side in `part_walk`). Both collapse once modules bind value-side
+            // (module-naming-flip). A signature *value* is admitted by the `OfKind(Signature)`
             // wildcard above, never here.
             KType::Signature { sig, pinned_slots } => match c {
                 Carried::Object(KObject::Module(m)) => {

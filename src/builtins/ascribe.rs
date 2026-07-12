@@ -257,11 +257,7 @@ fn resolve_module_and_signature<'a>(
 
     let m = match arg_object(args, "m") {
         Some(KObject::Module(module)) => *module,
-        // Transitional type-side fallthrough (deleted in Phase 3).
-        _ => match arg_type(args, "m") {
-            Some(KType::Module { module, .. }) => *module,
-            _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
-        },
+        _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
     };
     let s = match arg_type(args, "s") {
         Some(KType::Signature {

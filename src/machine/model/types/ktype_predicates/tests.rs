@@ -429,7 +429,6 @@ fn is_type_denoting_table() {
     assert!(KType::OfKind(KKind::Signature).is_type_denoting());
     assert!(KType::OfKind(KKind::AnyType).is_type_denoting());
     assert!(KType::OfKind(KKind::ProperType).is_type_denoting());
-    assert!(KType::OfKind(KKind::Module).is_type_denoting());
     // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
     // the value carries no nominal identity the caller hasn't already named.
     assert!(!KType::OfKind(KKind::NewType).is_type_denoting());
@@ -512,7 +511,6 @@ fn is_more_specific_for_pinned_signature_bound() {
         sig: SigSource::Declared(ordered),
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
-    let any_module = KType::OfKind(KKind::Module);
 
     assert!(pinned_number.is_more_specific_than(&bare));
     assert!(!bare.is_more_specific_than(&pinned_number));
@@ -524,9 +522,6 @@ fn is_more_specific_for_pinned_signature_bound() {
     assert!(!pinned_elt.is_more_specific_than(&pinned_number));
     assert!(!pinned_number.is_more_specific_than(&other_sig));
     assert!(!other_sig.is_more_specific_than(&pinned_number));
-    assert!(bare.is_more_specific_than(&any_module));
-    assert!(pinned_number.is_more_specific_than(&any_module));
-    assert!(pinned_two.is_more_specific_than(&any_module));
 }
 
 /// A shared `Result` `TypeConstructor` set. Identity is now `(set ptr, index)`, so a

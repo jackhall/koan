@@ -108,6 +108,11 @@ pub(super) fn resolve_name_part<'step>(
         Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
             // The `&KType` rides the type channel; its stored token is recomputed at the read site
             // (`literal.rs`) via `resolve_type_stored`, since `NameOutcome` carries only the value.
+            // A module name resolves here to `KType::Module`: it is bound type-side (Decision: a
+            // module reaching a binding door installs `KType::Module` into `bindings.types`), so the
+            // probe classifies it on the type channel and the built cell re-resolves it type-side in
+            // `part_walk`. Surfacing it to the Object arm here would route the built cell through
+            // `part_walk`'s value-side `resolve_value_carrier`, which misses a type-side binding.
             TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
             TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
             TypeResolution::Park(producers) => match producers.first() {
