@@ -64,6 +64,11 @@ region address can be reused by a later allocation and alias a different type.
   Re-keying the hash is rejected: it would diverge from a fresh computation of the same type
   elsewhere and need a persistent rewrite record plus an region-wide rewrite; tagging touches
   only the lifted type and keeps the hash content-derived.
+- *Phasing — decided.* Foundation phase (carries the risk): digest mint, the per-frame
+  `digest → type` table, and merge-on-lift — run in shadow mode, where digests are computed
+  and checked for agreement while pointer identity remains the identity in use. Mechanical
+  phases, each leaving the verify-koan slate green: compiler-guided swap of equality,
+  hashing, and carriers to the `Copy` tag, then removal of the `Rc` fields.
 - *Cross-thread collision reconciliation — deferred.* Per-frame `Collided` marks merge up on
   lift; joining independent run-frame tables under future parallelization (so a hash contested
   in one thread is `Collided` in the join) generalizes this and is deferred.
@@ -80,5 +85,7 @@ when it ships.
 
 **Requires:** none — builds on shipped substrate.
 
-**Unblocks:** [Memoized subtype matching](memoized-subtype-matching.md) — its match cache is
-keyed on these digests and homed in this registry's per-type entries.
+**Unblocks:**
+
+- [Memoized subtype matching](memoized-subtype-matching.md) — its match cache is keyed on
+  these digests and homed in this registry's per-type entries.

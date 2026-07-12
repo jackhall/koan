@@ -17,8 +17,7 @@ Future work on the type and module system. Each entry points at a
   — implicit module parameters, lexical resolution, strict-on-ambiguity
   policy, explicit-application disambiguation. The call-site witness-elision
   layer over the already-first-class module + signature substrate
-  ([modules.md](modules.md)); also lands the signature-bound module-typed
-  dispatch the current `:Module` (`OfKind(Module)`) wildcard lacks, plus multi-abstract-type
+  ([modules.md](modules.md)); also lands multi-abstract-type
   implicit resolution for signatures spanning multiple type slots, and generic
   functions as type-parameterized functors selected by implicit resolution
   ([generics.md](generics.md)), including dependent parameters that reference an
@@ -32,6 +31,14 @@ Future work on the type and module system. Each entry points at a
 
 ## Cross-cutting
 
+- [Signature subtyping and self-sigs](../../roadmap/type_memos/signature-subtyping-and-self-sigs.md),
+  [Structural satisfaction](../../roadmap/type_memos/structural-satisfaction.md), and the
+  module-value chain ([KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md),
+  then [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md),
+  then [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)) — modules move to
+  the value channel, typed by a creation-time principal signature under canonical signature
+  subtyping; the combined end state is pinned in
+  [module-values-and-type-identity.md](module-values-and-type-identity.md).
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as FUNCTORs over their element/key types. Parks the **applicative
   functor semantics** open question: the FUNCTOR binder

@@ -17,8 +17,9 @@ buys the language and listing its ready-to-start items:
 [operator_chaining/](operator_chaining/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
 [simplify_dispatch/](simplify_dispatch/README.md),
-[compile_safety/](compile_safety/README.md), and
-[scheduler_library/](scheduler_library/README.md).
+[compile_safety/](compile_safety/README.md),
+[scheduler_library/](scheduler_library/README.md), and
+[type_memos/](type_memos/README.md).
 
 Design rationale for what's already in the language lives in [design/](../design/) — five
 topical docs covering the execution model, memory model, functional programming,
@@ -41,13 +42,11 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Fold the two type-write paths](refactor/fold-type-write-paths.md)
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
-- [Memoized subtype matching](refactor/memoized-subtype-matching.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Own singleton nominal-set construction](refactor/own-singleton-nominal-set-construction.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Structural value equality](refactor/structural-value-equality.md)
-- [Content-addressed type identity](refactor/type-identity-registry.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Region debug audits](scheduler_library/region-debug-audits.md)
 - [Carving the workcell crate](scheduler_library/workcell-extraction.md)
@@ -58,5 +57,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [SIG abstract vs manifest type members](type_language/sig-abstract-vs-manifest-types.md)
+- [SIG abstract vs manifest type members](type_memos/sig-abstract-vs-manifest-types.md)
+- [Content-addressed type identity](type_memos/type-identity-registry.md)
 

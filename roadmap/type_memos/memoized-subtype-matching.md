@@ -33,6 +33,9 @@ a hash cannot encode, so matching still walks every time.
   successful one, given overload resolution's many non-matching slot checks.
 - *`Collided` bypass — decided.* A `Collided` digest is not a reliable key; fall back to the
   structural walk, as equality does.
+- *Phasing — decided.* Foundation phase (carries the risk): the cache home in the registry
+  entry, with the `Collided`-bypass contract. Mechanical phases, each leaving the
+  verify-koan slate green: wiring the predicate call sites, growth-bound tuning.
 - *Result caching only, no transitive inference — deferred.* Deriving `T <: U` from `T <: S`
   and `S <: U` (lattice closure) is a separate, heavier feature.
 - *Cache growth bound — open.* An unbounded per-type vector versus a capped/LRU cache; the
@@ -40,7 +43,9 @@ a hash cannot encode, so matching still walks every time.
 
 ## Dependencies
 
-**Requires:** [Content-addressed type identity](type-identity-registry.md) — the digests key
-the cache, and the registry entry is its home.
+**Requires:**
+
+- [Content-addressed type identity](type-identity-registry.md) — the digests key the cache,
+  and the registry entry is its home.
 
 **Unblocks:** none tracked yet.

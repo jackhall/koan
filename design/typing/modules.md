@@ -54,7 +54,7 @@ name-presence shape check ([`ascribe.rs`](../../src/builtins/ascribe.rs))
 admits any module member that supplies the named slot regardless of how
 the member was declared — full type-shape checking against the VAL slot's
 declared type is owned by
-[Modular implicits](../../roadmap/predicate_typing/modular-implicits.md).
+[Signature subtyping and self-sigs](../../roadmap/type_memos/signature-subtyping-and-self-sigs.md).
 
 Structures can be **ascribed** to signatures via two operators that differ
 only by a whitespace gap in the visual rendering, expressing "you can see
@@ -129,7 +129,7 @@ newtype-with-private-fields pattern that a trait system would need.
 
 The type language is first-class; modules and signatures live there. A
 module value rides the value channel's `Type` arm as
-[`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
+[`KType::Module { module }`](../../src/machine/model/types/ktype.rs)
 and a signature value as `KType::Signature { sig, pinned_slots }` —
 the same [`Carried::Type`](../../src/machine/model/values/carried.rs) arm that carries
 `Number`, `Str`, and builtin type values, with the identity-bearing module/signature
@@ -150,7 +150,7 @@ never to the builtin `Type` meta-type. Signature member access
 (`access_type_member` over `KType::Signature`) reads its decl scope the same way.
 
 `MODULE` and `SIG` declarations are both **type-only**: finalize installs the
-identity (`KType::Module { module, frame }` for MODULE, `KType::Signature {
+identity (`KType::Module { module }` for MODULE, `KType::Signature {
 sig, pinned_slots }` for SIG) into `bindings.types` via
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs) and writes no
 value-side carrier — `bindings.data` carries zero type carriers. `LET M2 = M1`
@@ -164,8 +164,8 @@ demand from the type entry via
 ATTR's `body_type_lhs` routes its Type-classed receiver through that bridge rather
 than a raw `bindings.data` lookup.
 
-`KType::Module` carries the live `&Module` pointer (plus the per-call
-frame anchor for functor-built modules); `KType::Signature { sig, pinned_slots }`
+`KType::Module` carries the live `&Module` pointer;
+`KType::Signature { sig, pinned_slots }`
 carries the region-pinned `&Signature` plus any `WITH` abstract-type
 pins; `KType::AbstractType { source, name }` carries an abstract-type member —
 either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of an

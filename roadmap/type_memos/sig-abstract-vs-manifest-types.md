@@ -28,7 +28,7 @@ manifest-equality rule to enforce.
 - A SIG declares abstract (witness-less, open for sharing) and manifest (fixed-witness) type
   members as distinct surface forms.
 - A module matches a SIG only when each of its manifest type members equals the declared one,
-  while abstract members stay unconstrained — enforced through `compatible_sigs`.
+  while abstract members stay unconstrained — enforced through the module-satisfies-SIG check.
 - `WITH` pins target abstract slots; an incompatible manifest pin (e.g. `Ord = Str` onto a
   `Number`-manifest slot) is a type error.
 - Abstract members carry no concrete witness and manifest members carry no `AbstractType`
@@ -46,9 +46,15 @@ manifest-equality rule to enforce.
   redundant equal pin). Recommended: allow an equal pin, reject an incompatible one.
 - *Satisfaction rule — decided.* A module matches a SIG iff every manifest type member equals the
   module's corresponding type and every abstract member is unconstrained — the OCaml rule, threaded
-  through `compatible_sigs`.
+  through the module-satisfies-SIG check.
 - *`WITH` targets abstract slots — decided.* `WITH` pins only abstract members; the current free
   re-pin tightens (the `Ord = Str` onto a `Number` slot case becomes a manifest-fixity error).
+- *Phasing — decided.* Foundation phase (carries the risk): the `TYPE` declarator and the
+  witness-less abstract representation behind it, with the opaque-ascription re-tag reading
+  the new representation — the declarator and the representation land together so abstract
+  members are declarable from the first green build. Mechanical phases, each leaving the
+  verify-koan slate green: `LET` narrows to pure-manifest, `WITH` gains manifest-fixity
+  errors, the satisfaction rule threads through, test/doc sweep.
 - *Untangle the `AbstractType` hybrid — open.* The opaque-ascription re-tag (`:|` / `:!`, the
   `IntOrd.Type` → `AbstractType` path) rests on the witness-with-default model; rework so abstract
   members carry no witness and manifest members carry no abstract identity. This is the
@@ -59,4 +65,7 @@ manifest-equality rule to enforce.
 
 **Requires:** none — builds on the shipped SIG / opaque-ascription / `AbstractType` substrate.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Signature subtyping and self-sigs](signature-subtyping-and-self-sigs.md) — the subtyping
+  relation is defined over the abstract/manifest distinction.
