@@ -314,10 +314,15 @@ lifetime, so the borrow checker rejects any attempt to stash it past its constru
 sole exit to node storage is finalize's fold. A value that
 cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines a
 module-family pointer, a bound `KFunctor`'s captured body, or an `Rc`-shared set — `SetRef` / `Variant`
-/ `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three
-runtime-checked tiers instead, all routed through the library's
-[`RegionHandle::alloc_resident_audited`](../workgraph/src/witnessed/region.rs) (store only if the
-caller-supplied audit returns true — nothing lands on a decline):
+/ `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three tiers
+instead. The two runtime-checked tiers route through the library's
+[`RegionHandle::alloc_resident_checked`](../workgraph/src/witnessed/region.rs), which stores only if
+the family's own [`AuditedStored`](../workgraph/src/witnessed/region.rs) audit returns true — nothing
+lands on a decline. The audit is a **per-family declaration** (an `unsafe impl` the embedder writes
+once per family in [arena.rs](../src/machine/core/arena.rs)), not a caller-supplied closure: a
+permissive audit is not writable in safe code, and each call site passes only typed
+[`ResidenceEvidence`](../src/machine/core/arena.rs), never code. The third tier stores through a
+compile-only capability with no runtime audit at all:
 
 - **checked** (`alloc_ktype_checked` / `alloc_object_checked`) —
   [`KType::resident_in`](../src/machine/model/types/ktype.rs) /
@@ -346,7 +351,7 @@ caller-supplied audit returns true — nothing lands on a decline):
   free parameter a caller asserts. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
   compose from.
-- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit made
+- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — no runtime audit at all,
   sound by signature: each sink takes its input at the brand lifetime (`KType<'b>` / `KObject<'b>` on
   `FoldingBrand<'b>`), and inside a fold combinator's `for<'b>` closure the only inhabitants of that
   lifetime are values derived from the fold's declared operand views, the brand's own allocations, and
@@ -355,10 +360,12 @@ caller-supplied audit returns true — nothing lands on a decline):
   lifetime), so smuggling a captured borrow past a folded sink is a compile error rather than a
   runtime-audited obligation. `FoldingBrand`'s sole constructor
   ([`in_fold_closure`](../src/machine/core/arena.rs)) takes a
-  [`FoldToken`](../workgraph/src/witnessed.rs), which only a fold engine (`transfer_into` /
-  `merge_pinned` / `map_pinned` / `StepAllocator::alloc_carried_with` /
-  `alloc_carried_with_scope`) mints and whose `'b` brand keeps it from escaping the closure — so the
-  capability is reachable only at a fresh fold brand. `alloc_carried_with_scope` additionally crosses
+  [`FoldedPlacement`](../workgraph/src/witnessed.rs) — a compile-only capability privately wrapping
+  the destination handle — which only a fold engine (`transfer_into` / `merge_pinned` / `map_pinned` /
+  `StepAllocator::alloc_carried_with` / `alloc_carried_with_scope`) mints over the destination region
+  and whose `'b` brand keeps it from escaping the closure, so the capability is reachable only at a
+  fresh fold brand. The placement's [`alloc_resident_folded`](../workgraph/src/witnessed.rs) store
+  discharges the residence obligation at compile time. `alloc_carried_with_scope` additionally crosses
   the consumer's scope as its own delivered operand, so a field-list re-walk's scope reads resolve at
   the brand rather than ambiently.
 
@@ -366,10 +373,13 @@ caller-supplied audit returns true — nothing lands on a decline):
 un-answerable (`KType` opts out of the address side-table the `owns_module` / `owns_signature` /
 `owns_function` checks read, by not implementing `Stored::record_local`), so that one field is
 unchecked. Every structural family (`Scope` / `Module` / `ModuleSignature` / `KFunction`) always
-captures a borrow (its parent, its declaring scope), so its bare veneer takes the audited-not-`'static`
+captures a borrow (its parent, its declaring scope), so its bare veneer takes the checked-not-`'static`
 form too — `alloc_scope` / `alloc_module` / `alloc_signature` / `alloc_function` run a
-release-enforced `ptr::eq` same-region check via `alloc_resident_audited` rather than a
-`debug_assert!`.
+release-enforced `ptr::eq` same-region check via their family's `AuditedStored` audit rather than a
+`debug_assert!`. The frame-child door ([`build_frame_child_witnessed`](../src/machine/core/arena.rs))
+routes the same real `Scope` family audit as `alloc_scope`: the child is built over the frame's own
+region, so the `ptr::eq` check holds by construction while the parent-liveness chain stays typed by
+`CallFrame::new`.
 
 A scheduler slot's scope handle is lifetime-free, so the node carries no `'run` through its scope.
 A per-call frame scope is stored as a payload-less
