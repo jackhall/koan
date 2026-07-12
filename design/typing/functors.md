@@ -305,17 +305,18 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 
 ```
 SIG Monad = (
-  (LET Wrap = (TEMPLATE Type))
+  (TYPE (Type AS Wrap))
   (VAL pure :(FN (x :Number) -> :(Number AS Wrap)))
   (VAL bind :(FN (m :(Number AS Wrap), f :(FN (x :Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
-`(TEMPLATE <param>)` is the declaration form: inside a SIG body it
-binds the slot name (`Wrap` above) to a template `KType::SetRef` whose
-member is a `KKind::TypeConstructor` carrying the parameter symbol
-list. The builtin lives in
-[`type_ops.rs`](../../src/builtins/type_ops.rs).
+`TYPE (<Param> AS <Name>)` is the declaration form (declaration-by-example:
+it mirrors the application surface `:(Number AS Wrap)` with the concrete
+argument replaced by the parameter name). Inside a SIG body it binds the
+slot name (`Wrap` above) to a sentinel `KType::SetRef` whose member is a
+`KKind::TypeConstructor` carrying the parameter symbol list. The declarator
+lives in [`type_decl.rs`](../../src/builtins/type_decl.rs).
 
 Application uses the `AS` keyworded builtin through the type-expression sigil:
 `:(Number AS Wrap)` in a type-position slot lowers to
@@ -337,17 +338,17 @@ resulting module's `type_members[Wrap]` — they sit in distinct sets, so
 their `(set ptr, index)` identities differ and `First.Wrap<Number>` and
 `Second.Wrap<Number>` are incomparable types. The minting site is the same
 loop in `ascribe.rs:body_opaque` that mints `KType::AbstractType` slots; it
-inspects the SIG's `bindings.types[<slot>]` and matches a
+inspects the SIG's `bindings.types[<slot>]` and matches a sentinel
 `TypeConstructor`-kind member so the slot inherits its declared kind
-(falling back to `AbstractType` for plain `LET Type = ...` slots).
+(falling back to `AbstractType` for a plain `TYPE Type` slot).
 
 The surface is **arity-1 only.** The `param_names` list always carries one
 entry; multi-parameter constructors (`Functor F G`) are tracked in
 [open-work.md](open-work.md). The parameter symbol must be a Type-classified
 token (≥1 lowercase character): the parser rejects single-letter capitals
 (`T`, `E`) at lex time, so surface forms in this section using `T` are
-conceptual — real code writes `(TEMPLATE Type)` or
-`(TEMPLATE Elt)`. The [token-class rule](tokens.md) is the
+conceptual — real code writes `TYPE (Type AS Wrap)` or
+`TYPE (Elt AS Wrap)`. The [token-class rule](tokens.md) is the
 parser-level cause.
 
 `ConstructorApply` is a type-language-only variant: no `KObject` reports a

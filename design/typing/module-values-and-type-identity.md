@@ -67,7 +67,6 @@ check is O(1).
 
 ## Open work
 
-- [SIG abstract vs manifest type members](../../roadmap/type_memos/sig-abstract-vs-manifest-types.md)
 - [Signature subtyping and self-sigs](../../roadmap/type_memos/signature-subtyping-and-self-sigs.md)
 - [Structural satisfaction](../../roadmap/type_memos/structural-satisfaction.md)
 - [KObject module carrier](../../roadmap/type_memos/kobject-module-carrier.md)

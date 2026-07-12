@@ -151,9 +151,8 @@ src/
 │   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
 │   ├── result.rs             Result tagged-union builtin
 │   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           TEMPLATE / WITH
-│   ├── type_ops/type_constructor.rs   TEMPLATE — parameterized type constructor
-│   ├── type_ops/with.rs               WITH — type-constructor application
+│   ├── type_ops.rs           WITH — infix signature specialization
+│   ├── type_ops/with.rs               WITH — abstract-slot pinning + manifest fixity
 │   ├── union.rs              UNION — sum-type declaration (dissolves to one newtype per variant, joined by an anonymous union)
 │   ├── type_union.rs         `|` — the `:(A | B)` anonymous-union type constructor
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
@@ -164,6 +163,7 @@ src/
 │   ├── sig_def.rs            SIG
 │   ├── functor_def.rs        FUNCTOR — modules parameterized by modules
 │   ├── val_decl.rs           VAL (SIG-body value-slot declarator)
+│   ├── type_decl.rs          TYPE — SIG-body abstract type-member declarators (bare + higher-kinded)
 │   ├── ascribe.rs            :| / :! module ascription
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs

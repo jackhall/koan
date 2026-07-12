@@ -29,7 +29,7 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG OrderedSig = ((LET Type = Number) (VAL compare :(FN (x :Type, y :Type) -> Number)))
+SIG OrderedSig = ((TYPE Type) (VAL compare :(FN (x :Type, y :Type) -> Number)))
 ```
 
 Module and signature names use the **Type-token** spelling: first character
@@ -41,12 +41,23 @@ The token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no
 lowercase) from `IntOrd` (Type token: uppercase-leading with at least one
 lowercase) is described in [tokens.md](tokens.md).
 
-SIG bodies accept two declarators. `LET <TypeName> = <expr>` declares an
-abstract type slot (the binder name is Type-classified, so it lands on the
-type-class binder path). `(VAL <name>: <TypeExpr>)` declares a value slot:
-the canonical surface for naming an operation the signature requires, with
-the slot's declared type recorded explicitly rather than inferred from an
-example value. `VAL` is meaningful only inside a SIG body; outside it the
+SIG bodies accept three declarators, split by what a satisfying module must
+supply:
+
+- `TYPE <TypeName>` declares an **abstract** type member — a witness-less slot
+  the module supplies at any concrete type. `TYPE (<Param> AS <Name>)` is the
+  higher-kinded form (see [Higher-kinded type slots](functors.md#higher-kinded-type-slots)).
+  `TYPE` is meaningful only inside a SIG body; the implementation lives at
+  [`type_decl.rs`](../../src/builtins/type_decl.rs).
+- `LET <TypeName> = <expr>` declares a **manifest** type member — a slot fixed
+  to the RHS type. A satisfying module's member must equal it. Inside a SIG body
+  the invariant is `=`-iff-manifest: a Type-class `LET` binds the concrete RHS
+  (no abstract re-tag), and abstract members use `TYPE`, which has no RHS.
+- `(VAL <name> :<TypeExpr>)` declares a value slot: the canonical surface for
+  naming an operation the signature requires, with the slot's declared type
+  recorded explicitly rather than inferred from an example value.
+
+`VAL` and `TYPE` are meaningful only inside a SIG body; outside it the
 declarator is unbound. The lowercase-name `(LET name = <value>)` form is
 rejected inside SIG bodies with a diagnostic directing to `VAL`. The implementation lives at
 [`val_decl.rs`](../../src/builtins/val_decl.rs); ascription's
@@ -93,21 +104,34 @@ A SIG-local abstract-type binding stays *named* end to end, so a slot read
 through an opaque view reports the abstract type rather than the underlying
 representation. Three sites cooperate.
 
-A SIG-local type binding (`LET Type = Number` inside a SIG body, the type-route
-under `Scope::is_in_sig_body` in
-[`let_binding.rs`](../../src/builtins/let_binding.rs)) binds the name-bearing
-`KType::AbstractType { source: Sig(decl_scope_id), name }` rather than collapsing
-to the underlying type, so a later `VAL zero :Type` records that `zero` *names*
-the abstract member `Type`. A higher-kinded `LET Wrap = (TEMPLATE T)` is the
-exception — it stays a `TypeConstructor` so ascription's per-call constructor mint
-preserves the parameterization. Outer aliases and builtin annotations (`:Number`,
-an outer `LET MyAlias = Number`) stay concrete.
+A `TYPE Type` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
+the name-bearing `KType::AbstractType { source: Sig(decl_scope_id), name }`, so a
+later `VAL zero :Type` records that `zero` *names* the abstract member `Type`. The
+higher-kinded `TYPE (Type AS Wrap)` binds a sentinel `TypeConstructor` so
+ascription's per-call constructor mint preserves the parameterization. A manifest
+`LET Tag = Number` binds the concrete `Number` — it carries no abstract identity,
+and a `VAL x :Tag` slot reads through concretely. Classification is by
+*representation*, not name class:
+[`ascribe.rs`](../../src/builtins/ascribe.rs)'s `is_abstract_sig_member` reads the
+member's `KType` shape (a `Sig`-sourced `AbstractType` or a sentinel constructor is
+abstract; everything else is manifest). Outer aliases and builtin annotations
+(`:Number`, an outer `LET MyAlias = Number`) stay concrete.
 
-Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`),
-after minting `type_members`, records on the new `Module` a `slot_type_tags` map
+Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`)
+mints a per-call `AbstractType` into `type_members` for each abstract member and
+mirrors each manifest member's fixed `KType` in concretely (the view scope carries
+no type entries of its own), then records on the new `Module` a `slot_type_tags` map
 (VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
-a `Sig`-rooted member present in `type_members`. Transparent `:!` leaves the map
-empty, so transparent reads stay concrete.
+a `Sig`-rooted abstract member. Transparent `:!` leaves the map empty, so
+transparent reads stay concrete.
+
+**Satisfaction and `WITH`.** A module satisfies a signature (`shape_check`, run for
+both `:|` and `:!`) when it supplies every abstract member (presence only — bound to
+any type) and every manifest member at the *equal* `KType`; a value slot is
+satisfied by a value member of the same name. `WITH` pins abstract slots as before;
+a pin naming a manifest member is normalized away when it equals the fixed type
+(leaving signature identity unchanged) and is a type error when it differs
+([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
 
 ATTR's `access_module_member`
 ([`attr.rs`](../../src/builtins/attr.rs)), on a value-side slot hit with a

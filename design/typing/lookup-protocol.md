@@ -202,7 +202,8 @@ visibility exemption.
 a `Rebind` at any scope depth — never a shadow, never a merge:
 
 - A user *type* (nominal `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
-  declaration, or a `LET <TypeName> = …` / `VAL` abstract member) naming a builtin type is
+  declaration, or a SIG-body `TYPE` abstract / `LET <TypeName> = …` manifest type member)
+  naming a builtin type is
   rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
   [`register_user_type_delivered`](../../src/machine/core/scope.rs) consult
   [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.

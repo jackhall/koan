@@ -48,13 +48,13 @@ error: shape error: FUNCTOR return-type slot must denote a module, signature, or
 
 ## Specializing signatures with `WITH`
 
-A signature can declare a *type* member alongside its value members, written
-`LET <TypeName> = <Type>`, and have other members refer to it. `WITH` pins such
+A signature can declare an *abstract* type member alongside its value members,
+written `TYPE <TypeName>`, and have other members refer to it. `WITH` pins such
 a type member to a concrete type, producing a more specific signature:
 
 ```koan
 SIG Ordered = (
-  LET Carrier = Number
+  TYPE Carrier
   VAL compare :Carrier
 )
 LET IntOrdered = (Ordered WITH {Carrier = Number})
@@ -72,7 +72,7 @@ PRINT View.compare
 
 `Ordered WITH {Carrier = Number}` is `Ordered` with its `Carrier` slot fixed to
 `Number`. Pinning a slot that the signature doesn't declare is an error
-(`<Sig> has no abstract type slot ...`). A related form, `(TEMPLATE Type)`,
+(`<Sig> has no abstract type slot ...`). A related form, `TYPE (Type AS Wrap)`,
 declares a *higher-kinded* type member — a slot that takes a type and produces a
 type — for signatures that abstract over type constructors rather than plain
 types.

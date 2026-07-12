@@ -16,14 +16,14 @@ system rather than implicit in builtin internals.
 
 ```
 SIG Monad = (
-  (LET Wrap = (TEMPLATE Type))   -- type constructor: applied as :(T AS Wrap)
+  (TYPE (Type AS Wrap))          -- type constructor: applied as :(Number AS Wrap)
   (VAL pure :(FN (x :Number) -> :(Number AS Wrap)))
   (VAL bind :(FN (m :(Number AS Wrap), f :(FN (x :Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
 The `Wrap` slot is a type-constructor slot declared with
-`(TEMPLATE <param>)` — the higher-kinded surface form lives in
+`TYPE (<Param> AS <Name>)` — the higher-kinded surface form lives in
 [typing/functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots).
 Opaque ascription mints a per-call `KType::SetRef` to a
 `TypeConstructor`-kind member under the ascribed module's

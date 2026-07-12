@@ -30,7 +30,7 @@ is scaffolding without a building.
 
 - *In-language `Monad` signature — decided per [design/effects.md](../../design/effects.md).*
   Implementation lands the signature plus `pure` / `bind`. The `Wrap`
-  higher-kinded slot surface (`(TEMPLATE Type)` declaration form,
+  higher-kinded slot surface (`TYPE (Type AS Wrap)` declaration form,
   `KType::ConstructorApply` application) has landed via module-system
   stage 2; see
   [design/typing/functors.md § Higher-kinded type slots](../../design/typing/functors.md#higher-kinded-type-slots).

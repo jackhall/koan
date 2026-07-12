@@ -41,8 +41,8 @@ signature-to-signature relation: `WITH` pinned-slot agreement is ad-hoc equality
 
 **Requires:**
 
-- [SIG abstract vs manifest type members](sig-abstract-vs-manifest-types.md) — the relation
-  is defined over the abstract/manifest distinction.
+- [Structures and signatures](../../design/typing/modules.md#structures-and-signatures) — the
+  relation is defined over the shipped abstract/manifest type-member distinction.
 
 **Unblocks:**
 

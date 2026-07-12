@@ -73,7 +73,7 @@ the link in each section to the relevant chapter.
 | `:(LIST OF <Type>)`           | List type.                                         |
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN (<params>) -> <Result>)`| Function type.                                     |
-| `(TEMPLATE Type)`             | A higher-kinded type member, inside a `SIG`.       |
+| `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
 
 Token rule throughout: **keywords** are ≥2 uppercase letters with no lowercase;
 **type names** are uppercase-leading with ≥1 lowercase letter; **identifiers**

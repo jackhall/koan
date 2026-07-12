@@ -57,6 +57,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [SIG abstract vs manifest type members](type_memos/sig-abstract-vs-manifest-types.md)
+- [Signature subtyping and self-sigs](type_memos/signature-subtyping-and-self-sigs.md)
 - [Content-addressed type identity](type_memos/type-identity-registry.md)
 

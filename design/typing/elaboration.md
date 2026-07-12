@@ -237,11 +237,11 @@ mutual-exclusion guard (one map, never both) is the cross-kind check the value
 and type write paths run — see
 [lookup-protocol.md § Layer 2](lookup-protocol.md#layer-2--bindings-per-scope-lookup).
 
-The value-side ATTR walker and ascription's abstract-type member sweep both
-walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`
-helper, so SIG `Type` declarations resolve uniformly whether the signature
-body's LET wrote to `types` (Type-class LHS, `Type`-arm RHS) or to `data`
-(other type-language carriers).
+The value-side ATTR walker and ascription's type-member sweep both walk
+`bindings.types`, classifying each Type-class entry by representation via
+`is_abstract_sig_member` (`abstract_members_of` / `manifest_type_members_of`),
+so a SIG's `TYPE` abstract members and `LET <Name> = …` manifest members resolve
+uniformly under one model.
 
 ## Bare-leaf type-name carrier
 
