@@ -161,9 +161,17 @@ The Koan layers compose the substrate; they hold no witness state of their own.
   `{ bit, ref }` entry whose set members pin the foreign regions for the scope's
   life — the job a reach accumulator and a deposit list would otherwise split,
   folded into the one resident set.
-- **Binding entries** store the erased value, the resident set reference, and the
-  `borrows_host` bit. Reads copy the thin reference; no entry owns a set, and no
-  lookup clones one.
+- **The mint and the store are one fused door.** A production bind derives the
+  reach off the value's *own* delivered witness and pins it in a single call
+  (`Scope::bind_delivered` / `bind_checked` for values, `register_type_delivered`
+  / `register_module_upsert` and siblings for types), rather than pairing a
+  separate mint with an adjacent store — so scope entry cannot state a reach the
+  value's borrows don't back.
+- **Binding entries** store the erased value and an opaque `StoredReach` token —
+  the resident set reference plus the `borrows_host` bit, mintable only by
+  witness-reading derivation doors and never assembled from loose parts outside
+  `machine::core`. Reads copy the thin reference and replay the whole token; no
+  entry owns a set, and no lookup clones one.
 - **Module reach** is the union over the child scope's **binding entries'** sets,
   minted once at scope close (the seal point).
 - **Omission policy stays scope-derived.** Which regions a bind may home-omit (the

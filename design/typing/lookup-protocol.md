@@ -204,7 +204,7 @@ a `Rebind` at any scope depth — never a shadow, never a merge:
 - A user *type* (nominal `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
   declaration, or a `LET <TypeName> = …` / `VAL` abstract member) naming a builtin type is
   rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
-  [`register_user_type`](../../src/machine/core/scope.rs) consult
+  [`register_user_type_delivered`](../../src/machine/core/scope.rs) consult
   [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.
 - A user *FN / FUNCTOR* overload whose untyped signature key collides with a builtin
   dispatch bucket is rejected rather than joining it —

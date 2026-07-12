@@ -104,7 +104,7 @@ Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
 future** seals its captured-scope reach at construction; a **`KType::Module`** seals its child scope's
 home frame and binding-entry reaches the same way, via
-[`Scope::reach_of_child`](../../src/machine/core/scope.rs). The embedding or binding site mints that
+[`Scope::child_module_reach`](../../src/machine/core/scope.rs). The embedding or binding site mints that
 carrier's reach into its own arena — `merge` at an `attr` / `FROM` projection,
 [`Scope::host_reach_of`](../../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind — and
 the [`run_program`](../../src/machine/execute/runtime/interpret.rs) root drain mints the rehomed

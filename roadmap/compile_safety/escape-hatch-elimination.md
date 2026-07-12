@@ -50,11 +50,12 @@ The typed frame parenting the frame-child door's replacement rests on has
 shipped — `CallFrame::new` derives the parent pin and `new_tail` reserves the
 no-chain case
 ([design/per-call-region/frames.md § Outer-frame chain](../../design/per-call-region/frames.md)).
+The witness-derived fused bind doors that front the evidence-tier audits have
+also shipped
+([design/witness-hosting.md § Scope and bindings](../../design/witness-hosting.md)).
 
 **Requires:**
 
-- [Witness-derived binding](witness-derived-binding.md) — the fused bind
-  doors that replace the evidence-tier audits.
 
 **Unblocks:**
 

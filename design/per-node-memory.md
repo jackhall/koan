@@ -122,7 +122,7 @@ with a separately-asserted witness: the **type** family seals the same way — a
 through the step context's [`alloc_type_of`](../src/machine/core/arena.rs), which rebuilds the type at the
 fold brand from the dep's own view, a region-referencing `KType::Module` through
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
-construction ([`Scope::reach_of_child`](../src/machine/core/scope.rs), from the child scope the birth
+construction ([`Scope::child_module_reach`](../src/machine/core/scope.rs), from the child scope the birth
 site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
 `yoke` brand. The region-pure
 carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/witnessed.rs), which fixes the
@@ -275,7 +275,7 @@ brand from the dep's view, folding its own region (the producer's home frame) pl
 the alloc site itself; a
 region-referencing `KType::Module` seals via [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
 under the child-scope reach minted once at construction from the child scope the birth site holds
-directly ([`Scope::reach_of_child`](../src/machine/core/scope.rs)), never recovered by walking the built
+directly ([`Scope::child_module_reach`](../src/machine/core/scope.rs)), never recovered by walking the built
 `KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
@@ -318,14 +318,14 @@ The minted reach is stored **per binding**, so a later read hands its carrier ba
 home-omitted foreign `Option<&FrameSet>` alongside the reference — minted at bind time from the
 delivered carrier for a value or alias ([`Scope::host_reach_of`](../src/machine/core/scope.rs)), and
 minted from the child scope's binding-entry reaches, held directly at construction, for a module
-([`Scope::reach_of_child`](../src/machine/core/scope.rs)). A carrier-oriented lookup
+([`Scope::child_module_reach`](../src/machine/core/scope.rs)). A carrier-oriented lookup
 (`lookup_value_carrier` / `lookup_type_carrier`) or an `ATTR` member read hands that stored reach back —
 copying the thin reference, never cloning the set — and the read builds a self-contained terminal —
 home frame fetched fresh, ∪ the stored foreign reach — through
 [`Scope::resident_value_carrier`](../src/machine/core/scope.rs) / `resident_type_carrier`, witnessing
 the existing `&'a KObject` / `&'a KType` **in place**. A bare type leaf rides the reach through the
 whole resolve chain (the `type_identifier_memo` and `resolve_type_identifier`), recomputing it at the
-memo miss by name ([`Scope::resolve_type_reach`](../src/machine/core/scope.rs)). The stored reach is
+memo miss by name ([`Scope::resolve_type_stored`](../src/machine/core/scope.rs)). The stored reach is
 home-omitted for the same cycle-safety rule every mint obeys — the region's own home frame `Rc` never
 lands in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built
 FN-def / LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its

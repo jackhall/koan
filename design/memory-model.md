@@ -248,7 +248,7 @@ bare borrow and the *consumer* keeps that borrow's region alive. Both channels c
 reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
 **closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
 child scope's home frame and binding-entry reaches the same way (via
-[`Scope::reach_of_child`](../src/machine/core/scope.rs)). The embedding or binding site mints that
+[`Scope::child_module_reach`](../src/machine/core/scope.rs)). The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,
 [`Scope::host_reach_of`](../src/machine/core/scope.rs) at a `let` / user-fn arg / `USING` bind), and the
 root drain mints the rehomed terminal's full witness set into the run-root scope's own arena — so a
@@ -340,7 +340,10 @@ caller-supplied audit returns true — nothing lands on a decline):
   nested per-call functor body). Mint and audit share the one predicate, so they stay exact
   complements; and unlike the other tiers these live on `Scope`, not `RegionBrand` — a `StoredReach`
   is meaningful only relative to its minting scope, so taking the destination from `self` binds
-  evidence, ambient coverage, and destination region together by construction. `Residence`
+  evidence, ambient coverage, and destination region together by construction. These tiers' callers are the
+  fused bind/register doors (`Scope::bind_delivered` / `register_type_delivered` and siblings): the `StoredReach`
+  is an opaque token those doors derive from the value's own witness and thread whole into the alloc, never a
+  free parameter a caller asserts. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
   compose from.
 - **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — an always-true audit made
