@@ -1,6 +1,8 @@
 //! `<sig> WITH {<Slot> = <Type>, …}` — infix signature specialization. Pins a subset of
 //! `sig`'s abstract-type slots, each to the type bound in the record literal, yielding a
-//! `KType::Signature { sig, pinned_slots }`. The infix signature-specialization builtin.
+//! `KType::Signature { sig, pinned_slots }`. A pin naming a manifest member (its type already
+//! fixed) is not an abstract slot: a pin equal to the fixed type normalizes away (leaving
+//! signature identity unchanged), and an unequal one is a type error.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
 //! values are resolved `Held::Type`s — a dotted `Er.Type` value sub-dispatches in value
@@ -12,7 +14,7 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::builtins::ascribe::abstract_members_of;
+use crate::builtins::ascribe::{abstract_members_of, manifest_type_members_of};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -48,25 +50,51 @@ pub fn body<'a>(
             )));
         }
     };
-    // A binding must name one of the SIG's abstract type slots — a width-subset check
-    // against the slot set. Slot names are capitalized, so a lowercase / unknown key
-    // simply isn't in the set; no separate name-shape check is needed.
-    let known_slots: HashSet<String> = abstract_members_of(s.decl_scope()).into_iter().collect();
-    // Validation only: every pin must name a known slot and hold a type. The composed
-    // `Signature` is built inside the fold closure from the crossed views, never from an
-    // ambient `pinned` vec — the compiler rejects smuggling an `'a` `KType` into the fresh brand.
+    // A binding names either an abstract slot (recorded as a pin) or a manifest member (its
+    // type is already fixed). Slot names are capitalized, so a lowercase / unknown key is in
+    // neither set; no separate name-shape check is needed.
+    let abstract_slots: HashSet<String> = abstract_members_of(s.decl_scope()).into_iter().collect();
+    let manifest_members: std::collections::HashMap<String, KType> =
+        manifest_type_members_of(s.decl_scope())
+            .into_iter()
+            .collect();
+    // Validation only: every pin must name a known slot and hold a type. A pin equal to a
+    // manifest member's fixed type is normalized away (added to `dropped`, never recorded), so
+    // `S WITH {Tag = Number}` keeps `S`'s signature identity; an unequal manifest pin is a type
+    // error. The composed `Signature` is built inside the fold closure from the crossed views,
+    // never from an ambient `pinned` vec — the compiler rejects smuggling an `'a` `KType` into
+    // the fresh brand — so `dropped` (a `String`-only set) is threaded in for the fold to skip.
+    let mut dropped: HashSet<String> = HashSet::new();
     for (name, value) in fields.iter() {
-        if !known_slots.contains(name) {
+        let is_abstract = abstract_slots.contains(name);
+        let manifest = manifest_members.get(name);
+        if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
                 s.path,
             ))));
         }
-        if let Held::Object(other) = value {
-            return done_err(KError::new(KErrorKind::ShapeError(format!(
-                "WITH binding `{name}` value must be a type, got `{}`",
-                other.ktype().name(),
-            ))));
+        let pin_type = match value {
+            Held::Type(kt) => kt,
+            Held::Object(other) => {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "WITH binding `{name}` value must be a type, got `{}`",
+                    other.ktype().name(),
+                ))));
+            }
+        };
+        if let Some(fixed) = manifest {
+            if pin_type == fixed {
+                dropped.insert(name.clone());
+            } else {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "`{}.{name}` is a manifest type member fixed to `{}`; \
+                     WITH cannot re-pin it to `{}`",
+                    s.path,
+                    fixed.render(),
+                    pin_type.render(),
+                ))));
+            }
         }
     }
 
@@ -86,30 +114,32 @@ pub fn body<'a>(
         // reach unions into the result's witness.
         Some(bindings) => {
             let bindings_carrier = bindings.duplicate();
-            let sealed =
-                ctx.ctx
-                    .alloc_carried_with(&[&sig_carrier, &bindings_carrier], |brand, views| {
-                        let sig = match views[0] {
-                            Carried::Type(KType::Signature { sig, .. }) => sig,
-                            _ => unreachable!("validated above: the sig arg is a Signature type"),
-                        };
-                        let pinned: Vec<(String, KType)> = match views[1] {
-                            Carried::Object(KObject::Record(record, _)) => record
-                                .iter()
-                                .map(|(name, value)| match value {
-                                    Held::Type(kt) => (name.clone(), kt.clone()),
-                                    Held::Object(_) => {
-                                        unreachable!("validated above: every pin value is a type")
-                                    }
-                                })
-                                .collect(),
-                            _ => unreachable!("validated above: bindings is a record"),
-                        };
-                        Carried::Type(brand.alloc_ktype_folded(KType::Signature {
-                            sig,
-                            pinned_slots: pinned,
-                        }))
-                    });
+            let sealed = ctx.ctx.alloc_carried_with(
+                &[&sig_carrier, &bindings_carrier],
+                move |brand, views| {
+                    let sig = match views[0] {
+                        Carried::Type(KType::Signature { sig, .. }) => sig,
+                        _ => unreachable!("validated above: the sig arg is a Signature type"),
+                    };
+                    let pinned: Vec<(String, KType)> = match views[1] {
+                        Carried::Object(KObject::Record(record, _)) => record
+                            .iter()
+                            .filter(|(name, _)| !dropped.contains(name.as_str()))
+                            .map(|(name, value)| match value {
+                                Held::Type(kt) => (name.clone(), kt.clone()),
+                                Held::Object(_) => {
+                                    unreachable!("validated above: every pin value is a type")
+                                }
+                            })
+                            .collect(),
+                        _ => unreachable!("validated above: bindings is a record"),
+                    };
+                    Carried::Type(brand.alloc_ktype_folded(KType::Signature {
+                        sig,
+                        pinned_slots: pinned,
+                    }))
+                },
+            );
             Action::Done(Ok(sealed))
         }
         // Carrier-less bindings: every pin must be region-free; rebuild the pin list at the brand
@@ -117,6 +147,7 @@ pub fn body<'a>(
         None => {
             let plan: Option<Vec<(String, KType<'static>)>> = fields
                 .iter()
+                .filter(|(name, _)| !dropped.contains(name.as_str()))
                 .map(|(name, value)| match value {
                     Held::Type(kt) => kt.to_static().map(|owned| (name.clone(), owned)),
                     Held::Object(_) => unreachable!("validated above: every pin value is a type"),
@@ -250,6 +281,85 @@ mod tests {
                 "expected unknown-slot rejection, got {e}",
             ),
             Ok(()) => panic!("WITH on unknown slot must err"),
+        }
+    }
+
+    /// A pin equal to a manifest member's fixed type normalizes away: `pinned_slots` stays
+    /// empty and the resulting signature compares equal to the bare sig.
+    #[test]
+    fn with_equal_manifest_pin_normalizes_away() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG Tagged = ((LET Tag = Number) (VAL value :Number))",
+        );
+        let bare = scope
+            .resolve_type("Tagged")
+            .expect("Tagged must bind a Signature KType");
+        let result = run_one_type(scope, parse_one("Tagged WITH {Tag = Number}"));
+        match &result {
+            KType::Signature { pinned_slots, .. } => {
+                assert!(
+                    pinned_slots.is_empty(),
+                    "equal manifest pin must not record a pinned slot, got {pinned_slots:?}"
+                );
+            }
+            other => panic!("expected Signature type, got {other:?}"),
+        }
+        assert_eq!(
+            result, bare,
+            "an equal manifest pin must preserve signature identity"
+        );
+    }
+
+    /// A pin unequal to a manifest member's fixed type is a manifest-fixity error.
+    #[test]
+    fn with_rejects_unequal_manifest_pin() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG Tagged = ((LET Tag = Number) (VAL value :Number))",
+        );
+        let mut runtime = KoanRuntime::new();
+        let id = runtime.dispatch_in_scope(parse_one("Tagged WITH {Tag = Str}"), scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        match runtime.result_error(id) {
+            Err(e) => {
+                let text = format!("{e}");
+                assert!(
+                    text.contains("Tag") && text.contains("manifest"),
+                    "expected manifest-fixity rejection naming the slot, got {e}",
+                );
+            }
+            Ok(()) => panic!("WITH re-pinning a manifest member to a different type must err"),
+        }
+    }
+
+    /// A mixed record pins only the abstract slot; the equal manifest pin normalizes away.
+    #[test]
+    fn with_mixed_record_records_only_abstract_pin() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))",
+        );
+        let result = run_one_type(scope, parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
+        match result {
+            KType::Signature { pinned_slots, .. } => {
+                assert_eq!(
+                    pinned_slots.len(),
+                    1,
+                    "only the abstract Elt pin is recorded, got {pinned_slots:?}"
+                );
+                assert_eq!(pinned_slots[0].0, "Elt");
+                assert_eq!(pinned_slots[0].1, KType::Str);
+            }
+            other => panic!("expected Signature type, got {other:?}"),
         }
     }
 
