@@ -218,11 +218,11 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
         Ok(StepCarried::born(
             deps.owned(0)
                 .delivered
-                .transfer_into::<DestHandleFamily, CarriedFamily, _>(
+                .transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                     dest,
                     Residence::Copied,
-                    |value, region, token| {
-                        copy_carried(value, FoldingBrand::in_fold_closure(region, token))
+                    |value, _region, placement| {
+                        copy_carried(value, FoldingBrand::in_fold_closure(placement))
                     },
                 ),
         ))

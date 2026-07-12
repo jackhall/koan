@@ -32,7 +32,7 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Delivered, Erased, FamilyArena, FoldToken, Reattachable, Region, RegionHandle,
+    Delivered, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle,
     RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
     Stored, WitnessRegion, Witnessed,
 };
@@ -518,32 +518,35 @@ impl<'a> Scope<'a> {
 /// (`transfer_into` / `merge_pinned` / `map_pinned` / [`StepAllocator::alloc_carried_with`])
 /// composes a witness naming every source operand's reach, so a value built *from the closure's
 /// operands* is covered by the fold without a per-value audit. Carries the folded-placement
-/// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldToken`] is the sole
-/// key to its one constructor ([`Self::in_fold_closure`]): only a fold engine can mint a token, and
-/// the token's `'b` brand keeps it from escaping the closure, so this capability is reachable only
-/// at a fresh fold brand — enforced by the type, not by a prose audit list.
+/// methods [`RegionBrand`] deliberately lacks; everything else derefs. A [`FoldedPlacement`] is the
+/// sole key to its one constructor ([`Self::in_fold_closure`]): a fold engine mints the placement
+/// over the destination region and hands it in, and the placement's `'a` brand keeps it confined to
+/// the closure, so this capability is reachable only at a fresh fold brand — enforced by the type,
+/// not by a prose audit list.
 #[derive(Clone, Copy)]
-pub struct FoldingBrand<'a>(RegionBrand<'a>);
+pub struct FoldingBrand<'a> {
+    brand: RegionBrand<'a>,
+    placement: FoldedPlacement<'a, KoanStorageProfile>,
+}
 
 impl<'a> std::ops::Deref for FoldingBrand<'a> {
     type Target = RegionBrand<'a>;
     fn deref(&self) -> &RegionBrand<'a> {
-        &self.0
+        &self.brand
     }
 }
 
 impl<'a> FoldingBrand<'a> {
-    /// Mint the folded-placement capability inside a fold closure. The [`FoldToken`] is proof of
-    /// residence: a fold engine (`transfer_into` / `merge_pinned` / `map_pinned` /
-    /// [`StepAllocator::alloc_carried_with`]) mints it and hands it to the closure alongside the
-    /// operands, and its `'a` brand keeps it confined there — so this constructor is callable only
-    /// where the enclosing combinator already folds the operands' reach into the result.
-    pub(crate) fn in_fold_closure(
-        handle: RegionHandle<'a, KoanStorageProfile>,
-        token: FoldToken<'a>,
-    ) -> Self {
-        let _ = token;
-        FoldingBrand(RegionBrand(handle))
+    /// Mint the folded-placement capability inside a fold closure. The [`FoldedPlacement`] is the
+    /// fold-brand proof: a fold engine mints it over the destination region and hands it to the
+    /// closure alongside the operands, and its `'a` brand keeps it confined there — so this
+    /// constructor is callable only where the enclosing combinator already folds the operands' reach
+    /// into the result.
+    pub(crate) fn in_fold_closure(placement: FoldedPlacement<'a, KoanStorageProfile>) -> Self {
+        FoldingBrand {
+            brand: RegionBrand(placement.handle()),
+            placement,
+        }
     }
 
     /// Store a value built at this fold's own brand. Sound without a per-value audit: the input is
@@ -552,20 +555,15 @@ impl<'a> FoldingBrand<'a> {
     /// allocations, and owned/`'static` data — all named by the witness the enclosing combinator
     /// composes. An ambient-lifetime capture is a compile error at this signature (a `KType<'ambient>`
     /// cannot coerce to `KType<'b>`, since `'b` has no outlives relation to any enclosing lifetime),
-    /// so the always-true audit is discharged by the type, not by a runtime check.
+    /// so the store is discharged at compile time by the placement capability, with no runtime audit
+    /// at all.
     pub(crate) fn alloc_ktype_folded(self, t: KType<'a>) -> &'a KType<'a> {
-        (self.0)
-            .0
-            .alloc_resident_audited::<KType<'static>>(t, |_, _| true)
-            .expect("alloc_resident_audited with an always-true audit never returns None")
+        self.placement.alloc_resident_folded::<KType<'static>>(t)
     }
 
     /// Object twin of [`Self::alloc_ktype_folded`].
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
-        (self.0)
-            .0
-            .alloc_resident_audited::<KObject<'static>>(o, |_, _| true)
-            .expect("alloc_resident_audited with an always-true audit never returns None")
+        self.placement.alloc_resident_folded::<KObject<'static>>(o)
     }
 }
 
@@ -1008,9 +1006,7 @@ impl<'step> StepAllocator<'step> {
             self.context
                 .alloc_with_handle::<KoanStorageProfile, CarriedFamily, CarriedFamily>(
                     deps,
-                    |handle, views, token| {
-                        build(FoldingBrand::in_fold_closure(handle, token), views)
-                    },
+                    |placement, views| build(FoldingBrand::in_fold_closure(placement), views),
                 ),
         )
     }
@@ -1051,18 +1047,21 @@ impl<'step> StepAllocator<'step> {
                 crate::witnessed::Residence::Kept,
                 |scope_view, (handle, views), _brand| (handle, (views, scope_view)),
             );
-        let frame = self.frame();
-        StepCarried::born(operands.map_pinned::<CarriedFamily, _>(
-            &frame,
-            |(handle, (views, scope)), token| {
-                // The fold token proves this closure runs at a fresh fold brand; the value `build`
-                // returns comes only from this fold's own operands — the dep views and the crossed
-                // scope envelope, both re-anchored at this brand — whose reach the enclosing fold
-                // already composes into the result's witness. No ambient-lifetime borrow reaches
-                // this closure.
-                build(FoldingBrand::in_fold_closure(handle, token), views, scope)
-            },
-        ))
+        // The placement is minted by the engine over the frame's own region; the build value comes
+        // only from this fold's declared operands — the dep views and the crossed scope envelope,
+        // both re-anchored at this brand — whose reach the enclosing fold already composes into the
+        // result's witness. No ambient-lifetime borrow reaches this closure. The carried `_handle`
+        // is ignored for minting; it stays in the operand tuple only because the fold seam produced
+        // it.
+        StepCarried::born(
+            self.context
+                .map_pinned_placing::<ScopeFoldOperands, CarriedFamily, KoanStorageProfile>(
+                    operands,
+                    |(_handle, (views, scope)), placement| {
+                        build(FoldingBrand::in_fold_closure(placement), views, scope)
+                    },
+                ),
+        )
     }
 
     /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region

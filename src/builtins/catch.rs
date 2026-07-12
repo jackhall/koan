@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{kerror_ktype, KoanRegionExt};
+use crate::machine::core::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
 use crate::machine::execute::StepCarried;
 use crate::machine::model::{KObject, KType};
 use crate::machine::Scope;
@@ -91,11 +91,11 @@ pub fn body<'a>(
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.
-            Ok(carrier) => carrier.transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+            Ok(carrier) => carrier.transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                 home,
                 Residence::Copied,
-                |value, (region, identity), token| {
-                    let region = FoldingBrand::in_fold_closure(region, token);
+                |value, (_region, identity), placement| {
+                    let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(build_result(
                         "Ok",
                         identity,
@@ -115,18 +115,19 @@ pub fn body<'a>(
                 });
                 // The pinned merge: `frame` covers the freshly-built payload (it lives in that
                 // frame's own region); the identity operand's backing is the live scope.
-                payload.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
-                    home,
-                    &frame,
-                    |payload, (region, identity), token| {
-                        let region = FoldingBrand::in_fold_closure(region, token);
-                        Carried::Object(region.alloc_object_folded(build_result(
-                            "Error",
-                            identity,
-                            payload.object().deep_clone(),
-                        )))
-                    },
-                )
+                payload
+                    .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
+                        home,
+                        &frame,
+                        |payload, (_region, identity), placement| {
+                            let region = FoldingBrand::in_fold_closure(placement);
+                            Carried::Object(region.alloc_object_folded(build_result(
+                                "Error",
+                                identity,
+                                payload.object().deep_clone(),
+                            )))
+                        },
+                    )
             }
         };
         Action::Done(Ok(StepCarried::born(witnessed)))

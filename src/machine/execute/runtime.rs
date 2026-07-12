@@ -153,11 +153,11 @@ impl<'run> KoanRuntime<'run> {
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let delivered = self.sched.dep_delivered(producer).map_err(|e| e.clone())?;
         Ok(
-            delivered.transfer_into::<DestHandleFamily, CarriedFamily, _>(
+            delivered.transfer_into_placing::<DestHandleFamily, CarriedFamily, _>(
                 dest,
                 crate::witnessed::Residence::Copied,
-                |value, region, token| {
-                    copy_carried(value, FoldingBrand::in_fold_closure(region, token))
+                |value, _region, placement| {
+                    copy_carried(value, FoldingBrand::in_fold_closure(placement))
                 },
             ),
         )

@@ -278,11 +278,11 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             Ok(terminals[0]
                 .delivered
-                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     Residence::Copied,
-                    move |value, (region, identity_ty), token| {
-                        let region = FoldingBrand::in_fold_closure(region, token);
+                    move |value, (_region, identity_ty), placement| {
+                        let region = FoldingBrand::in_fold_closure(placement);
                         let inner = if collapse {
                             WrappedPayload::peel(value.object())
                         } else {
@@ -335,18 +335,19 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
-            Ok(fields.merge_pinned::<RegionTypeFamily, CarriedFamily, _>(
-                home,
-                &dest_frame,
-                |(_region, fields), (region, identity_ty), token| {
-                    let region = FoldingBrand::in_fold_closure(region, token);
-                    let record = Record::from_pairs(fields);
-                    Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                        inner: WrappedPayload::hold(&KObject::record(record)),
-                        type_id: identity_ty,
-                    }))
-                },
-            ))
+            Ok(fields
+                .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
+                    home,
+                    &dest_frame,
+                    |(_region, fields), (_identity_region, identity_ty), placement| {
+                        let region = FoldingBrand::in_fold_closure(placement);
+                        let record = Record::from_pairs(fields);
+                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
+                            inner: WrappedPayload::hold(&KObject::record(record)),
+                            type_id: identity_ty,
+                        }))
+                    },
+                ))
         }
         CtorKind::Tagged {
             schema,
@@ -381,11 +382,11 @@ fn finish_witnessed<'step>(
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered
-                .transfer_into::<RegionTypeFamily, CarriedFamily, _>(
+                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
                     home,
                     Residence::Copied,
-                    move |value, (region, identity_ty), token| {
-                        let region = FoldingBrand::in_fold_closure(region, token);
+                    move |value, (_region, identity_ty), placement| {
+                        let region = FoldingBrand::in_fold_closure(placement);
                         let (set, index) = match identity_ty {
                             KType::SetRef { set, index } => (Rc::clone(set), *index),
                             _ => unreachable!("a Tagged identity is always a SetRef"),

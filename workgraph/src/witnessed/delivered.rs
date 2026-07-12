@@ -28,8 +28,8 @@
 use std::rc::Rc;
 
 use super::{
-    Carrier, Erased, FoldToken, HasRegionHandle, PinsRegion, Reattachable, Region, RegionHandle,
-    RegionOwner, RegionSet, Residence, Sealed, StorageProfile, Stored, Witnessed,
+    Carrier, Erased, FoldToken, FoldedPlacement, HasRegionHandle, PinsRegion, Reattachable, Region,
+    RegionHandle, RegionOwner, RegionSet, Residence, Sealed, StorageProfile, Stored, Witnessed,
 };
 
 /// A sealed carrier paired with the retained frame owner that pins its value's backing in transit.
@@ -207,6 +207,35 @@ impl<T: Reattachable, F: PinsRegion + 'static> Delivered<T, Carrier<F>, F> {
                 Carrier::compose_into(left, right, live_dest.region_handle(), Some(host), mode)
             },
             relocate,
+        )
+    }
+
+    /// [`Self::transfer_into`] handing `relocate` a [`FoldedPlacement`] over the destination operand's
+    /// own handle instead of a bare [`FoldToken`]. The placement is minted over exactly the handle
+    /// [`Carrier::compose_into`] mints the composed reach set over, so the folded store rides the same
+    /// confinement the composition establishes — the destination is the engine's own operand region,
+    /// never a caller-captured handle.
+    pub fn transfer_into_placing<B: Reattachable, P: Reattachable, Pr>(
+        &self,
+        dest: Witnessed<B, Carrier<F>>,
+        mode: Residence,
+        relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
+    ) -> Witnessed<P, Carrier<F>>
+    where
+        Pr: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<Pr>>,
+        for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+        RegionSet<F>: Stored<Pr> + for<'r> Reattachable<At<'r> = RegionSet<F>>,
+        T::At<'static>: Copy,
+    {
+        let host = &self.host;
+        self.cell.duplicate().unseal().merge_composed(
+            dest,
+            host,
+            |left, right, live_dest| {
+                Carrier::compose_into(left, right, live_dest.region_handle(), Some(host), mode)
+            },
+            super::place_over_dest::<T, B, P, Pr>(relocate),
         )
     }
 }

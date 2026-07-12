@@ -10,8 +10,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::{
-    Carrier, Delivered, FoldToken, PinsRegion, Reattachable, Region, RegionHandle, RegionOwner,
-    Residence, StorageProfile, Witnessed,
+    Carrier, Delivered, FoldToken, FoldedPlacement, PinsRegion, Reattachable, Region, RegionHandle,
+    RegionOwner, Residence, StorageProfile, Witnessed,
 };
 
 /// The step construction context — handed to a finish by the step loop, whose held region owner is
@@ -172,11 +172,14 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
     }
 
     /// [`Self::alloc_with`] for a frame owning a library [`Region`]: same dep folding, build closure
-    /// receives the [`RegionHandle`].
+    /// receives a [`FoldedPlacement`] over the destination region. The placement replaces the bare
+    /// handle and the [`FoldToken`] of the region-based [`Self::alloc_with`] with one capability: it
+    /// carries the destination handle and is itself the fold-brand proof, minted here over the same
+    /// region [`Self::alloc_with`] folds the deps' reach into.
     pub fn alloc_with_handle<P, T, V>(
         &self,
         deps: &[&Delivered<V, Carrier<F>, F>],
-        build: impl for<'b> FnOnce(RegionHandle<'b, P>, Vec<V::At<'b>>, FoldToken<'b>) -> T::At<'b>,
+        build: impl for<'b> FnOnce(FoldedPlacement<'b, P>, Vec<V::At<'b>>) -> T::At<'b>,
     ) -> Witnessed<T, Carrier<F>>
     where
         P: StorageProfile + 'static,
@@ -187,8 +190,33 @@ impl<F: RegionOwner + PinsRegion + 'static> StepContext<F> {
         super::RegionSet<F>: super::Stored<P> + for<'r> Reattachable<At<'r> = super::RegionSet<F>>,
     {
         self.alloc_with::<T, V, P>(deps, |region, views, token| {
-            build(RegionHandle::new(region), views, token)
+            // The accumulator was yoked over this frame's own region and `alloc_with` folds every
+            // dep's reach into it, so a placement over its handle is honestly minted here; the fold
+            // token is subsumed by the placement as the `'b` brand proof.
+            let _ = token;
+            build(FoldedPlacement::mint(RegionHandle::new(region)), views)
         })
+    }
+
+    /// [`Witnessed::map_pinned`] that hands the build closure a [`FoldedPlacement`] over **this
+    /// context's own frame region** instead of a bare [`FoldToken`]. The engine mints the placement
+    /// over exactly the region the result's [`Carrier<F>`] witness covers — the held frame
+    /// (guarantee 4) — so a value the closure folds from `operand`'s declared views stores through
+    /// the placement with no per-value audit and no caller-supplied handle. The covariance door
+    /// fork 2 rejected is closed because koan never supplies the destination handle: the engine
+    /// mints it over [`Self::region`].
+    pub fn map_pinned_placing<T, P2, P>(
+        &self,
+        operand: Witnessed<T, Carrier<F>>,
+        f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, P>) -> P2::At<'b>,
+    ) -> Witnessed<P2, Carrier<F>>
+    where
+        T: Reattachable,
+        P2: Reattachable,
+        P: StorageProfile + 'static,
+        F: RegionOwner<Region = Region<P>>,
+    {
+        operand.map_pinned_placing::<P2, P, _>(&self.frame, self.region(), f)
     }
 }
 

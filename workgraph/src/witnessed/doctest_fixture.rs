@@ -7,8 +7,8 @@
 use std::cell::Cell;
 
 use super::{
-    FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet, SealedExtern, StorageOf,
-    StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
+    AuditedStored, FamilyArena, PinsRegion, Reattachable, Region, RegionOwner, RegionSet,
+    SealedExtern, StorageOf, StorageProfile, Stored, Witness, WitnessRegion, Witnessed,
 };
 
 /// A shared-reference carrier family: `&'r u32`.
@@ -70,11 +70,23 @@ pub fn seal_extern<T: Reattachable>(live: T::At<'_>) -> SealedExtern<T> {
     SealedExtern::erase(live)
 }
 
-/// Profile for the region/handle doctests: the reference family plus the witness-set family the
-/// fold verbs mint into.
+/// A recorded-reference carrier family: `&'r u32` whose [`Stored::record_local`] records the
+/// *pointee's* address into the region's membership side-table, so [`Region::owns_addr`] can later
+/// answer whether a borrow points into a value resident in this region. The simplest honest shape
+/// for an [`AuditedStored`] audit — [`RegionHandle::alloc_resident_checked`]'s doctests exercise a
+/// passing store (a borrow of a resident value) and a rejecting one (a borrow the region does not
+/// own).
+pub struct RecordedRefFamily;
+// SAFETY: `&'r u32` is one type generic only in `'r`.
+unsafe impl Reattachable for RecordedRefFamily {
+    type At<'r> = &'r u32;
+}
+
+/// Profile for the region/handle doctests: the reference family, the witness-set family the fold
+/// verbs mint into, and the recorded-reference family the checked-store doctests audit against.
 pub struct FixtureProfile;
 impl StorageProfile for FixtureProfile {
-    type Families = (RefFamily, (RegionSet<RegionCart>, ()));
+    type Families = (RefFamily, (RegionSet<RegionCart>, (RecordedRefFamily, ())));
 }
 impl Stored<FixtureProfile> for RefFamily {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
@@ -84,6 +96,25 @@ impl Stored<FixtureProfile> for RefFamily {
 impl Stored<FixtureProfile> for RegionSet<RegionCart> {
     fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
         &storage.1 .0
+    }
+}
+impl Stored<FixtureProfile> for RecordedRefFamily {
+    fn cell(storage: &StorageOf<FixtureProfile>) -> &FamilyArena<Self> {
+        &storage.1 .1 .0
+    }
+    fn record_local(frame: &Region<FixtureProfile>, stored: &&'static u32) {
+        frame.record_addr(*stored as *const u32 as usize);
+    }
+}
+
+// SAFETY: `audit` returns true only when `region` owns the address of the `u32` the incoming
+// reference borrows — i.e. that `u32` was previously stored into (and recorded by) this region, so
+// the borrow is genuinely resident. A permissive audit is not writable here without lying about
+// that residence relation.
+unsafe impl AuditedStored<FixtureProfile> for RecordedRefFamily {
+    type AuditContext<'ctx> = ();
+    fn audit(region: &Region<FixtureProfile>, value: &&u32, _context: ()) -> bool {
+        region.owns_addr(*value as *const u32 as usize)
     }
 }
 

@@ -95,37 +95,39 @@ impl NodeFinalize for KoanRuntime<'_> {
                 // check failed, and the path returns the `Err` terminal.
                 let home_operand: Witnessed<ContractHomeFamily, CarrierWitness> =
                     Witnessed::resident((home.handle(), declared));
-                let checked = envelope.transfer_into::<ContractHomeFamily, CarriedFamily, _>(
-                    home_operand,
-                    Residence::Copied,
-                    |value, (home_region, declared_type), token| {
-                        let home_region = FoldingBrand::in_fold_closure(home_region, token);
-                        let object = value.object();
-                        if !declared_type.matches_value(object) {
-                            mismatch = Some(return_type_mismatch(
-                                declared_type,
-                                per_call,
-                                label,
-                                object.ktype().name(),
-                            ));
-                            return Carried::Object(
-                                home_region.alloc_object_folded(object.deep_clone()),
-                            );
-                        }
-                        // A declared union return checks (above) but never re-tags: the value keeps
-                        // its own runtime type, which is what union elimination dispatches on. Every
-                        // other declared return re-stamps the value into the declared type.
-                        if matches!(declared_type, KType::Union(_)) {
-                            return Carried::Object(
-                                home_region.alloc_object_folded(object.deep_clone()),
-                            );
-                        }
-                        Carried::Object(
-                            home_region
-                                .alloc_object_folded(object.deep_clone().stamp_type(declared_type)),
-                        )
-                    },
-                );
+                let checked = envelope
+                    .transfer_into_placing::<ContractHomeFamily, CarriedFamily, _>(
+                        home_operand,
+                        Residence::Copied,
+                        |value, (_home_region, declared_type), placement| {
+                            let home_region = FoldingBrand::in_fold_closure(placement);
+                            let object = value.object();
+                            if !declared_type.matches_value(object) {
+                                mismatch = Some(return_type_mismatch(
+                                    declared_type,
+                                    per_call,
+                                    label,
+                                    object.ktype().name(),
+                                ));
+                                return Carried::Object(
+                                    home_region.alloc_object_folded(object.deep_clone()),
+                                );
+                            }
+                            // A declared union return checks (above) but never re-tags: the value keeps
+                            // its own runtime type, which is what union elimination dispatches on. Every
+                            // other declared return re-stamps the value into the declared type.
+                            if matches!(declared_type, KType::Union(_)) {
+                                return Carried::Object(
+                                    home_region.alloc_object_folded(object.deep_clone()),
+                                );
+                            }
+                            Carried::Object(
+                                home_region.alloc_object_folded(
+                                    object.deep_clone().stamp_type(declared_type),
+                                ),
+                            )
+                        },
+                    );
                 return match mismatch {
                     Some(error) => Err(error),
                     None => Ok(checked),

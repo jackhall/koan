@@ -347,6 +347,77 @@ impl<'a, W: StorageProfile> RegionHandle<'a, W> {
     ) -> Option<&'a K::At<'a>> {
         audit(self.region, &value).then(|| self.region.alloc_resident::<K>(value))
     }
+
+    /// Resident move-in vetted by family `K`'s own declared [`AuditedStored`] audit rather than a
+    /// call-site closure: `value` is stored only when `K::audit` — the embedder's residence
+    /// verifier for the family — accepts it against this handle's region and the typed `context`.
+    /// Where [`Self::alloc_resident`] admits only `'static` values, this admits a value that
+    /// legitimately borrows a region, with the family (an `unsafe impl`, not forgeable call-site
+    /// code) declaring the vetting.
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RecordedRefFamily, RegionCart};
+    /// use workgraph::witnessed::RegionHandle;
+    /// static SEED: u32 = 7;
+    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // Seed the region so it records `SEED`'s address as resident.
+    /// let _ = handle.alloc_resident::<RecordedRefFamily>(&SEED);
+    /// // A borrow of the now-resident `SEED` passes the family audit.
+    /// let stored = handle
+    ///     .alloc_resident_checked::<RecordedRefFamily>(&SEED, ())
+    ///     .expect("SEED is resident");
+    /// assert_eq!(**stored, 7);
+    /// ```
+    ///
+    /// ```
+    /// use std::rc::Rc;
+    /// use workgraph::witnessed::doctest_fixture::{fresh_region, RecordedRefFamily, RegionCart};
+    /// use workgraph::witnessed::RegionHandle;
+    /// static OTHER: u32 = 9;
+    /// let cart = Rc::new(RegionCart(fresh_region()));
+    /// let handle = RegionHandle::from_owner(&*cart);
+    /// // `OTHER` was never stored, so the region does not own its address: the audit rejects it.
+    /// assert!(handle
+    ///     .alloc_resident_checked::<RecordedRefFamily>(&OTHER, ())
+    ///     .is_none());
+    /// ```
+    pub fn alloc_resident_checked<K: AuditedStored<W>>(
+        self,
+        value: K::At<'_>,
+        context: K::AuditContext<'_>,
+    ) -> Option<&'a K::At<'a>> {
+        K::audit(self.region, &value, context).then(|| self.region.alloc_resident::<K>(value))
+    }
+}
+
+/// A per-family residence audit an embedder declares once, consumed by
+/// [`RegionHandle::alloc_resident_checked`] to gate a region-borrowing move-in. Where
+/// [`RegionHandle::alloc_resident`] admits only `'static` values and the crate-private
+/// brand-confined doors build in place, this is the door for a value the embedder can vet only at
+/// runtime — but the audit is a **family declaration**, not a forgeable call-site closure, so a
+/// permissive audit is not writable in safe code. Each call site passes typed `context`
+/// (residence evidence), never code.
+///
+/// # Safety
+///
+/// An implementor's [`audit`](Self::audit) must return `true` only when every region borrow the
+/// stored `value` carries is resident in `region` or covered by `context`'s evidence — the same
+/// obligation the caller of [`Region::alloc_resident`] otherwise discharges by construction. A
+/// lying audit (one that returns `true` for a value borrowing a region that `region` neither owns
+/// nor `context` covers) re-admits an unvetted lifetime-lengthening move-in, exactly the dangle the
+/// `'static` bound on [`RegionHandle::alloc_resident`] rules out. `unsafe` to implement for that
+/// reason, following the [`RegionOwner`] / [`Reattachable`] precedent — the impl is an audited
+/// soundness declaration.
+pub unsafe trait AuditedStored<W: StorageProfile>: Stored<W> {
+    /// The typed evidence a call site passes — never code. `()` for a family whose audit is a
+    /// self-contained residence check; a richer context (reach evidence, an ambient predicate) for
+    /// a family whose audit widens against the destination's coverage.
+    type AuditContext<'ctx>;
+    /// Vet `value` for residence in `region` under `context`. Returns `true` only when the store is
+    /// sound per the trait's safety contract.
+    fn audit(region: &Region<W>, value: &Self::At<'_>, context: Self::AuditContext<'_>) -> bool;
 }
 
 /// [`Reattachable`] family for a [`RegionHandle`] — a thin pointer, layout independent of `'r` — so an

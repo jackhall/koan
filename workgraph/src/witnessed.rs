@@ -29,7 +29,8 @@ use stable_deref_trait::StableDeref;
 
 mod region;
 pub use region::{
-    FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf, StorageProfile, Stored,
+    AuditedStored, FamilyArena, Region, RegionHandle, RegionHandleFamily, StorageOf,
+    StorageProfile, Stored,
 };
 
 mod region_set;
@@ -202,6 +203,88 @@ impl<'b> FoldToken<'b> {
     /// Forge a fold token for a test that has no enclosing fold engine to mint one.
     pub fn forge_for_test() -> Self {
         FoldToken::mint()
+    }
+}
+
+/// A **compile-only** capability to store into a fold destination's region without a per-value
+/// audit — the fold-door counterpart of [`FoldToken`]. It privately wraps the destination
+/// [`RegionHandle`] and is minted only by a fold engine that has composed the closure result's
+/// witness over exactly that region, so a value the closure builds from the fold's operands is
+/// covered by the result witness. [`Self::alloc_resident_folded`] therefore discharges the store's
+/// residence obligation at compile time, with **no runtime check** at all.
+///
+/// Like [`FoldToken`], `Copy` is safe (the placement cannot outlive its closure — `'b` is
+/// unnameable outside — so duplicating it inside grants nothing new), the private field keeps an
+/// embedder from forging one, and the crate-internal [`mint`](Self::mint) confines minting to the
+/// fold engines. It doubles as the `E0582` witness a placement-bearing fold closure needs — an
+/// input mentioning `'b`, without which `impl for<'b> FnOnce(..) -> P::At<'b>` is rejected.
+///
+/// ```compile_fail
+/// use std::rc::Rc;
+/// use workgraph::witnessed::FoldedPlacement;
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile, RegionCart};
+/// use workgraph::witnessed::RegionHandle;
+/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let handle = RegionHandle::from_owner(&*cart);
+/// // The field is private outside the crate — a placement cannot be forged by construction.
+/// let _p: FoldedPlacement<'_, FixtureProfile> = FoldedPlacement { handle };
+/// ```
+///
+/// ```compile_fail
+/// use std::rc::Rc;
+/// use workgraph::witnessed::FoldedPlacement;
+/// use workgraph::witnessed::doctest_fixture::{fresh_region, FixtureProfile, RegionCart};
+/// use workgraph::witnessed::RegionHandle;
+/// let cart = Rc::new(RegionCart(fresh_region()));
+/// let handle = RegionHandle::from_owner(&*cart);
+/// // `mint` is crate-internal — only the fold engines mint a placement.
+/// let _p = FoldedPlacement::mint(handle);
+/// ```
+pub struct FoldedPlacement<'b, W: StorageProfile> {
+    handle: RegionHandle<'b, W>,
+}
+
+// Manual impls: a derive would bound `W: Clone` / `W: Copy`, which the `Copy` handle field does not
+// need — mirroring [`RegionHandle`]'s own manual `Clone` / `Copy`.
+impl<W: StorageProfile> Clone for FoldedPlacement<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: StorageProfile> Copy for FoldedPlacement<'_, W> {}
+
+impl<'b, W: StorageProfile> FoldedPlacement<'b, W> {
+    /// Mint a placement over `handle` — crate-internal, so only a fold engine that has composed the
+    /// result witness over `handle`'s region can produce one.
+    pub(crate) fn mint(handle: RegionHandle<'b, W>) -> Self {
+        FoldedPlacement { handle }
+    }
+
+    /// Forge a placement for an embedder white-box test that has no enclosing fold engine to mint
+    /// one — gated off production and out of the external-crate `compile_fail` fixtures, mirroring
+    /// [`FoldToken::forge_for_test`].
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn forge_for_test(handle: RegionHandle<'b, W>) -> Self {
+        FoldedPlacement { handle }
+    }
+
+    /// The destination handle — the identity / allocation capability the enclosing fold closure
+    /// already held at will, so exposing it grants nothing new.
+    pub fn handle(self) -> RegionHandle<'b, W> {
+        self.handle
+    }
+
+    /// Store a value built at this fold's own brand into the destination region — **no audit, no
+    /// `Option`**.
+    ///
+    /// Sound by the rank-2 fold brand: the only inhabitants of `K::At<'b>` are the fold's declared
+    /// operand views, the brand's own allocations, and owned `'static` data, all named by the
+    /// witness the minting engine composes over this placement's own region. An ambient-lifetime
+    /// capture is a compile error at this signature (`'b` has no outlives relation to any enclosing
+    /// lifetime), so the always-true audit is discharged by the type. The private field plus
+    /// crate-internal [`mint`](Self::mint) make the destination inseparable from that proof.
+    pub fn alloc_resident_folded<K: Stored<W>>(self, value: K::At<'b>) -> &'b K::At<'b> {
+        self.handle.region().alloc_resident::<K>(value)
     }
 }
 
@@ -505,6 +588,37 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         }
     }
 
+    /// [`Self::map_pinned`] that hands the closure a [`FoldedPlacement`] over the engine-supplied
+    /// `region` instead of a bare [`FoldToken`]. The placement is minted at the same fresh `for<'b>`
+    /// brand the operand is re-anchored under, so a value the closure folds from the operand's views
+    /// stores through the placement with no per-value audit. Because `region` is handed in by the
+    /// engine — never captured from the closure's environment — the placement's destination cannot be
+    /// substituted by caller code; the covariance a bare handle would admit is closed.
+    pub fn map_pinned_placing<P: Reattachable, PP: StorageProfile, Pin: Witness>(
+        self,
+        pin: &Pin,
+        region: &Region<PP>,
+        f: impl for<'b> FnOnce(T::At<'b>, FoldedPlacement<'b, PP>) -> P::At<'b>,
+    ) -> Witnessed<P, W> {
+        let Witnessed { value, witness } = self;
+        // SAFETY: `reattach`'s contract, exactly as in `map_pinned` — the borrowed `pin` keeps the
+        // carrier's pointee live and fixed-address for the whole call, the re-anchor is transient (the
+        // fresh `for<'b>` brand the closure cannot leak), and the projection is immediately re-erased
+        // to `'static` for storage under the carried witness. The placement is minted over `region`
+        // at that same brand, so the destination is exactly the engine-supplied region. The mint is
+        // co-located with the re-anchor because the placement carries `region`'s lifetime: routing it
+        // through a shared reattach helper universally quantifies the fold brand and rejects the
+        // region coercion (and a brand-free helper closure trips `E0582`, since `T::At<'b>` alone does
+        // not witness `'b`).
+        let live: T::At<'_> = unsafe { value.reattach() };
+        let projected = f(live, FoldedPlacement::mint(RegionHandle::new(region)));
+        let _ = pin;
+        Witnessed {
+            value: Erased::erase(projected),
+            witness,
+        }
+    }
+
     /// Combine two witnessed carriers under an **externally supplied pin** rather than bundled
     /// pinning witnesses — the pinned-merge verb for reference-only-witnessed carriers (the
     /// collapsed [`Carrier`]), mirroring [`Sealed::open_with`]'s relationship to [`Sealed::open`].
@@ -524,6 +638,27 @@ impl<T: Reattachable, W> Witnessed<T, W> {
         W: ComposeWitness<B>,
     {
         self.merge_composed(other, pin, W::compose, f)
+    }
+
+    /// [`Self::merge_pinned`] handing `f` a [`FoldedPlacement`] over the destination operand `other`'s
+    /// own handle instead of a bare [`FoldToken`]. The composed witness names `other`'s region, and
+    /// the placement is minted over that same handle, so a value `f` folds from the two operands
+    /// stores through the engine-controlled destination — never a caller-captured handle.
+    pub fn merge_pinned_placing<B, P2, Pr, Pin>(
+        self,
+        other: Witnessed<B, W>,
+        pin: &Pin,
+        f: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P2::At<'b>,
+    ) -> Witnessed<P2, W>
+    where
+        B: Reattachable,
+        P2: Reattachable,
+        Pin: Witness,
+        Pr: StorageProfile + 'static,
+        W: ComposeWitness<B>,
+        for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+    {
+        self.merge_composed(other, pin, W::compose, place_over_dest::<T, B, P2, Pr>(f))
     }
 
     /// The engine under [`Self::merge_pinned`] and the envelope-bearing
@@ -564,6 +699,30 @@ impl<T: Reattachable, W> Witnessed<T, W> {
             value: Erased::erase(projected),
             witness,
         }
+    }
+}
+
+/// Adapt a folded-placement relocate closure into the [`FoldToken`]-shaped closure
+/// [`Witnessed::merge_composed`] expects: mint a [`FoldedPlacement`] over the destination operand's
+/// own handle at the fold brand, then run the caller's `relocate`. The destination handle comes from
+/// the operand itself (its [`HasRegionHandle`] projection — the same handle the composed witness
+/// covers), so the placement's region is the engine's own operand, never a caller-captured handle.
+/// Built as a returned `impl for<'b> FnOnce` so the closure is inferred higher-ranked over the brand
+/// — an inline closure is not coerced to `for<'b>` and trips a spurious `'b: 'static`, the same
+/// reason the `alloc_with` fold steps are factored out.
+fn place_over_dest<T, B, P, Pr>(
+    relocate: impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldedPlacement<'b, Pr>) -> P::At<'b>,
+) -> impl for<'b> FnOnce(T::At<'b>, B::At<'b>, FoldToken<'b>) -> P::At<'b>
+where
+    T: Reattachable,
+    B: Reattachable,
+    P: Reattachable,
+    Pr: StorageProfile + 'static,
+    for<'b> B::At<'b>: HasRegionHandle<'b, Pr>,
+{
+    |left, right, _token| {
+        let placement = FoldedPlacement::mint(right.region_handle());
+        relocate(left, right, placement)
     }
 }
 
