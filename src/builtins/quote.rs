@@ -16,12 +16,13 @@ pub fn body<'a>(
     // A quoted expression is raw, unevaluated AST, region-pure iff splice-free: a `Spliced` part is
     // a resolved value, not raw AST, and its cell carries a producer reach the empty (foreign-reach-
     // only) witnessed set could not name. `KExpression<'a>` is invariant with no `'static` rebuild,
-    // so the audited twin runs the splice-free check as an always-on loud gate (rather than a
-    // debug-only assert) before the value is stored.
-    let carrier = ctx.scope.brand().alloc_object_witnessed_checked(
-        KObject::KExpression(expr),
-        |_region, o| matches!(o, KObject::KExpression(e) if e.is_splice_free()),
-    );
+    // so the checked twin runs the `KObject` family audit — whose walk gates a `KExpression` by
+    // `is_splice_free` — as an always-on loud gate (rather than a debug-only assert) before the
+    // value is stored.
+    let carrier = ctx
+        .scope
+        .brand()
+        .alloc_object_witnessed_checked(KObject::KExpression(expr));
     Action::Done(carrier)
 }
 
@@ -87,10 +88,9 @@ mod tests {
             "a Spliced part makes the expression not splice-free"
         );
 
-        let result = scope.brand().alloc_object_witnessed_checked(
-            KObject::KExpression(expr),
-            |_region, o| matches!(o, KObject::KExpression(e) if e.is_splice_free()),
-        );
+        let result = scope
+            .brand()
+            .alloc_object_witnessed_checked(KObject::KExpression(expr));
         assert!(
             result.is_err(),
             "a spliced quoted expression must be rejected, not silently stored"

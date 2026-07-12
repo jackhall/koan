@@ -32,9 +32,9 @@ use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, Mod
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
-    Delivered, Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle,
-    RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf, StorageProfile,
-    Stored, WitnessRegion, Witnessed,
+    AuditedStored, Delivered, Erased, FamilyArena, FoldedPlacement, Reattachable, Region,
+    RegionHandle, RegionHandleFamily, RegionHost, RegionSet, Sealed, StepContext, StorageOf,
+    StorageProfile, Stored, WitnessRegion, Witnessed,
 };
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
@@ -131,7 +131,7 @@ impl<'a> RegionBrand<'a> {
     pub fn alloc_ktype_checked(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
         let name = t.name();
         self.0
-            .alloc_resident_audited::<KType<'static>>(t, |region, value| value.resident_in(region))
+            .alloc_resident_checked::<KType<'static>>(t, ResidenceEvidence::dest_only())
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -148,9 +148,7 @@ impl<'a> RegionBrand<'a> {
     pub fn alloc_object_checked(self, o: KObject<'_>) -> Result<&'a KObject<'a>, KError> {
         let name = o.ktype().name();
         self.0
-            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
-                value.resident_in(region)
-            })
+            .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::dest_only())
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -166,9 +164,7 @@ impl<'a> RegionBrand<'a> {
     /// a mis-homed value becomes a loud panic instead.
     pub fn alloc_function(self, f: KFunction<'_>) -> &'a KFunction<'a> {
         self.0
-            .alloc_resident_audited::<KFunction<'static>>(f, |region, value| {
-                std::ptr::eq(region, value.captured_scope().region())
-            })
+            .alloc_resident_checked::<KFunction<'static>>(f, ())
             .expect(
                 "alloc_function: a KFunction must be allocated into the same KoanRegion \
                  that owns its captured scope",
@@ -180,9 +176,7 @@ impl<'a> RegionBrand<'a> {
     /// [`Self::alloc_function`].
     pub fn alloc_scope(self, s: Scope<'_>) -> &'a Scope<'a> {
         self.0
-            .alloc_resident_audited::<Scope<'static>>(s, |region, value| {
-                std::ptr::eq(region, value.region())
-            })
+            .alloc_resident_checked::<Scope<'static>>(s, ())
             .expect("alloc_scope: a Scope must be allocated into its own region")
     }
 
@@ -192,9 +186,7 @@ impl<'a> RegionBrand<'a> {
     /// [`Scope::alloc_module_reaching`] instead. See [`Self::alloc_function`].
     pub fn alloc_module(self, m: Module<'_>) -> &'a Module<'a> {
         self.0
-            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
-                std::ptr::eq(region, value.child_scope().region())
-            })
+            .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
     }
 
@@ -203,9 +195,7 @@ impl<'a> RegionBrand<'a> {
     /// `'static`. See [`Self::alloc_function`].
     pub fn alloc_signature(self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
         self.0
-            .alloc_resident_audited::<ModuleSignature<'static>>(s, |region, value| {
-                std::ptr::eq(region, value.decl_scope().region())
-            })
+            .alloc_resident_checked::<ModuleSignature<'static>>(s, ())
             .expect(
                 "alloc_signature: a ModuleSignature must be allocated into its own decl \
                  scope's region",
@@ -261,18 +251,21 @@ impl<'a> RegionBrand<'a> {
 
     /// Runtime-checked twin of [`Self::alloc_object_witnessed`] for a `value` that cannot rebuild at
     /// `'static` (e.g. a `KObject::KExpression` — `KExpression<'a>` is invariant and raw AST has no
-    /// `'static` rebuild): `audit` receives this brand's own region and the value before anything is
-    /// stored, and the value is stored — sealed under the same empty (own-region-only) witness
-    /// [`Self::alloc_object_witnessed`] uses — only if `audit` returns true. Storing nothing on a
-    /// failed audit; a foreign-region dangle errors loudly instead of landing unvetted.
+    /// `'static` rebuild): the `KObject` family audit vets `value` against this brand's own region
+    /// before anything is stored, and the value is stored — sealed under the same empty
+    /// (own-region-only) witness [`Self::alloc_object_witnessed`] uses — only if it passes. The
+    /// standard `KObject` residence walk gates a `KObject::KExpression` by its
+    /// [`is_splice_free`](crate::machine::model::ast::KExpression::is_splice_free) flag, so a spliced
+    /// expression (a resolved value carrying a producer reach the empty seal cannot name) is
+    /// rejected. Storing nothing on a failed audit; a foreign-region dangle errors loudly instead of
+    /// landing unvetted.
     pub(crate) fn alloc_object_witnessed_checked(
         self,
         value: KObject<'_>,
-        audit: impl FnOnce(&KoanRegion, &KObject<'_>) -> bool,
     ) -> Result<StepCarried<'a>, KError> {
         let name = value.ktype().name();
         self.0
-            .alloc_resident_audited::<KObject<'static>>(value, audit)
+            .alloc_resident_checked::<KObject<'static>>(value, ResidenceEvidence::dest_only())
             .map(|live| StepCarried::born(Witnessed::resident(Carried::Object(live))))
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
@@ -329,18 +322,13 @@ impl<'a> Scope<'a> {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
         };
+        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
             .0
-            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
-                // The plain evidence-only check first (cheap, no closure alloc, and directly
-                // unit-testable in isolation); only fall back to the ambient-widened walk when it
-                // declines.
-                value.resident_in_reach(region, sets) || {
-                    let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
-                    let residence = Residence::with_reach_and_ambient(region, sets, &ambient);
-                    value.resident_in_visiting(&residence, &mut Vec::new())
-                }
-            })
+            .alloc_resident_checked::<KType<'static>>(
+                t,
+                ResidenceEvidence::reaching_ambient(sets, &ambient),
+            )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination, evidence reach, \
@@ -367,17 +355,13 @@ impl<'a> Scope<'a> {
     ) -> Result<&'a KObject<'a>, KError> {
         let name = o.ktype().name();
         let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
+        let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
             .0
-            .alloc_resident_audited::<KObject<'static>>(o, |region, value| {
-                // The plain evidence-only check first (cheap, directly unit-testable); only fall
-                // back to the ambient-widened walk when it declines.
-                value.resident_in_delivered(region, &sets) || {
-                    let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
-                    let residence = Residence::with_reach_and_ambient(region, &sets, &ambient);
-                    value.resident_in_visiting(&residence)
-                }
-            })
+            .alloc_resident_checked::<KObject<'static>>(
+                o,
+                ResidenceEvidence::reaching_ambient(&sets, &ambient),
+            )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region not covered by dest, the supplied evidence, or \
@@ -405,10 +389,10 @@ impl<'a> Scope<'a> {
         let ambient = |region: &KoanRegion| self.covers_region_ambiently(region);
         self.brand()
             .0
-            .alloc_resident_audited::<Module<'static>>(m, |region, value| {
-                Residence::with_reach_and_ambient(region, sets, &ambient)
-                    .covers_region(value.child_scope().region())
-            })
+            .alloc_resident_checked::<Module<'static>>(
+                m,
+                ResidenceEvidence::reaching_ambient(sets, &ambient),
+            )
             .expect(
                 "alloc_module_reaching: a Module's child scope must be covered by dest, the \
                  supplied evidence reach, or the destination scope's ambient coverage",
@@ -429,9 +413,10 @@ impl<'a> Scope<'a> {
         let obj = self
             .brand()
             .0
-            .alloc_resident_audited::<KObject<'static>>(value, |region, value| {
-                value.resident_in_visiting(&Residence::dest_only_seen(region, &seen))
-            })
+            .alloc_resident_checked::<KObject<'static>>(
+                value,
+                ResidenceEvidence::dest_only_seen(&seen),
+            )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -459,12 +444,7 @@ impl<'a> Scope<'a> {
         let kt = self
             .brand()
             .0
-            .alloc_resident_audited::<KType<'static>>(t, |region, value| {
-                value.resident_in_visiting(
-                    &Residence::dest_only_seen(region, &seen),
-                    &mut Vec::new(),
-                )
-            })
+            .alloc_resident_checked::<KType<'static>>(t, ResidenceEvidence::dest_only_seen(&seen))
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
                     "{name}: borrows a region other than its seal's destination"
@@ -914,6 +894,154 @@ impl<'d> Residence<'d> {
         self.note_region_pointer();
         self.dest.owns_function(f as *const KFunction<'_>)
             || self.covers_region(f.captured_scope().region())
+    }
+}
+
+/// The typed residence evidence a move-in site hands to an [`AuditedStored`] audit — the
+/// call-site half of a [`Residence`], without the destination region (the audit takes that from
+/// the handle it runs against). A family's `audit` builds a [`Residence`] from `(region, self)`
+/// and runs the family's own residence walk over it. Fields are private and mirror [`Residence`]'s
+/// evidence fields: `reach` are the reach sets a foreign borrow may legitimately land in, `ambient`
+/// (when present) is the destination scope's own [`Scope::covers_region_ambiently`], and `seen` is
+/// the walk's saw-a-region-pointer recorder.
+///
+/// [`Self::dest_only`] and [`Self::dest_only_seen`] are freely mintable within `machine::core`; the
+/// ambient-bearing form ([`Self::reaching_ambient`]) is module-private, minted only by [`Scope`]'s
+/// own evidence-tier methods, so the ambient predicate is always the destination scope's own
+/// coverage — a builtin cannot mint a permissive (always-true ambient) context.
+pub struct ResidenceEvidence<'ctx> {
+    reach: &'ctx [&'ctx FrameSet],
+    ambient: Option<&'ctx dyn Fn(&KoanRegion) -> bool>,
+    seen: Option<&'ctx Cell<bool>>,
+}
+
+impl<'ctx> ResidenceEvidence<'ctx> {
+    /// Dest-only evidence: the audit vets `value` against the destination region alone.
+    pub(crate) fn dest_only() -> Self {
+        ResidenceEvidence {
+            reach: &[],
+            ambient: None,
+            seen: None,
+        }
+    }
+
+    /// [`Self::dest_only`] with a saw-a-region-pointer recorder — the [`Residence::seen`] flag the
+    /// checked-stored sites read after the store to derive a value's home-borrow bit.
+    pub(crate) fn dest_only_seen(seen: &'ctx Cell<bool>) -> Self {
+        ResidenceEvidence {
+            reach: &[],
+            ambient: None,
+            seen: Some(seen),
+        }
+    }
+
+    /// The reaching evidence tier: `reach`'s foreign sets plus the destination scope's own ambient
+    /// coverage. Module-private so only [`Scope`]'s evidence-tier methods mint it — binding
+    /// `ambient` to the destination scope by construction.
+    fn reaching_ambient(
+        reach: &'ctx [&'ctx FrameSet],
+        ambient: &'ctx dyn Fn(&KoanRegion) -> bool,
+    ) -> Self {
+        ResidenceEvidence {
+            reach,
+            ambient: Some(ambient),
+            seen: None,
+        }
+    }
+}
+
+// SAFETY: `audit` returns true only when every region borrow the stored `KType` carries is
+// resident in `region`, covered by `context`'s reach evidence, or (when the ambient predicate is
+// present) covered by the destination scope's own ambient coverage — the exact residence the
+// `KType` walk verifies. Exact for `KType`: its only region pointers (`&Module` / `&ModuleSignature`
+// / `&KFunction`) each expose their owning region, so no member enumeration is needed.
+unsafe impl AuditedStored<KoanStorageProfile> for KType<'static> {
+    type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
+    fn audit(region: &KoanRegion, value: &KType<'_>, context: ResidenceEvidence<'_>) -> bool {
+        match (context.ambient, context.seen) {
+            (Some(ambient), _) => {
+                // The plain evidence-only check first (cheap, no closure alloc, directly
+                // unit-testable in isolation); only fall back to the ambient-widened walk when it
+                // declines.
+                value.resident_in_reach(region, context.reach)
+                    || value.resident_in_visiting(
+                        &Residence::with_reach_and_ambient(region, context.reach, ambient),
+                        &mut Vec::new(),
+                    )
+            }
+            (None, Some(seen)) => value
+                .resident_in_visiting(&Residence::dest_only_seen(region, seen), &mut Vec::new()),
+            (None, None) => value.resident_in(region),
+        }
+    }
+}
+
+// SAFETY: `audit` returns true only when every answerable region borrow the stored `KObject`
+// carries is resident in `region`, covered by `context`'s reach evidence, or (when the ambient
+// predicate is present) covered by the destination scope's own ambient coverage — the residence the
+// `KObject` walk verifies. Honest-partial in the one place the walk is (`Wrapped { type_id }`, whose
+// `&KType` opts out of the residence side-table); every other borrow is checked.
+unsafe impl AuditedStored<KoanStorageProfile> for KObject<'static> {
+    type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
+    fn audit(region: &KoanRegion, value: &KObject<'_>, context: ResidenceEvidence<'_>) -> bool {
+        match (context.ambient, context.seen) {
+            (Some(ambient), _) => {
+                // The plain evidence-only check first (cheap, directly unit-testable); only fall
+                // back to the ambient-widened walk when it declines.
+                value.resident_in_delivered(region, context.reach)
+                    || value.resident_in_visiting(&Residence::with_reach_and_ambient(
+                        region,
+                        context.reach,
+                        ambient,
+                    ))
+            }
+            (None, Some(seen)) => {
+                value.resident_in_visiting(&Residence::dest_only_seen(region, seen))
+            }
+            (None, None) => value.resident_in(region),
+        }
+    }
+}
+
+// SAFETY: `audit` returns true only when `region` is the very region that owns the stored
+// `KFunction`'s captured scope — the function borrows that scope, so a store elsewhere would
+// lengthen the borrow's lifetime past its region.
+unsafe impl AuditedStored<KoanStorageProfile> for KFunction<'static> {
+    type AuditContext<'ctx> = ();
+    fn audit(region: &KoanRegion, value: &KFunction<'_>, _context: ()) -> bool {
+        std::ptr::eq(region, value.captured_scope().region())
+    }
+}
+
+// SAFETY: `audit` returns true only when `region` is the region the stored `Scope` names as its
+// own — every `Scope` borrows its parent, so a store into any other region would dangle.
+unsafe impl AuditedStored<KoanStorageProfile> for Scope<'static> {
+    type AuditContext<'ctx> = ();
+    fn audit(region: &KoanRegion, value: &Scope<'_>, _context: ()) -> bool {
+        std::ptr::eq(region, value.region())
+    }
+}
+
+// SAFETY: `audit` returns true only when the stored `Module`'s child scope's region is `region`
+// itself, covered by `context`'s reach evidence, or covered by the destination scope's ambient
+// coverage — the `Module` borrows that child scope, so its region must be covered.
+unsafe impl AuditedStored<KoanStorageProfile> for Module<'static> {
+    type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
+    fn audit(region: &KoanRegion, value: &Module<'_>, context: ResidenceEvidence<'_>) -> bool {
+        let residence = match context.ambient {
+            Some(ambient) => Residence::with_reach_and_ambient(region, context.reach, ambient),
+            None => Residence::dest_only(region),
+        };
+        residence.covers_region(value.child_scope().region())
+    }
+}
+
+// SAFETY: `audit` returns true only when `region` is the region that owns the stored
+// `ModuleSignature`'s decl scope — the signature borrows that scope, so a store elsewhere dangles.
+unsafe impl AuditedStored<KoanStorageProfile> for ModuleSignature<'static> {
+    type AuditContext<'ctx> = ();
+    fn audit(region: &KoanRegion, value: &ModuleSignature<'_>, _context: ()) -> bool {
+        std::ptr::eq(region, value.decl_scope().region())
     }
 }
 
