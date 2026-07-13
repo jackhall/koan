@@ -55,18 +55,23 @@ created, from the type's content alone — no raw-pointer identity in `KType`, n
 on interning order, no shared interner. The digest is wide enough that equality is one
 digest compare with no repair path; opaque ascription stays generative by minting a
 per-application nonce into the digested content. The full design — including where type
-content lives and the per-frame memo registry — is [type-identity.md](type-identity.md).
+content lives and the thread-local memo registry — is [type-identity.md](type-identity.md).
 
 ## Memoized subtype matching
 
 Subtype outcomes — including signature subtyping, the most frequently checked relation this
-design adds — are cached per
-type in its registry entry, keyed by the candidate supertype's digest, positive and negative
-outcomes alike. Types are immutable, so entries never invalidate. A repeat admissibility
-check is O(1).
+design adds — are cached in a thread-local flat LRU keyed by `(subject digest, candidate
+digest, relation)`, positive and negative outcomes alike. A module's structural satisfaction
+check (`self_sig <: schema(sig)`) memoizes under the `SigSatisfies` relation with the module's
+and signature's digests as the key; a repeat admissibility check is then O(1). Dispatch
+specificity between two distinct SIG slots reuses the same relation to order them (see
+[modules.md § First-class modules](modules.md#first-class-modules)). Types are immutable, so
+verdicts never invalidate; LRU eviction or a cold thread costs a re-walk, never a wrong
+answer, and no verdict is observable to a koan program. The mechanism, capacity, and the
+insert guard for pre-seal pointer transients live in
+[type-identity.md § The memo registry](type-identity.md#the-memo-registry).
 
 ## Open work
 
 - [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md)
 - [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)
-- [Memoized subtype matching](../../roadmap/type_memos/memoized-subtype-matching.md)

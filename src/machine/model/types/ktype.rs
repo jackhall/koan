@@ -293,7 +293,7 @@ impl<'a> KType<'a> {
     /// This type's content digest — its identity. Reads the stored field for the composite
     /// variants (`O(1)`) and computes the leaf / id-keyed / member-reference variants on
     /// demand. Keyed on by the subtype memo cache (see
-    /// [memoized subtype matching](../../../../roadmap/type_memos/memoized-subtype-matching.md)).
+    /// [type-identity.md § The memo registry](../../../../design/typing/type-identity.md#the-memo-registry)).
     pub fn digest(&self) -> TypeDigest {
         type_digest::digest_of(self)
     }

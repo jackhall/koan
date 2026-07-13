@@ -20,7 +20,7 @@ Type-system mechanics:
   slot-specificity, and the limitations the static-typing work will close.
 - [type-identity.md](type-identity.md) — the end-state identity story: an
   eager content-hash digest on every `KType`, one-compare equality,
-  generativity confined to opaque ascription, and the per-frame memo
+  generativity confined to opaque ascription, and the thread-local memo
   registry that caches subtype verdicts.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set

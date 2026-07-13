@@ -249,6 +249,18 @@ expression position — is matched by the `:Signature` (`OfKind(Signature)`)
 wildcard. A slot typed `:OrderedSig` therefore never admits the signature
 value itself, and `:Signature` never admits a satisfying module.
 
+When a module satisfies two distinct SIG slots at once, dispatch orders them by
+**structural subtyping**, not by declaration order: `:A` is more specific than
+`:B` iff `of_sig(A)` is a *strict* `sig_subtype` of `of_sig(B)` — the forward
+direction holds and the reverse fails (`WITH` pins fold into `of_sig` on both
+sides). A slot whose signature requires strictly more (`Wide` = `Base` plus an
+extra member) wins over the broader one. Two structurally-identical distinct SIGs
+are mutually satisfying — forward and reverse both hold — so neither strictly
+refines the other and dispatch surfaces `AmbiguousDispatch` rather than letting
+declaration order silently pick a winner. The
+[`is_more_specific_than`](../../src/machine/model/types/ktype_predicates.rs) walk
+implements this, memoizing each direction under the `SigSatisfies` relation.
+
 Module-typed bindings reuse the existing ascription operators:
 
 ```

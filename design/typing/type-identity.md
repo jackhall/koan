@@ -1,10 +1,8 @@
 # Type identity
 
-The end-state design of koan's type identity: identity is a wide content-hash
+The design of koan's type identity: identity is a wide content-hash
 digest computed eagerly at construction; equality is one digest compare; a
-per-call-frame registry memoizes subtype verdicts and is never load-bearing.
-The identity and generativity model below has shipped; the memo registry is the
-one still-future half, tracked under [Open work](#open-work).
+thread-local registry memoizes subtype verdicts and is never load-bearing.
 [ktype/README.md](ktype/README.md) is the variant-level companion.
 
 ## Identity is an eager content digest
@@ -58,23 +56,28 @@ ownership, and its digest travels with it.
 
 ## The memo registry
 
-Each call frame owns a registry: a map from digest to a memo entry holding
-subtype and satisfaction verdicts (see
+A subtype verdict is a pure function of a `(subject digest, candidate digest,
+relation)` key: a digest is content identity, so once a verdict is computed it
+never changes for the life of the process, and any caching granularity —
+per-frame, per-thread, whole-process — is observationally identical. koan caches
+verdicts in a **thread-local flat LRU** — one `LruCache` per OS thread
+([`type_memos.rs`](../../src/machine/model/types/type_memos.rs)), consulted
+before a structural walk and filled after one. An explicit `Relation` tag keeps
+two questions in one cache: `MoreSpecific` (the strict specificity walk) and
+`SigSatisfies` (module/signature structural satisfaction — see
 [module-values-and-type-identity.md § Memoized subtype matching](module-values-and-type-identity.md#memoized-subtype-matching)).
-The registry is reached through the dispatch/step context at the predicate
-call sites; `KType` itself carries no registry reference.
+`KType` itself carries no registry reference; the predicate call sites reach the
+thread-local directly.
 
 The registry is a cache, never a soundness mechanism:
 
-- Every verdict is re-derivable by the structural walk it memoizes, so dropping
-  any entry — or the whole registry — at any moment is semantically invisible.
-- Nothing flows caller-ward or callee-ward for correctness. Arguments and
-  lexical reads need no registry hand-off; a callee that misses re-derives and
-  warms its own frame's registry.
-- At frame exit the registry dies with the frame. Merging still-warm entries
-  into the caller's registry on lift is an optimization the design permits, not
-  an obligation.
-
-## Open work
-
-- [Memoized subtype matching](../../roadmap/type_memos/memoized-subtype-matching.md)
+- Every verdict is re-derivable by the structural walk it memoizes, so eviction
+  (the LRU bound) or a cold thread costs a re-walk, never a wrong answer — the
+  walk stays the source of truth. No verdict is observable to a koan program.
+- The one purity hazard is a pre-seal `RecursiveSet`, whose digest is a
+  pointer-derived transient rather than a content digest. An insert guard
+  (`memo_safe`) keeps any type embedding such a set out of the cache, so a stale
+  hit is impossible; lookups need no guard, since nothing unsafe was inserted.
+- Thread-local is lock-free under ready-node parallelism and every sketched
+  future concurrency primitive — a cold worker thread simply re-walks and warms
+  its own cache.
