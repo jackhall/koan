@@ -116,6 +116,8 @@ overload-resolution walk returning a `ResolveOutcome`),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
 [recursive_set.rs](src/machine/model/types/recursive_set.rs) (`RecursiveSet`, the
 `Rc`-owned unit of nominal identity, allocation, and lift),
+[type_digest.rs](src/machine/model/types/type_digest.rs) (`TypeDigest`, the eager
+content-hash every `KType` compares by),
 [sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema` and the
 canonical signature-subtyping relation),
 [builtins.rs](src/builtins.rs) (registry),

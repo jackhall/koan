@@ -57,7 +57,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [Content-addressed type identity](type_memos/type-identity-registry.md)
+- [Memoized subtype matching](type_memos/memoized-subtype-matching.md)
 - [User-defined type constructors](type_memos/user-defined-type-constructors.md)
 - [Value-head type paths](type_memos/value-head-type-paths.md)
 

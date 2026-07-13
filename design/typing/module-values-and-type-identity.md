@@ -50,12 +50,12 @@ kind-wildcard exception.
 
 ## Content-addressed type identity
 
-Type identity is a wide content-hash digest (`Unique(u128) | Collided(u128)`), computed
-bottom-up when the type is created, from the type's content alone — no raw-pointer identity
-in `KType`, no dependence on interning order, thread-local tables that merge without a lock.
-A per-frame `digest → type` table detects collisions (two distinct types with one digest)
-and repairs by tagging the newcomer `Collided`, never by changing a hash. Equality is a
-`u128` compare when both sides are `Unique`, and a structural walk otherwise.
+Type identity is a wide content-hash digest, computed eagerly bottom-up when the type is
+created, from the type's content alone — no raw-pointer identity in `KType`, no dependence
+on interning order, no shared interner. The digest is wide enough that equality is one
+digest compare with no repair path; opaque ascription stays generative by minting a
+per-application nonce into the digested content. The full design — including where type
+content lives and the per-frame memo registry — is [type-identity.md](type-identity.md).
 
 ## Memoized subtype matching
 
@@ -69,5 +69,4 @@ check is O(1).
 
 - [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md)
 - [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)
-- [Content-addressed type identity](../../roadmap/type_memos/type-identity-registry.md)
 - [Memoized subtype matching](../../roadmap/type_memos/memoized-subtype-matching.md)

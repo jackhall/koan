@@ -59,10 +59,10 @@ to the type's lifetime for the structural compare).
   on `KObject` / `KType` (custom where needed) or write a dedicated `value_eq` walk.
   Recommended: a dedicated walk, so float/NaN handling, record order-blindness, and
   nominal identity are explicit rather than fighting a derive.
-- *Nominal identity source — open.* Newtype/tagged identity compares via `type_id` /
-  set pointer (`Rc::ptr_eq`) today; the `Copy` digest from
-  [Content-addressed type identity](../type_memos/type-identity-registry.md) would give a cheaper
-  comparison. Coordinate so equality does not bake in `Rc::ptr_eq` if the digest lands.
+- *Nominal identity source — open.* Value-side newtype/tagged equality still routes
+  through rendering today; the shipped `Copy` type digest from
+  [Type identity](../../design/typing/type-identity.md) gives a cheaper comparison.
+  Coordinate so equality keys on that digest rather than baking in `Rc::ptr_eq`.
 - *Hash consistency — decided.* The dict-key `Hash` impl is rewritten alongside `equal`
   so structural equality and hashing agree — no rendered-string hashing.
 
@@ -71,7 +71,7 @@ to the type's lifetime for the structural compare).
 An engine-internal value-semantics item. It is the comparison side of
 [Constructing circular values](../type_language/circular-value-construction.md) (a
 cyclic value must not hang equality) and is simplified by
-[Content-addressed type identity](../type_memos/type-identity-registry.md) (a `Copy` nominal
+[Type identity](../../design/typing/type-identity.md) (a `Copy` nominal
 identity). Update [design/execution/README.md](../../design/execution/README.md) if a
 documented value-equality semantics lands.
 

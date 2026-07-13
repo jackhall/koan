@@ -58,11 +58,14 @@
   component of mutually-recursive types; a non-recursive type is a singleton set).
   See [user-types.md](../user-types.md) for the full model.
   - `SetRef { set: Rc<RecursiveSet>, index }` — the **external** handle, the
-    per-declaration identity synthesized by `KObject::ktype()` for `Wrapped` and
+    nominal identity synthesized by `KObject::ktype()` for `Wrapped` and
     `Tagged` carriers and held by `bindings.types`. Identity is
-    `(Rc::as_ptr(set), index)` — never the schema, which may be cyclic. Two
-    distinct nominals sit at distinct `(set ptr, index)` pairs, giving the
-    per-declaration-distinctness dispatch keys on. The member's `kind` (read via
+    `(set digest, index)` — the set's sealed content digest plus the member index,
+    via [`same_nominal`](../../../src/machine/model/types/recursive_set.rs), never
+    the schema (which may be cyclic); the `Rc` is content transport only, with a
+    set-pointer fast path for the shared and pre-seal cases. Structurally identical
+    declarations therefore unify — the same `NEWTYPE` elaborated twice denotes one
+    type — rather than staying per-declaration distinct. The member's `kind` (read via
     `set.member(index).kind`) is one of the nominal families `KKind::{Newtype,
     TypeConstructor}` — `kind_of` reads it off the `SetRef` to classify the nominal type
     value. A user `UNION` seals one `NewType` member per variant, so each variant is a
@@ -74,8 +77,8 @@
     reaches the predicates — matching is shallow `SetRef` identity that does not
     descend a member's schema.
   - `RecursiveGroup(Rc<RecursiveSet>)` — the first-class handle to a whole set,
-    bound by a `RECURSIVE TYPES` group name. Identity is the set pointer
-    (`Rc::ptr_eq`); inert in value dispatch.
+    bound by a `RECURSIVE TYPES` group name. Identity is the set's content digest
+    (via `same_nominal`, index-free); inert in value dispatch.
   A slot that wants "any user-declared type of family X" is an `OfKind(KKind)`
   carrying the nominal family (`OfKind(Newtype)` / `OfKind(TypeConstructor)`).
   Because `OfKind` is type-channel-only, such a slot
@@ -90,8 +93,8 @@
   Not a set-member reference: it composes any member types, canonicalized by
   [`KType::union_of`](../../../src/machine/model/types/ktype_resolution.rs) —
   flattened, deduplicated, and collapsed to the lone member when only one survives
-  (`:(A | A)` is `:A`). Identity is order-blind: `PartialEq` / `Hash` are set-based, so
-  `:(A | B)` equals `:(B | A)`. A union admits any value one of its members admits, and
+  (`:(A | A)` is `:A`). Identity is order-blind: the stored digest sorts its member
+  digests, so `:(A | B)` equals `:(B | A)` under `PartialEq` / `Hash`. A union admits any value one of its members admits, and
   each member is strictly more specific than the union
   ([`is_more_specific_than`](../../../src/machine/model/types/ktype_predicates.rs)), so a
   union-typed slot dispatches by the value's own runtime type. `kind_of` reports
@@ -119,10 +122,11 @@
   `LET Type = ...` that would otherwise collapse to its underlying type binds
   this name-bearing tag instead), while a `Module`-rooted member is the per-call
   mint `:|` opaque ascription produces (`Foo.Type`, with a module to project
-  further members off). Manual `PartialEq` keys identity on
-  `module.scope_id()` for `KType::Module`, `sig.sig_id()` + `pinned_slots`
-  for `KType::Signature` (the `SigSource`'s `path()` is diagnostic-only), and
-  `(source.scope_id(), name)` for `KType::AbstractType` — so two
+  further members off). Manual `PartialEq` keys the id-carrying variants on
+  `module.scope_id()` for `KType::Module` and `(source.scope_id(), name)` for
+  `KType::AbstractType`, while `KType::Signature` compares by its stored content
+  digest (which folds `sig.sig_id()` and `pinned_slots`; the `SigSource`'s `path()`
+  is diagnostic-only) — so two
   opaque ascriptions of the same source module produce distinct
   `KType::Module` identities (the abstraction barrier) but their
   `AbstractType` minting for the same slot name compares equal, and a

@@ -55,7 +55,7 @@ each `.ktype()` / lift, where a region reference would be a cheap copy.
 ## Dependencies
 
 An engine-internal memory/hot-path item near
-[Content-addressed type identity](../type_memos/type-identity-registry.md). The
+[Type identity](../../design/typing/type-identity.md). The
 `resolve_type_identifier` resolver-leaf redundant allocation it once shared is already
 fixed (see [design/typing/elaboration.md](../../design/typing/elaboration.md)). Update
 [design/memory-model.md](../../design/memory-model.md) if the region-storage families it

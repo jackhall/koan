@@ -329,11 +329,11 @@ mod tests {
     /// short-circuits on a second finalize once every member is filled — the type-only
     /// (no value-side carrier) idempotency net (`recover_union`'s `Sealed` arm).
     ///
-    /// The old `Reuse` path — a pre-installed *unfilled* `KType::Union` placeholder that the
+    /// The `Reuse` path — a pre-installed *unfilled* `KType::Union` placeholder that the
     /// seal fills in place — is unreachable under content-addressed identity: `RECURSIVE TYPES`
     /// pre-installs bare `SetRef`s, and a pre-seal composite carries a transient digest that no
     /// longer stands in for the sealed result, so the pre-installed placeholder cannot upsert
-    /// in place. See roadmap type-identity-registry.
+    /// in place. See [design/typing/type-identity.md](../../design/typing/type-identity.md).
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();

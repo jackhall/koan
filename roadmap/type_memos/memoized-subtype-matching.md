@@ -14,15 +14,14 @@ a hash cannot encode, so matching still walks every time.
 
 **Acceptance criteria.**
 
-- A per-type match cache records, keyed by a candidate supertype's `Unique` digest, whether the
+- A per-type match cache records, keyed by a candidate supertype's digest, whether the
   type satisfies it; a repeat check hits in O(1) rather than re-walking.
 - Both satisfied and unsatisfied outcomes are cached, so neither a repeat match nor a repeat
   non-match re-walks.
 - Cached outcomes are never invalidated (types are immutable, so the relation is fixed).
-- A check whose self or candidate digest is `Collided` bypasses the cache and walks
-  structurally.
 - The cache lives in the type's registry entry (one per distinct type), shared across all
-  `KType` instances of that type, and merges up on lift with the rest of the entry.
+  `KType` instances of that type; entries are re-derivable, so a dropped entry (frame
+  death) costs a re-walk, never correctness.
 - Overload specificity orders two distinct SIG-declared signature types structurally: a
   `:A` slot is more specific than a `:B` slot iff `A`'s schema is a strict `sig_subtype` of
   `B`'s (pin agreement included), with the outcome cached like every other subtype check —
@@ -38,8 +37,6 @@ a hash cannot encode, so matching still walks every time.
 - *Per-module `satisfaction_memo` folds in — decided.* `Module::satisfaction_memo` (the
   `sig_id`-keyed structural satisfaction cache dispatch consults) migrates into the digest-keyed
   registry entry when this item ships, leaving `Module` cache-free.
-- *`Collided` bypass — decided.* A `Collided` digest is not a reliable key; fall back to the
-  structural walk, as equality does.
 - *Cross-SIG specificity lands here, not earlier — decided.* The shipped
   [self-sig and empty-signature specificity arms](../../design/typing/modules.md#first-class-modules)
   order a module against a `Declared` signature or the `Empty` top; ordering two distinct
@@ -57,7 +54,5 @@ a hash cannot encode, so matching still walks every time.
 
 **Requires:**
 
-- [Content-addressed type identity](type-identity-registry.md) — the digests key the cache,
-  and the registry entry is its home.
 
 **Unblocks:** none tracked yet.

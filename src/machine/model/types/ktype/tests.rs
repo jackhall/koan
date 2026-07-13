@@ -338,7 +338,7 @@ fn set_ref_identity_unifies_by_content_digest() {
     assert_eq!(hash_of(&a), hash_of(&b));
 
     // A separate allocation with the same content unifies: identity is the content digest,
-    // not the allocation (roadmap type-identity-registry — structurally identical
+    // not the allocation (content-addressed identity — structurally identical
     // declarations denote one type).
     let other = record_newtype_set("Point", sid);
     let c = KType::SetRef {

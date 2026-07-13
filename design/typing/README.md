@@ -18,6 +18,10 @@ Type-system mechanics:
 - [ktype/](ktype/README.md) — `KType` variants, container parameterization,
   variance, type-position slot kinds, function signatures, dispatch and
   slot-specificity, and the limitations the static-typing work will close.
+- [type-identity.md](type-identity.md) — the end-state identity story: an
+  eager content-hash digest on every `KType`, one-compare equality,
+  generativity confined to opaque ascription, and the per-frame memo
+  registry that caches subtype verdicts.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that
