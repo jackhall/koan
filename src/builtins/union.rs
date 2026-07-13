@@ -18,16 +18,15 @@ enum UnionRecovery<'a> {
     /// A parallel finalize already sealed this union (its members are filled) — return the
     /// bound union type unchanged (the idempotency net).
     Sealed(KType<'a>),
-    /// A pre-installed union over a shared set of still-pending members — reuse that set.
-    Reuse(Rc<RecursiveSet<'a>>),
-    /// No matching prior identity — mint a fresh set of `n` pending members.
+    /// No matching sealed identity — mint a fresh set of `n` pending members.
     Fresh,
 }
 
-/// Recover a pre-installed union identity for `name`, distinguishing an idempotent re-finalize
-/// (members filled) from a still-pending pre-install (shared set reused) or a fresh declaration.
-/// A pre-installed union binds `KType::Union` over `SetRef`s into one shared `RecursiveSet` of
-/// `n` newtype members declared in this scope.
+/// Recover a sealed union identity for `name`, distinguishing an idempotent re-finalize (a bound
+/// `KType::Union` whose members are all filled) from a fresh declaration. A pre-seal placeholder
+/// is never reused in place: under content-addressed identity its transient digest no longer
+/// stands in for the sealed result, so a partially-filled match re-mints Fresh rather than
+/// upserting the placeholder.
 fn recover_union<'a>(
     scope: &Scope<'a>,
     name: &str,
@@ -43,17 +42,18 @@ fn recover_union<'a>(
         _ => return UnionRecovery::Fresh,
     };
     let set = match members.first() {
-        Some(KType::SetRef { set, .. }) => Rc::clone(set),
+        Some(KType::SetRef { set, .. }) => set,
         _ => return UnionRecovery::Fresh,
     };
     let member0 = set.member(0);
-    if set.len() != n || member0.scope_id != scope_id || member0.kind != KKind::NewType {
-        return UnionRecovery::Fresh;
-    }
-    if set.members().iter().all(NominalMember::is_filled) {
+    if set.len() == n
+        && member0.scope_id == scope_id
+        && member0.kind == KKind::NewType
+        && set.members().iter().all(NominalMember::is_filled)
+    {
         return UnionRecovery::Sealed(KType::union_of(members.clone()));
     }
-    UnionRecovery::Reuse(set)
+    UnionRecovery::Fresh
 }
 
 /// Seal the elaborated variant schema into a per-variant [`RecursiveSet`] and bind the union
@@ -93,7 +93,6 @@ fn finalize_union<'a>(
                 carriers,
             ));
         }
-        UnionRecovery::Reuse(set) => set,
         UnionRecovery::Fresh => Rc::new(RecursiveSet::new(
             fields
                 .iter()
@@ -329,11 +328,11 @@ mod tests {
     /// short-circuits on a second finalize once every member is filled — the type-only
     /// (no value-side carrier) idempotency net (`recover_union`'s `Sealed` arm).
     ///
-    /// The `Reuse` path — a pre-installed *unfilled* `KType::Union` placeholder that the
-    /// seal fills in place — is unreachable under content-addressed identity: `RECURSIVE TYPES`
-    /// pre-installs bare `SetRef`s, and a pre-seal composite carries a transient digest that no
-    /// longer stands in for the sealed result, so the pre-installed placeholder cannot upsert
-    /// in place. See [design/typing/type-identity.md](../../design/typing/type-identity.md).
+    /// `recover_union` has no in-place reuse arm: under content-addressed identity a pre-seal
+    /// composite carries a transient digest that no longer stands in for the sealed result, so a
+    /// partially-filled prior binding re-mints Fresh rather than upserting the placeholder. Only a
+    /// fully-sealed match short-circuits. See
+    /// [design/typing/type-identity.md](../../design/typing/type-identity.md).
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();
