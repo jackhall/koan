@@ -2,11 +2,10 @@
 //! ordering for dispatch tie-breaking on `KType`. See
 //! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
-use std::rc::Rc;
-
 use super::kkind::KKind;
 use super::ktype::{KType, SigSource};
 use super::record::Record;
+use super::recursive_set::same_nominal;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject};
@@ -320,12 +319,12 @@ impl<'a> KType<'a> {
                     index,
                     type_args,
                 } => {
-                    // Ctor identity is `(set ptr, index)` — the same shallow key dispatch
-                    // uses everywhere, never a schema descent.
+                    // Ctor identity is the nominal `(set, index)` — the same content-digest
+                    // key dispatch uses everywhere (see `same_nominal`), never a schema descent.
                     let ctor_matches = matches!(
                         ctor.as_ref(),
                         KType::SetRef { set: cset, index: ci }
-                            if Rc::ptr_eq(cset, set) && ci == index
+                            if same_nominal(cset, *ci, set, *index)
                     );
                     if !ctor_matches {
                         return false;
@@ -386,7 +385,7 @@ impl<'a> KType<'a> {
     /// Per-value admissibility for a resolved [`Carried`] argument — the same-lifetime core the
     /// spliced arms of [`accepts_part`] delegate to, and the classifier a spliced cell opens against
     /// at its own brand. `self` and `c` share `'a`, so every comparison is a same-lifetime check
-    /// (`== self`, `satisfied_by`, `Rc::ptr_eq`); a differently-branded value is re-anchored to the
+    /// (`== self`, `satisfied_by`, `same_nominal`); a differently-branded value is re-anchored to the
     /// slot type's brand before it reaches here. "Dispatch trusts the carried element type": a
     /// container's memoized carried `KType` is read via `satisfied_by`, never by walking its contents.
     pub fn accepts_carried(&self, c: Carried<'a>) -> bool {

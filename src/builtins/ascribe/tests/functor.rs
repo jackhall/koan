@@ -343,8 +343,10 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     };
     assert!(is_type_constructor(&a_wrap));
     assert!(is_type_constructor(&b_wrap));
-    // Identity is the `(set ptr, index)` pair — two ascriptions mint distinct sets, so the
-    // members' origin scope_ids differ and the slots compare unequal.
+    // Identity is the content digest, but an opaque-ascription set is *generative*: each
+    // application folds its per-call nonce (the view module's `scope_id`) into the set digest,
+    // so the two sets digest apart even though their member content is identical. The origin
+    // scope_ids differ because they ARE those distinct nonces.
     match (&a_wrap, &b_wrap) {
         (
             Some(KType::SetRef {

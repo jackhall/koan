@@ -12,7 +12,7 @@
 
 use super::kkind::KKind;
 use super::record::Record;
-use super::recursive_set::{NominalSchema, RecursiveSet};
+use super::recursive_set::{same_nominal, NominalSchema, RecursiveSet};
 use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, TypeDigest};
@@ -206,9 +206,9 @@ pub enum KType<'a> {
     /// shallow `SetRef` identity that does not descend a member's schema).
     SetLocal(usize),
     /// First-class handle to a whole [`RecursiveSet`], bound by a `RECURSIVE TYPES` group
-    /// name. Identity is the set pointer (`Rc::ptr_eq`); lift shares the set by `Rc::clone`
-    /// through the derived `Clone`. Inert in value dispatch — it names a group of types, not
-    /// a value type — and reserved for value-language cycle construction.
+    /// name. Identity is the set's content digest (via `same_nominal`, index-free); lift shares
+    /// the set by `Rc::clone` through the derived `Clone`. Inert in value dispatch — it names a
+    /// group of types, not a value type — and reserved for value-language cycle construction.
     RecursiveGroup(Rc<RecursiveSet<'a>>),
     /// A module signature — its [`SigSource`] names which of the three lattice points it draws
     /// from. Both the introspectable signature value (a `Declared` decl-scope) and the dispatch
@@ -435,9 +435,10 @@ impl<'a> KType<'a> {
     /// possible without a region borrow and without re-minting a shared set:
     /// - `Module` / `Signature` / `AbstractType { source: Module(_) }` /
     ///   `KFunctor { body: Some(_) }` hold region pointers -> `None`.
-    /// - `SetRef` / `RecursiveGroup` share their set by `Rc` and
-    ///   compare by `Rc::ptr_eq`; a rebuilt set is a different identity -> `None`
-    ///   (such values take the runtime-checked resident path instead).
+    /// - `SetRef` / `RecursiveGroup` own their set by `Rc` (its content transport); `to_static`
+    ///   declines rather than re-mint that shared allocation -> `None`, so such values take the
+    ///   runtime-checked resident path instead. (Identity itself is the content digest, which a
+    ///   rebuild would preserve — but rebuilding the set is still out of `to_static`'s remit.)
     /// - every other variant rebuilds recursively.
     pub fn to_static(&self) -> Option<KType<'static>> {
         match self {
@@ -721,12 +722,15 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
         .join(" ")
 }
 
-/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry region pointers
-/// whose identity is the pointee's stable `scope_id()` / `sig_id()` rather than the raw
-/// pointer. Two opaque ascriptions of the same source module produce different `&Module`
-/// (each allocates a fresh child scope) and must NOT compare equal under `KType::Module`;
-/// two `KType::AbstractType` values minted from the same source-and-name MUST compare
-/// equal even when their `&Module` pointers differ.
+/// Manual `PartialEq`. The eight composite variants compare by their stored content
+/// [`TypeDigest`] — one `u128` compare, no structural descent and no fallback: the
+/// digest is the truth. A member reference (`SetRef` / `RecursiveGroup`) goes through
+/// [`same_nominal`] (set-pointer fast path, else content digest + index). The remaining
+/// id-keyed variants compare by their pointee's stable id: `Module` / `AbstractType` on
+/// `scope_id()`, so two opaque ascriptions of the same source module (each a fresh child
+/// scope) do NOT compare equal under `KType::Module`, while two `KType::AbstractType` values
+/// minted from the same source-and-name DO compare equal even when their `&Module` pointers
+/// differ.
 impl<'a> PartialEq for KType<'a> {
     fn eq(&self, other: &Self) -> bool {
         use KType::*;
@@ -741,60 +745,24 @@ impl<'a> PartialEq for KType<'a> {
             | (RecordType, RecordType)
             | (Any, Any) => true,
             (OfKind(a), OfKind(b)) => a == b,
-            (List { element: a, .. }, List { element: b, .. }) => a == b,
-            (
-                Dict {
-                    key: ka, value: va, ..
-                },
-                Dict {
-                    key: kb, value: vb, ..
-                },
-            ) => ka == kb && va == vb,
-            (Record { fields: a, .. }, Record { fields: b, .. }) => a == b,
-            (
-                KFunction {
-                    params: p1,
-                    ret: r1,
-                    ..
-                },
-                KFunction {
-                    params: p2,
-                    ret: r2,
-                    ..
-                },
-            ) => p1 == p2 && r1 == r2,
-            // `body` is identity-inert: two functor types with different (or no)
-            // bodies but the same `params`/`ret` compare equal.
-            (
-                KFunctor {
-                    params: p1,
-                    ret: r1,
-                    ..
-                },
-                KFunctor {
-                    params: p2,
-                    ret: r2,
-                    ..
-                },
-            ) => p1 == p2 && r1 == r2,
-            // Identity is `(set ptr, index)` ONLY — never descend the schema, which is
-            // cyclic. `Rc::ptr_eq` keys the shared allocation; lift preserves it.
+            // The eight composite variants store their content digest — one `u128` compare is
+            // the whole test. The digest is the truth: no structural fallback exists.
+            (List { digest: a, .. }, List { digest: b, .. })
+            | (Dict { digest: a, .. }, Dict { digest: b, .. })
+            | (Record { digest: a, .. }, Record { digest: b, .. })
+            | (KFunction { digest: a, .. }, KFunction { digest: b, .. })
+            | (KFunctor { digest: a, .. }, KFunctor { digest: b, .. })
+            | (Union { digest: a, .. }, Union { digest: b, .. })
+            | (Signature { digest: a, .. }, Signature { digest: b, .. })
+            | (ConstructorApply { digest: a, .. }, ConstructorApply { digest: b, .. }) => a == b,
+            // A member reference: the set-pointer fast path, else the content digest plus
+            // index — see [`same_nominal`]. Structurally identical declarations unify.
             (SetRef { set: s1, index: i1 }, SetRef { set: s2, index: i2 }) => {
-                Rc::ptr_eq(s1, s2) && i1 == i2
+                same_nominal(s1, *i1, s2, *i2)
             }
+            // Whole-set handle: same-set identity, index-free.
+            (RecursiveGroup(a), RecursiveGroup(b)) => same_nominal(a, 0, b, 0),
             (SetLocal(a), SetLocal(b)) => a == b,
-            (
-                Signature {
-                    sig: s1,
-                    pinned_slots: p1,
-                    ..
-                },
-                Signature {
-                    sig: s2,
-                    pinned_slots: p2,
-                    ..
-                },
-            ) => s1.sig_id() == s2.sig_id() && p1 == p2,
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
                 m1.scope_id() == m2.scope_id()
             }
@@ -808,24 +776,9 @@ impl<'a> PartialEq for KType<'a> {
                     name: n2,
                 },
             ) => s1.scope_id() == s2.scope_id() && n1 == n2,
-            (
-                ConstructorApply {
-                    ctor: c1, args: a1, ..
-                },
-                ConstructorApply {
-                    ctor: c2, args: a2, ..
-                },
-            ) => c1 == c2 && a1 == a2,
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             (Unresolved(a), Unresolved(b)) => a == b,
-            // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
-            (RecursiveGroup(a), RecursiveGroup(b)) => Rc::ptr_eq(a, b),
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
-            // Order-blind set equality. Members are canonically deduplicated, so equal length
-            // plus one-directional containment is sufficient.
-            (Union { members: a, .. }, Union { members: b, .. }) => {
-                a.len() == b.len() && a.iter().all(|m| b.contains(m))
-            }
             _ => false,
         }
     }
@@ -833,10 +786,12 @@ impl<'a> PartialEq for KType<'a> {
 impl<'a> Eq for KType<'a> {}
 
 /// Manual `Hash`, kept consistent with the hand-written `PartialEq` above
-/// (`a == b` ⟹ `hash(a) == hash(b)`): each arm hashes exactly the fields its `PartialEq`
-/// arm compares. The region-pointer variants hash their stable identity key
-/// (`scope_id()` / `source.scope_id()` / `sig_id()`), never the raw pointer; the set
-/// variants hash `Rc::as_ptr` + index, never the cyclic schema.
+/// (`a == b` ⟹ `hash(a) == hash(b)`). The eight composite variants hash their stored content
+/// digest (one `u128`); the id-keyed variants hash their stable id (`scope_id()` /
+/// `source.scope_id()`). A member reference hashes its set's sealed digest (+ index), matching
+/// [`same_nominal`]'s digest path — falling back to `Rc::as_ptr` only in the pre-seal window,
+/// where the pointer path is also what settles equality. A set's hash therefore changes at
+/// seal, which is sound because no `KType`-keyed map exists in the crate.
 impl<'a> std::hash::Hash for KType<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use KType::*;
@@ -845,60 +800,38 @@ impl<'a> std::hash::Hash for KType<'a> {
             Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
             | RecordType | Any => {}
             OfKind(k) => k.hash(state),
-            List { element, .. } => element.hash(state),
-            Dict { key, value, .. } => {
-                key.hash(state);
-                value.hash(state);
-            }
-            Record { fields, .. } => fields.hash(state),
-            KFunction { params, ret, .. } => {
-                params.hash(state);
-                ret.hash(state);
-            }
-            // `body` is excluded to stay consistent with `PartialEq`.
-            KFunctor { params, ret, .. } => {
-                params.hash(state);
-                ret.hash(state);
-            }
+            List { digest, .. }
+            | Dict { digest, .. }
+            | Record { digest, .. }
+            | KFunction { digest, .. }
+            | KFunctor { digest, .. }
+            | Union { digest, .. }
+            | Signature { digest, .. }
+            | ConstructorApply { digest, .. } => digest.hash(state),
             SetRef { set, index } => {
-                (Rc::as_ptr(set) as *const ()).hash(state);
+                hash_set_identity(set, state);
                 index.hash(state);
             }
+            RecursiveGroup(set) => hash_set_identity(set, state),
             SetLocal(i) => i.hash(state),
-            Signature {
-                sig, pinned_slots, ..
-            } => {
-                sig.sig_id().hash(state);
-                pinned_slots.hash(state);
-            }
             Module { module, .. } => module.scope_id().hash(state),
             AbstractType { source, name } => {
                 source.scope_id().hash(state);
                 name.hash(state);
             }
-            ConstructorApply { ctor, args, .. } => {
-                ctor.hash(state);
-                args.hash(state);
-            }
             RecursiveRef(n) => n.hash(state),
             Unresolved(t) => t.hash(state),
-            // Set-pointer identity ONLY — never the cyclic schema, matching `PartialEq`.
-            RecursiveGroup(set) => (Rc::as_ptr(set) as *const ()).hash(state),
             DeferredReturn(s) => s.hash(state),
-            // Order-independent, matching the set-based `PartialEq`: hash the length, then
-            // combine each member's own hash commutatively by XOR so a reordering hashes equal.
-            Union { members, .. } => {
-                use std::hash::Hasher as _;
-                members.len().hash(state);
-                let mut acc: u64 = 0;
-                for m in members {
-                    let mut member_hasher = std::collections::hash_map::DefaultHasher::new();
-                    m.hash(&mut member_hasher);
-                    acc ^= member_hasher.finish();
-                }
-                state.write_u64(acc);
-            }
         }
+    }
+}
+
+/// Hash a set's identity for [`KType`]'s `Hash`: its sealed content digest, or — in the
+/// pre-seal window only — its pointer, matching [`same_nominal`]'s two paths.
+fn hash_set_identity<H: std::hash::Hasher>(set: &Rc<RecursiveSet<'_>>, state: &mut H) {
+    match set.digest() {
+        Some(d) => state.write_u128(d.0),
+        None => state.write_usize(Rc::as_ptr(set) as *const () as usize),
     }
 }
 

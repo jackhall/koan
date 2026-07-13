@@ -1,4 +1,4 @@
-use super::super::recursive_set::NominalSchema;
+use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::kfunction::Body;
@@ -323,7 +323,7 @@ fn hash_agrees_with_eq_for_region_free_variants() {
 /// `SetRef`s over the same `Rc` allocation and index compare equal — so `Hash` must
 /// agree. Two over *distinct* allocations of the same name compare unequal.
 #[test]
-fn hash_keys_set_ref_on_pointer_and_index() {
+fn set_ref_identity_unifies_by_content_digest() {
     let sid = ScopeId::from_raw(0, 0x1234);
     let set = record_newtype_set("Point", sid);
     let a = KType::SetRef {
@@ -337,13 +337,86 @@ fn hash_keys_set_ref_on_pointer_and_index() {
     assert_eq!(a, b);
     assert_eq!(hash_of(&a), hash_of(&b));
 
-    // A separate allocation with the same name is a distinct identity.
+    // A separate allocation with the same content unifies: identity is the content digest,
+    // not the allocation (roadmap type-identity-registry — structurally identical
+    // declarations denote one type).
     let other = record_newtype_set("Point", sid);
     let c = KType::SetRef {
         set: other,
         index: 0,
     };
-    assert_ne!(a, c);
+    assert_eq!(a, c);
+    assert_eq!(hash_of(&a), hash_of(&c));
+
+    // A different member name is different content, so it stays a distinct type.
+    let line = record_newtype_set("Line", sid);
+    let d = KType::SetRef { set: line, index: 0 };
+    assert_ne!(a, d);
+}
+
+/// The two-phase window: before a set seals it has no digest, so `SetRef` identity falls to
+/// the set pointer (the only path that answers "equal" pre-seal); once `fill_member` seals it,
+/// the content-digest rule takes over and same-content sets in different allocations unify.
+/// Koan source never compares a pre-seal `SetRef` from a *different* allocation (a pre-installed
+/// identity stays confined to its declaring elaboration), so the pre-seal cross-allocation case
+/// is pinned here at the Rust level.
+#[test]
+fn set_ref_pre_seal_window_pointer_then_digest() {
+    let pending_pair = |session| {
+        Rc::new(RecursiveSet::new(vec![
+            NominalMember::pending("Aa".into(), ScopeId::from_raw(session, 1), KKind::NewType),
+            NominalMember::pending("Bb".into(), ScopeId::from_raw(session, 2), KKind::NewType),
+        ]))
+    };
+    let seal = |set: &Rc<RecursiveSet<'static>>| {
+        set.fill_member(0, NominalSchema::NewType(Box::new(KType::Number)));
+        set.fill_member(1, NominalSchema::NewType(Box::new(KType::Str)));
+    };
+
+    // Unsealed: pointer rule. Same set + index equal; same set + different index distinct.
+    let set = pending_pair(1);
+    assert!(set.digest().is_none());
+    let a0 = KType::SetRef {
+        set: Rc::clone(&set),
+        index: 0,
+    };
+    let a0_again = KType::SetRef {
+        set: Rc::clone(&set),
+        index: 0,
+    };
+    let a1 = KType::SetRef {
+        set: Rc::clone(&set),
+        index: 1,
+    };
+    assert_eq!(a0, a0_again);
+    assert_ne!(a0, a1);
+    assert_eq!(hash_of(&a0), hash_of(&a0_again));
+
+    // A SetRef into a *different* unsealed set has no digest to compare, so it is not equal.
+    let other = pending_pair(1);
+    let other0 = KType::SetRef {
+        set: other,
+        index: 0,
+    };
+    assert_ne!(a0, other0);
+
+    // Seal both this set and an independently built same-content set: the digest rule now
+    // governs and the two unify across allocations (the `session` half of each `scope_id`
+    // differs, proving `scope_id` is excluded from identity).
+    seal(&set);
+    let twin = pending_pair(42);
+    seal(&twin);
+    assert!(set.digest().is_some() && twin.digest().is_some());
+    let sealed_a0 = KType::SetRef {
+        set: Rc::clone(&set),
+        index: 0,
+    };
+    let twin0 = KType::SetRef {
+        set: twin,
+        index: 0,
+    };
+    assert_eq!(sealed_a0, twin0, "sealed same-content sets unify across allocations");
+    assert_eq!(hash_of(&sealed_a0), hash_of(&twin0));
 }
 
 /// Distinct variants must not collide structurally — the leading discriminant

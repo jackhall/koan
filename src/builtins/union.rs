@@ -205,7 +205,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::core::run_root_storage;
-    use crate::machine::model::types::{KKind, NominalMember, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::model::values::Carried;
     use crate::machine::model::KType;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
@@ -325,31 +325,19 @@ mod tests {
         );
     }
 
-    /// `finalize_union` fills the pending members of a pre-installed union set, then
+    /// `finalize_union` mints and seals a fresh union's members on first finalize, then
     /// short-circuits on a second finalize once every member is filled — the type-only
-    /// (no value-side carrier) idempotency net. The pre-install now carries one pending member
-    /// per variant, bound as a `KType::Union` (the shape a `RECURSIVE TYPES` seal would install).
+    /// (no value-side carrier) idempotency net (`recover_union`'s `Sealed` arm).
+    ///
+    /// The old `Reuse` path — a pre-installed *unfilled* `KType::Union` placeholder that the
+    /// seal fills in place — is unreachable under content-addressed identity: `RECURSIVE TYPES`
+    /// pre-installs bare `SetRef`s, and a pre-seal composite carries a transient digest that no
+    /// longer stands in for the sealed result, so the pre-installed placeholder cannot upsert
+    /// in place. See roadmap type-identity-registry.
     #[test]
-    fn finalize_union_idempotent_after_seal_pre_install() {
+    fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let scope_id = scope.id;
-        // Pre-install a union set with two pending (unfilled) newtype members.
-        let pre_set = std::rc::Rc::new(RecursiveSet::new(vec![
-            NominalMember::pending("Some".into(), scope_id, KKind::NewType),
-            NominalMember::pending("None".into(), scope_id, KKind::NewType),
-        ]));
-        let pre_identity = KType::union_of(vec![
-            KType::SetRef {
-                set: std::rc::Rc::clone(&pre_set),
-                index: 0,
-            },
-            KType::SetRef {
-                set: std::rc::Rc::clone(&pre_set),
-                index: 1,
-            },
-        ]);
-        scope.preinstall_identity("Maybe".into(), pre_identity, BindingIndex::value(0));
         let fctx = crate::machine::core::kfunction::action::FinishCtx::for_scope(scope);
         let fields = || {
             vec![
@@ -357,16 +345,17 @@ mod tests {
                 ("None".to_string(), KType::Null),
             ]
         };
+        // First finalize: no prior binding, so a fresh set of pending members is minted, sealed,
+        // and registered.
         let first =
             super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
         assert!(first.is_ok());
-        // The members of the *pre-installed* set are now filled in place.
-        assert!(pre_set.member(0).is_filled() && pre_set.member(1).is_filled());
         assert_eq!(variant_repr(scope, "Maybe", "Some"), KType::Number);
         assert_eq!(variant_repr(scope, "Maybe", "None"), KType::Null);
+        // Second finalize: every member is filled, so `recover_union` short-circuits, returning
+        // the bound union type unchanged.
         let second =
             super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
-        // The short-circuit returns the bound union type unchanged.
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(
                 &crate::machine::FrameSet::empty(),

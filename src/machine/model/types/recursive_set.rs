@@ -13,8 +13,13 @@
 //! - *External* (the `bindings.types` entry, a field of a non-member, a param slot, a
 //!   constructed value's `ktype()`) is [`KType::SetRef`] carrying `Rc<RecursiveSet>` + index.
 //!
-//! Identity is `(Rc::as_ptr(set), index)` — lift-stable because `Rc::clone` shares the same
-//! allocation. A member's `name` / `scope_id` are diagnostics only, never identity.
+//! Identity is `(set digest, index)` — the set's content digest, sealed at fill (see
+//! [`set_digest`](super::type_digest::set_digest)), so two independently built sets with the
+//! same content denote the same type. A member's `name` and `kind` join the digested content;
+//! `scope_id` stays diagnostics-only, excluded from identity so the same declaration
+//! elaborated twice unifies. The `Rc` remains solely as content transport — `Rc::clone` shares
+//! the allocation on lift, and [`same_nominal`] keeps a pointer fast path for that shared case
+//! and for the pre-seal window before a digest exists.
 //!
 //! A set is created with its membership known — a singleton for a non-recursive or
 //! self-recursive type, or the whole group for a `RECURSIVE TYPES` block — with each
@@ -178,6 +183,33 @@ impl<'a> RecursiveSet<'a> {
         let set = RecursiveSet::new(vec![member]);
         set.fill_member(0, schema);
         Rc::new(set)
+    }
+}
+
+/// Whether two member references `(set, index)` denote the same nominal type — the identity
+/// rule shared by [`KType`](super::ktype::KType)'s `SetRef` `PartialEq` arm and the
+/// dispatch-time constructor-identity check in `ktype_predicates`.
+///
+/// The set-pointer fast path (`Rc::ptr_eq`) is the ONLY path that can answer "equal" while a
+/// set is unsealed — the two-phase window before its digest exists — and it is also the cheap
+/// common case (lift shares a set by `Rc::clone`). Once both sets are sealed, identity is the
+/// content digest plus index, so two independently built sets with the same content unify. A
+/// digestless set in a *different* allocation is never equal: a pre-seal `SetRef` never
+/// escapes its declaring elaboration, so this can only fire on a mid-declaration
+/// self-comparison, which the pointer path has already settled. There is no structural
+/// fallback — the digest is the truth.
+pub(crate) fn same_nominal<'a>(
+    s1: &Rc<RecursiveSet<'a>>,
+    i1: usize,
+    s2: &Rc<RecursiveSet<'a>>,
+    i2: usize,
+) -> bool {
+    if Rc::ptr_eq(s1, s2) {
+        return i1 == i2;
+    }
+    match (s1.digest(), s2.digest()) {
+        (Some(d1), Some(d2)) => d1 == d2 && i1 == i2,
+        _ => false,
     }
 }
 

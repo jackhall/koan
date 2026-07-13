@@ -8,8 +8,8 @@ use crate::machine::model::Record;
 use std::rc::Rc;
 
 /// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
-/// (empty record repr is fine — the predicates key on `(set ptr, index)` + `kind`, never the
-/// schema).
+/// (empty record repr is fine — the predicates key on the nominal `(set digest, index)` +
+/// `kind`, never a schema descent).
 fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
     let set = RecursiveSet::singleton(
         name.into(),
@@ -33,6 +33,23 @@ fn newtype_setref<'a>(name: &str, scope_id: ScopeId, repr: KType<'a>) -> KType<'
 fn is_more_specific_concrete_beats_any() {
     assert!(KType::Number.is_more_specific_than(&KType::Any));
     assert!(!KType::Any.is_more_specific_than(&KType::Number));
+}
+
+/// Dispatch treats two structurally identical nominal declarations interchangeably — the
+/// content-digest identity a `NEWTYPE` elaborated twice (an FN body called twice) yields. Two
+/// independently built same-content newtype sets (distinct allocations, distinct `scope_id`s)
+/// satisfy each other's slot, so a value of one is admitted where the other is declared.
+#[test]
+fn dispatch_unifies_structurally_identical_nominals() {
+    let slot = newtype_setref("Wrapper", ScopeId::from_raw(1, 1), KType::Number);
+    let carried = newtype_setref("Wrapper", ScopeId::from_raw(2, 2), KType::Number);
+    assert_eq!(slot, carried, "same content unifies regardless of allocation");
+    assert!(slot.satisfied_by(&carried));
+    assert!(carried.satisfied_by(&slot));
+
+    // A different declared name is genuinely different content, so it is not admitted.
+    let other = newtype_setref("Boxer", ScopeId::from_raw(1, 1), KType::Number);
+    assert!(!slot.satisfied_by(&other));
 }
 
 #[test]
