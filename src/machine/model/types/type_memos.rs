@@ -29,8 +29,6 @@ use super::type_digest::TypeDigest;
 /// enum still keys the cache explicitly so the two questions never share an entry.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Relation {
-    // wired in Phase 2 (`is_more_specific_than`)
-    #[allow(dead_code)]
     MoreSpecific,
     // wired in Phase 3 (`Module::structurally_satisfies`, `SigSource::satisfied_by_module`)
     #[allow(dead_code)]
@@ -93,9 +91,6 @@ thread_local! {
     ));
 }
 
-// wired in Phase 2+ (`is_more_specific_than`) and Phase 3 (`Module::structurally_satisfies`,
-// `SigSource::satisfied_by_module`).
-#[allow(dead_code)]
 /// Thread-local lookup. The `RefCell` borrow is confined to this one call — never held across
 /// the structural walk a miss falls back to.
 pub(crate) fn lookup(
@@ -106,9 +101,6 @@ pub(crate) fn lookup(
     TYPE_MEMOS.with(|m| m.borrow_mut().lookup(subject, candidate, relation))
 }
 
-// wired in Phase 2+ (`is_more_specific_than`) and Phase 3 (`Module::structurally_satisfies`,
-// `SigSource::satisfied_by_module`).
-#[allow(dead_code)]
 /// Thread-local insert. The `RefCell` borrow is confined to this one call.
 pub(crate) fn insert(
     subject: TypeDigest,
@@ -119,8 +111,6 @@ pub(crate) fn insert(
     TYPE_MEMOS.with(|m| m.borrow_mut().insert(subject, candidate, relation, verdict));
 }
 
-// wired in Phase 2 (`is_more_specific_than`'s insert guard).
-#[allow(dead_code)]
 /// The insert guard: `false` if `kt` contains any `SetRef` / `RecursiveGroup` over an
 /// unsealed set (a pointer-transient digest, unsafe to memoize — see the module doc), else
 /// recurses into every composite child position. All other variants — every leaf, every
@@ -173,25 +163,21 @@ thread_local! {
     static MEMO_MISSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-// wired in Phase 2+ (counter-verified hit/miss assertions in the predicate tests).
+/// Counter-verified hit assertions in the predicate tests.
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn hit_count() -> usize {
     MEMO_HITS.with(|c| c.get())
 }
 
-// wired in Phase 2+ (counter-verified hit/miss assertions in the predicate tests).
+/// Counter-verified miss assertions in the predicate tests.
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn miss_count() -> usize {
     MEMO_MISSES.with(|c| c.get())
 }
 
 /// Clear the thread-local cache and zero both counters. Tests reset at start; the test
 /// harness gives each test its own thread, but callers should not rely on that alone.
-// wired in Phase 2+ (predicate tests reset before exercising the cache).
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn reset() {
     TYPE_MEMOS.with(|m| {
         *m.borrow_mut() =

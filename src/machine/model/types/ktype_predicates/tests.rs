@@ -994,3 +994,72 @@ fn specificity_self_sig_refines_declared_and_empty() {
     // `satisfied_by` routes a memoized `SelfOf` element type through the `SelfOf ≺ Declared` arm.
     assert!(declared.satisfied_by(&self_of));
 }
+
+// --- memo cache wiring (`is_more_specific_than` routes composite pairs through `type_memos`) --
+
+/// A repeat check of the same composite pair (`List<Number>` vs `List<Any>`, verdict `true`)
+/// is a counter-verified cache hit on the second call, and the verdict is identical both times.
+#[test]
+fn memo_repeat_composite_hit() {
+    type_memos::reset();
+    let n = KType::list(Box::new(KType::Number));
+    let a = KType::list(Box::new(KType::Any));
+
+    let first = n.is_more_specific_than(&a);
+    assert!(first);
+    assert_eq!(type_memos::miss_count(), 1);
+    assert_eq!(type_memos::hit_count(), 0);
+
+    let second = n.is_more_specific_than(&a);
+    assert_eq!(second, first);
+    assert_eq!(
+        type_memos::hit_count(),
+        1,
+        "second call must be a cache hit"
+    );
+}
+
+/// A negative verdict is cached too: the second call to a pair the walk resolves `false` for
+/// is a hit returning `false`.
+#[test]
+fn memo_negative_verdict_also_caches() {
+    type_memos::reset();
+    let a = KType::list(Box::new(KType::Any));
+    let n = KType::list(Box::new(KType::Number));
+
+    let first = a.is_more_specific_than(&n);
+    assert!(!first);
+    assert_eq!(type_memos::miss_count(), 1);
+
+    let second = a.is_more_specific_than(&n);
+    assert!(!second);
+    assert_eq!(
+        type_memos::hit_count(),
+        1,
+        "second call must be a cache hit"
+    );
+}
+
+/// Leaf pairs never probe the cache: `Number` vs `Any` takes `is_stored_digest_variant`'s
+/// `else` branch (`Any` is not a stored-digest variant), so both counters stay at zero.
+#[test]
+fn memo_leaf_pairs_move_no_counters() {
+    type_memos::reset();
+    assert!(KType::Number.is_more_specific_than(&KType::Any));
+    assert_eq!(type_memos::hit_count(), 0);
+    assert_eq!(type_memos::miss_count(), 0);
+}
+
+/// Purity sanity: resetting the cache between two computations of the same composite verdict
+/// changes nothing observable — the cache is an accelerator, never load-bearing.
+#[test]
+fn memo_purity_across_reset() {
+    type_memos::reset();
+    let n = KType::list(Box::new(KType::Number));
+    let a = KType::list(Box::new(KType::Any));
+
+    let before = n.is_more_specific_than(&a);
+    type_memos::reset();
+    let after = n.is_more_specific_than(&a);
+    assert_eq!(before, after);
+}

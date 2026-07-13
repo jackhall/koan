@@ -7,6 +7,7 @@ use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::same_nominal;
 use super::signature::{ExpressionSignature, SignatureElement};
+use super::type_memos::{self, Relation};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject};
 use crate::machine::DeliveredCarried;
@@ -66,6 +67,42 @@ impl<'a> KType<'a> {
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
     /// inner slots. Returns `false` for equal types.
     pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
+        if self.is_stored_digest_variant() && other.is_stored_digest_variant() {
+            let (subject, candidate) = (self.digest(), other.digest());
+            if let Some(verdict) = type_memos::lookup(subject, candidate, Relation::MoreSpecific) {
+                return verdict;
+            }
+            let verdict = self.more_specific_walk(other);
+            if type_memos::memo_safe(self) && type_memos::memo_safe(other) {
+                type_memos::insert(subject, candidate, Relation::MoreSpecific, verdict);
+            }
+            verdict
+        } else {
+            self.more_specific_walk(other)
+        }
+    }
+
+    /// True iff `self` is one of the composite variants whose digest is a stored field
+    /// (`digest_of` in `type_digest.rs` reads it directly rather than recomputing it) —
+    /// the set of pairs [`is_more_specific_than`](Self::is_more_specific_than) consults the
+    /// memo cache for. Gating on both sides being composite keeps a leaf-vs-leaf or
+    /// `OfKind`/`SetRef` compare (already O(1)-ish) out of the cache, where a probe would
+    /// only slow it down.
+    fn is_stored_digest_variant(&self) -> bool {
+        matches!(
+            self,
+            KType::List { .. }
+                | KType::Dict { .. }
+                | KType::Record { .. }
+                | KType::KFunction { .. }
+                | KType::KFunctor { .. }
+                | KType::Union { .. }
+                | KType::Signature { .. }
+                | KType::ConstructorApply { .. }
+        )
+    }
+
+    fn more_specific_walk(&self, other: &KType<'a>) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
