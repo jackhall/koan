@@ -149,7 +149,7 @@ pub(super) fn sigiled_type_expr<'step>(
 }
 
 /// `:{x :Number, y :Str}` — a single-part record-type sigil. Folds the field list straight
-/// to `Carried::Type(KType::Record(_))` via the shared field-list elaborator, deferring
+/// to `Carried::Type(KType::Record { .. })` via the shared field-list elaborator, deferring
 /// through a dep-finish when a field forward-references or sub-dispatches. No type-constructor
 /// builtin is involved — the record type is structural.
 pub(super) fn record_type<'step>(

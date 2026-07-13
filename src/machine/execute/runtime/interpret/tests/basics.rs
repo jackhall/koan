@@ -116,7 +116,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
             assert!(items.is_empty());
             assert_eq!(
                 obj.ktype(),
-                crate::machine::model::types::KType::List(Box::new(
+                crate::machine::model::types::KType::list(Box::new(
                     crate::machine::model::types::KType::Number,
                 )),
             );

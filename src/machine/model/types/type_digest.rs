@@ -25,7 +25,7 @@ use std::rc::Rc;
 use crate::machine::core::ScopeId;
 
 use super::kkind::KKind;
-use super::ktype::KType;
+use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::{NominalSchema, RecursiveSet};
 use super::signature::DeferredReturnSurface;
@@ -127,12 +127,24 @@ fn kkind_tag(k: KKind) -> u8 {
     }
 }
 
-/// The digest of a `KType`. For a recursive set's member (`SetRef` / `RecursiveGroup`) this
-/// reads the set's sealed digest; a pre-seal reference (no digest yet) contributes a
-/// pointer-derived transient that never survives sealing — the whole composite is rebuilt at
-/// seal (`seal_recursive_refs` re-runs the constructors), recomputing a content digest.
+/// The digest of a `KType` — its identity. The composite variants store their digest
+/// (filled by the smart constructors on [`KType`]), so this reads the field; the leaf,
+/// id-keyed, and member-reference variants compute theirs on demand. For a member reference
+/// (`SetRef` / `RecursiveGroup`) that means the set's sealed digest; a pre-seal reference (no
+/// digest yet) contributes a pointer-derived transient that never survives sealing — the
+/// whole composite is rebuilt at seal (`seal_recursive_refs` re-runs the constructors),
+/// recomputing a content digest.
 pub fn digest_of(kt: &KType) -> TypeDigest {
     match kt {
+        // Composite variants store their digest — the smart constructors filled it.
+        KType::List { digest, .. }
+        | KType::Dict { digest, .. }
+        | KType::Record { digest, .. }
+        | KType::KFunction { digest, .. }
+        | KType::KFunctor { digest, .. }
+        | KType::Union { digest, .. }
+        | KType::Signature { digest, .. }
+        | KType::ConstructorApply { digest, .. } => *digest,
         KType::Number => DigestHasher::new(TAG_NUMBER).finish(),
         KType::Str => DigestHasher::new(TAG_STR).finish(),
         KType::Bool => DigestHasher::new(TAG_BOOL).finish(),
@@ -143,29 +155,6 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
         KType::RecordType => DigestHasher::new(TAG_RECORD_TYPE).finish(),
         KType::Any => DigestHasher::new(TAG_ANY).finish(),
         KType::OfKind(k) => DigestHasher::new(TAG_OF_KIND).byte(kkind_tag(*k)).finish(),
-        KType::List(inner) => DigestHasher::new(TAG_LIST)
-            .digest(digest_of(inner))
-            .finish(),
-        KType::Dict(key, value) => DigestHasher::new(TAG_DICT)
-            .digest(digest_of(key))
-            .digest(digest_of(value))
-            .finish(),
-        KType::Record(fields) => {
-            let mut h = DigestHasher::new(TAG_RECORD);
-            feed_record(&mut h, fields);
-            h.finish()
-        }
-        KType::KFunction { params, ret } => {
-            let mut h = DigestHasher::new(TAG_KFUNCTION);
-            feed_record(&mut h, params);
-            h.digest(digest_of(ret)).finish()
-        }
-        // `body` is identity-inert (matching `PartialEq`), so it never reaches the digest.
-        KType::KFunctor { params, ret, .. } => {
-            let mut h = DigestHasher::new(TAG_KFUNCTOR);
-            feed_record(&mut h, params);
-            h.digest(digest_of(ret)).finish()
-        }
         KType::DeferredReturn(surface) => {
             let mut h = DigestHasher::new(TAG_DEFERRED_RETURN);
             match surface {
@@ -185,27 +174,6 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             feed_set_identity(&mut h, set);
             h.finish()
         }
-        // Order-blind, matching the set-based `PartialEq`: sort the member digests.
-        KType::Union(members) => {
-            let mut member_digests: Vec<TypeDigest> = members.iter().map(digest_of).collect();
-            member_digests.sort_unstable();
-            let mut h = DigestHasher::new(TAG_UNION);
-            h.count(member_digests.len());
-            for d in member_digests {
-                h.digest(d);
-            }
-            h.finish()
-        }
-        // Positional (matching `PartialEq`) — do NOT sort `pinned_slots`.
-        KType::Signature { sig, pinned_slots } => {
-            let mut h = DigestHasher::new(TAG_SIGNATURE);
-            h.scope_id(sig.sig_id());
-            h.count(pinned_slots.len());
-            for (name, kt) in pinned_slots {
-                h.string(name).digest(digest_of(kt));
-            }
-            h.finish()
-        }
         KType::Module { module } => DigestHasher::new(TAG_MODULE)
             .scope_id(module.scope_id())
             .finish(),
@@ -213,16 +181,81 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             .scope_id(source.scope_id())
             .string(name)
             .finish(),
-        KType::ConstructorApply { ctor, args } => {
-            let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
-            h.digest(digest_of(ctor));
-            h.count(args.len());
-            for a in args {
-                h.digest(digest_of(a));
-            }
-            h.finish()
-        }
     }
+}
+
+// Per-shape digest builders — the smart constructors on `KType` call these to fill a
+// composite's `digest` field from its children's stored digests (shallow work). Each mirrors
+// exactly the fields the corresponding `PartialEq` arm compares, keeping `a == b ⟹
+// digest(a) == digest(b)`.
+
+/// `List<element>`.
+pub(crate) fn list_digest(element: TypeDigest) -> TypeDigest {
+    DigestHasher::new(TAG_LIST).digest(element).finish()
+}
+
+/// `Dict<key, value>`.
+pub(crate) fn dict_digest(key: TypeDigest, value: TypeDigest) -> TypeDigest {
+    DigestHasher::new(TAG_DICT)
+        .digest(key)
+        .digest(value)
+        .finish()
+}
+
+/// A structural record type.
+pub(crate) fn record_digest(fields: &Record<KType>) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_RECORD);
+    feed_record(&mut h, fields);
+    h.finish()
+}
+
+/// A function type `(params) -> ret`.
+pub(crate) fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_KFUNCTION);
+    feed_record(&mut h, params);
+    h.digest(ret).finish()
+}
+
+/// A functor type `(params) -> ret` — `body` is identity-inert and never reaches the digest.
+pub(crate) fn functor_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_KFUNCTOR);
+    feed_record(&mut h, params);
+    h.digest(ret).finish()
+}
+
+/// A union — order-blind, matching the set-based `PartialEq`: sort the member digests.
+pub(crate) fn union_digest(members: &[KType]) -> TypeDigest {
+    let mut member_digests: Vec<TypeDigest> = members.iter().map(KType::digest).collect();
+    member_digests.sort_unstable();
+    let mut h = DigestHasher::new(TAG_UNION);
+    h.count(member_digests.len());
+    for d in member_digests {
+        h.digest(d);
+    }
+    h.finish()
+}
+
+/// `ConstructorApply(ctor, args)` — positional over `args`.
+pub(crate) fn constructor_apply_digest(ctor: TypeDigest, args: &[KType]) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
+    h.digest(ctor);
+    h.count(args.len());
+    for a in args {
+        h.digest(a.digest());
+    }
+    h.finish()
+}
+
+/// A module-signature type — positional over `pinned_slots` (matching `PartialEq`; do NOT
+/// sort).
+pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)]) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_SIGNATURE);
+    h.scope_id(sig.sig_id());
+    h.count(pinned_slots.len());
+    for (name, kt) in pinned_slots {
+        h.string(name).digest(kt.digest());
+    }
+    h.finish()
 }
 
 /// A member reference's digest: `(set digest, index)` once the set is sealed.
@@ -240,8 +273,7 @@ fn feed_set_identity(h: &mut DigestHasher, set: &Rc<RecursiveSet>) {
             h.byte(1).digest(d);
         }
         None => {
-            h.byte(0)
-                .count(Rc::as_ptr(set) as *const () as usize);
+            h.byte(0).count(Rc::as_ptr(set) as *const () as usize);
         }
     }
 }
@@ -252,7 +284,7 @@ fn feed_set_identity(h: &mut DigestHasher, set: &Rc<RecursiveSet>) {
 fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
     let mut pairs: Vec<(&str, TypeDigest)> = record
         .iter()
-        .map(|(name, value)| (name.as_str(), digest_of(value)))
+        .map(|(name, value)| (name.as_str(), value.digest()))
         .collect();
     pairs.sort_by(|a, b| a.0.cmp(b.0));
     h.count(pairs.len());
@@ -286,7 +318,7 @@ pub fn set_digest(set: &RecursiveSet) -> TypeDigest {
             .expect("set_digest computes at seal — every member is filled");
         match schema {
             NominalSchema::NewType(repr) => {
-                h.byte(0).digest(digest_of(repr));
+                h.byte(0).digest(repr.digest());
             }
             NominalSchema::TypeConstructor {
                 schema,
@@ -295,7 +327,7 @@ pub fn set_digest(set: &RecursiveSet) -> TypeDigest {
                 // HashMap iteration order is nondeterministic — sort by key.
                 let mut entries: Vec<(&str, TypeDigest)> = schema
                     .iter()
-                    .map(|(k, v)| (k.as_str(), digest_of(v)))
+                    .map(|(k, v)| (k.as_str(), v.digest()))
                     .collect();
                 entries.sort_by(|a, b| a.0.cmp(b.0));
                 h.byte(1).count(entries.len());

@@ -106,7 +106,7 @@ fn val_function_typed_slot() {
     };
     let compare = s.decl_scope().bindings().expect_type("compare");
     match compare {
-        KType::KFunction { params, ret } => {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.get("y"), Some(&KType::Number));

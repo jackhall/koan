@@ -204,10 +204,15 @@ impl<'a> KObject<'a> {
     /// `type_args` are replaced with the declared args.
     pub fn stamp_type(self, declared: &KType<'a>) -> KObject<'a> {
         match (self, declared) {
-            (KObject::List(items, _), KType::List(elem)) => KObject::List(items, elem.clone()),
-            (KObject::Dict(map, _, _), KType::Dict(k, v)) => {
-                KObject::Dict(map, k.clone(), v.clone())
+            (KObject::List(items, _), KType::List { element: elem, .. }) => {
+                KObject::List(items, elem.clone())
             }
+            (
+                KObject::Dict(map, _, _),
+                KType::Dict {
+                    key: k, value: v, ..
+                },
+            ) => KObject::Dict(map, k.clone(), v.clone()),
             (
                 KObject::Tagged {
                     tag,
@@ -224,7 +229,7 @@ impl<'a> KObject<'a> {
                 index,
                 type_args: Rc::new(args.clone()),
             },
-            (KObject::Record(fields, _), KType::Record(types)) => {
+            (KObject::Record(fields, _), KType::Record { fields: types, .. }) => {
                 KObject::Record(fields, types.clone())
             }
             (other, _) => other,
@@ -324,8 +329,8 @@ impl<'a> KObject<'a> {
             KObject::KString(_) => KType::Str,
             KObject::Bool(_) => KType::Bool,
             KObject::Null => KType::Null,
-            KObject::List(_, elem) => KType::List(elem.clone()),
-            KObject::Dict(_, k, v) => KType::Dict(k.clone(), v.clone()),
+            KObject::List(_, elem) => KType::list(elem.clone()),
+            KObject::Dict(_, k, v) => KType::dict(k.clone(), v.clone()),
             KObject::KFunction(f) => function_value_ktype(f),
             KObject::KExpression(_) => KType::KExpression,
             // A `TypeConstructor` value keeps the ctor identity — bare `SetRef` when
@@ -343,18 +348,12 @@ impl<'a> KObject<'a> {
                 if type_args.is_empty() {
                     bare
                 } else {
-                    KType::ConstructorApply {
-                        ctor: Box::new(bare),
-                        args: type_args.as_ref().clone(),
-                    }
+                    KType::constructor_apply(Box::new(bare), type_args.as_ref().clone())
                 }
             }
-            KObject::Record(_, field_types) => KType::Record(field_types.clone()),
+            KObject::Record(_, field_types) => KType::record(field_types.clone()),
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
-            KObject::Module(m) => KType::Signature {
-                sig: SigSource::SelfOf(m),
-                pinned_slots: Vec::new(),
-            },
+            KObject::Module(m) => KType::signature(SigSource::SelfOf(m), Vec::new()),
         }
     }
 
@@ -459,13 +458,9 @@ fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType<'a> {
     // type-bound functor name (`LET F = (FUNCTOR …)`) is applied through — while
     // staying identity-inert under equality/hashing.
     if f.is_functor {
-        KType::KFunctor {
-            params,
-            ret,
-            body: Some(f),
-        }
+        KType::functor_type(params, ret, Some(f))
     } else {
-        KType::KFunction { params, ret }
+        KType::function_type(params, ret)
     }
 }
 

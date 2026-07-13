@@ -249,11 +249,11 @@ fn monad_signature_smoke() {
     // name, carrying the declared type directly.
     let kt: &KType = s.decl_scope().bindings().expect_type("pure");
     match kt {
-        KType::KFunction { params, ret } => {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.len(), 1);
             match ret.as_ref() {
-                KType::ConstructorApply { ctor, args } => {
+                KType::ConstructorApply { ctor, args, .. } => {
                     assert_type_constructor(ctor.as_ref(), &["Type"]);
                     assert_eq!(*args, vec![KType::Number]);
                 }

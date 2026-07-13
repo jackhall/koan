@@ -3,7 +3,7 @@
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_silent};
 use crate::machine::core::run_root_storage;
 
-/// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::List(Number)`
+/// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
 /// to `bindings.types` (reachable via `Scope::resolve_type`); the `KTypeValue`
 /// carrier is only a dispatch transport, not the storage shape.
 #[test]
@@ -15,11 +15,11 @@ fn list_of_let_binding_is_ktype_value() {
     let kt = scope
         .resolve_type("MyList")
         .expect("MyList should be bound in bindings.types");
-    assert_eq!(*kt, KType::List(Box::new(KType::Number)));
+    assert_eq!(*kt, KType::list(Box::new(KType::Number)));
 }
 
 /// `elaborate_type_identifier` lowers a leaf naming a type-side LET binding back to its
-/// stored `KType` (`LET MyList = :(LIST OF Number)` -> `KType::List(Number)`).
+/// stored `KType` (`LET MyList = :(LIST OF Number)` -> `KType::list(Number)`).
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeIdentifier;
@@ -30,7 +30,7 @@ fn elaborator_lowers_ktype_value_binding() {
     run(scope, "LET MyList = :(LIST OF Number)");
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into())) {
-        TypeResolution::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
+        TypeResolution::Done(kt) => assert_eq!(kt, KType::list(Box::new(KType::Number))),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
 }
@@ -60,7 +60,9 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(kw, "USE_ORD");
             assert_eq!(name, "Er");
             match ktype {
-                KType::Signature { sig, pinned_slots } => {
+                KType::Signature {
+                    sig, pinned_slots, ..
+                } => {
                     assert_eq!(
                         sig.sig_id(),
                         sig_id,

@@ -48,10 +48,7 @@ pub fn body<'a>(
                 .scope
                 .brand()
                 .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
-            let identity = KType::Signature {
-                sig: SigSource::Declared(sig),
-                pinned_slots: Vec::new(),
-            };
+            let identity = KType::signature(SigSource::Declared(sig), Vec::new());
             match fctx
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)

@@ -15,6 +15,7 @@ use super::record::Record;
 use super::recursive_set::{NominalSchema, RecursiveSet};
 use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
+use super::type_digest::{self, TypeDigest};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
@@ -98,18 +99,28 @@ pub enum KType<'a> {
     Str,
     Bool,
     Null,
-    /// Bare `List` lowers to `List<Any>`.
-    List(Box<KType<'a>>),
-    /// Bare `Dict` lowers to `Dict<Any, Any>`.
-    Dict(Box<KType<'a>>, Box<KType<'a>>),
+    /// Bare `List` lowers to `List<Any>`. Build through [`KType::list`], which fills `digest`.
+    List {
+        element: Box<KType<'a>>,
+        digest: TypeDigest,
+    },
+    /// Bare `Dict` lowers to `Dict<Any, Any>`. Build through [`KType::dict`].
+    Dict {
+        key: Box<KType<'a>>,
+        value: Box<KType<'a>>,
+        digest: TypeDigest,
+    },
     /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field schema
     /// with width/depth subtyping, order-blind by `(name, type)` for identity and
     /// declaration-ordered for rendering. A record-repr `NewType` `SetRef` wraps this with a
     /// nominal identity; the bare record type stays structural. A record *value*
     /// (`KObject::Record`) memoizes it as its carried type. Subtyping is the dual of the
     /// function-parameter relation — width-*superset* is more specific, covariant depth —
-    /// see `record_value_more_specific`.
-    Record(Box<Record<KType<'a>>>),
+    /// see `record_value_more_specific`. Build through [`KType::record`].
+    Record {
+        fields: Box<Record<KType<'a>>>,
+        digest: TypeDigest,
+    },
     /// `params` is the parameter record `(name → type)` — order preserved for rendering,
     /// equality order-blind by `(name, type)`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke the function it
@@ -118,6 +129,7 @@ pub enum KType<'a> {
     KFunction {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
+        digest: TypeDigest,
     },
     /// Structural functor type — mirrors `KFunction` storage and rendering, but
     /// carries no admissibility against `KFunction` (the cross-arms in
@@ -135,6 +147,7 @@ pub enum KType<'a> {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
         body: Option<&'a KFunction<'a>>,
+        digest: TypeDigest,
     },
     /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> Er` or
@@ -181,8 +194,12 @@ pub enum KType<'a> {
     /// deduplicated, no nested `Union`, always two or more (a single-member union is that
     /// member — [`union_of`](KType::union_of) collapses it). Identity is order-blind, so
     /// equality and hashing are set-based rather than positional. Each member is a subtype
-    /// of the union; the union admits any value one of its members admits.
-    Union(Vec<KType<'a>>),
+    /// of the union; the union admits any value one of its members admits. Build through
+    /// [`KType::union_of`], which canonicalizes then fills `digest`.
+    Union {
+        members: Vec<KType<'a>>,
+        digest: TypeDigest,
+    },
     /// Intra-set sibling reference — a bare index resolved against the ambient set during
     /// deep traversal only. Carries no `Rc`, so a set holds no internal refcount cycle and
     /// frees once its last external handle drops. Never reaches the predicates (matching is
@@ -208,6 +225,7 @@ pub enum KType<'a> {
     Signature {
         sig: SigSource<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
+        digest: TypeDigest,
     },
     /// First-class module value's type. A bare borrow into the region the functor call minted the
     /// module in; that region is pinned by the value carrier's witness set when the module flows down
@@ -235,6 +253,7 @@ pub enum KType<'a> {
     ConstructorApply {
         ctor: Box<KType<'a>>,
         args: Vec<KType<'a>>,
+        digest: TypeDigest,
     },
     /// Definition-time transient: a reference to a not-yet-sealed nominal (self or forward
     /// sibling) while elaborating a type-definition body. Sealed into a [`KType::SetLocal`]
@@ -257,9 +276,78 @@ impl<'a> KType<'a> {
     /// It constrains nothing, so every module value satisfies it; a builtin module-accepting
     /// slot or return is typed this way. Embeds no region pointer.
     pub fn empty_signature() -> KType<'a> {
+        KType::signature(SigSource::Empty, Vec::new())
+    }
+
+    /// This type's content digest — its identity. Reads the stored field for the composite
+    /// variants (`O(1)`) and computes the leaf / id-keyed / member-reference variants on
+    /// demand. Keyed on by the subtype memo cache (see
+    /// [memoized subtype matching](../../../../roadmap/type_memos/memoized-subtype-matching.md)).
+    pub fn digest(&self) -> TypeDigest {
+        type_digest::digest_of(self)
+    }
+
+    // Smart constructors for the digest-carrying variants: each fills `digest` from its
+    // children's stored digests (shallow — never a re-walk). Every construction of these
+    // variants routes through one of these so no site can install a stale or absent digest.
+
+    /// `List<element>`.
+    pub fn list(element: Box<KType<'a>>) -> KType<'a> {
+        let digest = type_digest::list_digest(element.digest());
+        KType::List { element, digest }
+    }
+
+    /// `Dict<key, value>`.
+    pub fn dict(key: Box<KType<'a>>, value: Box<KType<'a>>) -> KType<'a> {
+        let digest = type_digest::dict_digest(key.digest(), value.digest());
+        KType::Dict { key, value, digest }
+    }
+
+    /// A structural record type over `fields`.
+    pub fn record(fields: Box<Record<KType<'a>>>) -> KType<'a> {
+        let digest = type_digest::record_digest(&fields);
+        KType::Record { fields, digest }
+    }
+
+    /// A function type `(params) -> ret`.
+    pub fn function_type(params: Record<KType<'a>>, ret: Box<KType<'a>>) -> KType<'a> {
+        let digest = type_digest::function_digest(&params, ret.digest());
+        KType::KFunction {
+            params,
+            ret,
+            digest,
+        }
+    }
+
+    /// A functor type `(params) -> ret`; `body` is identity-inert, so it never reaches the
+    /// digest.
+    pub fn functor_type(
+        params: Record<KType<'a>>,
+        ret: Box<KType<'a>>,
+        body: Option<&'a KFunction<'a>>,
+    ) -> KType<'a> {
+        let digest = type_digest::functor_digest(&params, ret.digest());
+        KType::KFunctor {
+            params,
+            ret,
+            body,
+            digest,
+        }
+    }
+
+    /// Application of a higher-kinded type constructor `ctor` to `args`.
+    pub fn constructor_apply(ctor: Box<KType<'a>>, args: Vec<KType<'a>>) -> KType<'a> {
+        let digest = type_digest::constructor_apply_digest(ctor.digest(), &args);
+        KType::ConstructorApply { ctor, args, digest }
+    }
+
+    /// A module-signature type. Routes `empty_signature` and every `WITH`-pinned build.
+    pub fn signature(sig: SigSource<'a>, pinned_slots: Vec<(String, KType<'a>)>) -> KType<'a> {
+        let digest = type_digest::signature_digest(sig, &pinned_slots);
         KType::Signature {
-            sig: SigSource::Empty,
-            pinned_slots: Vec::new(),
+            sig,
+            pinned_slots,
+            digest,
         }
     }
 
@@ -272,12 +360,14 @@ impl<'a> KType<'a> {
             KType::Str => "Str".into(),
             KType::Bool => "Bool".into(),
             KType::Null => "Null".into(),
-            KType::List(t) => format!(":(LIST OF {})", t.name()),
-            KType::Dict(k, v) => format!(":(MAP {} -> {})", k.name(), v.name()),
+            KType::List { element, .. } => format!(":(LIST OF {})", element.name()),
+            KType::Dict { key, value, .. } => {
+                format!(":(MAP {} -> {})", key.name(), value.name())
+            }
             // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
             // space-separated like FN params (the field-list parser accepts that).
-            KType::Record(r) => format!(":{{{}}}", render_param_record(r)),
-            KType::KFunction { params, ret } => {
+            KType::Record { fields, .. } => format!(":{{{}}}", render_param_record(fields)),
+            KType::KFunction { params, ret, .. } => {
                 format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
             }
             KType::KFunctor { params, ret, .. } => {
@@ -299,7 +389,7 @@ impl<'a> KType<'a> {
             KType::SetRef { set, index } => set.member(*index).name.clone(),
             // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
-            KType::Union(members) => {
+            KType::Union { members, .. } => {
                 let rendered: Vec<String> = members.iter().map(|m| m.name()).collect();
                 format!(":({})", rendered.join(" | "))
             }
@@ -310,7 +400,9 @@ impl<'a> KType<'a> {
                 let names: Vec<&str> = set.members().iter().map(|m| m.name.as_str()).collect();
                 format!("RECURSIVE TYPES ({})", names.join(" "))
             }
-            KType::Signature { sig, pinned_slots } => {
+            KType::Signature {
+                sig, pinned_slots, ..
+            } => {
                 if pinned_slots.is_empty() {
                     sig.path()
                 } else {
@@ -326,7 +418,7 @@ impl<'a> KType<'a> {
             KType::AbstractType { name, .. } => name.clone(),
             KType::RecursiveRef(name) => name.clone(),
             KType::Unresolved(t) => t.render(),
-            KType::ConstructorApply { ctor, args } => {
+            KType::ConstructorApply { ctor, args, .. } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
                 format!(":({} {})", ctor.name(), arg_names.join(" "))
             }
@@ -353,27 +445,30 @@ impl<'a> KType<'a> {
             KType::Str => Some(KType::Str),
             KType::Bool => Some(KType::Bool),
             KType::Null => Some(KType::Null),
-            KType::List(t) => Some(KType::List(Box::new(t.to_static()?))),
-            KType::Dict(k, v) => Some(KType::Dict(
-                Box::new(k.to_static()?),
-                Box::new(v.to_static()?),
+            KType::List { element, .. } => Some(KType::list(Box::new(element.to_static()?))),
+            KType::Dict { key, value, .. } => Some(KType::dict(
+                Box::new(key.to_static()?),
+                Box::new(value.to_static()?),
             )),
-            KType::Record(r) => Some(KType::Record(Box::new(record_to_static(r)?))),
-            KType::KFunction { params, ret } => Some(KType::KFunction {
-                params: record_to_static(params)?,
-                ret: Box::new(ret.to_static()?),
-            }),
+            KType::Record { fields, .. } => {
+                Some(KType::record(Box::new(record_to_static(fields)?)))
+            }
+            KType::KFunction { params, ret, .. } => Some(KType::function_type(
+                record_to_static(params)?,
+                Box::new(ret.to_static()?),
+            )),
             // A bound functor value's `body` is a live region pointer.
             KType::KFunctor { body: Some(_), .. } => None,
             KType::KFunctor {
                 params,
                 ret,
                 body: None,
-            } => Some(KType::KFunctor {
-                params: record_to_static(params)?,
-                ret: Box::new(ret.to_static()?),
-                body: None,
-            }),
+                ..
+            } => Some(KType::functor_type(
+                record_to_static(params)?,
+                Box::new(ret.to_static()?),
+                None,
+            )),
             KType::DeferredReturn(s) => Some(KType::DeferredReturn(s.clone())),
             KType::Identifier => Some(KType::Identifier),
             KType::KExpression => Some(KType::KExpression),
@@ -384,12 +479,12 @@ impl<'a> KType<'a> {
             KType::SetRef { .. } => None,
             // A union's identity is its owned member set; rebuild each member and rewrap. A
             // member holding a region pointer (e.g. a `SetRef`) declines, and the union with it.
-            KType::Union(members) => {
+            KType::Union { members, .. } => {
                 let mut static_members = Vec::with_capacity(members.len());
                 for m in members {
                     static_members.push(m.to_static()?);
                 }
-                Some(KType::Union(static_members))
+                Some(KType::union_of(static_members))
             }
             KType::SetLocal(i) => Some(KType::SetLocal(*i)),
             KType::RecursiveGroup(_) => None,
@@ -398,6 +493,7 @@ impl<'a> KType<'a> {
             KType::Signature {
                 sig: SigSource::Empty,
                 pinned_slots,
+                ..
             } if pinned_slots.is_empty() => Some(KType::empty_signature()),
             // Region pointers: a `Declared`/`SelfOf` source, or any non-empty pin set.
             KType::Signature { .. } => None,
@@ -413,16 +509,13 @@ impl<'a> KType<'a> {
                 source: AbstractSource::Module(_),
                 ..
             } => None,
-            KType::ConstructorApply { ctor, args } => {
+            KType::ConstructorApply { ctor, args, .. } => {
                 let ctor = Box::new(ctor.to_static()?);
                 let mut static_args = Vec::with_capacity(args.len());
                 for a in args {
                     static_args.push(a.to_static()?);
                 }
-                Some(KType::ConstructorApply {
-                    ctor,
-                    args: static_args,
-                })
+                Some(KType::constructor_apply(ctor, static_args))
             }
             KType::RecursiveRef(s) => Some(KType::RecursiveRef(s.clone())),
             KType::Unresolved(t) => Some(KType::Unresolved(t.clone())),
@@ -479,17 +572,19 @@ impl<'a> KType<'a> {
             | KType::RecursiveRef(_)
             | KType::Unresolved(_)
             | KType::Any => true,
-            KType::List(t) => t.resident_in_visiting(residence, visited),
-            KType::Dict(k, v) => {
-                k.resident_in_visiting(residence, visited)
-                    && v.resident_in_visiting(residence, visited)
+            KType::List { element, .. } => element.resident_in_visiting(residence, visited),
+            KType::Dict { key, value, .. } => {
+                key.resident_in_visiting(residence, visited)
+                    && value.resident_in_visiting(residence, visited)
             }
-            KType::Record(r) => record_resident_in(r, residence, visited),
-            KType::KFunction { params, ret } => {
+            KType::Record { fields, .. } => record_resident_in(fields, residence, visited),
+            KType::KFunction { params, ret, .. } => {
                 record_resident_in(params, residence, visited)
                     && ret.resident_in_visiting(residence, visited)
             }
-            KType::KFunctor { params, ret, body } => {
+            KType::KFunctor {
+                params, ret, body, ..
+            } => {
                 let body_ok = match body {
                     Some(f) => residence.owns_function(f),
                     None => true,
@@ -501,10 +596,12 @@ impl<'a> KType<'a> {
             KType::SetRef { set, .. } | KType::RecursiveGroup(set) => {
                 set_resident_in(set, residence, visited)
             }
-            KType::Union(members) => members
+            KType::Union { members, .. } => members
                 .iter()
                 .all(|m| m.resident_in_visiting(residence, visited)),
-            KType::Signature { sig, pinned_slots } => {
+            KType::Signature {
+                sig, pinned_slots, ..
+            } => {
                 let source_ok = match sig {
                     SigSource::Declared(s) => residence.owns_signature(s),
                     SigSource::SelfOf(m) => residence.owns_module(m),
@@ -524,7 +621,7 @@ impl<'a> KType<'a> {
                 source: AbstractSource::Module(m),
                 ..
             } => residence.owns_module(m),
-            KType::ConstructorApply { ctor, args } => {
+            KType::ConstructorApply { ctor, args, .. } => {
                 ctor.resident_in_visiting(residence, visited)
                     && args
                         .iter()
@@ -549,7 +646,7 @@ impl<'a> KType<'a> {
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
             // A union is a proper type value — it classifies against `OfKind(Proper)` slots
             // and never against a nominal-family kind.
-            KType::Union(_) => KKind::ProperType,
+            KType::Union { .. } => KKind::ProperType,
             _ => KKind::ProperType,
         }
     }
@@ -644,17 +741,26 @@ impl<'a> PartialEq for KType<'a> {
             | (RecordType, RecordType)
             | (Any, Any) => true,
             (OfKind(a), OfKind(b)) => a == b,
-            (List(a), List(b)) => a == b,
-            (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
-            (Record(a), Record(b)) => a == b,
+            (List { element: a, .. }, List { element: b, .. }) => a == b,
+            (
+                Dict {
+                    key: ka, value: va, ..
+                },
+                Dict {
+                    key: kb, value: vb, ..
+                },
+            ) => ka == kb && va == vb,
+            (Record { fields: a, .. }, Record { fields: b, .. }) => a == b,
             (
                 KFunction {
                     params: p1,
                     ret: r1,
+                    ..
                 },
                 KFunction {
                     params: p2,
                     ret: r2,
+                    ..
                 },
             ) => p1 == p2 && r1 == r2,
             // `body` is identity-inert: two functor types with different (or no)
@@ -681,10 +787,12 @@ impl<'a> PartialEq for KType<'a> {
                 Signature {
                     sig: s1,
                     pinned_slots: p1,
+                    ..
                 },
                 Signature {
                     sig: s2,
                     pinned_slots: p2,
+                    ..
                 },
             ) => s1.sig_id() == s2.sig_id() && p1 == p2,
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
@@ -700,9 +808,14 @@ impl<'a> PartialEq for KType<'a> {
                     name: n2,
                 },
             ) => s1.scope_id() == s2.scope_id() && n1 == n2,
-            (ConstructorApply { ctor: c1, args: a1 }, ConstructorApply { ctor: c2, args: a2 }) => {
-                c1 == c2 && a1 == a2
-            }
+            (
+                ConstructorApply {
+                    ctor: c1, args: a1, ..
+                },
+                ConstructorApply {
+                    ctor: c2, args: a2, ..
+                },
+            ) => c1 == c2 && a1 == a2,
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             (Unresolved(a), Unresolved(b)) => a == b,
             // Whole-set handle: identity is the set pointer, never the (cyclic) schema.
@@ -710,7 +823,9 @@ impl<'a> PartialEq for KType<'a> {
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
             // Order-blind set equality. Members are canonically deduplicated, so equal length
             // plus one-directional containment is sufficient.
-            (Union(a), Union(b)) => a.len() == b.len() && a.iter().all(|m| b.contains(m)),
+            (Union { members: a, .. }, Union { members: b, .. }) => {
+                a.len() == b.len() && a.iter().all(|m| b.contains(m))
+            }
             _ => false,
         }
     }
@@ -730,13 +845,13 @@ impl<'a> std::hash::Hash for KType<'a> {
             Number | Str | Bool | Null | Identifier | KExpression | SigiledTypeExpr
             | RecordType | Any => {}
             OfKind(k) => k.hash(state),
-            List(t) => t.hash(state),
-            Dict(k, v) => {
-                k.hash(state);
-                v.hash(state);
+            List { element, .. } => element.hash(state),
+            Dict { key, value, .. } => {
+                key.hash(state);
+                value.hash(state);
             }
-            Record(r) => r.hash(state),
-            KFunction { params, ret } => {
+            Record { fields, .. } => fields.hash(state),
+            KFunction { params, ret, .. } => {
                 params.hash(state);
                 ret.hash(state);
             }
@@ -750,7 +865,9 @@ impl<'a> std::hash::Hash for KType<'a> {
                 index.hash(state);
             }
             SetLocal(i) => i.hash(state),
-            Signature { sig, pinned_slots } => {
+            Signature {
+                sig, pinned_slots, ..
+            } => {
                 sig.sig_id().hash(state);
                 pinned_slots.hash(state);
             }
@@ -759,7 +876,7 @@ impl<'a> std::hash::Hash for KType<'a> {
                 source.scope_id().hash(state);
                 name.hash(state);
             }
-            ConstructorApply { ctor, args } => {
+            ConstructorApply { ctor, args, .. } => {
                 ctor.hash(state);
                 args.hash(state);
             }
@@ -770,7 +887,7 @@ impl<'a> std::hash::Hash for KType<'a> {
             DeferredReturn(s) => s.hash(state),
             // Order-independent, matching the set-based `PartialEq`: hash the length, then
             // combine each member's own hash commutatively by XOR so a reordering hashes equal.
-            Union(members) => {
+            Union { members, .. } => {
                 use std::hash::Hasher as _;
                 members.len().hash(state);
                 let mut acc: u64 = 0;

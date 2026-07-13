@@ -14,7 +14,7 @@ fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
 }
@@ -37,24 +37,24 @@ fn is_more_specific_concrete_beats_any() {
 
 #[test]
 fn is_more_specific_list_number_beats_list_any() {
-    let n = KType::List(Box::new(KType::Number));
-    let a = KType::List(Box::new(KType::Any));
+    let n = KType::list(Box::new(KType::Number));
+    let a = KType::list(Box::new(KType::Any));
     assert!(n.is_more_specific_than(&a));
     assert!(!a.is_more_specific_than(&n));
 }
 
 #[test]
 fn is_more_specific_disjoint_lists_incomparable() {
-    let n = KType::List(Box::new(KType::Number));
-    let s = KType::List(Box::new(KType::Str));
+    let n = KType::list(Box::new(KType::Number));
+    let s = KType::list(Box::new(KType::Str));
     assert!(!n.is_more_specific_than(&s));
     assert!(!s.is_more_specific_than(&n));
 }
 
 #[test]
 fn is_more_specific_dict_refines_value() {
-    let strict = KType::Dict(Box::new(KType::Str), Box::new(KType::Number));
-    let loose = KType::Dict(Box::new(KType::Str), Box::new(KType::Any));
+    let strict = KType::dict(Box::new(KType::Str), Box::new(KType::Number));
+    let loose = KType::dict(Box::new(KType::Str), Box::new(KType::Any));
     assert!(strict.is_more_specific_than(&loose));
     assert!(!loose.is_more_specific_than(&strict));
 }
@@ -65,14 +65,11 @@ fn is_more_specific_dict_refines_value() {
 /// (the unary declares a param the nullary lacks → contravariant width violation).
 #[test]
 fn is_more_specific_function_width_subset() {
-    let unary = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Number),
-    };
-    let nullary = KType::KFunction {
-        params: Record::new(),
-        ret: Box::new(KType::Number),
-    };
+    let unary = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Number),
+    );
+    let nullary = KType::function_type(Record::new(), Box::new(KType::Number));
     assert!(nullary.is_more_specific_than(&unary));
     assert!(!unary.is_more_specific_than(&nullary));
 }
@@ -82,14 +79,14 @@ fn is_more_specific_function_width_subset() {
 /// value accepting `Any` fills a slot that promised only `Number`.
 #[test]
 fn is_more_specific_function_param_contravariant() {
-    let any_param = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Any)]),
-        ret: Box::new(KType::Str),
-    };
-    let number_param = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Str),
-    };
+    let any_param = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Any)]),
+        Box::new(KType::Str),
+    );
+    let number_param = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Str),
+    );
     assert!(any_param.is_more_specific_than(&number_param));
     assert!(!number_param.is_more_specific_than(&any_param));
 }
@@ -98,20 +95,20 @@ fn is_more_specific_function_param_contravariant() {
 /// return makes the function more specific.
 #[test]
 fn is_more_specific_function_return_covariant() {
-    let number_ret = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Number),
-    };
-    let any_ret = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Any),
-    };
+    let number_ret = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Number),
+    );
+    let any_ret = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Any),
+    );
     assert!(number_ret.is_more_specific_than(&any_ret));
     assert!(!any_ret.is_more_specific_than(&number_ret));
 }
 
 fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
-    KType::Record(Box::new(Record::from_pairs(
+    KType::record(Box::new(Record::from_pairs(
         fields.into_iter().map(|(n, t)| (n.to_string(), t)),
     )))
 }
@@ -310,10 +307,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
     let kt_sig: &KType<'_> = region
         .brand()
-        .alloc_ktype_checked(KType::Signature {
-            sig: SigSource::Declared(sig),
-            pinned_slots: Vec::new(),
-        })
+        .alloc_ktype_checked(KType::signature(SigSource::Declared(sig), Vec::new()))
         .expect("sig was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig))));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
@@ -416,15 +410,12 @@ fn is_type_denoting_table() {
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
-    let sb = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    };
+    let sb = KType::signature(SigSource::Declared(sig), Vec::new());
     assert!(sb.is_type_denoting());
-    let sb_pinned = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: vec![("Type".into(), KType::Number)],
-    };
+    let sb_pinned = KType::signature(
+        SigSource::Declared(sig),
+        vec![("Type".into(), KType::Number)],
+    );
     assert!(sb_pinned.is_type_denoting());
     assert!(KType::OfKind(KKind::Signature).is_type_denoting());
     assert!(KType::OfKind(KKind::AnyType).is_type_denoting());
@@ -444,12 +435,12 @@ fn is_type_denoting_table() {
     assert!(!KType::Any.is_type_denoting());
     assert!(!KType::Identifier.is_type_denoting());
     assert!(!KType::KExpression.is_type_denoting());
-    assert!(!KType::List(Box::new(KType::Number)).is_type_denoting());
-    assert!(!KType::Dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
-    assert!(!KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Number),
-    }
+    assert!(!KType::list(Box::new(KType::Number)).is_type_denoting());
+    assert!(!KType::dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
+    assert!(!KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Number),
+    )
     .is_type_denoting());
 }
 
@@ -487,30 +478,27 @@ fn is_more_specific_for_pinned_signature_bound() {
         .brand()
         .alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
 
-    let bare = KType::Signature {
-        sig: SigSource::Declared(ordered),
-        pinned_slots: Vec::new(),
-    };
-    let pinned_number = KType::Signature {
-        sig: SigSource::Declared(ordered),
-        pinned_slots: vec![("Type".into(), KType::Number)],
-    };
-    let pinned_str = KType::Signature {
-        sig: SigSource::Declared(ordered),
-        pinned_slots: vec![("Type".into(), KType::Str)],
-    };
-    let pinned_two = KType::Signature {
-        sig: SigSource::Declared(ordered),
-        pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
-    };
-    let other_sig = KType::Signature {
-        sig: SigSource::Declared(hashed),
-        pinned_slots: vec![("Type".into(), KType::Number)],
-    };
-    let pinned_elt = KType::Signature {
-        sig: SigSource::Declared(ordered),
-        pinned_slots: vec![("Elt".into(), KType::Number)],
-    };
+    let bare = KType::signature(SigSource::Declared(ordered), Vec::new());
+    let pinned_number = KType::signature(
+        SigSource::Declared(ordered),
+        vec![("Type".into(), KType::Number)],
+    );
+    let pinned_str = KType::signature(
+        SigSource::Declared(ordered),
+        vec![("Type".into(), KType::Str)],
+    );
+    let pinned_two = KType::signature(
+        SigSource::Declared(ordered),
+        vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
+    );
+    let other_sig = KType::signature(
+        SigSource::Declared(hashed),
+        vec![("Type".into(), KType::Number)],
+    );
+    let pinned_elt = KType::signature(
+        SigSource::Declared(ordered),
+        vec![("Elt".into(), KType::Number)],
+    );
 
     assert!(pinned_number.is_more_specific_than(&bare));
     assert!(!bare.is_more_specific_than(&pinned_number));
@@ -601,17 +589,11 @@ fn constructor_apply_result_checks_inhabited_error_param() {
         index: 0,
     };
 
-    let slot_myerr = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Any, myerr_ty.clone()],
-    };
+    let slot_myerr = KType::constructor_apply(ctor.clone(), vec![KType::Any, myerr_ty.clone()]);
     let caught = result_value(&r_set, "Error", error_carrier(&kerror_set));
     assert!(!slot_myerr.matches_value(&caught));
 
-    let slot_kerror = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Any, kerror_ty.clone()],
-    };
+    let slot_kerror = KType::constructor_apply(ctor.clone(), vec![KType::Any, kerror_ty.clone()]);
     assert!(slot_kerror.matches_value(&caught));
 
     let my_error = result_value(&r_set, "Error", error_carrier(&myerr_set));
@@ -635,15 +617,9 @@ fn constructor_apply_result_ok_admits_any_error_param() {
         index: 0,
     };
     let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
-    let slot = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Number, myerr_ty],
-    };
+    let slot = KType::constructor_apply(ctor.clone(), vec![KType::Number, myerr_ty]);
     assert!(slot.matches_value(&ok_value));
-    let slot_str = KType::ConstructorApply {
-        ctor,
-        args: vec![KType::Str, KType::Any],
-    };
+    let slot_str = KType::constructor_apply(ctor, vec![KType::Str, KType::Any]);
     assert!(!slot_str.matches_value(&ok_value));
 }
 
@@ -681,14 +657,8 @@ fn constructor_apply_covariant_admission_and_specificity() {
         index: 0,
         type_args: std::rc::Rc::new(vec![KType::Number, myerr.clone()]),
     };
-    let coarse = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Any, KType::Any],
-    };
-    let refined = KType::ConstructorApply {
-        ctor,
-        args: vec![KType::Number, myerr],
-    };
+    let coarse = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
+    let refined = KType::constructor_apply(ctor, vec![KType::Number, myerr]);
     assert!(coarse.matches_value(&stamped));
     assert!(refined.matches_value(&stamped));
     assert!(refined.is_more_specific_than(&coarse));
@@ -712,20 +682,11 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
         index: 0,
         type_args: std::rc::Rc::new(vec![KType::Number, KType::Str]),
     };
-    let slot_ok = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Number, KType::Str],
-    };
+    let slot_ok = KType::constructor_apply(ctor.clone(), vec![KType::Number, KType::Str]);
     assert!(slot_ok.matches_value(&stamped));
-    let slot_any = KType::ConstructorApply {
-        ctor: ctor.clone(),
-        args: vec![KType::Any, KType::Any],
-    };
+    let slot_any = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
     assert!(slot_any.matches_value(&stamped));
-    let slot_bad = KType::ConstructorApply {
-        ctor,
-        args: vec![KType::Bool, KType::Str],
-    };
+    let slot_bad = KType::constructor_apply(ctor, vec![KType::Bool, KType::Str]);
     assert!(!slot_bad.matches_value(&stamped));
 }
 
@@ -737,16 +698,13 @@ use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, Return
 /// does not hold — `Any` never refines a precise placeholder.
 #[test]
 fn deferred_return_more_specific_than_any() {
-    let deferred = KType::KFunction {
-        params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+    let deferred = KType::function_type(
+        Record::new(),
+        Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
             TypeIdentifier::leaf("Er".into()),
         ))),
-    };
-    let any = KType::KFunction {
-        params: Record::new(),
-        ret: Box::new(KType::Any),
-    };
+    );
+    let any = KType::function_type(Record::new(), Box::new(KType::Any));
     assert!(deferred.is_more_specific_than(&any));
     assert!(!any.is_more_specific_than(&deferred));
 }
@@ -756,20 +714,20 @@ fn deferred_return_more_specific_than_any() {
 #[test]
 fn two_functors_differ_only_in_deferred_return_are_distinct() {
     use std::hash::{Hash, Hasher};
-    let er = KType::KFunctor {
-        params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+    let er = KType::functor_type(
+        Record::new(),
+        Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
             TypeIdentifier::leaf("Er".into()),
         ))),
-        body: None,
-    };
-    let ar = KType::KFunctor {
-        params: Record::new(),
-        ret: Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
+        None,
+    );
+    let ar = KType::functor_type(
+        Record::new(),
+        Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
             TypeIdentifier::leaf("Ar".into()),
         ))),
-        body: None,
-    };
+        None,
+    );
     assert_ne!(er, ar);
     assert!(!er.is_more_specific_than(&ar));
     assert!(!ar.is_more_specific_than(&er));
@@ -850,8 +808,8 @@ fn union_admits_member_typed_value() {
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
 
-    let number_or_str = KType::Union(vec![KType::Number, KType::Str]);
-    let str_or_bool = KType::Union(vec![KType::Str, KType::Bool]);
+    let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
+    let str_or_bool = KType::union_of(vec![KType::Str, KType::Bool]);
 
     assert!(number_or_str.accepts_carried(Carried::Object(n)));
     assert!(!str_or_bool.accepts_carried(Carried::Object(n)));
@@ -872,8 +830,8 @@ fn union_honors_memoized_list_element_type() {
         KType::Number,
     ));
 
-    let with_list = KType::Union(vec![KType::List(Box::new(KType::Number)), KType::Str]);
-    let without_list = KType::Union(vec![KType::Number, KType::Str]);
+    let with_list = KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]);
+    let without_list = KType::union_of(vec![KType::Number, KType::Str]);
 
     assert!(with_list.accepts_carried(Carried::Object(list_value)));
     assert!(!without_list.accepts_carried(Carried::Object(list_value)));
@@ -884,8 +842,8 @@ fn union_honors_memoized_list_element_type() {
 #[test]
 fn union_specificity_ordering() {
     let number = KType::Number;
-    let number_or_str = KType::Union(vec![KType::Number, KType::Str]);
-    let number_or_str_or_bool = KType::Union(vec![KType::Number, KType::Str, KType::Bool]);
+    let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
+    let number_or_str_or_bool = KType::union_of(vec![KType::Number, KType::Str, KType::Bool]);
 
     // Each member is a subtype of the union.
     assert!(number.is_more_specific_than(&number_or_str));
@@ -897,7 +855,7 @@ fn union_specificity_ordering() {
     assert!(number_or_str.is_more_specific_than(&number_or_str_or_bool));
     assert!(!number_or_str_or_bool.is_more_specific_than(&number_or_str));
     // Equal unions (order-blind) are not strictly more specific than each other.
-    let str_or_number = KType::Union(vec![KType::Str, KType::Number]);
+    let str_or_number = KType::union_of(vec![KType::Str, KType::Number]);
     assert!(!number_or_str.is_more_specific_than(&str_or_number));
 }
 
@@ -922,17 +880,11 @@ fn module_object_ktype_reports_self_sig() {
     let kt = KObject::Module(m).ktype();
     assert!(matches!(
         &kt,
-        KType::Signature { sig: SigSource::SelfOf(mm), pinned_slots }
+        KType::Signature { sig: SigSource::SelfOf(mm), pinned_slots, .. }
             if mm.scope_id() == m.scope_id() && pinned_slots.is_empty()
     ));
     // Identity keys on `scope_id`: same module compares equal, a distinct module does not.
-    assert_eq!(
-        kt,
-        KType::Signature {
-            sig: SigSource::SelfOf(m),
-            pinned_slots: Vec::new(),
-        }
-    );
+    assert_eq!(kt, KType::signature(SigSource::SelfOf(m), Vec::new()));
     let child2 = region
         .brand()
         .alloc_scope(Scope::child_under_module(scope, "Mod2".into()));
@@ -971,20 +923,14 @@ fn matches_value_admits_module_object_via_signature_slot() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
 
-    let declared = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    };
+    let declared = KType::signature(SigSource::Declared(sig), Vec::new());
     assert!(declared.matches_value(&KObject::Module(m)));
 
-    let pinned_ok = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: vec![("Type".into(), KType::Number)],
-    };
-    let pinned_bad = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: vec![("Type".into(), KType::Str)],
-    };
+    let pinned_ok = KType::signature(
+        SigSource::Declared(sig),
+        vec![("Type".into(), KType::Number)],
+    );
+    let pinned_bad = KType::signature(SigSource::Declared(sig), vec![("Type".into(), KType::Str)]);
     assert!(pinned_ok.matches_value(&KObject::Module(m)));
     assert!(!pinned_bad.matches_value(&KObject::Module(m)));
 
@@ -1015,14 +961,8 @@ fn specificity_self_sig_refines_declared_and_empty() {
         .alloc_scope(Scope::child_under_module(scope, "M".into()));
     let m: &Module = region.brand().alloc_module(Module::new("M".into(), child));
 
-    let self_of = KType::Signature {
-        sig: SigSource::SelfOf(m),
-        pinned_slots: Vec::new(),
-    };
-    let declared = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    };
+    let self_of = KType::signature(SigSource::SelfOf(m), Vec::new());
+    let declared = KType::signature(SigSource::Declared(sig), Vec::new());
     let empty = KType::empty_signature();
 
     // `SelfOf(m) ≺ Declared(sig)` because `m` satisfies the (empty) signature.

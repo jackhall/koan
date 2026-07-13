@@ -90,9 +90,6 @@ fn constructor_apply_name_renders_surface_form() {
         },
     );
     let ctor = KType::SetRef { set, index: 0 };
-    let app = KType::ConstructorApply {
-        ctor: Box::new(ctor),
-        args: vec![KType::Number],
-    };
+    let app = KType::constructor_apply(Box::new(ctor), vec![KType::Number]);
     assert_eq!(app.name(), ":(Wrap Number)");
 }

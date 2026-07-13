@@ -136,11 +136,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // `{x,y}` carrier. The `fields` slot is `KExpression` (captured unevaluated);
     // the `record` slot is `:{}`, which shape-gates the operand to records.
     let signature = sig(
-        KType::Record(Box::new(Record::new())),
+        KType::record(Box::new(Record::new())),
         vec![
             arg("fields", KType::KExpression),
             kw("FROM"),
-            arg("record", KType::Record(Box::new(Record::new()))),
+            arg("record", KType::record(Box::new(Record::new()))),
         ],
     );
     crate::builtins::register_builtin(scope, "FROM", signature, body);

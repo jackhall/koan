@@ -138,7 +138,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     results.as_deref_mut(),
                 ) {
                     FieldListOutcome::Done(pairs) => {
-                        Ok(KType::Record(Box::new(Record::from_pairs(pairs))))
+                        Ok(KType::record(Box::new(Record::from_pairs(pairs))))
                     }
                     FieldListOutcome::Err(msg) => Err(msg),
                     FieldListOutcome::Pending {

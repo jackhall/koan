@@ -50,8 +50,8 @@ pub fn body<'a>(
         (_, Some(name_kt)) => {
             let resolved_name = match name_kt {
                 KType::Unresolved(te) => te.render(),
-                KType::List(_)
-                | KType::Dict(_, _)
+                KType::List { .. }
+                | KType::Dict { .. }
                 | KType::KFunction { .. }
                 | KType::KFunctor { .. }
                 | KType::SetLocal(_)

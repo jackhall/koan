@@ -86,7 +86,7 @@ fn parenthesized_compound_member() {
     let result = run_one_type(scope, parse_one(":((LIST OF Number) | Str)"));
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::List(Box::new(KType::Number)), KType::Str]),
+        KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]),
     );
 }
 
@@ -100,7 +100,7 @@ fn binary_union_with_reaching_member_correlates() {
     run(scope, "NEWTYPE Wrapped = :{a :Number}");
     let result = run_one_type(scope, parse_one(":(Wrapped | Number)"));
     match result {
-        KType::Union(members) => {
+        KType::Union { members, .. } => {
             assert_eq!(members.len(), 2, "expected a flat two-member union");
             assert!(
                 members.iter().any(|m| m.name() == "Wrapped"),
@@ -125,7 +125,7 @@ fn nary_union_with_reaching_member_correlates() {
     run(scope, "NEWTYPE Wrapped = :{a :Number}");
     let result = run_one_type(scope, parse_one(":(Wrapped | Number | Str)"));
     match result {
-        KType::Union(members) => {
+        KType::Union { members, .. } => {
             assert_eq!(members.len(), 3, "expected a flat three-member union");
             assert!(
                 members.iter().any(|m| m.name() == "Wrapped"),

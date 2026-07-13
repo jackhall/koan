@@ -23,10 +23,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(kt @ KType::SetRef { .. }) => kt.clone(),
         _ => panic!("Result must be registered before CATCH"),
     };
-    let return_type = KType::ConstructorApply {
-        ctor: Box::new(result_ctor),
-        args: vec![KType::Any, kerror_ktype()],
-    };
+    let return_type =
+        KType::constructor_apply(Box::new(result_ctor), vec![KType::Any, kerror_ktype()]);
     let signature = sig(
         return_type,
         vec![kw("CATCH"), arg("expr", KType::KExpression)],

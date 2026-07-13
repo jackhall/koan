@@ -23,7 +23,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![
                 arg("sig", KType::OfKind(KKind::Signature)),
                 kw("WITH"),
-                arg("bindings", KType::Record(Box::new(Record::new()))),
+                arg("bindings", KType::record(Box::new(Record::new()))),
             ],
         )
     };

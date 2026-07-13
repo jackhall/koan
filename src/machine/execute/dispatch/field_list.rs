@@ -378,7 +378,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     Action::AwaitDeps { deps, finish }
 }
 
-/// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record(_))`.
+/// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record { .. })`.
 /// The `fields` expression is the record's `(name :Type, …)` field list. A record type at a
 /// value/type position declares no binder, so the elaborator threads no self-reference; a
 /// field naming a forward type parks and a sigil field type sub-dispatches, both deferred
@@ -397,7 +397,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         None,
     ) {
         FieldListOutcome::Done(pairs) => {
-            let kt = KType::Record(Box::new(Record::from_pairs(pairs)));
+            let kt = KType::record(Box::new(Record::from_pairs(pairs)));
             match kt.to_static() {
                 // Region-free record: the compile-enforced `'static` tier.
                 Some(owned) => Outcome::Done(Ok(view.step_ctx().alloc_type(owned))),
@@ -415,7 +415,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
                     None,
                     &[],
                     Box::new(|_brand, pairs, _extras| {
-                        Ok(KType::Record(Box::new(Record::from_pairs(pairs))))
+                        Ok(KType::record(Box::new(Record::from_pairs(pairs))))
                     }),
                 )),
             }
@@ -436,7 +436,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             None,
             Vec::new(),
             Box::new(|_brand, pairs, _extras| {
-                Ok(KType::Record(Box::new(Record::from_pairs(pairs))))
+                Ok(KType::record(Box::new(Record::from_pairs(pairs))))
             }),
         ),
     }

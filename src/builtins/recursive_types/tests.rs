@@ -20,7 +20,7 @@ fn struct_set_and_fields<'a>(
             let borrow = member.schema();
             match borrow.as_ref() {
                 Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                    KType::Record(record) => {
+                    KType::Record { fields: record, .. } => {
                         let fields = record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                         (std::rc::Rc::clone(set), fields)
                     }

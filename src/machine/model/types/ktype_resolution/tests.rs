@@ -34,7 +34,7 @@ fn from_name_kfunction_no_longer_resolves() {
 fn from_name_list_lowers_to_list_any() {
     assert_eq!(
         KType::from_name("List"),
-        Some(KType::List(Box::new(KType::Any)))
+        Some(KType::list(Box::new(KType::Any)))
     );
 }
 
@@ -42,7 +42,7 @@ fn from_name_list_lowers_to_list_any() {
 fn from_name_dict_lowers_to_dict_any_any() {
     assert_eq!(
         KType::from_name("Dict"),
-        Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any)))
+        Some(KType::dict(Box::new(KType::Any), Box::new(KType::Any)))
     );
 }
 
@@ -58,9 +58,9 @@ fn join_same_yields_same() {
 
 #[test]
 fn join_lists_recurses_on_element() {
-    let a = KType::List(Box::new(KType::Number));
-    let b = KType::List(Box::new(KType::Str));
-    assert_eq!(KType::join(&a, &b), KType::List(Box::new(KType::Any)));
+    let a = KType::list(Box::new(KType::Number));
+    let b = KType::list(Box::new(KType::Str));
+    assert_eq!(KType::join(&a, &b), KType::list(Box::new(KType::Any)));
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn join_iter_mixed_yields_any() {
 #[test]
 fn union_of_two_distinct_members() {
     let u = KType::union_of(vec![KType::Number, KType::Str]);
-    assert_eq!(u, KType::Union(vec![KType::Number, KType::Str]));
+    assert_eq!(u, KType::union_of(vec![KType::Number, KType::Str]));
 }
 
 /// A single member collapses to that member (AC2's `:(A | A)` is `:A`, degenerate case).
@@ -109,33 +109,33 @@ fn union_of_dedups_to_single() {
 #[test]
 fn union_of_dedups_within_set() {
     let u = KType::union_of(vec![KType::Number, KType::Str, KType::Number]);
-    assert_eq!(u, KType::Union(vec![KType::Number, KType::Str]));
+    assert_eq!(u, KType::union_of(vec![KType::Number, KType::Str]));
 }
 
 /// A nested `Union` member is flattened into the outer members, then deduplicated.
 #[test]
 fn union_of_flattens_nested_union() {
-    let inner = KType::Union(vec![KType::Str, KType::Bool]);
+    let inner = KType::union_of(vec![KType::Str, KType::Bool]);
     let u = KType::union_of(vec![KType::Number, inner, KType::Bool]);
     assert_eq!(
         u,
-        KType::Union(vec![KType::Number, KType::Str, KType::Bool])
+        KType::union_of(vec![KType::Number, KType::Str, KType::Bool])
     );
 }
 
 fn function(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'static> {
-    KType::KFunction {
-        params: Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
-        ret: Box::new(ret),
-    }
+    KType::function_type(
+        Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
+        Box::new(ret),
+    )
 }
 
 fn functor(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'static> {
-    KType::KFunctor {
-        params: Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
-        ret: Box::new(ret),
-        body: None,
-    }
+    KType::functor_type(
+        Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
+        Box::new(ret),
+        None,
+    )
 }
 
 /// Two same-shape functions join to the shared `KFunction` (the established arm).
@@ -157,8 +157,8 @@ fn join_same_shape_functors_yields_shared_functor() {
     assert_eq!(joined, g1.clone());
     // The element type a `[g1, g2]` list literal memoizes is the shared functor, not `Any`.
     assert_eq!(
-        KType::List(Box::new(KType::join_iter(vec![g1.clone(), g2.clone()]))),
-        KType::List(Box::new(g1)),
+        KType::list(Box::new(KType::join_iter(vec![g1.clone(), g2.clone()]))),
+        KType::list(Box::new(g1)),
     );
 }
 

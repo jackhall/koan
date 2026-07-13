@@ -273,10 +273,9 @@ fn type_recursive_setref_relocates_and_navigates() {
     let set = RecursiveSet::singleton(
         "Tree".into(),
         ScopeId::next(),
-        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::from_pairs(vec![(
-            "children".into(),
-            KType::List(Box::new(KType::SetLocal(0))),
-        )]))))),
+        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::from_pairs(vec![
+            ("children".into(), KType::list(Box::new(KType::SetLocal(0)))),
+        ]))))),
     );
     let type_value = KType::SetRef {
         set: Rc::clone(&set),
@@ -306,9 +305,9 @@ fn type_recursive_setref_relocates_and_navigates() {
             let borrow = out_set.member(*index).schema();
             match borrow.as_ref() {
                 Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                    KType::Record(fields) => assert_eq!(
+                    KType::Record { fields, .. } => assert_eq!(
                         fields.get("children"),
-                        Some(&KType::List(Box::new(KType::SetLocal(0)))),
+                        Some(&KType::list(Box::new(KType::SetLocal(0)))),
                         "the relocated Tree's self-reference is still SetLocal(0)",
                     ),
                     other => panic!("expected a record repr, got {other:?}"),

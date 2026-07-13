@@ -247,27 +247,30 @@ fn seal_refs_inner<'a>(
         // A `SetRef` into *this* set (cross-sibling, resolved post-seal) folds to `SetLocal`;
         // a `SetRef` into another set is an external handle and passes through.
         KType::SetRef { set: other, index } if Rc::ptr_eq(other, set) => KType::SetLocal(*index),
-        KType::List(inner) => KType::List(Box::new(recurse(inner))),
-        KType::Dict(k, v) => KType::Dict(Box::new(recurse(k)), Box::new(recurse(v))),
-        KType::Record(fields) => KType::Record(Box::new(
+        KType::List { element, .. } => KType::list(Box::new(recurse(element))),
+        KType::Dict { key, value, .. } => {
+            KType::dict(Box::new(recurse(key)), Box::new(recurse(value)))
+        }
+        KType::Record { fields, .. } => KType::record(Box::new(
             fields.map(|t| seal_refs_inner(set, binder, t, missing)),
         )),
-        KType::KFunction { params, ret } => KType::KFunction {
-            params: params.map(|t| seal_refs_inner(set, binder, t, missing)),
-            ret: Box::new(recurse(ret)),
-        },
-        KType::KFunctor { params, ret, body } => KType::KFunctor {
-            params: params.map(|t| seal_refs_inner(set, binder, t, missing)),
-            ret: Box::new(recurse(ret)),
-            body: *body,
-        },
-        KType::ConstructorApply { ctor, args } => KType::ConstructorApply {
-            ctor: Box::new(recurse(ctor)),
-            args: args.iter().map(recurse).collect(),
-        },
+        KType::KFunction { params, ret, .. } => KType::function_type(
+            params.map(|t| seal_refs_inner(set, binder, t, missing)),
+            Box::new(recurse(ret)),
+        ),
+        KType::KFunctor {
+            params, ret, body, ..
+        } => KType::functor_type(
+            params.map(|t| seal_refs_inner(set, binder, t, missing)),
+            Box::new(recurse(ret)),
+            *body,
+        ),
+        KType::ConstructorApply { ctor, args, .. } => {
+            KType::constructor_apply(Box::new(recurse(ctor)), args.iter().map(recurse).collect())
+        }
         // A union inside a schema seals member-wise, so a self / sibling reference among its
         // members folds to a `SetLocal` like any other.
-        KType::Union(members) => KType::Union(members.iter().map(recurse).collect()),
+        KType::Union { members, .. } => KType::union_of(members.iter().map(recurse).collect()),
         // Leaves and external handles pass through.
         other => other.clone(),
     }
@@ -284,30 +287,32 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
             set: Rc::clone(set),
             index: *i,
         },
-        KType::List(inner) => KType::List(Box::new(resolve_set_locals(set, inner))),
-        KType::Dict(k, v) => KType::Dict(
-            Box::new(resolve_set_locals(set, k)),
-            Box::new(resolve_set_locals(set, v)),
+        KType::List { element, .. } => KType::list(Box::new(resolve_set_locals(set, element))),
+        KType::Dict { key, value, .. } => KType::dict(
+            Box::new(resolve_set_locals(set, key)),
+            Box::new(resolve_set_locals(set, value)),
         ),
-        KType::Record(fields) => {
-            KType::Record(Box::new(fields.map(|t| resolve_set_locals(set, t))))
+        KType::Record { fields, .. } => {
+            KType::record(Box::new(fields.map(|t| resolve_set_locals(set, t))))
         }
-        KType::KFunction { params, ret } => KType::KFunction {
-            params: params.map(|t| resolve_set_locals(set, t)),
-            ret: Box::new(resolve_set_locals(set, ret)),
-        },
-        KType::KFunctor { params, ret, body } => KType::KFunctor {
-            params: params.map(|t| resolve_set_locals(set, t)),
-            ret: Box::new(resolve_set_locals(set, ret)),
-            body: *body,
-        },
-        KType::ConstructorApply { ctor, args } => KType::ConstructorApply {
-            ctor: Box::new(resolve_set_locals(set, ctor)),
-            args: args.iter().map(|a| resolve_set_locals(set, a)).collect(),
-        },
+        KType::KFunction { params, ret, .. } => KType::function_type(
+            params.map(|t| resolve_set_locals(set, t)),
+            Box::new(resolve_set_locals(set, ret)),
+        ),
+        KType::KFunctor {
+            params, ret, body, ..
+        } => KType::functor_type(
+            params.map(|t| resolve_set_locals(set, t)),
+            Box::new(resolve_set_locals(set, ret)),
+            *body,
+        ),
+        KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
+            Box::new(resolve_set_locals(set, ctor)),
+            args.iter().map(|a| resolve_set_locals(set, a)).collect(),
+        ),
         // Projecting a union member-wise binds each member's ambient `SetLocal`s to real handles.
-        KType::Union(members) => {
-            KType::Union(members.iter().map(|m| resolve_set_locals(set, m)).collect())
+        KType::Union { members, .. } => {
+            KType::union_of(members.iter().map(|m| resolve_set_locals(set, m)).collect())
         }
         // Leaves and external handles pass through; only the ambient set's `SetLocal`s bind.
         other => other.clone(),

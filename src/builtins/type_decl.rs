@@ -22,9 +22,7 @@ use std::collections::HashMap;
 
 use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{
-    AbstractSource, KKind, NominalSchema, RecursiveSet,
-};
+use crate::machine::model::types::{AbstractSource, KKind, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 

@@ -18,7 +18,7 @@ fn fn_return_coarsens_list_carrier_to_declared() {
     let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
-    assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(result.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 /// Without an annotation, a list keeps its precise memoized join type.
@@ -28,7 +28,7 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
     let scope = run_root_silent(&region);
     run(scope, "FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
     let result = run_one(scope, parse_one("NUMS"));
-    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
+    assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }
 
 /// A heterogeneous literal carries `List<Any>` and does not satisfy a precise
@@ -52,7 +52,7 @@ fn fn_return_empty_list_stamps_declared_element_type() {
     let scope = run_root_silent(&region);
     run(scope, "FN (EMPTY) -> :(LIST OF Number) = ([])");
     let result = run_one(scope, parse_one("EMPTY"));
-    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
+    assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }
 
 #[test]
@@ -465,7 +465,7 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
         "FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)",
     );
     let result = run_one(scope, parse_one("ECHO [1]"));
-    assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(result.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 /// A correct-element call into a precise slot keeps the precise element type.
@@ -478,5 +478,5 @@ fn fn_typed_list_param_accepts_matching_element_at_call() {
         "FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",
     );
     let result = run_one(scope, parse_one("ECHO [1]"));
-    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
+    assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }

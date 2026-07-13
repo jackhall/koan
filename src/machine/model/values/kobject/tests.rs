@@ -20,19 +20,19 @@ fn newtype_singleton<'a>(
 #[test]
 fn ktype_of_homogeneous_number_list() {
     let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
-    assert_eq!(l.ktype(), KType::List(Box::new(KType::Number)));
+    assert_eq!(l.ktype(), KType::list(Box::new(KType::Number)));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
     let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
-    assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 #[test]
 fn ktype_of_empty_list_is_list_any() {
     let l: KObject<'_> = KObject::list(vec![]);
-    assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn ktype_of_nested_list() {
     let outer: KObject<'_> = KObject::list(vec![inner]);
     assert_eq!(
         outer.ktype(),
-        KType::List(Box::new(KType::List(Box::new(KType::Number))))
+        KType::list(Box::new(KType::list(Box::new(KType::Number))))
     );
 }
 
@@ -54,7 +54,7 @@ fn ktype_of_dict_string_number() {
     let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
-        KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
+        KType::dict(Box::new(KType::Str), Box::new(KType::Number))
     );
 }
 
@@ -64,27 +64,27 @@ fn ktype_of_empty_dict_is_dict_any_any() {
     let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
-        KType::Dict(Box::new(KType::Any), Box::new(KType::Any))
+        KType::dict(Box::new(KType::Any), Box::new(KType::Any))
     );
 }
 
 #[test]
 fn matches_value_list_number_rejects_string_element() {
-    let t = KType::List(Box::new(KType::Number));
+    let t = KType::list(Box::new(KType::Number));
     let bad: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(!t.matches_value(&bad));
 }
 
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
-    let t = KType::List(Box::new(KType::Number));
+    let t = KType::list(Box::new(KType::Number));
     let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
     assert!(t.matches_value(&good));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
-    let t = KType::List(Box::new(KType::Any));
+    let t = KType::list(Box::new(KType::Any));
     let mixed: KObject<'_> =
         KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(t.matches_value(&mixed));
@@ -101,7 +101,7 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
         Held::Object(KObject::Number(2.0)),
     ]);
     let stamped = KObject::list_with_type(items, KType::Any);
-    assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(stamped.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 /// A `TypeConstructor` (`Result`) value keeps the ctor identity: erased `type_args`
@@ -147,9 +147,9 @@ fn type_constructor_ktype_erased_vs_applied() {
 #[test]
 fn stamp_type_coarsens_list_carrier() {
     let value = KObject::list(vec![KObject::Number(1.0)]);
-    assert_eq!(value.ktype(), KType::List(Box::new(KType::Number)));
-    let stamped = value.stamp_type(&KType::List(Box::new(KType::Any)));
-    assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
+    assert_eq!(value.ktype(), KType::list(Box::new(KType::Number)));
+    let stamped = value.stamp_type(&KType::list(Box::new(KType::Any)));
+    assert_eq!(stamped.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 #[test]

@@ -68,7 +68,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     // The `compare` slot's `x` param reads the abstract identity — the substitution reaches
     // inside the function type, the case a raw value read would get wrong.
     match sig.value_slots.get("compare") {
-        Some(KType::KFunction { params, ret }) => {
+        Some(KType::KFunction { params, ret, .. }) => {
             assert_eq!(params.get("x"), Some(&elem_abstract));
             assert_eq!(**ret, KType::Number);
         }
@@ -96,7 +96,7 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
     // Declared slots substitute to the concrete source type.
     assert_eq!(sig.value_slots.get("zero"), Some(&KType::Number));
     match sig.value_slots.get("compare") {
-        Some(KType::KFunction { params, ret }) => {
+        Some(KType::KFunction { params, ret, .. }) => {
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(**ret, KType::Number);
         }

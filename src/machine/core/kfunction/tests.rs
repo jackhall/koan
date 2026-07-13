@@ -182,7 +182,9 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
     let functor = KFunction::new(make_sig(), Body::Builtin(body_any), scope, None, None, true);
     let functor_obj = KObject::KFunction(region.brand().alloc_function(functor));
     match functor_obj.ktype() {
-        KType::KFunctor { params, ret, body } => {
+        KType::KFunctor {
+            params, ret, body, ..
+        } => {
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.len(), 1);
             assert_eq!(*ret, KType::Number);
@@ -242,11 +244,11 @@ fn functor_ktype_identity_ignores_body() {
         "functor types with different bodies must hash equal",
     );
     // And both equal the body-less annotation form (the `:(FUNCTOR …)` surface).
-    let annotation = KType::KFunctor {
-        params: crate::machine::model::types::Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Number),
-        body: None,
-    };
+    let annotation = KType::functor_type(
+        crate::machine::model::types::Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Number),
+        None,
+    );
     assert_eq!(
         a, annotation,
         "a body-bearing functor equals its annotation"

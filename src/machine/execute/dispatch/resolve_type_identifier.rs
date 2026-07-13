@@ -136,17 +136,17 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                 KType::AbstractType { source, name } => {
                     return Some((source.scope_id(), name.as_str()));
                 }
-                KType::List(inner) => self.stack.push(inner),
-                KType::Dict(k, v) => {
-                    self.stack.push(v);
-                    self.stack.push(k);
+                KType::List { element, .. } => self.stack.push(element),
+                KType::Dict { key, value, .. } => {
+                    self.stack.push(value);
+                    self.stack.push(key);
                 }
-                KType::Record(fields) => {
+                KType::Record { fields, .. } => {
                     for t in fields.values() {
                         self.stack.push(t);
                     }
                 }
-                KType::KFunction { params, ret } => {
+                KType::KFunction { params, ret, .. } => {
                     self.stack.push(ret);
                     for a in params.values() {
                         self.stack.push(a);
@@ -158,13 +158,13 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                         self.stack.push(p);
                     }
                 }
-                KType::ConstructorApply { ctor, args } => {
+                KType::ConstructorApply { ctor, args, .. } => {
                     for a in args.iter().rev() {
                         self.stack.push(a);
                     }
                     self.stack.push(ctor);
                 }
-                KType::Union(members) => {
+                KType::Union { members, .. } => {
                     for m in members.iter().rev() {
                         self.stack.push(m);
                     }

@@ -152,35 +152,38 @@ pub fn substitute_sig_members<'a>(
         {
             members[&set.member(*index).name].clone()
         }
-        KType::List(t) => KType::List(Box::new(substitute_sig_members(t, sig_id, members))),
-        KType::Dict(k, v) => KType::Dict(
-            Box::new(substitute_sig_members(k, sig_id, members)),
-            Box::new(substitute_sig_members(v, sig_id, members)),
+        KType::List { element, .. } => {
+            KType::list(Box::new(substitute_sig_members(element, sig_id, members)))
+        }
+        KType::Dict { key, value, .. } => KType::dict(
+            Box::new(substitute_sig_members(key, sig_id, members)),
+            Box::new(substitute_sig_members(value, sig_id, members)),
         ),
-        KType::Record(r) => KType::Record(Box::new(
-            r.map(|v| substitute_sig_members(v, sig_id, members)),
+        KType::Record { fields, .. } => KType::record(Box::new(
+            fields.map(|v| substitute_sig_members(v, sig_id, members)),
         )),
-        KType::KFunction { params, ret } => KType::KFunction {
-            params: params.map(|v| substitute_sig_members(v, sig_id, members)),
-            ret: Box::new(substitute_sig_members(ret, sig_id, members)),
-        },
-        KType::KFunctor { params, ret, body } => KType::KFunctor {
-            params: params.map(|v| substitute_sig_members(v, sig_id, members)),
-            ret: Box::new(substitute_sig_members(ret, sig_id, members)),
-            body: *body,
-        },
-        KType::Union(us) => KType::Union(
+        KType::KFunction { params, ret, .. } => KType::function_type(
+            params.map(|v| substitute_sig_members(v, sig_id, members)),
+            Box::new(substitute_sig_members(ret, sig_id, members)),
+        ),
+        KType::KFunctor {
+            params, ret, body, ..
+        } => KType::functor_type(
+            params.map(|v| substitute_sig_members(v, sig_id, members)),
+            Box::new(substitute_sig_members(ret, sig_id, members)),
+            *body,
+        ),
+        KType::Union { members: us, .. } => KType::union_of(
             us.iter()
                 .map(|m| substitute_sig_members(m, sig_id, members))
                 .collect(),
         ),
-        KType::ConstructorApply { ctor, args } => KType::ConstructorApply {
-            ctor: Box::new(substitute_sig_members(ctor, sig_id, members)),
-            args: args
-                .iter()
+        KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
+            Box::new(substitute_sig_members(ctor, sig_id, members)),
+            args.iter()
                 .map(|a| substitute_sig_members(a, sig_id, members))
                 .collect(),
-        },
+        ),
         _ => kt.clone(),
     }
 }

@@ -78,8 +78,7 @@ pub fn body_opaque<'a>(
                     );
                     // Generative: the per-application nonce (the minted module's `scope_id`)
                     // folds into the set digest, so two `:|` applications never unify.
-                    let fresh =
-                        RecursiveSet::new_generative(vec![member], new_module.scope_id());
+                    let fresh = RecursiveSet::new_generative(vec![member], new_module.scope_id());
                     fresh.fill_member(
                         0,
                         NominalSchema::TypeConstructor {

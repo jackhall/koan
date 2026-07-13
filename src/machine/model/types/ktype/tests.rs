@@ -12,28 +12,28 @@ fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>>
     RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     )
 }
 
 #[test]
 fn name_renders_parameterized_list() {
-    let t = KType::List(Box::new(KType::List(Box::new(KType::Number))));
+    let t = KType::list(Box::new(KType::list(Box::new(KType::Number))));
     assert_eq!(t.name(), ":(LIST OF :(LIST OF Number))");
 }
 
 #[test]
 fn name_renders_dict() {
-    let t = KType::Dict(Box::new(KType::Str), Box::new(KType::Number));
+    let t = KType::dict(Box::new(KType::Str), Box::new(KType::Number));
     assert_eq!(t.name(), ":(MAP Str -> Number)");
 }
 
 #[test]
 fn name_renders_function() {
-    let t = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-    };
+    let t = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+        Box::new(KType::Bool),
+    );
     assert_eq!(t.name(), ":(FN (x :Number y :Str) -> Bool)");
 }
 
@@ -41,79 +41,76 @@ fn name_renders_function() {
 /// prefix a second colon (`xs :(LIST OF Number)`, not `xs ::(LIST OF Number)`).
 #[test]
 fn name_renders_function_with_sigiled_param() {
-    let t = KType::KFunction {
-        params: Record::from_pairs(vec![("xs".into(), KType::List(Box::new(KType::Number)))]),
-        ret: Box::new(KType::Bool),
-    };
+    let t = KType::function_type(
+        Record::from_pairs(vec![("xs".into(), KType::list(Box::new(KType::Number)))]),
+        Box::new(KType::Bool),
+    );
     assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
 }
 
 #[test]
 fn name_renders_functor() {
-    let t = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
+    let t = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+        Box::new(KType::Bool),
+        None,
+    );
     assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
 }
 
 #[test]
 fn functor_structural_eq_same_shape() {
-    let a = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
-    let b = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
+    let a = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+        Box::new(KType::Bool),
+        None,
+    );
+    let b = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+        Box::new(KType::Bool),
+        None,
+    );
     assert_eq!(a, b);
 }
 
 #[test]
 fn functor_structural_neq_when_params_or_ret_differ() {
-    let base = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
-    let diff_params = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
-    let diff_ret = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Null),
-        body: None,
-    };
+    let base = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+        None,
+    );
+    let diff_params = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Str)]),
+        Box::new(KType::Bool),
+        None,
+    );
+    let diff_ret = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Null),
+        None,
+    );
     assert_ne!(base, diff_params);
     assert_ne!(base, diff_ret);
 }
 
 #[test]
 fn functor_and_function_are_disjoint_types() {
-    let f = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
-    let g = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
+    let f = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
+    let g = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+        None,
+    );
     assert_ne!(f, g);
 }
 
 #[test]
 fn name_renders_function_nullary() {
-    let t = KType::KFunction {
-        params: Record::new(),
-        ret: Box::new(KType::Any),
-    };
+    let t = KType::function_type(Record::new(), Box::new(KType::Any));
     assert_eq!(t.name(), ":(FN () -> Any)");
 }
 
@@ -122,14 +119,14 @@ fn name_renders_function_nullary() {
 /// hash equal.
 #[test]
 fn function_params_order_blind_equality() {
-    let xy = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        ret: Box::new(KType::Bool),
-    };
-    let yx = KType::KFunction {
-        params: Record::from_pairs(vec![("y".into(), KType::Str), ("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
+    let xy = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+        Box::new(KType::Bool),
+    );
+    let yx = KType::function_type(
+        Record::from_pairs(vec![("y".into(), KType::Str), ("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
     assert_eq!(xy, yx);
     assert_eq!(hash_of(&xy), hash_of(&yx));
 }
@@ -138,14 +135,14 @@ fn function_params_order_blind_equality() {
 /// function type.
 #[test]
 fn function_params_name_sensitive_inequality() {
-    let x = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
-    let a = KType::KFunction {
-        params: Record::from_pairs(vec![("a".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
+    let x = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
+    let a = KType::function_type(
+        Record::from_pairs(vec![("a".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
     assert_ne!(x, a);
 }
 
@@ -183,38 +180,38 @@ fn any_module_and_any_signature_render_surface_keywords() {
 /// `:(A | B)` renders members joined by ` | ` and wrapped in the type sigil.
 #[test]
 fn name_renders_union() {
-    let u = KType::Union(vec![KType::Number, KType::Str]);
+    let u = KType::union_of(vec![KType::Number, KType::Str]);
     assert_eq!(u.name(), ":(Number | Str)");
 }
 
 /// A compound member already opens its own sigil, which nests without a doubled colon.
 #[test]
 fn name_renders_union_with_compound_member() {
-    let u = KType::Union(vec![KType::List(Box::new(KType::Number)), KType::Str]);
+    let u = KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]);
     assert_eq!(u.name(), ":(:(LIST OF Number) | Str)");
 }
 
 /// Union equality is order-blind: the same members in a different order compare equal.
 #[test]
 fn union_equality_order_blind() {
-    let ab = KType::Union(vec![KType::Number, KType::Str]);
-    let ba = KType::Union(vec![KType::Str, KType::Number]);
+    let ab = KType::union_of(vec![KType::Number, KType::Str]);
+    let ba = KType::union_of(vec![KType::Str, KType::Number]);
     assert_eq!(ab, ba);
 }
 
 /// Two unions of different member sets are unequal.
 #[test]
 fn union_inequality_different_members() {
-    let ns = KType::Union(vec![KType::Number, KType::Str]);
-    let nb = KType::Union(vec![KType::Number, KType::Bool]);
+    let ns = KType::union_of(vec![KType::Number, KType::Str]);
+    let nb = KType::union_of(vec![KType::Number, KType::Bool]);
     assert_ne!(ns, nb);
 }
 
 /// Hash agrees with the order-blind equality: reordered-but-equal unions hash equal.
 #[test]
 fn union_hash_order_blind() {
-    let ab = KType::Union(vec![KType::Number, KType::Str, KType::Bool]);
-    let ba = KType::Union(vec![KType::Bool, KType::Number, KType::Str]);
+    let ab = KType::union_of(vec![KType::Number, KType::Str, KType::Bool]);
+    let ba = KType::union_of(vec![KType::Bool, KType::Number, KType::Str]);
     assert_eq!(ab, ba);
     assert_eq!(hash_of(&ab), hash_of(&ba));
 }
@@ -222,10 +219,10 @@ fn union_hash_order_blind() {
 /// A region-free union rebuilds at `'static` member-wise.
 #[test]
 fn to_static_rebuilds_union() {
-    let u = KType::Union(vec![KType::Number, KType::Str]);
+    let u = KType::union_of(vec![KType::Number, KType::Str]);
     assert_eq!(
         u.to_static().expect("union of owned members rebuilds"),
-        KType::Union(vec![KType::Number, KType::Str])
+        KType::union_of(vec![KType::Number, KType::Str])
     );
 }
 
@@ -260,34 +257,34 @@ fn hash_agrees_with_eq_for_region_free_variants() {
             KType::OfKind(KKind::Signature),
         ),
         (
-            KType::List(Box::new(KType::Number)),
-            KType::List(Box::new(KType::Number)),
+            KType::list(Box::new(KType::Number)),
+            KType::list(Box::new(KType::Number)),
         ),
         (
-            KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
-            KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
+            KType::dict(Box::new(KType::Str), Box::new(KType::Number)),
+            KType::dict(Box::new(KType::Str), Box::new(KType::Number)),
         ),
         (
-            KType::KFunction {
-                params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                ret: Box::new(KType::Bool),
-            },
-            KType::KFunction {
-                params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                ret: Box::new(KType::Bool),
-            },
+            KType::function_type(
+                Record::from_pairs(vec![("x".into(), KType::Number)]),
+                Box::new(KType::Bool),
+            ),
+            KType::function_type(
+                Record::from_pairs(vec![("x".into(), KType::Number)]),
+                Box::new(KType::Bool),
+            ),
         ),
         (
-            KType::KFunctor {
-                params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                ret: Box::new(KType::Bool),
-                body: None,
-            },
-            KType::KFunctor {
-                params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-                ret: Box::new(KType::Bool),
-                body: None,
-            },
+            KType::functor_type(
+                Record::from_pairs(vec![("x".into(), KType::Number)]),
+                Box::new(KType::Bool),
+                None,
+            ),
+            KType::functor_type(
+                Record::from_pairs(vec![("x".into(), KType::Number)]),
+                Box::new(KType::Bool),
+                None,
+            ),
         ),
         (KType::OfKind(KKind::NewType), KType::OfKind(KKind::NewType)),
         (
@@ -354,15 +351,15 @@ fn hash_keys_set_ref_on_pointer_and_index() {
 /// and `Hash`.
 #[test]
 fn hash_distinguishes_function_from_functor() {
-    let f = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
-    let g = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
+    let f = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
+    let g = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+        None,
+    );
     assert_ne!(f, g);
     assert_ne!(hash_of(&f), hash_of(&g));
 }
@@ -427,25 +424,25 @@ fn to_static_rebuilds_abstract_type_sig_source() {
 /// children and propagate the rebuild.
 #[test]
 fn to_static_rebuilds_nested_containers() {
-    let list = KType::List(Box::new(KType::Dict(
+    let list = KType::list(Box::new(KType::dict(
         Box::new(KType::Str),
         Box::new(KType::Number),
     )));
     assert_eq!(
         list.to_static().expect("nested owned containers rebuild"),
-        KType::List(Box::new(KType::Dict(
+        KType::list(Box::new(KType::dict(
             Box::new(KType::Str),
             Box::new(KType::Number)
         )))
     );
 
-    let record = KType::Record(Box::new(Record::from_pairs(vec![(
+    let record = KType::record(Box::new(Record::from_pairs(vec![(
         "x".into(),
         KType::Number,
     )])));
     assert_eq!(
         record.to_static().expect("record-type fields rebuild"),
-        KType::Record(Box::new(Record::from_pairs(vec![(
+        KType::record(Box::new(Record::from_pairs(vec![(
             "x".into(),
             KType::Number
         )])))
@@ -455,47 +452,41 @@ fn to_static_rebuilds_nested_containers() {
 /// `KFunction` (always owned) and a bodyless `KFunctor` both recurse `params`/`ret`.
 #[test]
 fn to_static_rebuilds_function_and_bodyless_functor() {
-    let f = KType::KFunction {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-    };
+    let f = KType::function_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+    );
     assert_eq!(
         f.to_static().expect("KFunction is owned"),
-        KType::KFunction {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-        }
+        KType::function_type(
+            Record::from_pairs(vec![("x".into(), KType::Number)]),
+            Box::new(KType::Bool),
+        )
     );
 
-    let g = KType::KFunctor {
-        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-        ret: Box::new(KType::Bool),
-        body: None,
-    };
+    let g = KType::functor_type(
+        Record::from_pairs(vec![("x".into(), KType::Number)]),
+        Box::new(KType::Bool),
+        None,
+    );
     assert_eq!(
         g.to_static().expect("bodyless KFunctor is owned"),
-        KType::KFunctor {
-            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
-            ret: Box::new(KType::Bool),
-            body: None,
-        }
+        KType::functor_type(
+            Record::from_pairs(vec![("x".into(), KType::Number)]),
+            Box::new(KType::Bool),
+            None,
+        )
     );
 }
 
 /// `ConstructorApply` recurses `ctor` and every element of `args`.
 #[test]
 fn to_static_rebuilds_constructor_apply() {
-    let t = KType::ConstructorApply {
-        ctor: Box::new(KType::Any),
-        args: vec![KType::Number, KType::Str],
-    };
+    let t = KType::constructor_apply(Box::new(KType::Any), vec![KType::Number, KType::Str]);
     assert_eq!(
         t.to_static()
             .expect("ConstructorApply over owned args rebuilds"),
-        KType::ConstructorApply {
-            ctor: Box::new(KType::Any),
-            args: vec![KType::Number, KType::Str],
-        }
+        KType::constructor_apply(Box::new(KType::Any), vec![KType::Number, KType::Str])
     );
 }
 
@@ -524,10 +515,7 @@ fn to_static_none_for_signature_borrow() {
     let sig = storage
         .brand()
         .alloc_signature(ModuleSignature::new("Sig".into(), scope));
-    let t = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    };
+    let t = KType::signature(SigSource::Declared(sig), Vec::new());
     assert!(t.to_static().is_none());
 }
 
@@ -565,11 +553,7 @@ fn to_static_none_for_functor_with_body() {
         None,
         true,
     ));
-    let t = KType::KFunctor {
-        params: Record::new(),
-        ret: Box::new(KType::Number),
-        body: Some(func),
-    };
+    let t = KType::functor_type(Record::new(), Box::new(KType::Number), Some(func));
     assert!(t.to_static().is_none());
 }
 
@@ -635,10 +619,10 @@ fn resident_in_false_for_set_with_foreign_signature_member() {
     let set = RecursiveSet::singleton(
         "Wrap".into(),
         ScopeId::from_raw(0, 0xA2),
-        NominalSchema::NewType(Box::new(KType::Signature {
-            sig: SigSource::Declared(sig),
-            pinned_slots: Vec::new(),
-        })),
+        NominalSchema::NewType(Box::new(KType::signature(
+            SigSource::Declared(sig),
+            Vec::new(),
+        ))),
     );
     let t = KType::SetRef { set, index: 0 };
 

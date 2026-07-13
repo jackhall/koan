@@ -990,11 +990,7 @@ fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run>
             true,
         );
         let kf_ref: &KFunction = home.brand().alloc_function(kf);
-        let kt = KType::KFunctor {
-            params: Record::new(),
-            ret: Box::new(KType::Null),
-            body: Some(kf_ref),
-        };
+        let kt = KType::functor_type(Record::new(), Box::new(KType::Null), Some(kf_ref));
         home.brand()
             .alloc_ktype_checked(kt)
             .expect("kf_ref was just allocated into home's own region")
@@ -1114,7 +1110,7 @@ fn alloc_type_composed_correlates_mixed_operands() {
         TypeOperand::Reaching(&dep),
     ];
     let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
-        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        KType::dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
     });
 
     let consumer_storage = consumer_frame.storage_rc();
@@ -1123,7 +1119,9 @@ fn alloc_type_composed_correlates_mixed_operands() {
     drop(consumer_frame);
 
     let (k_is_number, read_id) = composed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::Dict(k, v)) => {
+        Carried::Type(KType::Dict {
+            key: k, value: v, ..
+        }) => {
             let k_is_number = matches!(k.as_ref(), KType::Number);
             let id = match v.as_ref() {
                 KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
@@ -1169,7 +1167,7 @@ fn alloc_type_composed_operand_order_is_positional() {
         TypeOperand::Pure(KType::Number),
     ];
     let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
-        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        KType::dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
     });
 
     let consumer_storage = consumer_frame.storage_rc();
@@ -1178,7 +1176,9 @@ fn alloc_type_composed_operand_order_is_positional() {
     drop(consumer_frame);
 
     let (read_id, v_is_number) = composed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::Dict(k, v)) => {
+        Carried::Type(KType::Dict {
+            key: k, value: v, ..
+        }) => {
             let id = match k.as_ref() {
                 KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
                 other => panic!(
@@ -1210,7 +1210,7 @@ fn alloc_type_composed_all_pure_seals_empty_reach() {
         TypeOperand::Pure(KType::Number),
     ];
     let composed: StepCarried = ctx.alloc_type_composed(operands, |_brand, parts| {
-        KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+        KType::dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
     });
     assert!(
         composed.reach_is_empty(),
@@ -1383,10 +1383,7 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
     let sig = region_a
         .brand()
         .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
-    let kt = KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    };
+    let kt = KType::signature(SigSource::Declared(sig), Vec::new());
 
     let region_b = run_root_storage();
     let before = region_b.region().alloc_count();
@@ -1434,12 +1431,12 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
                 .clone();
             let record =
                 Record::from_pairs([("flag".to_string(), flag), ("count".to_string(), count)]);
-            Carried::Type(brand.alloc_ktype_folded(KType::Record(Box::new(record))))
+            Carried::Type(brand.alloc_ktype_folded(KType::record(Box::new(record))))
         });
 
     // The record lives in `run_storage`'s region; `producer` still pins the `Bool` leaf it embeds.
     sealed.inspect_pinned(&run_storage, |c| match c {
-        Carried::Type(KType::Record(r)) => {
+        Carried::Type(KType::Record { fields: r, .. }) => {
             assert_eq!(
                 r.get("flag"),
                 Some(&KType::Bool),

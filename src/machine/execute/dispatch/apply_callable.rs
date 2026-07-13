@@ -89,7 +89,7 @@ fn apply_constructor<'step>(
 ) -> Outcome<'step> {
     // A user `UNION` binds an anonymous union of per-variant newtype `SetRef`s. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
-    if let KType::Union(members) = identity {
+    if let KType::Union { members, .. } = identity {
         return apply_union_construct(ctx, members, reach, expr);
     }
     let KType::SetRef { set, index } = identity else {

@@ -9,12 +9,16 @@ use crate::machine::model::types::{
 };
 
 fn record(pairs: Vec<(&str, KType<'static>)>) -> KType<'static> {
-    KType::Record(Box::new(Record::from_pairs(
+    KType::record(Box::new(Record::from_pairs(
         pairs.into_iter().map(|(n, t)| (n.to_string(), t)),
     )))
 }
 
-fn newtype_singleton(name: &str, scope: ScopeId, repr: KType<'static>) -> std::rc::Rc<RecursiveSet<'static>> {
+fn newtype_singleton(
+    name: &str,
+    scope: ScopeId,
+    repr: KType<'static>,
+) -> std::rc::Rc<RecursiveSet<'static>> {
     RecursiveSet::singleton(name.into(), scope, NominalSchema::NewType(Box::new(repr)))
 }
 
@@ -24,8 +28,8 @@ fn same_content_built_twice_digests_equal() {
     let r2 = record(vec![("x", KType::Number), ("y", KType::Str)]);
     assert_eq!(digest_of(&r1), digest_of(&r2));
 
-    let u1 = KType::Union(vec![KType::Number, KType::Str]);
-    let u2 = KType::Union(vec![KType::Number, KType::Str]);
+    let u1 = KType::union_of(vec![KType::Number, KType::Str]);
+    let u2 = KType::union_of(vec![KType::Number, KType::Str]);
     assert_eq!(digest_of(&u1), digest_of(&u2));
 }
 
@@ -50,8 +54,8 @@ fn record_digest_is_order_blind_but_binds_name_to_type() {
 
 #[test]
 fn union_digest_is_order_blind() {
-    let forward = KType::Union(vec![KType::Number, KType::Str]);
-    let reversed = KType::Union(vec![KType::Str, KType::Number]);
+    let forward = KType::union_of(vec![KType::Number, KType::Str]);
+    let reversed = KType::union_of(vec![KType::Str, KType::Number]);
     assert_eq!(digest_of(&forward), digest_of(&reversed));
 }
 
@@ -60,29 +64,37 @@ fn leaves_and_composites_digest_distinctly_by_shape() {
     assert_ne!(digest_of(&KType::Number), digest_of(&KType::Str));
     assert_ne!(digest_of(&KType::Bool), digest_of(&KType::Null));
     assert_ne!(
-        digest_of(&KType::List(Box::new(KType::Number))),
-        digest_of(&KType::List(Box::new(KType::Str))),
+        digest_of(&KType::list(Box::new(KType::Number))),
+        digest_of(&KType::list(Box::new(KType::Str))),
     );
     // A list of X and a dict keyed on X differ by domain tag even if payloads overlap.
     assert_ne!(
-        digest_of(&KType::List(Box::new(KType::Number))),
-        digest_of(&KType::Dict(Box::new(KType::Number), Box::new(KType::Number))),
+        digest_of(&KType::list(Box::new(KType::Number))),
+        digest_of(&KType::dict(
+            Box::new(KType::Number),
+            Box::new(KType::Number)
+        )),
     );
 }
 
 #[test]
 fn functor_digest_matches_by_shape_and_stays_apart_from_function() {
-    let functor = |ret| KType::KFunctor {
-        params: Record::from_pairs(vec![("x".to_string(), KType::Number)]),
-        ret: Box::new(ret),
-        body: None,
+    let functor = |ret| {
+        KType::functor_type(
+            Record::from_pairs(vec![("x".to_string(), KType::Number)]),
+            Box::new(ret),
+            None,
+        )
     };
-    assert_eq!(digest_of(&functor(KType::Str)), digest_of(&functor(KType::Str)));
+    assert_eq!(
+        digest_of(&functor(KType::Str)),
+        digest_of(&functor(KType::Str))
+    );
 
-    let function = KType::KFunction {
-        params: Record::from_pairs(vec![("x".to_string(), KType::Number)]),
-        ret: Box::new(KType::Str),
-    };
+    let function = KType::function_type(
+        Record::from_pairs(vec![("x".to_string(), KType::Number)]),
+        Box::new(KType::Str),
+    );
     assert_ne!(
         digest_of(&functor(KType::Str)),
         digest_of(&function),
@@ -98,9 +110,16 @@ fn independently_built_sets_unify_and_exclude_scope_id() {
     let s1 = newtype_singleton("Foo", ScopeId::from_raw(7, 1), KType::Number);
     let s2 = newtype_singleton("Foo", ScopeId::from_raw(9, 2), KType::Number);
     assert!(s1.digest().is_some());
-    assert_eq!(s1.digest(), s2.digest(), "content unifies across allocations");
     assert_eq!(
-        digest_of(&KType::SetRef { set: s1.clone(), index: 0 }),
+        s1.digest(),
+        s2.digest(),
+        "content unifies across allocations"
+    );
+    assert_eq!(
+        digest_of(&KType::SetRef {
+            set: s1.clone(),
+            index: 0
+        }),
         digest_of(&KType::SetRef { set: s2, index: 0 }),
     );
 
@@ -121,7 +140,11 @@ fn generative_sets_never_unify() {
     };
     let g1 = generative(ScopeId::from_raw(1, 1));
     let g2 = generative(ScopeId::from_raw(2, 2));
-    assert_ne!(g1.digest(), g2.digest(), "distinct nonces fold to distinct digests");
+    assert_ne!(
+        g1.digest(),
+        g2.digest(),
+        "distinct nonces fold to distinct digests"
+    );
 
     // A content-addressed set of the same shape is distinct from any generative mint.
     let plain = newtype_singleton("Op", ScopeId::from_raw(1, 1), KType::Number);
@@ -136,7 +159,10 @@ fn multi_member_set_seals_digest_on_last_fill() {
     ]);
     assert!(set.digest().is_none(), "unsealed before any fill");
     set.fill_member(0, NominalSchema::NewType(Box::new(KType::Number)));
-    assert!(set.digest().is_none(), "still unsealed after one of two fills");
+    assert!(
+        set.digest().is_none(),
+        "still unsealed after one of two fills"
+    );
     set.fill_member(1, NominalSchema::NewType(Box::new(KType::Str)));
     assert!(set.digest().is_some(), "sealed once every member filled");
 }
@@ -148,9 +174,16 @@ fn schema_embedding_external_setref_digests_deterministically() {
         let outer = newtype_singleton(
             "Outer",
             ScopeId::from_raw(4, 4),
-            KType::SetRef { set: inner, index: 0 },
+            KType::SetRef {
+                set: inner,
+                index: 0,
+            },
         );
         outer.digest().expect("sealed on fill")
     };
-    assert_eq!(build(), build(), "a set over an external SetRef is content-addressed");
+    assert_eq!(
+        build(),
+        build(),
+        "a set over an external SetRef is content-addressed"
+    );
 }

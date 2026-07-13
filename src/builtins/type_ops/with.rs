@@ -137,10 +137,7 @@ pub fn body<'a>(
                             .collect(),
                         _ => unreachable!("validated above: bindings is a record"),
                     };
-                    Carried::Type(brand.alloc_ktype_folded(KType::Signature {
-                        sig,
-                        pinned_slots: pinned,
-                    }))
+                    Carried::Type(brand.alloc_ktype_folded(KType::signature(sig, pinned)))
                 },
             );
             Action::Done(Ok(sealed))
@@ -167,10 +164,7 @@ pub fn body<'a>(
                             .into_iter()
                             .map(|(name, kt)| (name, brand.alloc_ktype(kt).clone()))
                             .collect();
-                        Carried::Type(brand.alloc_ktype_folded(KType::Signature {
-                            sig,
-                            pinned_slots: pinned,
-                        }))
+                        Carried::Type(brand.alloc_ktype_folded(KType::signature(sig, pinned)))
                     });
                     Action::Done(Ok(sealed))
                 }
@@ -204,7 +198,9 @@ mod tests {
         };
         let result = run_one_type(scope, parse_one("OrderedSig WITH {Carrier = Number}"));
         match result {
-            KType::Signature { sig, pinned_slots } => {
+            KType::Signature {
+                sig, pinned_slots, ..
+            } => {
                 assert_eq!(sig.sig_id(), sig_id);
                 assert_eq!(sig.path(), "OrderedSig");
                 assert_eq!(pinned_slots.len(), 1);

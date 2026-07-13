@@ -97,7 +97,7 @@ fn sigil_list_of_lowers_to_list_carrier() {
     let scope = run(&region, "SIG Sig = ((VAL items :(LIST OF Number)))");
     let items_kt = lookup_sig_value_kt(scope, "Sig", "items");
     match items_kt {
-        KType::List(elem) => assert_eq!(*elem, KType::Number),
+        KType::List { element: elem, .. } => assert_eq!(*elem, KType::Number),
         other => panic!("items must be KType::List(Number), got {other:?}"),
     }
 }
@@ -124,7 +124,9 @@ fn sigil_map_lowers_to_dict_carrier() {
     let scope = run(&region, "SIG Sig = ((VAL table :(MAP Str -> Number)))");
     let table_kt = lookup_sig_value_kt(scope, "Sig", "table");
     match table_kt {
-        KType::Dict(k, v) => {
+        KType::Dict {
+            key: k, value: v, ..
+        } => {
             assert_eq!(*k, KType::Str);
             assert_eq!(*v, KType::Number);
         }
@@ -145,7 +147,7 @@ fn sigil_fn_lowers_to_kfunction_named() {
     );
     let cmp = lookup_sig_value_kt(scope, "Sig", "compare");
     match cmp {
-        KType::KFunction { params, ret } => {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.get("y"), Some(&KType::Str));
@@ -162,7 +164,7 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let scope = run(&region, "SIG Sig = ((VAL gen :(FN () -> Number)))");
     let gen = lookup_sig_value_kt(scope, "Sig", "gen");
     match gen {
-        KType::KFunction { params, ret } => {
+        KType::KFunction { params, ret, .. } => {
             assert!(params.is_empty());
             assert_eq!(*ret, KType::Number);
         }
@@ -210,7 +212,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
         Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::NewType(KType::Record(fields)) => fields,
+            ProjectedSchema::NewType(KType::Record { fields, .. }) => fields,
             _ => panic!("Foo must project a record-repr NewType schema"),
         },
         other => panic!("Foo must be a NewType SetRef in types, got {other:?}"),
@@ -219,7 +221,7 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
     assert_eq!(xs_name, "xs");
     match xs_type {
-        KType::List(elem) => assert_eq!(**elem, KType::Number),
+        KType::List { element: elem, .. } => assert_eq!(**elem, KType::Number),
         other => panic!("xs must be KType::List(Number), got {other:?}"),
     }
 }
@@ -236,7 +238,7 @@ fn union_field_accepts_keyworded_map_sigil() {
     // UNION is type-only — it binds an anonymous union of per-variant newtypes; the `Some`
     // variant's newtype repr is the keyworded `MAP` sigil that sub-Dispatched.
     let some_repr = match scope.resolve_type("Maybe") {
-        Some(KType::Union(members)) => members
+        Some(KType::Union { members, .. }) => members
             .iter()
             .find_map(|m| match m {
                 KType::SetRef { set, index } if set.member(*index).name == "Some" => {
@@ -251,7 +253,9 @@ fn union_field_accepts_keyworded_map_sigil() {
         other => panic!("Maybe must be a Union in types, got {other:?}"),
     };
     match some_repr {
-        KType::Dict(k, v) => {
+        KType::Dict {
+            key: k, value: v, ..
+        } => {
             assert_eq!(*k, KType::Str);
             assert_eq!(*v, KType::Number);
         }

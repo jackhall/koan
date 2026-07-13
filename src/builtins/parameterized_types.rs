@@ -1,8 +1,8 @@
 //! Keyworded parameterized-type constructor builtins reached through the `:(...)` sigil.
 //! See [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md).
 //!
-//! - `LIST OF :Type` → `Carried::Type(KType::List(_))`
-//! - `MAP :Type -> :Type` → `Carried::Type(KType::Dict(_, _))`
+//! - `LIST OF :Type` → `Carried::Type(KType::List { .. })`
+//! - `MAP :Type -> :Type` → `Carried::Type(KType::Dict { .. })`
 //! - `FN <sig> -> :Type` → `Carried::Type(KType::KFunction { .. })`
 //! - `FUNCTOR <sig> -> :Type` → `Carried::Type(KType::KFunctor { .. })`
 //!
@@ -63,15 +63,8 @@ fn finalize_carrier<'a>(
     match kind {
         // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
         // callable, so it carries no body.
-        CarrierKind::Functor => KType::KFunctor {
-            params: record,
-            ret: Box::new(ret),
-            body: None,
-        },
-        CarrierKind::Function => KType::KFunction {
-            params: record,
-            ret: Box::new(ret),
-        },
+        CarrierKind::Functor => KType::functor_type(record, Box::new(ret), None),
+        CarrierKind::Function => KType::function_type(record, Box::new(ret)),
     }
 }
 
@@ -99,7 +92,7 @@ mod action_bodies {
         Action::Done(Ok(ctx
             .ctx
             .alloc_type_composed(operands, |_brand, parts| {
-                KType::List(Box::new(parts[0].clone()))
+                KType::list(Box::new(parts[0].clone()))
             })))
     }
 
@@ -113,7 +106,7 @@ mod action_bodies {
         Action::Done(Ok(ctx
             .ctx
             .alloc_type_composed(operands, |_brand, parts| {
-                KType::Dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
+                KType::dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
             })))
     }
 
@@ -149,9 +142,8 @@ mod action_bodies {
         ];
         Action::Done(Ok(ctx.ctx.alloc_type_composed(
             operands,
-            |_brand, parts| KType::ConstructorApply {
-                ctor: Box::new(parts[1].clone()),
-                args: vec![parts[0].clone()],
+            |_brand, parts| {
+                KType::constructor_apply(Box::new(parts[1].clone()), vec![parts[0].clone()])
             },
         )))
     }
@@ -372,7 +364,7 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
-        assert_eq!(*result, KType::List(Box::new(KType::Number)));
+        assert_eq!(*result, KType::list(Box::new(KType::Number)));
     }
 
     // A root-scope-bound `Wrap` TypeConstructor applied with `:(Number AS Wrap)`
@@ -401,7 +393,7 @@ mod tests {
         );
         let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
         match result {
-            KType::ConstructorApply { ctor, args } => {
+            KType::ConstructorApply { ctor, args, .. } => {
                 match ctor.as_ref() {
                     KType::SetRef { set, index } => {
                         assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
@@ -421,7 +413,7 @@ mod tests {
         let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
         assert_eq!(
             *result,
-            KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
+            KType::dict(Box::new(KType::Str), Box::new(KType::Number))
         );
     }
 
@@ -432,13 +424,10 @@ mod tests {
         let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         assert_eq!(
             *result,
-            KType::KFunction {
-                params: Record::from_pairs(vec![
-                    ("x".into(), KType::Number),
-                    ("y".into(), KType::Str),
-                ]),
-                ret: Box::new(KType::Bool),
-            }
+            KType::function_type(
+                Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str),]),
+                Box::new(KType::Bool),
+            )
         );
     }
 
@@ -449,10 +438,7 @@ mod tests {
         let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
         assert_eq!(
             *result,
-            KType::KFunction {
-                params: Record::new(),
-                ret: Box::new(KType::Number),
-            }
+            KType::function_type(Record::new(), Box::new(KType::Number),)
         );
     }
 
@@ -464,11 +450,11 @@ mod tests {
         let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
         assert_eq!(
             *result,
-            KType::KFunctor {
-                params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
-                ret: Box::new(KType::empty_signature()),
-                body: None,
-            }
+            KType::functor_type(
+                Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
+                Box::new(KType::empty_signature()),
+                None,
+            )
         );
     }
 
@@ -481,13 +467,10 @@ mod tests {
         let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         assert_eq!(
             *result,
-            KType::KFunction {
-                params: Record::from_pairs(vec![(
-                    "xs".into(),
-                    KType::List(Box::new(KType::Number)),
-                )]),
-                ret: Box::new(KType::Bool),
-            }
+            KType::function_type(
+                Record::from_pairs(vec![("xs".into(), KType::list(Box::new(KType::Number)),)]),
+                Box::new(KType::Bool),
+            )
         );
     }
 
@@ -504,15 +487,15 @@ mod tests {
         let result = run_one_type(scope, parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
         assert_eq!(
             *result,
-            KType::Record(Box::new(Record::from_pairs(vec![
+            KType::record(Box::new(Record::from_pairs(vec![
                 (
                     "x".into(),
-                    KType::Record(Box::new(Record::from_pairs(vec![(
+                    KType::record(Box::new(Record::from_pairs(vec![(
                         "a".into(),
                         KType::Number,
                     )]))),
                 ),
-                ("y".into(), KType::List(Box::new(KType::Number))),
+                ("y".into(), KType::list(Box::new(KType::Number))),
             ]))),
         );
     }
@@ -530,10 +513,10 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
         match result {
-            KType::KFunction { params, ret } => {
+            KType::KFunction { params, ret, .. } => {
                 assert_eq!(
                     params.get("xs"),
-                    Some(&KType::List(Box::new(KType::Number))),
+                    Some(&KType::list(Box::new(KType::Number))),
                     "the sigil param must lower to LIST OF Number",
                 );
                 assert_eq!(
@@ -578,13 +561,10 @@ mod tests {
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
-            KType::KFunction {
-                params: Record::from_pairs(vec![
-                    ("x".into(), KType::Number),
-                    ("y".into(), KType::Str),
-                ]),
-                ret: Box::new(KType::Bool),
-            },
+            KType::function_type(
+                Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
+                Box::new(KType::Bool),
+            ),
         );
     }
 
@@ -594,10 +574,7 @@ mod tests {
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
-            KType::KFunction {
-                params: Record::new(),
-                ret: Box::new(KType::Any),
-            },
+            KType::function_type(Record::new(), Box::new(KType::Any)),
         );
     }
 
@@ -607,13 +584,10 @@ mod tests {
         let scope = run_root_silent(&region);
         assert_round_trips(
             scope,
-            KType::KFunction {
-                params: Record::from_pairs(vec![(
-                    "xs".into(),
-                    KType::List(Box::new(KType::Number)),
-                )]),
-                ret: Box::new(KType::Bool),
-            },
+            KType::function_type(
+                Record::from_pairs(vec![("xs".into(), KType::list(Box::new(KType::Number)))]),
+                Box::new(KType::Bool),
+            ),
         );
     }
 
@@ -621,11 +595,11 @@ mod tests {
     fn functor_capitalized_param_round_trips_and_preserves_name() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let expected = KType::KFunctor {
-            params: Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
-            ret: Box::new(KType::empty_signature()),
-            body: None,
-        };
+        let expected = KType::functor_type(
+            Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
+            Box::new(KType::empty_signature()),
+            None,
+        );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),);
         assert_round_trips(scope, expected);
@@ -641,7 +615,9 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(MAP Str -> Wrapped)"));
         match result {
-            KType::Dict(k, v) => {
+            KType::Dict {
+                key: k, value: v, ..
+            } => {
                 assert_eq!(**k, KType::Str, "scalar key must lower to Str");
                 assert_eq!(
                     v.name(),
@@ -662,7 +638,9 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(MAP Wrapped -> Str)"));
         match result {
-            KType::Dict(k, v) => {
+            KType::Dict {
+                key: k, value: v, ..
+            } => {
                 assert_eq!(
                     k.name(),
                     "Wrapped",
@@ -685,7 +663,7 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":{x :Wrapped}"));
         match result {
-            KType::Record(record) => {
+            KType::Record { fields: record, .. } => {
                 let field = record.get("x").expect("record must have field x");
                 assert_eq!(
                     field.name(),
@@ -707,7 +685,7 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(FN (x :Wrapped) -> Bool)"));
         match result {
-            KType::KFunction { params, ret } => {
+            KType::KFunction { params, ret, .. } => {
                 assert_eq!(
                     params.get("x").map(|kt| kt.name()),
                     Some("Wrapped".to_string()),
@@ -733,7 +711,7 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(FN (x :Number) -> Wrapped)"));
         match result {
-            KType::KFunction { params, ret } => {
+            KType::KFunction { params, ret, .. } => {
                 assert_eq!(
                     params.get("x"),
                     Some(&KType::Number),
@@ -758,7 +736,7 @@ mod tests {
         run(scope, "NEWTYPE Wrapped = :{a :Number}");
         let result = run_one_type(scope, parse_one(":(LIST OF Wrapped)"));
         match result {
-            KType::List(elem) => {
+            KType::List { element: elem, .. } => {
                 assert_eq!(
                     elem.name(),
                     "Wrapped",

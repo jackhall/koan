@@ -130,14 +130,14 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
         | KType::Signature { .. }
         | KType::Module { .. }
         | KType::AbstractType { .. } => Ok(t.name()),
-        KType::List(_)
-        | KType::Dict(_, _)
-        | KType::Record(_)
+        KType::List { .. }
+        | KType::Dict { .. }
+        | KType::Record { .. }
         | KType::KFunction { .. }
         | KType::KFunctor { .. }
         | KType::DeferredReturn(_)
         | KType::SetLocal(_)
-        | KType::Union(_)
+        | KType::Union { .. }
         | KType::RecursiveRef(_)
         | KType::RecursiveGroup(_)
         | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(

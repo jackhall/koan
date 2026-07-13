@@ -166,12 +166,12 @@ pub fn default_scope<'a>(
     scope.register_builtin_type("Null".into(), KType::Null, BindingIndex::BUILTIN);
     scope.register_builtin_type(
         "List".into(),
-        KType::List(Box::new(KType::Any)),
+        KType::list(Box::new(KType::Any)),
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(
         "Dict".into(),
-        KType::Dict(Box::new(KType::Any), Box::new(KType::Any)),
+        KType::dict(Box::new(KType::Any), Box::new(KType::Any)),
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(

@@ -39,7 +39,7 @@ fn recover_union<'a>(
         .lookup_type(name, None)
         .and_then(NameLookup::bound);
     let members = match bound {
-        Some(KType::Union(members)) => members,
+        Some(KType::Union { members, .. }) => members,
         _ => return UnionRecovery::Fresh,
     };
     let set = match members.first() {
@@ -51,7 +51,7 @@ fn recover_union<'a>(
         return UnionRecovery::Fresh;
     }
     if set.members().iter().all(NominalMember::is_filled) {
-        return UnionRecovery::Sealed(KType::Union(members.clone()));
+        return UnionRecovery::Sealed(KType::union_of(members.clone()));
     }
     UnionRecovery::Reuse(set)
 }
@@ -60,7 +60,7 @@ fn recover_union<'a>(
 /// name to the anonymous union of its members. One member per variant (name = tag,
 /// [`KKind::NewType`], schema [`NominalSchema::NewType`]) in declaration order; the binder's own
 /// name seals to the union of all members (ruling F2), variant-sibling references to `SetLocal`
-/// indices. `bindings.types[name]` binds `KType::Union([SetRef{set,0}, …])` through
+/// indices. `bindings.types[name]` binds `KType::Union { members: [SetRef{set,0}, …], .. }` through
 /// [`KType::union_of`] — type-only, no value-side carrier.
 fn finalize_union<'a>(
     fctx: &FinishCtx<'a>,
@@ -214,7 +214,7 @@ mod tests {
     /// each variant is a per-tag newtype under the dissolved model.
     fn variant_repr<'a>(scope: &'a Scope<'a>, name: &str, variant: &str) -> KType<'a> {
         let members = match scope.resolve_type(name) {
-            Some(KType::Union(members)) => members,
+            Some(KType::Union { members, .. }) => members,
             other => panic!("expected {name} to be a Union in types, got {other:?}"),
         };
         for member in members {
@@ -245,7 +245,7 @@ mod tests {
         // per-variant newtype `SetRef` each, registered into `types`.
         let result = run_one_type(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
         match result {
-            KType::Union(members) => {
+            KType::Union { members, .. } => {
                 assert_eq!(members.len(), 2, "one member per variant");
                 for member in members {
                     match member {
@@ -370,7 +370,7 @@ mod tests {
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(
                 &crate::machine::FrameSet::empty(),
-                |c| matches!(c, Carried::Type(KType::Union(members)) if members.len() == 2),
+                |c| matches!(c, Carried::Type(KType::Union { members, .. }) if members.len() == 2),
             )
         });
         assert_eq!(

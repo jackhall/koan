@@ -34,10 +34,10 @@ fn sig_abstract<'a>(id: ScopeId, name: &str) -> KType<'a> {
 }
 
 fn fn_type<'a>(params: Vec<(&str, KType<'a>)>, ret: KType<'a>) -> KType<'a> {
-    KType::KFunction {
-        params: Record::from_pairs(params.into_iter().map(|(n, t)| (n.to_string(), t))),
-        ret: Box::new(ret),
-    }
+    KType::function_type(
+        Record::from_pairs(params.into_iter().map(|(n, t)| (n.to_string(), t))),
+        Box::new(ret),
+    )
 }
 
 fn schema<'a>(
@@ -437,27 +437,27 @@ fn substitute_top_level_and_nested() {
     // Inside List, Record, Union.
     assert_eq!(
         substitute_sig_members(
-            &KType::List(Box::new(sig_abstract(SUP_ID, "Type"))),
+            &KType::list(Box::new(sig_abstract(SUP_ID, "Type"))),
             SUP_ID,
             &map
         ),
-        KType::List(Box::new(KType::Number))
+        KType::list(Box::new(KType::Number))
     );
-    let rec = KType::Record(Box::new(Record::from_pairs([(
+    let rec = KType::record(Box::new(Record::from_pairs([(
         "f".to_string(),
         sig_abstract(SUP_ID, "Type"),
     )])));
     assert_eq!(
         substitute_sig_members(&rec, SUP_ID, &map),
-        KType::Record(Box::new(Record::from_pairs([(
+        KType::record(Box::new(Record::from_pairs([(
             "f".to_string(),
             KType::Number
         )])))
     );
-    let union = KType::Union(vec![sig_abstract(SUP_ID, "Type"), KType::Str]);
+    let union = KType::union_of(vec![sig_abstract(SUP_ID, "Type"), KType::Str]);
     assert_eq!(
         substitute_sig_members(&union, SUP_ID, &map),
-        KType::Union(vec![KType::Number, KType::Str])
+        KType::union_of(vec![KType::Number, KType::Str])
     );
 }
 
@@ -466,16 +466,13 @@ fn substitute_constructor_apply_sentinel_ctor_position() {
     let mut map: HashMap<String, KType<'static>> = HashMap::new();
     let real = ctor("MyWrap", 1, REAL_ID);
     map.insert("Wrap".into(), real.clone());
-    let applied = KType::ConstructorApply {
-        ctor: Box::new(ctor("Wrap", 1, ScopeId::SENTINEL)),
-        args: vec![KType::Number],
-    };
+    let applied = KType::constructor_apply(
+        Box::new(ctor("Wrap", 1, ScopeId::SENTINEL)),
+        vec![KType::Number],
+    );
     assert_eq!(
         substitute_sig_members(&applied, SUP_ID, &map),
-        KType::ConstructorApply {
-            ctor: Box::new(real),
-            args: vec![KType::Number]
-        }
+        KType::constructor_apply(Box::new(real), vec![KType::Number])
     );
 }
 

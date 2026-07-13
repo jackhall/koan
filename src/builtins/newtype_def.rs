@@ -22,8 +22,8 @@ use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
-    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema,
-    Record, RecursiveSet, SchemaSealResult, SealOutcome,
+    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, Record,
+    RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
@@ -80,7 +80,7 @@ fn finalize_newtype<'a>(
 }
 
 /// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
-/// `NominalSchema::NewType(KType::Record(sealed))`. Transient `RecursiveRef(name)` field leaves
+/// `NominalSchema::NewType(KType::record(sealed))`. Transient `RecursiveRef(name)` field leaves
 /// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and dep-finish paths.
@@ -112,7 +112,7 @@ fn finalize_record_newtype<'a>(
             let sealed = Record::from_pairs(sealed_pairs);
             match missing.into_inner().into_iter().next() {
                 Some(m) => SchemaSealResult::Dangling(m),
-                None => SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Record(
+                None => SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::record(
                     Box::new(sealed),
                 )))),
             }
@@ -309,7 +309,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::core::run_root_storage;
     use crate::machine::execute::KoanRuntime;
@@ -330,7 +330,7 @@ mod tests {
                 let borrow = member.schema();
                 match borrow.as_ref() {
                     Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                        KType::Record(record) => {
+                        KType::Record { fields: record, .. } => {
                             let fields =
                                 record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                             (Rc::clone(set), fields)
@@ -501,7 +501,7 @@ mod tests {
         );
         assert_eq!(
             fields.iter().find(|(f, _)| f == "children").map(|(_, t)| t),
-            Some(&KType::List(Box::new(KType::SetLocal(tree_idx)))),
+            Some(&KType::list(Box::new(KType::SetLocal(tree_idx)))),
             "children seals its self-reference to List(SetLocal(Tree))",
         );
         assert!(scope.bindings().pending_types().is_empty());
@@ -525,7 +525,7 @@ mod tests {
             .map(|(_, t)| t)
             .expect("inner field present");
         match inner_ty {
-            KType::Record(rec) => assert_eq!(
+            KType::Record { fields: rec, .. } => assert_eq!(
                 rec.get("owner"),
                 Some(&KType::SetLocal(outer_idx)),
                 "the nested record's `owner` threads to a SetLocal back-edge into Outer",

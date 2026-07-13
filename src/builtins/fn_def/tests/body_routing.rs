@@ -86,7 +86,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     let f = lookup_fn(scope, "USE");
     assert_eq!(
         f.signature.return_type,
-        ReturnType::Resolved(KType::List(Box::new(KType::Number))),
+        ReturnType::Resolved(KType::list(Box::new(KType::Number))),
         "USE return type should resolve to List<Number> after dep-finish wake",
     );
 }

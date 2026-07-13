@@ -147,7 +147,7 @@ pub fn body_record_schema<'a>(
     use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
-        Some(KType::Record(record)) => record.clone(),
+        Some(KType::Record { fields: record, .. }) => record.clone(),
         Some(other) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",

@@ -64,7 +64,7 @@ fn struct_setref<'step>(name: &str, scope_id: ScopeId) -> KType<'step> {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
-        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
+        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
 }
@@ -77,7 +77,7 @@ fn ktype_user_refs_yields_nested_structural_refs_in_order() {
     let user_a = struct_setref("A", a_id);
     let user_b = struct_setref("B", b_id);
     // Dict<A, List<B>>
-    let kt = KType::Dict(Box::new(user_a), Box::new(KType::List(Box::new(user_b))));
+    let kt = KType::dict(Box::new(user_a), Box::new(KType::list(Box::new(user_b))));
     let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&kt)
         .map(|(id, n)| (id, n.to_string()))
         .collect();
@@ -218,7 +218,7 @@ mod bare_leaf_resolution {
         // (the name is no longer in `pending_types`) and hands back the sealed carrier.
         set.fill_member(
             0,
-            NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::from_pairs([(
+            NominalSchema::NewType(Box::new(KType::record(Box::new(Record::from_pairs([(
                 "x".to_string(),
                 KType::Number,
             )]))))),

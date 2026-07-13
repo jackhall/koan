@@ -19,8 +19,8 @@ impl<'a> KType<'a> {
             "Str" => Some(KType::Str),
             "Bool" => Some(KType::Bool),
             "Null" => Some(KType::Null),
-            "List" => Some(KType::List(Box::new(KType::Any))),
-            "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
+            "List" => Some(KType::list(Box::new(KType::Any))),
+            "Dict" => Some(KType::dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::OfKind(KKind::AnyType)),
             "Module" => Some(KType::empty_signature()),
@@ -53,7 +53,7 @@ impl<'a> KType<'a> {
         };
         for m in members {
             match m {
-                KType::Union(inner) => {
+                KType::Union { members: inner, .. } => {
                     for i in inner {
                         push_unique(i, &mut flat);
                     }
@@ -64,7 +64,11 @@ impl<'a> KType<'a> {
         if flat.len() == 1 {
             return flat.pop().unwrap();
         }
-        KType::Union(flat)
+        let digest = super::type_digest::union_digest(&flat);
+        KType::Union {
+            members: flat,
+            digest,
+        }
     }
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
@@ -74,25 +78,31 @@ impl<'a> KType<'a> {
             return a.clone();
         }
         match (a, b) {
-            (KType::List(x), KType::List(y)) => KType::List(Box::new(KType::join(x, y))),
-            (KType::Dict(xk, xv), KType::Dict(yk, yv)) => {
-                KType::Dict(Box::new(KType::join(xk, yk)), Box::new(KType::join(xv, yv)))
+            (KType::List { element: x, .. }, KType::List { element: y, .. }) => {
+                KType::list(Box::new(KType::join(x, y)))
             }
+            (
+                KType::Dict {
+                    key: xk, value: xv, ..
+                },
+                KType::Dict {
+                    key: yk, value: yv, ..
+                },
+            ) => KType::dict(Box::new(KType::join(xk, yk)), Box::new(KType::join(xv, yv))),
             // `KFunction` and `KFunctor` stay tag-matched: one never joins to the other family.
             (
                 KType::KFunction {
                     params: xa,
                     ret: xr,
+                    ..
                 },
                 KType::KFunction {
                     params: ya,
                     ret: yr,
+                    ..
                 },
             ) => match join_param_record(xa, ya) {
-                Some(params) => KType::KFunction {
-                    params,
-                    ret: Box::new(KType::join(xr, yr)),
-                },
+                Some(params) => KType::function_type(params, Box::new(KType::join(xr, yr))),
                 None => KType::Any,
             },
             (
@@ -108,11 +118,7 @@ impl<'a> KType<'a> {
                 },
             ) => match join_param_record(xa, ya) {
                 // Anonymous result: no callable body survives a join.
-                Some(params) => KType::KFunctor {
-                    params,
-                    ret: Box::new(KType::join(xr, yr)),
-                    body: None,
-                },
+                Some(params) => KType::functor_type(params, Box::new(KType::join(xr, yr)), None),
                 None => KType::Any,
             },
             _ => KType::Any,

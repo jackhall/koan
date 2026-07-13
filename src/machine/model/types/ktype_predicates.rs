@@ -77,8 +77,15 @@ impl<'a> KType<'a> {
             return true;
         }
         match (self, other) {
-            (List(a), List(b)) => a.is_more_specific_than(b),
-            (Dict(ka, va), Dict(kb, vb)) => {
+            (List { element: a, .. }, List { element: b, .. }) => a.is_more_specific_than(b),
+            (
+                Dict {
+                    key: ka, value: va, ..
+                },
+                Dict {
+                    key: kb, value: vb, ..
+                },
+            ) => {
                 let k_more = ka.is_more_specific_than(kb);
                 let v_more = va.is_more_specific_than(vb);
                 let k_eq = ka == kb;
@@ -87,7 +94,9 @@ impl<'a> KType<'a> {
             }
             // Record-value subtyping: width-superset + covariant depth (the dual of the
             // contravariant width-drop `param_record_more_specific` for function params).
-            (Record(a), Record(b)) => record_value_more_specific(a, b),
+            (Record { fields: a, .. }, Record { fields: b, .. }) => {
+                record_value_more_specific(a, b)
+            }
             // Function subtyping: contravariant params (width-subset), covariant return —
             // see `param_record_more_specific`. KFunction and KFunctor never compare against
             // each other; the shared `params`/`ret` shape lets both arms use one helper.
@@ -95,10 +104,12 @@ impl<'a> KType<'a> {
                 KFunction {
                     params: pa,
                     ret: ra,
+                    ..
                 },
                 KFunction {
                     params: pb,
                     ret: rb,
+                    ..
                 },
             ) => param_record_more_specific(pa, ra, pb, rb),
             (
@@ -127,6 +138,7 @@ impl<'a> KType<'a> {
                 Signature {
                     sig: SigSource::Declared(s),
                     pinned_slots: pb,
+                    ..
                 },
             ) => m.structurally_satisfies(s) && (pb.is_empty() || m.satisfies_pins(pb)),
             // Any non-empty signature refines the empty signature (the lattice top).
@@ -144,10 +156,12 @@ impl<'a> KType<'a> {
                 Signature {
                     sig: sa,
                     pinned_slots: pa,
+                    ..
                 },
                 Signature {
                     sig: sb,
                     pinned_slots: pb,
+                    ..
                 },
             ) if sa.sig_id() == sb.sig_id() => {
                 if pa.len() <= pb.len() {
@@ -168,9 +182,14 @@ impl<'a> KType<'a> {
             // A sealed nominal member is more specific than the `OfKind` wildcard of the
             // same surface family — read the member's `kind` off its set, by index.
             (SetRef { set, index }, OfKind(b)) if set.member(*index).kind == *b => true,
-            (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
-                if ca == cb && aa.len() == ab.len() =>
-            {
+            (
+                ConstructorApply {
+                    ctor: ca, args: aa, ..
+                },
+                ConstructorApply {
+                    ctor: cb, args: ab, ..
+                },
+            ) if ca == cb && aa.len() == ab.len() => {
                 let any_more = aa
                     .iter()
                     .zip(ab.iter())
@@ -184,7 +203,7 @@ impl<'a> KType<'a> {
             // Union subset: `a` refines `b` iff they are not the same set and every member of
             // `a` is equal to or more specific than some member of `b`. Set equality (not the
             // positional `Vec` compare) gates the strictness, matching order-blind identity.
-            (Union(a), Union(b)) => {
+            (Union { members: a, .. }, Union { members: b, .. }) => {
                 let same_set = a.len() == b.len() && a.iter().all(|m| b.contains(m));
                 !same_set
                     && a.iter()
@@ -192,7 +211,9 @@ impl<'a> KType<'a> {
             }
             // Each member of a union is a subtype of it: a non-union `x` is more specific than
             // `Union(ms)` iff it equals or refines one of the members.
-            (x, Union(ms)) => ms.iter().any(|m| x == m || x.is_more_specific_than(m)),
+            (x, Union { members: ms, .. }) => {
+                ms.iter().any(|m| x == m || x.is_more_specific_than(m))
+            }
             _ => false,
         }
     }
@@ -223,11 +244,15 @@ impl<'a> KType<'a> {
     pub fn matches_value(&self, obj: &KObject<'a>) -> bool {
         match self {
             KType::Any => true,
-            KType::List(elem) => match obj {
+            KType::List { element: elem, .. } => match obj {
                 KObject::List(items, _) => items.iter().all(|x| elem.matches_held(x)),
                 _ => false,
             },
-            KType::Dict(k_ty, v_ty) => match obj {
+            KType::Dict {
+                key: k_ty,
+                value: v_ty,
+                ..
+            } => match obj {
                 KObject::Dict(map, _, _) => map.iter().all(|(k_key, v_obj)| {
                     let k_t = k_key.ktype();
                     (matches!(k_ty.as_ref(), KType::Any) || **k_ty == k_t)
@@ -237,7 +262,7 @@ impl<'a> KType<'a> {
             },
             // Every slot field must be present in the value and match (depth). Extra value
             // fields are fine — a wider record value is more specific than a narrower slot.
-            KType::Record(fields) => match obj {
+            KType::Record { fields, .. } => match obj {
                 KObject::Record(values, _) => fields.iter().all(|(name, ft)| {
                     values
                         .get(name)
@@ -246,7 +271,7 @@ impl<'a> KType<'a> {
                 }),
                 _ => false,
             },
-            KType::KFunction { params, ret } => match obj {
+            KType::KFunction { params, ret, .. } => match obj {
                 KObject::KFunction(f) => {
                     if f.is_functor {
                         return false;
@@ -266,7 +291,9 @@ impl<'a> KType<'a> {
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
             // Object channel, via [`SigSource::satisfied_by_module`] plus pinned-slot agreement.
-            KType::Signature { sig, pinned_slots } => match obj {
+            KType::Signature {
+                sig, pinned_slots, ..
+            } => match obj {
                 KObject::Module(m) => {
                     sig.satisfied_by_module(m)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
@@ -285,7 +312,7 @@ impl<'a> KType<'a> {
             // checked structurally per-arg; an erased carrier falls back to checking the
             // inhabited tag's payload against the arg that field maps to (see
             // `result_field_param_index`).
-            KType::ConstructorApply { ctor, args } => match obj {
+            KType::ConstructorApply { ctor, args, .. } => match obj {
                 KObject::Tagged {
                     tag,
                     value,
@@ -323,7 +350,7 @@ impl<'a> KType<'a> {
             // `TypeConstructor` (`Result`) value.
             KType::SetRef { .. } => *self == obj.ktype(),
             // A union slot admits a value any of its members admits.
-            KType::Union(members) => members.iter().any(|m| m.matches_value(obj)),
+            KType::Union { members, .. } => members.iter().any(|m| m.matches_value(obj)),
             _ => *self == obj.ktype(),
         }
     }
@@ -351,7 +378,7 @@ impl<'a> KType<'a> {
             KType::Signature { .. } => false,
             KType::OfKind(k) => k.admits(t.kind_of()),
             // A union slot is satisfied by any type its members are satisfied by.
-            KType::Union(members) => members.iter().any(|m| m.matches_type(t)),
+            KType::Union { members, .. } => members.iter().any(|m| m.matches_type(t)),
             _ => *self == carrier_ktype,
         }
     }
@@ -371,23 +398,27 @@ impl<'a> KType<'a> {
             KType::Null => matches!(c, Carried::Object(KObject::Null)),
             // Evaluated container: compare the memoized carried element/field type against the slot
             // via `satisfied_by` — pure type-level, no element walk.
-            KType::List(elem) => match c {
+            KType::List { element: elem, .. } => match c {
                 Carried::Object(KObject::List(_, carried)) => elem.satisfied_by(carried),
                 _ => false,
             },
-            KType::Dict(k_ty, v_ty) => match c {
+            KType::Dict {
+                key: k_ty,
+                value: v_ty,
+                ..
+            } => match c {
                 Carried::Object(KObject::Dict(_, carried_k, carried_v)) => {
                     k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
                 }
                 _ => false,
             },
-            KType::Record(_) => match c {
+            KType::Record { .. } => match c {
                 Carried::Object(KObject::Record(_, carried)) => {
-                    self.satisfied_by(&KType::Record(carried.clone()))
+                    self.satisfied_by(&KType::record(carried.clone()))
                 }
                 _ => false,
             },
-            KType::KFunction { params, ret } => match c {
+            KType::KFunction { params, ret, .. } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
                     if f.is_functor {
                         return false;
@@ -426,7 +457,7 @@ impl<'a> KType<'a> {
             KType::SetRef { .. } => &c.ktype() == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
-            KType::Union(members) => members.iter().any(|m| m.accepts_carried(c)),
+            KType::Union { members, .. } => members.iter().any(|m| m.accepts_carried(c)),
             KType::Module { .. } => c.ktype() == *self,
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
@@ -437,7 +468,9 @@ impl<'a> KType<'a> {
             // re-resolves type-side in `part_walk`). Both collapse once modules bind value-side
             // (module-naming-flip). A signature *value* is admitted by the `OfKind(Signature)`
             // wildcard above, never here.
-            KType::Signature { sig, pinned_slots } => match c {
+            KType::Signature {
+                sig, pinned_slots, ..
+            } => match c {
                 Carried::Object(KObject::Module(m)) => {
                     sig.satisfied_by_module(m)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
@@ -508,9 +541,9 @@ impl<'a> KType<'a> {
             KType::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
             // An unevaluated container literal admits shape-only (element types unknown until
             // evaluation, so two container-typed overloads tie and defer-then-reevaluate).
-            KType::List(_) => matches!(part, ExpressionPart::ListLiteral(_)),
-            KType::Dict(_, _) => matches!(part, ExpressionPart::DictLiteral(_)),
-            KType::Record(_) => matches!(part, ExpressionPart::RecordLiteral(_)),
+            KType::List { .. } => matches!(part, ExpressionPart::ListLiteral(_)),
+            KType::Dict { .. } => matches!(part, ExpressionPart::DictLiteral(_)),
+            KType::Record { .. } => matches!(part, ExpressionPart::RecordLiteral(_)),
             // Function / functor slots admit no parser part shape — only a resolved value, handled
             // above by `accepts_carried`.
             KType::KFunction { .. } | KType::KFunctor { .. } => false,
@@ -534,7 +567,7 @@ impl<'a> KType<'a> {
             // (via `accepts_carried`); no parser part shape satisfies them. A union delegates to
             // its members, and a member admits a part only for a shape it classifies — a literal
             // for `Number` / `Str` / `Bool` / `Null`.
-            KType::Union(members) => members.iter().any(|m| m.accepts_part(part)),
+            KType::Union { members, .. } => members.iter().any(|m| m.accepts_part(part)),
             KType::SetRef { .. }
             | KType::Module { .. }
             | KType::AbstractType { .. }
