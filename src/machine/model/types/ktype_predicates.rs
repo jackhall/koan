@@ -6,10 +6,12 @@ use super::kkind::KKind;
 use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::same_nominal;
+use super::sig_schema::{sig_subtype, SigSchema};
 use super::signature::{ExpressionSignature, SignatureElement};
+use super::type_digest::TypeDigest;
 use super::type_memos::{self, Relation};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::{Carried, Held, KObject};
+use crate::machine::model::values::{Carried, Held, KObject, ModuleSignature};
 use crate::machine::DeliveredCarried;
 
 impl<'a> KType<'a> {
@@ -210,6 +212,23 @@ impl<'a> KType<'a> {
                     }
                 }
                 true
+            }
+            // Two distinct SIG-declared signatures compare by structural subtyping: `a ≺ b` iff
+            // `of_sig(a)` strictly `sig_subtype`s `of_sig(b)` (forward holds, reverse fails). Two
+            // structurally-identical distinct SIGs are mutually-satisfying, hence incomparable.
+            (
+                Signature {
+                    sig: SigSource::Declared(sa),
+                    pinned_slots: pa,
+                    ..
+                },
+                Signature {
+                    sig: SigSource::Declared(sb),
+                    pinned_slots: pb,
+                    ..
+                },
+            ) if sa.sig_id() != sb.sig_id() => {
+                declared_sig_more_specific(sa, pa, self.digest(), sb, pb, other.digest())
             }
             // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(NewType) ≺
             // OfKind(Proper)`. (Against `Identifier` / `OfKind(Proper)` the generic rule
@@ -621,6 +640,49 @@ impl<'a> KType<'a> {
             KType::DeferredReturn(_) => false,
         }
     }
+}
+
+/// Strict cross-SIG specificity for two DISTINCT `SIG`-declared signature slots. `a` is
+/// strictly more specific than `b` iff `of_sig(a, pins_a)` is a `sig_subtype` of
+/// `of_sig(b, pins_b)` in the forward direction only — the reverse must fail, or the two
+/// are mutually-satisfying (structurally equal) and neither strictly refines. Both
+/// directions memoize under `SigSatisfies`, keyed by the two signature digests (which fold
+/// their pins, so the key is exact).
+fn declared_sig_more_specific<'a>(
+    a: &ModuleSignature<'a>,
+    pins_a: &[(String, KType<'a>)],
+    digest_a: TypeDigest,
+    b: &ModuleSignature<'a>,
+    pins_b: &[(String, KType<'a>)],
+    digest_b: TypeDigest,
+) -> bool {
+    let forward_hit = type_memos::lookup(digest_a, digest_b, Relation::SigSatisfies);
+    let reverse_hit = type_memos::lookup(digest_b, digest_a, Relation::SigSatisfies);
+    if let (Some(forward), Some(reverse)) = (forward_hit, reverse_hit) {
+        return forward && !reverse;
+    }
+    // At least one direction missed: build both schemas once (the walk we're memoizing).
+    let schema_a = SigSchema::of_sig(a, pins_a);
+    let schema_b = SigSchema::of_sig(b, pins_b);
+    // The key (digest_a, digest_b) is transient-safe only if BOTH sides' pin types are
+    // memo_safe — a pin embedding an unsealed set makes the digest pointer-derived.
+    let insertable = pins_a.iter().all(|(_, kt)| type_memos::memo_safe(kt))
+        && pins_b.iter().all(|(_, kt)| type_memos::memo_safe(kt));
+    let forward = forward_hit.unwrap_or_else(|| {
+        let verdict = sig_subtype(&schema_a, &schema_b).is_ok();
+        if insertable {
+            type_memos::insert(digest_a, digest_b, Relation::SigSatisfies, verdict);
+        }
+        verdict
+    });
+    let reverse = reverse_hit.unwrap_or_else(|| {
+        let verdict = sig_subtype(&schema_b, &schema_a).is_ok();
+        if insertable {
+            type_memos::insert(digest_b, digest_a, Relation::SigSatisfies, verdict);
+        }
+        verdict
+    });
+    forward && !reverse
 }
 
 /// Shared name-keyed specificity for the structurally-identical `KFunction` /

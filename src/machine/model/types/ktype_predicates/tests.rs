@@ -467,7 +467,8 @@ fn is_type_denoting_table() {
 /// `KType::Signature { pinned_slots }` specificity rules (constraint role):
 /// - A non-empty `pinned_slots` strictly refines an empty same-`sig_id` form when
 ///   every pin in the empty side appears (with equal `KType`) in the non-empty side.
-/// - Different `sig_id`s are incomparable.
+/// - Different `sig_id`s compare by structural `sig_subtype`: two structurally-identical
+///   distinct SIGs are mutually-satisfying, hence incomparable (neither strictly refines).
 /// - Same `sig_id` with disjoint constraint keys is incomparable.
 /// - Same-key-different-`KType` is incomparable.
 /// - A `Signature` (pinned or not) strictly refines `OfKind(Module)`.
