@@ -5,7 +5,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KKind, KType, NominalMember, NominalSchema, Parseable, Record, RecursiveSet,
+    KKind, KType, NominalSchema, Parseable, Record, RecursiveSet,
 };
 use crate::machine::model::values::{KObject, WrappedPayload};
 use crate::machine::RegionBrand;
@@ -224,15 +224,14 @@ impl KError {
 /// these carriers are read directly by the TRY branch walker, never dispatched on, so the
 /// schema is never consulted.
 fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
-    let member = NominalMember::pending(name, ScopeId::SENTINEL, kind);
-    member.fill(match kind {
+    let schema = match kind {
         KKind::NewType => NominalSchema::NewType(Box::new(KType::Any)),
         _ => NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: Vec::new(),
         },
-    });
-    Rc::new(RecursiveSet::new(vec![member]))
+    };
+    RecursiveSet::singleton(name, ScopeId::SENTINEL, schema)
 }
 
 /// The `KError` carrier type — the `TypeConstructor`-kind `SetRef` a `to_tagged` value reports

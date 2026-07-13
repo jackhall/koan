@@ -76,13 +76,19 @@ pub fn body_opaque<'a>(
                         new_module.scope_id(),
                         KKind::TypeConstructor,
                     );
-                    member.fill(NominalSchema::TypeConstructor {
-                        schema,
-                        param_names,
-                    });
-                    let fresh = std::rc::Rc::new(RecursiveSet::new(vec![member]));
+                    // Generative: the per-application nonce (the minted module's `scope_id`)
+                    // folds into the set digest, so two `:|` applications never unify.
+                    let fresh =
+                        RecursiveSet::new_generative(vec![member], new_module.scope_id());
+                    fresh.fill_member(
+                        0,
+                        NominalSchema::TypeConstructor {
+                            schema,
+                            param_names,
+                        },
+                    );
                     KType::SetRef {
-                        set: fresh,
+                        set: std::rc::Rc::new(fresh),
                         index: 0,
                     }
                 }

@@ -1,4 +1,4 @@
-use super::super::recursive_set::{NominalMember, NominalSchema};
+use super::super::recursive_set::NominalSchema;
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::kfunction::Body;
@@ -9,11 +9,11 @@ use crate::machine::model::types::{ExpressionSignature, ReturnType};
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
 fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
-    let member = NominalMember::pending(name.into(), scope_id, KKind::NewType);
-    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
-        Record::new(),
-    )))));
-    Rc::new(RecursiveSet::new(vec![member]))
+    RecursiveSet::singleton(
+        name.into(),
+        scope_id,
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::new())))),
+    )
 }
 
 #[test]
@@ -632,12 +632,14 @@ fn resident_in_false_for_set_with_foreign_signature_member() {
         .brand()
         .alloc_signature(ModuleSignature::new("Sig".into(), sig_scope));
 
-    let member = NominalMember::pending("Wrap".into(), ScopeId::from_raw(0, 0xA2), KKind::NewType);
-    member.fill(NominalSchema::NewType(Box::new(KType::Signature {
-        sig: SigSource::Declared(sig),
-        pinned_slots: Vec::new(),
-    })));
-    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let set = RecursiveSet::singleton(
+        "Wrap".into(),
+        ScopeId::from_raw(0, 0xA2),
+        NominalSchema::NewType(Box::new(KType::Signature {
+            sig: SigSource::Declared(sig),
+            pinned_slots: Vec::new(),
+        })),
+    );
     let t = KType::SetRef { set, index: 0 };
 
     let dest = run_root_storage();

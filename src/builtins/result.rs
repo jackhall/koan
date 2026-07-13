@@ -12,22 +12,23 @@
 //! the one identity.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::{BindingIndex, Scope};
-use crate::machine::model::types::{KKind, KType, NominalMember, NominalSchema, RecursiveSet};
+use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let scope_id = scope.id;
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::Any);
     schema.insert("Error".into(), KType::Any);
-    let member = NominalMember::pending("Result".into(), scope_id, KKind::TypeConstructor);
-    member.fill(NominalSchema::TypeConstructor {
-        schema,
-        param_names: vec!["T".into(), "E".into()],
-    });
-    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let set = RecursiveSet::singleton(
+        "Result".into(),
+        scope_id,
+        NominalSchema::TypeConstructor {
+            schema,
+            param_names: vec!["T".into(), "E".into()],
+        },
+    );
     let identity = KType::SetRef { set, index: 0 };
     // Type-only: the variant schema rides the sealed member, so construction reads it via a
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a

@@ -57,6 +57,16 @@ impl ScopeId {
     pub const fn idx(self) -> u64 {
         self.idx
     }
+
+    /// Content bytes for a type digest: `session` then `idx`, each little-endian. A minted
+    /// leaf (`Signature` / `Module` / `AbstractType`, an opaque-ascription nonce) folds its
+    /// `ScopeId` into the digested type content through this.
+    pub fn digest_bytes(self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[..8].copy_from_slice(&self.session.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.idx.to_le_bytes());
+        bytes
+    }
 }
 
 impl std::fmt::Debug for ScopeId {

@@ -262,7 +262,7 @@ fn kfunction_borrow_preserved_verbatim() {
 /// escaping the region that built it with a dangling self-reference (cf. `recursive_tagged_match`).
 #[test]
 fn type_recursive_setref_relocates_and_navigates() {
-    use crate::machine::model::types::{KKind, NominalMember, NominalSchema, Record, RecursiveSet};
+    use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
     use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
@@ -270,14 +270,14 @@ fn type_recursive_setref_relocates_and_navigates() {
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
-    let member = NominalMember::pending("Tree".into(), ScopeId::next(), KKind::NewType);
-    member.fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
-        Record::from_pairs(vec![(
+    let set = RecursiveSet::singleton(
+        "Tree".into(),
+        ScopeId::next(),
+        NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::from_pairs(vec![(
             "children".into(),
             KType::List(Box::new(KType::SetLocal(0))),
-        )]),
-    )))));
-    let set = Rc::new(RecursiveSet::new(vec![member]));
+        )]))))),
+    );
     let type_value = KType::SetRef {
         set: Rc::clone(&set),
         index: 0,

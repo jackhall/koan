@@ -122,8 +122,7 @@ fn finalize_union<'a>(
         ))));
     }
     for (index, payload) in sealed {
-        set.member(index)
-            .fill(NominalSchema::NewType(Box::new(payload)));
+        set.fill_member(index, NominalSchema::NewType(Box::new(payload)));
     }
 
     let union_ty = KType::union_of(

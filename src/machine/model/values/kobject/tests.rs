@@ -110,16 +110,14 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
 fn type_constructor_ktype_erased_vs_applied() {
     use std::rc::Rc;
     let sid = ScopeId::from_raw(0, 0x55);
-    let member = crate::machine::model::types::NominalMember::pending(
+    let set = RecursiveSet::singleton(
         "Result".into(),
         sid,
-        crate::machine::model::types::KKind::TypeConstructor,
+        NominalSchema::TypeConstructor {
+            schema: HashMap::new(),
+            param_names: vec!["T".into(), "E".into()],
+        },
     );
-    member.fill(NominalSchema::TypeConstructor {
-        schema: HashMap::new(),
-        param_names: vec!["T".into(), "E".into()],
-    });
-    let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
     let erased = KObject::Tagged {
         tag: "Ok".into(),
         value: Rc::new(KObject::Number(1.0)),

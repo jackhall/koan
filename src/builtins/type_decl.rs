@@ -19,12 +19,11 @@
 //! distinguishable by their value-class name.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
-    AbstractSource, KKind, NominalMember, NominalSchema, RecursiveSet,
+    AbstractSource, KKind, NominalSchema, RecursiveSet,
 };
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
@@ -40,12 +39,14 @@ pub(crate) fn mint_type_constructor<'a>(
     member_name: String,
     param_names: Vec<String>,
 ) -> KType<'a> {
-    let member = NominalMember::pending(member_name, ScopeId::SENTINEL, KKind::TypeConstructor);
-    member.fill(NominalSchema::TypeConstructor {
-        schema: HashMap::new(),
-        param_names,
-    });
-    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let set = RecursiveSet::singleton(
+        member_name,
+        ScopeId::SENTINEL,
+        NominalSchema::TypeConstructor {
+            schema: HashMap::new(),
+            param_names,
+        },
+    );
     KType::SetRef { set, index: 0 }
 }
 

@@ -21,7 +21,7 @@
 //! member's `kind` recorded eagerly and its `schema` filled at its own finalize, hence the
 //! [`RefCell`] two-phase cell.
 
-use std::cell::{Ref, RefCell};
+use std::cell::{OnceCell, Ref, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -29,6 +29,7 @@ use crate::machine::core::ScopeId;
 
 use super::kkind::KKind;
 use super::ktype::KType;
+use super::type_digest::{set_digest, TypeDigest};
 
 /// A member's schema, owned by value inside the set. Sibling references inside these
 /// `KType`s are [`KType::SetLocal`] indices into the enclosing [`RecursiveSet`].
@@ -66,9 +67,11 @@ impl<'a> NominalMember<'a> {
         }
     }
 
-    /// Install the member's schema. Idempotent on a re-fill with equal shape is the caller's
-    /// concern; a double-fill is a sealing bug.
-    pub fn fill(&self, schema: NominalSchema<'a>) {
+    /// Install the member's schema. Private so no site can bypass
+    /// [`RecursiveSet::fill_member`], which seals the set's digest once the last member
+    /// fills. Idempotent on a re-fill with equal shape is the caller's concern; a double-fill
+    /// is a sealing bug.
+    fn fill(&self, schema: NominalSchema<'a>) {
         *self.schema.borrow_mut() = Some(schema);
     }
 
@@ -91,6 +94,13 @@ pub struct RecursiveSet<'a> {
     /// `name → index` for sealing a member's transient `RecursiveRef(name)` to
     /// `SetLocal(index)`.
     index_of: HashMap<String, usize>,
+    /// The set's content digest, sealed by [`Self::fill_member`] once every member fills —
+    /// `(set digest, index)` is a `SetRef`'s identity. Empty during the two-phase fill
+    /// window, where identity falls back to the set pointer.
+    digest: OnceCell<TypeDigest>,
+    /// Set when opaque ascription mints this set, so its per-application nonce folds into the
+    /// digest and two applications never unify. `None` for every content-addressed set.
+    generative_nonce: Option<ScopeId>,
 }
 
 impl<'a> RecursiveSet<'a> {
@@ -102,7 +112,42 @@ impl<'a> RecursiveSet<'a> {
             .enumerate()
             .map(|(i, m)| (m.name.clone(), i))
             .collect();
-        Self { members, index_of }
+        Self {
+            members,
+            index_of,
+            digest: OnceCell::new(),
+            generative_nonce: None,
+        }
+    }
+
+    /// A generative set: opaque ascription's per-application mint. `nonce` (the minted
+    /// module's `scope_id`) folds into the digest, so two `:|` applications of the same
+    /// signature member over the same representation stay distinct types.
+    pub fn new_generative(members: Vec<NominalMember<'a>>, nonce: ScopeId) -> Self {
+        let mut set = Self::new(members);
+        set.generative_nonce = Some(nonce);
+        set
+    }
+
+    /// The set's sealed content digest, or `None` in the two-phase window before the last
+    /// member fills.
+    pub fn digest(&self) -> Option<TypeDigest> {
+        self.digest.get().copied()
+    }
+
+    /// The generative nonce folded into this set's digest, if it is a generative mint.
+    pub fn generative_nonce(&self) -> Option<ScopeId> {
+        self.generative_nonce
+    }
+
+    /// Fill member `index`'s schema and, if that was the last unfilled member, seal the set's
+    /// content digest. The single sealing seam — [`NominalMember::fill`] is private so no
+    /// site can install a schema without reaching this digest computation.
+    pub fn fill_member(&self, index: usize, schema: NominalSchema<'a>) {
+        self.members[index].fill(schema);
+        if self.digest.get().is_none() && self.members.iter().all(NominalMember::is_filled) {
+            let _ = self.digest.set(set_digest(self));
+        }
     }
 
     pub fn member(&self, index: usize) -> &NominalMember<'a> {
@@ -130,8 +175,9 @@ impl<'a> RecursiveSet<'a> {
     /// A singleton set whose one member carries `schema`. The common non-recursive case.
     pub fn singleton(name: String, scope_id: ScopeId, schema: NominalSchema<'a>) -> Rc<Self> {
         let member = NominalMember::pending(name, scope_id, schema.kind());
-        member.fill(schema);
-        Rc::new(RecursiveSet::new(vec![member]))
+        let set = RecursiveSet::new(vec![member]);
+        set.fill_member(0, schema);
+        Rc::new(set)
     }
 }
 

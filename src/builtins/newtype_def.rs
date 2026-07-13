@@ -17,13 +17,12 @@
 
 use crate::machine::model::types::KKind;
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use crate::machine::core::kfunction::action::FinishCtx;
 use crate::machine::execute::{seal_type_operand, StepCarried};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
-    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalMember, NominalSchema,
+    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema,
     Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::values::KObject;
@@ -55,9 +54,11 @@ fn finalize_newtype<'a>(
 ) -> Result<StepCarried<'a>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
-    let member = NominalMember::pending(name.clone(), scope_id, KKind::NewType);
-    member.fill(NominalSchema::NewType(Box::new(repr)));
-    let set = Rc::new(RecursiveSet::new(vec![member]));
+    let set = RecursiveSet::singleton(
+        name.clone(),
+        scope_id,
+        NominalSchema::NewType(Box::new(repr)),
+    );
     let identity = KType::SetRef { set, index: 0 };
     // Fused mint + alloc + register: the RHS carrier's reach is minted into this scope's arena (kept
     // mode) so `identity`'s SetRef (never `'static`, and possibly embedding `repr`'s foreign borrow —
@@ -308,14 +309,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
+    
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::core::run_root_storage;
     use crate::machine::execute::KoanRuntime;
     use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, Scope};
+    use std::rc::Rc;
 
     /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
     /// identity so assertions see `SetLocal` / `List(SetLocal)` back-edges before projection.

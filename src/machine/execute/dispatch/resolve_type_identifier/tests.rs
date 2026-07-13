@@ -216,10 +216,13 @@ mod bare_leaf_resolution {
 
         // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
         // (the name is no longer in `pending_types`) and hands back the sealed carrier.
-        set.member(0)
-            .fill(NominalSchema::NewType(Box::new(KType::Record(Box::new(
-                Record::from_pairs([("x".to_string(), KType::Number)]),
-            )))));
+        set.fill_member(
+            0,
+            NominalSchema::NewType(Box::new(KType::Record(Box::new(Record::from_pairs([(
+                "x".to_string(),
+                KType::Number,
+            )]))))),
+        );
         drop(pending_guard);
 
         match scope.resolve_type_identifier(&leaf, None) {

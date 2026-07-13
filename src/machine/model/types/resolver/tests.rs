@@ -81,16 +81,14 @@ fn recursive_group_member_lowers_to_recursive_ref() {
 #[test]
 fn constructor_apply_name_renders_surface_form() {
     use crate::machine::model::types::NominalSchema;
-    let member = NominalMember::pending(
+    let set = RecursiveSet::singleton(
         "Wrap".into(),
         ScopeId::from_raw(0, 0xC0DE),
-        KKind::TypeConstructor,
+        NominalSchema::TypeConstructor {
+            schema: std::collections::HashMap::new(),
+            param_names: vec!["Type".into()],
+        },
     );
-    member.fill(NominalSchema::TypeConstructor {
-        schema: std::collections::HashMap::new(),
-        param_names: vec!["Type".into()],
-    });
-    let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
     let ctor = KType::SetRef { set, index: 0 };
     let app = KType::ConstructorApply {
         ctor: Box::new(ctor),

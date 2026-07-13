@@ -216,7 +216,7 @@ pub fn finalize_nominal_member<'a>(
         SchemaSealResult::Ok(schema) => schema,
         SchemaSealResult::Dangling(missing) => return SealOutcome::DanglingRef(missing),
     };
-    set.member(index).fill(schema);
+    set.fill_member(index, schema);
     // Install the `SetRef` identity. A non-equal existing entry (a redeclaration) surfaces
     // as `Rebind`, propagated to the binder.
     let identity = KType::SetRef {
