@@ -1058,11 +1058,11 @@ unsafe impl AuditedStored<KoanStorageProfile> for Scope<'static> {
 // SAFETY: `audit` returns true only when the stored `Module`'s child scope's region is `region`
 // itself, covered by `context`'s reach evidence, or covered by the destination scope's ambient
 // coverage — the `Module` borrows that child scope, so its region must be covered. Honest-partial:
-// the audit does not walk the `type_members` / opaque-slot maps or the `self_sig` /
-// `satisfaction_memo` cells, which also carry region-borrowing `KType`s — sound because every
-// store site allocates the module empty (`Module::new`), with those maps and cells installed only
-// post-store through `RefCell` / `OnceCell` interior mutability, a channel no store-time audit can
-// see (the hotspot map's "Module member installs" row).
+// the audit does not walk the `type_members` / `slot_type_tags` maps or the `self_sig` cell,
+// which also carry region-borrowing `KType`s — sound because every store site allocates the
+// module empty (`Module::new`), with those maps and the cell installed only post-store through
+// `RefCell` / `OnceCell` interior mutability, a channel no store-time audit can see (the hotspot
+// map's "Module member installs" row).
 unsafe impl AuditedStored<KoanStorageProfile> for Module<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &Module<'_>, context: ResidenceEvidence<'_>) -> bool {

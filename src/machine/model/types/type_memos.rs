@@ -30,8 +30,6 @@ use super::type_digest::TypeDigest;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Relation {
     MoreSpecific,
-    // wired in Phase 3 (`Module::structurally_satisfies`, `SigSource::satisfied_by_module`)
-    #[allow(dead_code)]
     SigSatisfies,
 }
 

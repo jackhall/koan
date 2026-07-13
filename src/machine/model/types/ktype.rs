@@ -15,7 +15,8 @@ use super::record::Record;
 use super::recursive_set::{same_nominal, NominalSchema, RecursiveSet};
 use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
-use super::type_digest::{self, TypeDigest};
+use super::type_digest::{self, module_digest, TypeDigest};
+use super::type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
@@ -87,7 +88,17 @@ impl<'a> SigSource<'a> {
             SigSource::Empty => true,
             SigSource::Declared(s) => m.structurally_satisfies(s),
             SigSource::SelfOf(m2) => {
-                m.scope_id() == m2.scope_id() || sig_subtype(m.self_sig(), m2.self_sig()).is_ok()
+                if m.scope_id() == m2.scope_id() {
+                    return true;
+                }
+                let subject = module_digest(m.scope_id());
+                let candidate = module_digest(m2.scope_id());
+                if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
+                    return hit;
+                }
+                let ok = sig_subtype(m.self_sig(), m2.self_sig()).is_ok();
+                memo_insert(subject, candidate, Relation::SigSatisfies, ok);
+                ok
             }
         }
     }

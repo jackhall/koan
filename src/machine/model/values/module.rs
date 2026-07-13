@@ -19,7 +19,10 @@ use std::collections::HashMap;
 
 use crate::machine::core::{Scope, ScopeId};
 
-use super::super::types::{sig_subtype, KType, SigSchema};
+use super::super::types::{
+    memo_insert, memo_lookup, module_digest, sig_subtype, signature_digest, KType, Relation,
+    SigSchema, SigSource,
+};
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`). Opaque-ascription members mint `KType::AbstractType { source:
@@ -45,12 +48,6 @@ pub struct Module<'a> {
     /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
     /// installed after the surrounding value is alloc'd.
     self_sig: OnceCell<SigSchema<'a>>,
-    /// Caches `self_sig <: bare-schema(sig)` keyed by `sig.sig_id()`, written by
-    /// [`Module::structurally_satisfies`] — the shared entry point both dispatch and ascription
-    /// route through. A pure cache — types are immutable, so entries are never invalidated. Pinned
-    /// checks are never memoized here (they vary per `KType::Signature` value; see
-    /// [`Module::satisfies_pins`]).
-    pub satisfaction_memo: RefCell<HashMap<ScopeId, bool>>,
 }
 
 impl<'a> Module<'a> {
@@ -61,7 +58,6 @@ impl<'a> Module<'a> {
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             self_sig: OnceCell::new(),
-            satisfaction_memo: RefCell::new(HashMap::new()),
         }
     }
 
@@ -92,16 +88,17 @@ impl<'a> Module<'a> {
 
     /// Structural satisfaction: `self_sig <: bare-schema(sig)` under [`sig_subtype`] — the
     /// admission rule for a signature-typed dispatch slot and the check `:|` / `:!` assert.
-    /// Memoized per `sig.sig_id()` in `satisfaction_memo`, both outcomes; a `WITH`-pinned
-    /// slot's residue is checked separately via [`Module::satisfies_pins`].
-    pub fn structurally_satisfies(&self, sig: &ModuleSignature<'a>) -> bool {
-        let sig_id = sig.sig_id();
-        let hit = self.satisfaction_memo.borrow().get(&sig_id).copied();
-        if let Some(hit) = hit {
+    /// Consults the thread-local match registry under `SigSatisfies`, keyed by this module's
+    /// and `sig`'s digests, both outcomes cached; a `WITH`-pinned slot's residue is checked
+    /// separately via [`Module::satisfies_pins`].
+    pub fn structurally_satisfies(&self, sig: &'a ModuleSignature<'a>) -> bool {
+        let subject = module_digest(self.scope_id());
+        let candidate = signature_digest(SigSource::Declared(sig), &[]);
+        if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
             return hit;
         }
         let ok = sig_subtype(self.self_sig(), &SigSchema::of_sig(sig, &[])).is_ok();
-        self.satisfaction_memo.borrow_mut().insert(sig_id, ok);
+        memo_insert(subject, candidate, Relation::SigSatisfies, ok);
         ok
     }
 

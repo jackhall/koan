@@ -36,6 +36,10 @@ pub use signature::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature,
     ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
+pub(crate) use type_digest::{module_digest, signature_digest};
+#[cfg(test)]
+pub(crate) use type_memos::{hit_count as memo_hit_count, reset as memo_reset};
+pub(crate) use type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
 pub use typed_field_list::{
     parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };

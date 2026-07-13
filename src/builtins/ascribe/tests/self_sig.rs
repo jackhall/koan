@@ -7,6 +7,7 @@ use crate::builtins::test_support::{
     parse_one, register_arity1_constructor, run, run_one_err, run_root_silent,
 };
 use crate::machine::core::run_root_storage;
+use crate::machine::model::types::{memo_hit_count, memo_reset};
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
 use crate::machine::{KErrorKind, Scope};
@@ -167,7 +168,9 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
     let scope = run_root_silent(&region);
     register_arity1_constructor(scope, "Wrapper");
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
-    // succeeds too — the satisfaction memo caches the first result.
+    // succeeds too — the satisfaction memo caches the first result and the repeat check is a
+    // registry hit.
+    memo_reset();
     run(
         scope,
         "SIG FullSig = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
@@ -183,9 +186,11 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
         scope.resolve_type("SecondView"),
         Some(KType::Module { .. })
     ));
-    // The memo recorded the (satisfying) result for the sig.
-    let impl_mod = module_named(scope, "Impl");
-    assert!(!impl_mod.satisfaction_memo.borrow().is_empty());
+    // The second ascription's satisfaction check is a registry hit on the first's verdict.
+    assert!(
+        memo_hit_count() > 0,
+        "expected the repeat satisfaction check to hit the registry"
+    );
 }
 
 #[test]

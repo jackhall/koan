@@ -282,7 +282,7 @@ fn resolve_module_and_signature<'a>(
 /// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
 fn check_satisfies<'a>(
     m: &Module<'a>,
-    s: &crate::machine::model::values::ModuleSignature<'a>,
+    s: &'a crate::machine::model::values::ModuleSignature<'a>,
 ) -> Result<(), KError> {
     if m.structurally_satisfies(s) {
         return Ok(());
