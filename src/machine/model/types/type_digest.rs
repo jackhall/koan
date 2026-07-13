@@ -174,9 +174,7 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             feed_set_identity(&mut h, set);
             h.finish()
         }
-        KType::Module { module } => DigestHasher::new(TAG_MODULE)
-            .scope_id(module.scope_id())
-            .finish(),
+        KType::Module { module } => module_digest(module.scope_id()),
         KType::AbstractType { source, name } => DigestHasher::new(TAG_ABSTRACT_TYPE)
             .scope_id(source.scope_id())
             .string(name)
@@ -256,6 +254,13 @@ pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)])
         h.string(name).digest(kt.digest());
     }
     h.finish()
+}
+
+/// A module value's identity digest — `KType::Module`'s digest, and the subject/candidate key
+/// the [`type_memos`](super::type_memos) `SigSatisfies` relation uses for a module's self-sig
+/// side. Shared with [`digest_of`]'s `Module` arm so the two can never diverge.
+pub(crate) fn module_digest(id: ScopeId) -> TypeDigest {
+    DigestHasher::new(TAG_MODULE).scope_id(id).finish()
 }
 
 /// A member reference's digest: `(set digest, index)` once the set is sealed.

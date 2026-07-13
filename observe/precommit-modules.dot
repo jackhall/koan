@@ -99,6 +99,7 @@ digraph {
     "koan::machine::model::types::sig_schema" [label="koan::machine::model::types::sig_schema"];
     "koan::machine::model::types::signature" [label="koan::machine::model::types::signature"];
     "koan::machine::model::types::type_digest" [label="koan::machine::model::types::type_digest"];
+    "koan::machine::model::types::type_memos" [label="koan::machine::model::types::type_memos"];
     "koan::machine::model::types::typed_field_list" [label="koan::machine::model::types::typed_field_list"];
     "koan::machine::model::values" [label="koan::machine::model::values"];
     "koan::machine::model::values::carried" [label="koan::machine::model::values::carried"];
@@ -221,6 +222,7 @@ digraph {
     "koan::machine::model::types" -> "koan::machine::model::types::sig_schema" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::signature" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::type_digest" [label="owns", style="solid"];
+    "koan::machine::model::types" -> "koan::machine::model::types::type_memos" [label="owns", style="solid"];
     "koan::machine::model::types" -> "koan::machine::model::types::typed_field_list" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::carried" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::kkey" [label="owns", style="solid"];
@@ -981,6 +983,10 @@ digraph {
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_memos" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_memos" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_memos" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_memos" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];

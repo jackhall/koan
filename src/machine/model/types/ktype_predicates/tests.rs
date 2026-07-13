@@ -43,7 +43,10 @@ fn is_more_specific_concrete_beats_any() {
 fn dispatch_unifies_structurally_identical_nominals() {
     let slot = newtype_setref("Wrapper", ScopeId::from_raw(1, 1), KType::Number);
     let carried = newtype_setref("Wrapper", ScopeId::from_raw(2, 2), KType::Number);
-    assert_eq!(slot, carried, "same content unifies regardless of allocation");
+    assert_eq!(
+        slot, carried,
+        "same content unifies regardless of allocation"
+    );
     assert!(slot.satisfied_by(&carried));
     assert!(carried.satisfied_by(&slot));
 

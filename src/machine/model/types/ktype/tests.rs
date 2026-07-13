@@ -350,7 +350,10 @@ fn set_ref_identity_unifies_by_content_digest() {
 
     // A different member name is different content, so it stays a distinct type.
     let line = record_newtype_set("Line", sid);
-    let d = KType::SetRef { set: line, index: 0 };
+    let d = KType::SetRef {
+        set: line,
+        index: 0,
+    };
     assert_ne!(a, d);
 }
 
@@ -415,7 +418,10 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
         set: twin,
         index: 0,
     };
-    assert_eq!(sealed_a0, twin0, "sealed same-content sets unify across allocations");
+    assert_eq!(
+        sealed_a0, twin0,
+        "sealed same-content sets unify across allocations"
+    );
     assert_eq!(hash_of(&sealed_a0), hash_of(&twin0));
 }
 

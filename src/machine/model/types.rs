@@ -13,6 +13,7 @@ mod resolver;
 mod sig_schema;
 mod signature;
 mod type_digest;
+mod type_memos;
 mod typed_field_list;
 
 pub use kkind::KKind;

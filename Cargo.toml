@@ -23,6 +23,7 @@ mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
 workgraph = { path = "workgraph" }
 blake3 = "1.8.5"
+lru = "0.18.1"
 
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }
