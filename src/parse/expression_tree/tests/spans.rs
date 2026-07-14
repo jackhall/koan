@@ -117,22 +117,20 @@ fn dict_literal_wrapper_spans_braces_inclusive() {
     assert!(matches!(part.value, ExpressionPart::DictLiteral(_)));
 }
 
+/// The captured part covers the `#` plus the group; the body keeps the paren span.
 #[test]
-fn quote_sigil_outer_covers_hash_and_body_inner_keyword_one_byte() {
+fn quote_part_covers_hash_and_body_keeps_paren_span() {
     let exprs = top("#(foo)");
     let outer = &exprs[0];
     assert_eq!(span_of(outer), Some(s(0, 6)));
-    let kw = &outer.parts[0];
-    assert!(matches!(kw.value, ExpressionPart::Keyword(ref k) if k == "QUOTE"));
-    assert_eq!(kw.span, Some(s(0, 1)));
-    let body_part = &outer.parts[1];
-    assert_eq!(body_part.span, Some(s(1, 6)));
+    let quoted = &outer.parts[0];
+    assert_eq!(quoted.span, Some(s(0, 6)));
     let Spanned {
-        value: ExpressionPart::Expression(body),
+        value: ExpressionPart::QuotedExpression(body),
         ..
-    } = body_part
+    } = quoted
     else {
-        panic!("expected body Expression");
+        panic!("expected a QuotedExpression part");
     };
     assert_eq!(body.span, Some(s(1, 6)));
     assert_eq!(body.parts[0].span, Some(s(2, 5)));

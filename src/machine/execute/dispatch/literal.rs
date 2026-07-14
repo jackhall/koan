@@ -266,6 +266,15 @@ impl<'step> KoanRuntime<'step> {
                     crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
             }
+            ExpressionPart::QuotedExpression(_) => {
+                // A quote rides its own one-part sub-dispatch (the `LiteralPassThrough` lane, which
+                // seals it through the checked door) rather than a static cell: a
+                // `KObject::KExpression` is invariant in its region lifetime with no `'static`
+                // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
+                let wrapped =
+                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
+                Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
+            }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, deps)
             }

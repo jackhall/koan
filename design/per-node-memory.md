@@ -83,7 +83,7 @@ a splice-free embed contributes no foreign region: the AST-embedding object is *
 allocs through the witnessed object surface (`alloc_object_witnessed`), born under the empty
 (foreign-reach-only) set exactly as any region-pure leaf. Co-location is enforced by the `for<'b>`
 brand; the embedded AST contributes no region of its own, and the sole residual obligation — that the
-embed is splice-free — is a runtime-checked gate at the `QUOTE` site
+embed is splice-free — is a runtime-checked gate at the quote-capture site
 ([`RegionBrand::alloc_object_witnessed_checked`](../src/machine/core/arena.rs), the audited twin of
 `alloc_object_witnessed`): a spliced part rejects with a structured `KError` rather than landing
 unvetted, not a witness the type encodes.

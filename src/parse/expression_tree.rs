@@ -263,9 +263,17 @@ pub fn build_tree<'a>(
                         expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
+                } else if let Some(('#', sigil_cursor)) = pending_sigil {
+                    // `#(...)` captures its body as data: a Quote frame, not a keyword-headed
+                    // call. `$(...)` keeps the head channel — evaluation is a runtime operation.
+                    pending_sigil = None;
+                    stack.push_frame(BracketFrame::Quote {
+                        expr: KExpression::new(Vec::new()),
+                        span_start,
+                        sigil_cursor,
+                    });
                 } else {
                     let (head, sigil_cursor) = match pending_sigil.take() {
-                        Some(('#', sc)) => (Some("QUOTE"), Some(sc)),
                         Some(('$', sc)) => (Some("EVAL"), Some(sc)),
                         _ => (None, None),
                     };
@@ -603,6 +611,12 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
         ExpressionPart::Expression(inner) => {
             ExpressionPart::Expression(Box::new(peel_redundant(*inner)))
         }
+        // Peel *inside* the quote, never out of it: the indent collapse wraps a sigil-led line's
+        // body in its own group (`#(+)` on its own line becomes `#((+))`), so without this the
+        // quote would hold a redundant wrapper instead of the body the user wrote.
+        ExpressionPart::QuotedExpression(inner) => {
+            ExpressionPart::QuotedExpression(Box::new(peel_redundant(*inner)))
+        }
         ExpressionPart::ListLiteral(items) => {
             ExpressionPart::ListLiteral(items.into_iter().map(peel_part).collect())
         }
@@ -650,6 +664,17 @@ pub fn parse_with_source<'a>(id: FileId) -> Result<Vec<KExpression<'a>>, KError>
         .into_iter()
         .map(|part| match part.value {
             ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
+            // The indent collapse wraps a sigil-led line *inside* the sigil, so a whole-line
+            // `#(...)` reaches the root as a bare quote part: lift it into the one-part
+            // expression every top-level statement is.
+            quoted @ ExpressionPart::QuotedExpression(_) => {
+                let span = part.span;
+                let peeled = Spanned {
+                    value: peel_part(quoted),
+                    span,
+                };
+                Ok(KExpression::build(vec![peeled], span, Some(id)))
+            }
             other => Err(KError::parse(
                 format!("unexpected top-level part: {:?}", other),
                 None,

@@ -173,7 +173,6 @@ src/
 │   ├── ascribe.rs            :| / :! module ascription
 │   ├── using_scope.rs        USING — lexical-scope introduction
 │   ├── test_support.rs
-│   ├── quote.rs              # surface form `#(expr)`
 │   └── eval.rs               # surface form `$(expr)`
 ├── machine.rs           pub mod core / model / execute
 └── machine/

@@ -210,7 +210,7 @@ fn nested_try_catches_inner_separately_from_outer() {
 #[test]
 fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
     // EVAL resolves names against the call-site scope at run time, so `it`
-    // inside a top-level QUOTE only succeeds if the per-TRY child scope's `it`
+    // inside a top-level quote only succeeds if the per-TRY child scope's `it`
     // binding is visible there.
     let bytes = run_program(
         "LET q = #(it)\n\

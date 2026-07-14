@@ -39,6 +39,9 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
                     .unwrap_or(&inner);
                 format!(":{{{stripped}}}")
             }
+            // The quoted body renders as a nested expression (`#[...]`), so the wrapper the
+            // parse-static capture holds is visible in every shape assertion.
+            ExpressionPart::QuotedExpression(e) => format!("#{}", describe(e)),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe_part).collect();
                 format!("L[{}]", inner.join(" "))

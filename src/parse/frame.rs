@@ -2,9 +2,9 @@
 //! (paren-expression, list literal, dict literal, `:(...)` type-expression group).
 //!
 //! `span_start` is the opener's original-source byte offset, used to stamp
-//! `Span { start: span_start, end: cursor }` at close time. The sigiled-Expression
-//! variant additionally carries `sigil_cursor` so the outer `#(...)` / `$(...)`
-//! wrapper covers the sigil byte plus the body.
+//! `Span { start: span_start, end: cursor }` at close time. The `$(...)` Expression
+//! frame and the `#(...)` Quote frame additionally carry `sigil_cursor` so the outer
+//! part's span covers the sigil byte plus the body.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
@@ -13,14 +13,23 @@ use crate::source::{self, Span, Spanned};
 use super::dict_literal::{BraceContents, DictFrame};
 
 pub(super) enum BracketFrame<'a> {
-    /// `head: Some(_)` flags a `#(...)` / `$(...)` sigil; on close such a frame yields
-    /// the `(QUOTE <body>)` / `(EVAL <body>)` AST shape rather than a bare Expression
-    /// part, and `sigil_cursor` (set iff `head` is) anchors the outer span at the sigil.
+    /// `head: Some(_)` flags a `$(...)` sigil; on close such a frame yields the
+    /// `(EVAL <body>)` AST shape rather than a bare Expression part, and `sigil_cursor`
+    /// (set iff `head` is) anchors the outer span at the sigil.
     Expression {
         expr: KExpression<'a>,
         head: Option<&'static str>,
         span_start: u32,
         sigil_cursor: Option<u32>,
+    },
+    /// Opened by a `#(` sigil. On close the body folds into an
+    /// [`ExpressionPart::QuotedExpression`] — a parse-static capture, not a call — so no
+    /// keyword is prepended. `span_start` is the `(` cursor (the body's own span) and
+    /// `sigil_cursor` the `#`, which the outer part's span starts at.
+    Quote {
+        expr: KExpression<'a>,
+        span_start: u32,
+        sigil_cursor: u32,
     },
     List {
         items: Vec<ExpressionPart<'a>>,
@@ -52,6 +61,7 @@ impl<'a> BracketFrame<'a> {
     pub(super) fn push(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self {
             BracketFrame::Expression { expr, .. } => expr.parts.push(part),
+            BracketFrame::Quote { expr, .. } => expr.parts.push(part),
             BracketFrame::List { items, .. } => items.push(part.value),
             BracketFrame::Dict { dict, .. } => dict.push(part.value),
             BracketFrame::SigiledTypeExpr { expr, .. } => expr.parts.push(part),
@@ -118,6 +128,28 @@ impl<'a> BracketFrame<'a> {
                     outer_span,
                 ))
             }
+            // `#(...)`: the body keeps the paren span, the captured part covers the sigil too.
+            BracketFrame::Quote {
+                mut expr,
+                span_start,
+                sigil_cursor,
+            } => {
+                let body_span = Span {
+                    start: span_start,
+                    end,
+                };
+                expr.span = Some(body_span);
+                expr.file = file;
+                expr.fill_cache();
+                let outer_span = Span {
+                    start: sigil_cursor,
+                    end,
+                };
+                Ok(Spanned::at(
+                    ExpressionPart::QuotedExpression(Box::new(expr)),
+                    outer_span,
+                ))
+            }
             BracketFrame::List { items, span_start } => {
                 let span = Span {
                     start: span_start,
@@ -174,12 +206,13 @@ impl<'a> BracketFrame<'a> {
         }
     }
 
-    /// Expression and SigiledTypeExpr both close on `)`; the variant determines which
+    /// Expression, Quote and SigiledTypeExpr all close on `)`; the variant determines which
     /// builder runs in `into_part`.
     pub(super) fn matches_closer(&self, closer: char) -> bool {
         matches!(
             (self, closer),
             (BracketFrame::Expression { .. }, ')')
+                | (BracketFrame::Quote { .. }, ')')
                 | (BracketFrame::List { .. }, ']')
                 | (BracketFrame::Dict { .. }, '}')
                 | (BracketFrame::SigiledTypeExpr { .. }, ')')
@@ -196,6 +229,7 @@ pub(super) fn close_paren_to_part<'a>(
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     match frame {
         BracketFrame::Expression { .. } => frame.into_part(end),
+        BracketFrame::Quote { .. } => frame.into_part(end),
         BracketFrame::SigiledTypeExpr { .. } => frame.into_part(end),
         BracketFrame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
             "unclosed ':{': this record type was never closed with a matching '}'",

@@ -97,6 +97,13 @@ pub enum ExpressionPart<'a> {
     /// `DictLiteral`. Field names are syntactic identifiers (never name-resolved).
     RecordLiteral(Vec<(String, ExpressionPart<'a>)>),
     Literal(KLiteral),
+    /// A `#(...)` quote: the parenthesized body captured at parse time as data. The parser folds
+    /// the sigil and its group into this part, so quoting is static syntax — there is no runtime
+    /// quoting operation and the body never dispatches. Behaves as a literal everywhere: it is a
+    /// `Slot` in the untyped key, a single one classifies [`DispatchShape::LiteralPassThrough`],
+    /// and it resolves to `KObject::KExpression(<body>)` — the value `$(...)` evaluates. See
+    /// [design/expressions-and-parsing.md](../../../design/expressions-and-parsing.md).
+    QuotedExpression(Box<KExpression<'a>>),
     /// A resolved sub-result travelling as its producer's [`DeliveredCarried`] envelope — the sealed
     /// carrier (value and reach as one unit) bundled with the retained frame owner that pins its
     /// backing in transit. The lifetime-free `cell` rests on the working expression across steps; the
@@ -130,6 +137,9 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("RecordLiteral").field(pairs).finish()
             }
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
+            ExpressionPart::QuotedExpression(e) => {
+                f.debug_tuple("QuotedExpression").field(e).finish()
+            }
             ExpressionPart::Spliced { cell, .. } => {
                 write!(f, "Spliced({})", cell.open(|c| c.summarize()))
             }
@@ -150,9 +160,12 @@ impl<'a> ExpressionPart<'a> {
         match self {
             // A spliced cell is a scheduler-introduced carrier, not raw syntactic AST.
             ExpressionPart::Spliced { .. } => false,
+            // A quote body is parse output, so it holds no `Spliced` cell; the recursion keeps the
+            // audit total over hand-built trees rather than trusting the construction site.
             ExpressionPart::Expression(e)
             | ExpressionPart::SigiledTypeExpr(e)
-            | ExpressionPart::RecordType(e) => e.is_splice_free(),
+            | ExpressionPart::RecordType(e)
+            | ExpressionPart::QuotedExpression(e) => e.is_splice_free(),
             ExpressionPart::ListLiteral(items) => items.iter().all(ExpressionPart::is_splice_free),
             ExpressionPart::DictLiteral(pairs) => pairs
                 .iter()
@@ -174,6 +187,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Expression(e) => e.summarize(),
             ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize()),
             ExpressionPart::RecordType(e) => format!(":{{{}}}", e.summarize()),
+            ExpressionPart::QuotedExpression(e) => format!("#({})", e.summarize()),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
                 format!("[{}]", inner.join(" "))
@@ -259,6 +273,9 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
+            // A quote denotes its body as data — the same `KObject` an `Expression` part in a
+            // `:KExpression` slot denotes, reached from any slot a literal reaches.
+            ExpressionPart::QuotedExpression(e) => KObject::KExpression((**e).clone()),
             // Reaches a value only through the dispatcher's type-context fast lane or sub-Dispatch,
             // both of which unwrap it; hitting `resolve()` means a builtin lost the marker.
             ExpressionPart::SigiledTypeExpr(_) => {
@@ -314,9 +331,13 @@ impl<'a> ExpressionPart<'a> {
             }
             ExpressionPart::Type(t) => KObject::KString(t.render()),
             ExpressionPart::Literal(lit) => lit.to_kobject(),
+            // A quote's `KObject::KExpression` is invariant in `'a` with no `'static` rebuild, so it
+            // cannot be constructed at the caller's `yoke` brand — the classifier routes a quote to
+            // its own sub-dispatch (which seals it through the checked door) before any static cell.
             ExpressionPart::Expression(_)
             | ExpressionPart::SigiledTypeExpr(_)
             | ExpressionPart::RecordType(_)
+            | ExpressionPart::QuotedExpression(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_)
@@ -338,6 +359,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::SigiledTypeExpr(e) => ExpressionPart::SigiledTypeExpr(e.clone()),
             ExpressionPart::RecordType(e) => ExpressionPart::RecordType(e.clone()),
+            ExpressionPart::QuotedExpression(e) => ExpressionPart::QuotedExpression(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
@@ -439,6 +461,7 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             ExpressionPart::Literal(_)
             | ExpressionPart::Spliced { .. }
             | ExpressionPart::Expression(_)
+            | ExpressionPart::QuotedExpression(_)
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
@@ -457,16 +480,17 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         ExpressionPart::Expression(_) => DispatchShape::HeadDeferred,
         ExpressionPart::SigiledTypeExpr(_) => DispatchShape::TypeHeadDeferred,
-        // A literal / list / dict / record-literal / record-type / future head in a
+        // A literal / list / dict / record-literal / record-type / quote / future head in a
         // multi-part expression: heads are always eager and must resolve to something
         // callable, so a non-callable head surfaces a loud `DispatchFailed`. A record
-        // *type* is a value, not a callable, so a `:{…}` head joins them here.
+        // *type* and a quoted expression are values, not callables, so they join them here.
         ExpressionPart::Literal(_)
         | ExpressionPart::Spliced { .. }
         | ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_)
-        | ExpressionPart::RecordType(_) => DispatchShape::NonCallableHead,
+        | ExpressionPart::RecordType(_)
+        | ExpressionPart::QuotedExpression(_) => DispatchShape::NonCallableHead,
         ExpressionPart::Keyword(_) => {
             unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
         }

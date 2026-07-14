@@ -57,6 +57,11 @@ impl<'a> KFunction<'a> {
                     (KType::KExpression, ExpressionPart::ListLiteral(_)) => {
                         has_lazy_slot = true;
                     }
+                    // A `#(...)` quote in a `:KExpression` slot is captured raw — the body is data,
+                    // so it must never be sub-dispatched.
+                    (KType::KExpression, ExpressionPart::QuotedExpression(_)) => {
+                        has_lazy_slot = true;
+                    }
                     (KType::KExpression, _) => return None,
                     // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
                     // part — captured raw (`resolve_for`), never sub-dispatched here.

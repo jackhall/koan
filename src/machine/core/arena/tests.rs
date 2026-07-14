@@ -1457,3 +1457,40 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
         _ => panic!("expected a Record type"),
     });
 }
+
+/// The checked seal's family audit gates a `KObject::KExpression` by
+/// [`is_splice_free`](crate::machine::model::ast::KExpression::is_splice_free): a `Spliced` part is
+/// a resolved value, not raw AST, and its cell carries a producer reach the empty
+/// (foreign-reach-only) witness this door seals under cannot name. Because
+/// `alloc_object_witnessed_checked` is an always-on loud gate rather than a `debug_assert!`, the
+/// rejection surfaces as a structured `KError` — never an assertion failure, never a silently
+/// stored dangle. The quote-capture lane (`dispatch::single_poll::literal_pass_through`) stores
+/// every quoted body through this door.
+#[test]
+fn spliced_expression_is_rejected_by_the_checked_object_seal() {
+    use crate::machine::model::ast::{ExpressionPart, KExpression};
+    use crate::witnessed::Sealed;
+
+    let storage = run_root_storage();
+    let scope = run_root_bare(&storage);
+
+    let witnessed = scope
+        .seal_fresh_object(KObject::Number(7.0))
+        .expect("a bare Number borrows no region, so its checked seal cannot fail");
+    let spliced = ExpressionPart::Spliced {
+        cell: Delivered::hosted(Sealed::seal(witnessed), Rc::clone(&storage)),
+    };
+    let expression = KExpression::new(vec![spliced.into()]);
+    assert!(
+        !expression.is_splice_free(),
+        "a Spliced part makes the expression not splice-free"
+    );
+
+    let result = scope
+        .brand()
+        .alloc_object_witnessed_checked(KObject::KExpression(expression));
+    assert!(
+        result.is_err(),
+        "a spliced quoted expression must be rejected, not silently stored"
+    );
+}

@@ -22,7 +22,6 @@ digraph {
     "koan::builtins::parameterized_types" [label="koan::builtins::parameterized_types"];
     "koan::builtins::parameterized_types::action_bodies" [label="koan::builtins::parameterized_types::action_bodies"];
     "koan::builtins::print" [label="koan::builtins::print"];
-    "koan::builtins::quote" [label="koan::builtins::quote"];
     "koan::builtins::record_projection" [label="koan::builtins::record_projection"];
     "koan::builtins::recursive_types" [label="koan::builtins::recursive_types"];
     "koan::builtins::resolve_or_await" [label="koan::builtins::resolve_or_await"];
@@ -141,7 +140,6 @@ digraph {
     "koan::builtins" -> "koan::builtins::nominal_schema" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::parameterized_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::print" [label="owns", style="solid"];
-    "koan::builtins" -> "koan::builtins::quote" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::record_projection" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::recursive_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::resolve_or_await" [label="owns", style="solid"];
@@ -393,13 +391,6 @@ digraph {
     "koan::builtins::print" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::print" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::machine" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::quote" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::record_projection" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -538,6 +529,7 @@ digraph {
     "koan::machine::core::arena" -> "koan::machine::core::scope_ptr" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::arena" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core::arena" -> "koan::machine::model::values" [label="uses", style="dashed"];

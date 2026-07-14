@@ -200,7 +200,7 @@ fn accepts_carried_matches_spliced_delegation() {
 /// `:Str`, matching a direct `accepts_carried`. Built through the scope's own carrier surface
 /// (`resident_value_carrier` + `Sealed::seal`) — the exact construction a real splice rests on the
 /// working expression — so the open exercises the confined lifetime cast under Miri. Also pins the
-/// cell's `is_splice_free` (a resolved value is not raw AST, so QUOTE's guard rejects it).
+/// cell's `is_splice_free` (a resolved value is not raw AST, so the checked seal's guard rejects it).
 #[test]
 fn spliced_cell_classifies_by_opening() {
     use crate::builtins::test_support::run_root_bare;
@@ -237,7 +237,7 @@ fn spliced_cell_classifies_by_opening() {
         );
     }
 
-    // A cell is a resolved value, not raw AST — QUOTE's splice-free guard rejects it.
+    // A cell is a resolved value, not raw AST — the checked seal's splice-free guard rejects it.
     let expr = KExpression::new(vec![crate::source::Spanned::bare(cell_part)]);
     assert!(!expr.is_splice_free());
 }

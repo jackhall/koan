@@ -22,7 +22,6 @@ pub(crate) mod newtype_def;
 mod nominal_schema;
 mod parameterized_types;
 mod print;
-mod quote;
 mod record_projection;
 mod recursive_types;
 mod resolve_or_await;
@@ -215,7 +214,6 @@ pub fn default_scope<'a>(
     using_scope::register(scope);
     catch::register(scope);
     attr::register(scope);
-    quote::register(scope);
     eval::register(scope);
     module_def::register(scope);
     sig_def::register(scope);

@@ -367,7 +367,7 @@ fn bracket_continuation_with_paren_sigils_passes_through() {
 
 #[test]
 fn dict_continuation_with_paren_sigils_passes_through() {
-    // Motivating dict-as-struct shape: each value is a `#(...)` QUOTE.
+    // Motivating dict-as-struct shape: each value is a `#(...)` quote.
     assert_eq!(
         collapse_whitespace("LET d = {\n  x = #(foo)\n  y = #(bar)\n}").unwrap(),
         "(LET d = { x = #(foo) y = #(bar) })",

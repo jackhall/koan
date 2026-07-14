@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
+use crate::machine::model::{Carried, KObject, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
@@ -197,6 +197,16 @@ pub(super) fn literal_pass_through<'step>(
         ExpressionPart::Spliced { cell } => {
             Outcome::Done(Ok(StepCarried::born(cell.into_cell().unseal())))
         }
+        // A quote is its body as data: seal the `KObject::KExpression` into this scope's region
+        // through the **checked** door. `KExpression<'a>` is invariant with no `'static` rebuild,
+        // so the family audit — which gates a `KExpression` by `is_splice_free` — runs as an
+        // always-on loud gate, and a spliced cell surfaces as a structured error rather than an
+        // assert. Parse output is splice-free, so the gate passes for every source quote.
+        ExpressionPart::QuotedExpression(body) => Outcome::Done(
+            ctx.current_scope()
+                .brand()
+                .alloc_object_witnessed_checked(KObject::KExpression(*body)),
+        ),
         ExpressionPart::Expression(boxed) => become_dispatch(ctx, *boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),
         ExpressionPart::DictLiteral(pairs) => park_on_literal(DepRequest::DictLit(pairs)),

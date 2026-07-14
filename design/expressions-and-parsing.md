@@ -256,12 +256,17 @@ The sigils are **expression-level operators** in
 [expression_tree.rs](../src/parse/expression_tree.rs), not entries in the
 compound-operator registry. The parser keeps a `pending_sigil` flag while it
 walks the input; consuming `#` or `$` sets the flag, and only the immediately
-following `(` clears it by opening an `Expression` frame tagged with the head
-keyword. On frame-close, the body is wrapped in an inner `Expression` part and
-prepended with the head, producing the AST shape `(QUOTE <body>)` /
-`(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on. The
-[QUOTE](../src/builtins/quote.rs) builtin's signature consumes a
-`KExpression`-typed slot and returns the captured AST as a value;
+following `(` clears it by opening a frame.
+
+Quoting is **parse-static**: `#(` opens a `Quote` frame, and on frame-close the
+body folds into an [`ExpressionPart::QuotedExpression`](../src/machine/model/ast.rs)
+— a part that is a slot for dispatch purposes and behaves like a literal, resolving
+to the `KObject::KExpression` value of the captured body. There is no quoting
+operation at run time and the body never dispatches.
+
+Evaluation is genuinely a run-time operation, so `$(` opens an `Expression` frame
+tagged with the head keyword `EVAL`, producing the AST shape `(EVAL <body>)` the
+EVAL builtin dispatches on.
 [EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
 a `KExpression` and tail-dispatches the inner AST in a fresh `CallFrame`
@@ -287,7 +292,9 @@ At the `build_tree` layer the rule is uniformly paren-only: any character
 following `#` or `$` other than `(` is a parse error
 (`expected '(' after '#', found <c>`), which is why the indent-collapse
 rewrite in [whitespace.rs](../src/parse/whitespace.rs) is what makes the
-bare-line surface possible. The bare `QUOTE` and `EVAL` keyword forms that
-the desugaring produces happen to dispatch (the parser classifies all-caps
-tokens as keywords, and the dispatch table matches), but they are not
-documented surface — user code goes through the sigils.
+bare-line surface possible. The bare `EVAL` keyword form that the `$`
+desugaring produces happens to dispatch (the parser classifies all-caps
+tokens as keywords, and the dispatch table matches), but it is not
+documented surface — user code goes through the sigil. `#` desugars to no
+keyword at all: the quote is captured by the parser, so there is no bare
+form of it to dispatch.

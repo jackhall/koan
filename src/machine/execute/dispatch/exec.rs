@@ -300,13 +300,16 @@ fn extract_carried_args<'step>(
                 args.push(view.current_scope().adopt_sealed_copied(cell))
             }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
-            // the args as a `'step` `Carried`.
-            ExpressionPart::Literal(_) => {
+            // the args as a `'step` `Carried`. A `#(...)` quote is a literal for this purpose: its
+            // `KObject::KExpression` body is data, and the checked door's family audit passes it —
+            // a quote body comes from the parser, which plants no `Spliced` cell, and the scheduler
+            // splices only into the parts of an expression it dispatches, never into quoted data.
+            ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => {
                 let object = view
                     .current_scope()
                     .brand()
                     .alloc_object_checked(part.value.resolve())
-                    .expect("a resolved literal is always owned or splice-free");
+                    .expect("a resolved literal or quoted expression is owned and splice-free");
                 args.push(Carried::Object(object));
             }
             _ => return None,

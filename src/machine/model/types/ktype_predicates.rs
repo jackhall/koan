@@ -533,12 +533,15 @@ impl<'a> KType<'a> {
             // above by `accepts_carried`.
             KType::KFunction { .. } => false,
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-            // A `:KExpression` slot captures a parenthesized expression raw; it also captures a
-            // bare list literal raw — the shape a `Unary`-mode operator run reduces to
-            // (`[Keyword, ListLiteral]`) — so the receiving builtin owns the operand run.
+            // A `:KExpression` slot captures a parenthesized expression raw, and a `#(...)` quote —
+            // whose body is already data — with it. It also captures a bare list literal raw, the
+            // shape a `Unary`-mode operator run reduces to (`[Keyword, ListLiteral]`), so the
+            // receiving builtin owns the operand run.
             KType::KExpression => matches!(
                 part,
-                ExpressionPart::Expression(_) | ExpressionPart::ListLiteral(_)
+                ExpressionPart::Expression(_)
+                    | ExpressionPart::QuotedExpression(_)
+                    | ExpressionPart::ListLiteral(_)
             ),
             KType::SigiledTypeExpr => matches!(part, ExpressionPart::SigiledTypeExpr(_)),
             KType::RecordType => matches!(part, ExpressionPart::RecordType(_)),

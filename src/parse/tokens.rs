@@ -240,6 +240,10 @@ mod tests {
                 let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
                 format!(":{{{}}}", inner.join(" "))
             }
+            ExpressionPart::QuotedExpression(e) => {
+                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
+                format!("#({})", inner.join(" "))
+            }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
