@@ -19,10 +19,10 @@ fn deferred_bare_module_param_return_yields_the_module() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "FN (USE_ORD Er :OrderedSig) -> Er = (Er)");
+    run(scope, "FN (USE_ORD Er :Ordered) -> Er = (Er)");
     let f = lookup_fn(scope, "USE_ORD");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -49,11 +49,11 @@ fn deferred_bare_module_param_return_admits_a_per_call_region_module() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET compare = 3))\n\
+         FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET compare = 3))\n\
          LET IntSet = (MAKESET IntOrd)\n\
-         FN (USE_ORD Er :OrderedSig) -> Er = (Er)",
+         FN (USE_ORD Er :Ordered) -> Er = (Er)",
     );
     match run_one(scope, parse_one("USE_ORD IntSet")) {
         KObject::Module(m) => assert_eq!(m.path, "Generated"),
@@ -79,10 +79,10 @@ fn deferred_bare_module_param_return_contract_is_the_self_sig() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "FN (BAD_ORD Er :OrderedSig) -> Er = (1)");
+    run(scope, "FN (BAD_ORD Er :Ordered) -> Er = (1)");
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("BAD_ORD IntOrd"), scope);
     runtime

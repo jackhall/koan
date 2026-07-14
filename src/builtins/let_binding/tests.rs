@@ -270,8 +270,8 @@ fn let_type_class_with_functor_admits() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))",
+        "SIG Ordered = (VAL compare :Number)\n\
+         LET MyF = (FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))",
     );
     assert!(
         scope.lookup("MyF").is_none(),
@@ -299,10 +299,10 @@ fn let_value_class_with_functor_rejects() {
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    run(scope, "SIG Ordered = (VAL compare :Number)");
     let err = run_one_err(
         scope,
-        parse_one("LET f = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))"),
+        parse_one("LET f = (FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
@@ -357,9 +357,9 @@ fn let_type_class_in_sig_body_binds_manifest() {
     );
 }
 
-/// A Type-classified SIG alias `LET Po = OrderedSig` writes the *same* unified
-/// `KType::Signature` identity into `bindings.types[Po]` as `OrderedSig` carries,
-/// so `:Po` and `:OrderedSig` are dispatch-identical. Pins the merged-variant
+/// A Type-classified SIG alias `LET Po = Ordered` writes the *same* unified
+/// `KType::Signature` identity into `bindings.types[Po]` as `Ordered` carries,
+/// so `:Po` and `:Ordered` are dispatch-identical. Pins the merged-variant
 /// LET path: the generic `KTypeValue(kt)` arm shared with struct/union/module
 /// aliases, with no separate signature-only install branch.
 #[test]
@@ -370,11 +370,9 @@ fn let_type_class_signature_alias_preserves_identity() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\nLET Po = OrderedSig",
+        "SIG Ordered = (VAL compare :Number)\nLET Po = Ordered",
     );
-    let original = scope
-        .resolve_type("OrderedSig")
-        .expect("OrderedSig type binding");
+    let original = scope.resolve_type("Ordered").expect("Ordered type binding");
     let aliased = scope.resolve_type("Po").expect("Po type binding");
     assert!(
         matches!(aliased, KType::Signature { .. }),
@@ -383,7 +381,7 @@ fn let_type_class_signature_alias_preserves_identity() {
     );
     assert_eq!(
         *original, *aliased,
-        "alias `Po` must carry the same signature identity as `OrderedSig`",
+        "alias `Po` must carry the same signature identity as `Ordered`",
     );
 }
 
@@ -399,10 +397,10 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = ((LET compare = 7))",
     );
-    let err = run_one_err(scope, parse_one("LET int_ord = (IntOrd :! OrderedSig)"));
+    let err = run_one_err(scope, parse_one("LET int_ord = (IntOrd :! Ordered)"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -428,8 +426,8 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "SIG OrderedSig = (VAL compare :Number)");
-    let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
+    run(scope, "SIG Ordered = (VAL compare :Number)");
+    let err = run_one_err(scope, parse_one("LET sig_alias = Ordered"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -452,9 +450,9 @@ fn let_type_class_with_module_rhs_binds_value_side() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET View = (IntOrd :! OrderedSig)",
+         LET View = (IntOrd :! Ordered)",
     );
     assert!(
         binds_module(scope, "View"),

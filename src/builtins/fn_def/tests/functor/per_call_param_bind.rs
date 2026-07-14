@@ -17,13 +17,13 @@ fn functor_body_module_dispatch_does_not_dangle() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET HeldSet = (MAKESET (IntOrdA))");
 
@@ -56,11 +56,11 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+        "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| Ordered)",
     );
-    run(scope, "FN (USE_TYPE Er :OrderedSig) -> Any = (Er.Carrier)");
+    run(scope, "FN (USE_TYPE Er :Ordered) -> Any = (Er.Carrier)");
     let result = run_one_type(scope, parse_one("USE_TYPE IntOrdView"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
@@ -84,13 +84,13 @@ fn functor_closure_escape_pins_type_class_bind() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+        "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| Ordered)",
     );
     run(
         scope,
-        "FN (MAKE_LOOKUP Er :OrderedSig) -> Any = \
+        "FN (MAKE_LOOKUP Er :Ordered) -> Any = \
             (FN (LOOKUP) -> Any = (Er.Carrier))",
     );
     run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
@@ -109,7 +109,7 @@ fn functor_closure_escape_pins_type_class_bind() {
     }
 }
 
-/// `FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)` dispatches and the
+/// `FN (MAKESET Er :Ordered) -> Ordered = (Er)` dispatches and the
 /// auto-wrapped `(Er)` body resolves `Er` through the per-call value-side binding,
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
@@ -118,15 +118,15 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET OrdView = (IntOrd :! OrderedSig)\n\
-         FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)",
+         LET OrdView = (IntOrd :! Ordered)\n\
+         FN (MAKESET Er :Ordered) -> Ordered = (Er)",
     );
     let result = run_one(scope, parse_one("MAKESET OrdView"));
     match result {
         KObject::Module(module) => {
-            assert_eq!(module.path, "IntOrd :! OrderedSig");
+            assert_eq!(module.path, "IntOrd :! Ordered");
         }
         other => {
             panic!(

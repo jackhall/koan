@@ -93,10 +93,10 @@ mod tests {
 
     #[test]
     fn binder_name_extracts_sig_name() {
-        let mut exprs = parse("SIG OrderedSig = (VAL x :Number)").expect("parse should succeed");
+        let mut exprs = parse("SIG Ordered = (VAL x :Number)").expect("parse should succeed");
         let expr = exprs.remove(0);
         let name = expr.binder_name_from_type_part();
-        assert_eq!(name.as_deref(), Some("OrderedSig"));
+        assert_eq!(name.as_deref(), Some("Ordered"));
     }
 
     #[test]
@@ -104,11 +104,11 @@ mod tests {
         use crate::machine::model::types::KType;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "SIG OrderedSig = (VAL x :Number)");
+        run(scope, "SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
-        assert!(scope.bindings().data().get("OrderedSig").is_none());
+        assert!(scope.bindings().data().get("Ordered").is_none());
         assert!(matches!(
-            scope.resolve_type("OrderedSig"),
+            scope.resolve_type("Ordered"),
             Some(KType::Signature { .. })
         ));
     }
@@ -118,15 +118,15 @@ mod tests {
         use crate::machine::model::types::KType;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let sig = match scope.resolve_type("OrderedSig") {
+        run(scope, "SIG Ordered = (VAL x :Number)");
+        let sig = match scope.resolve_type("Ordered") {
             Some(KType::Signature {
                 sig: SigSource::Declared(sig),
                 ..
             }) => *sig,
-            _ => panic!("OrderedSig should be a signature"),
+            _ => panic!("Ordered should be a signature"),
         };
-        assert_eq!(sig.path, "OrderedSig");
+        assert_eq!(sig.path, "Ordered");
     }
 
     /// Body-statement forward-reference: a SIG body's `VAL x :SomeType` parks on an

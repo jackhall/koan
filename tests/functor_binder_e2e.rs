@@ -2,7 +2,7 @@
 //! shape from [design/typing/functors.md](../design/typing/functors.md).
 //!
 //! The test exercises the full shipped FUNCTOR pipeline:
-//! 1. **Define** — `FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (MODULE Generated
+//! 1. **Define** — `FUNCTOR (MAKESET Er :Ordered) -> Set = (MODULE Generated
 //!    = ...)` registers a KFunction with `is_functor: true`.
 //! 2. **Apply** — `LET IntSet = (MAKESET IntOrd)` invokes the functor with a
 //!    signature-typed module argument; per-call type-side install registers
@@ -74,13 +74,13 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     panic!("no FN/FUNCTOR overload registered under `{keyword}`");
 }
 
-/// End-to-end MakeSet smoke. The functor takes an `OrderedSig`-satisfying
+/// End-to-end MakeSet smoke. The functor takes an `Ordered`-satisfying
 /// module (`IntOrd`), produces a module value carrying a value-side `tag`
 /// member, and the LET assigns the result to `IntSet`. The shape pulls
 /// every Stage 0-6 piece of the FUNCTOR work into a single Scheduler run:
 ///
 /// - Stage 0/2: `KType::KFunctor` projection on the functor carrier.
-/// - Stage 3: FUNCTOR binder admits the `OrderedSig → Module` shape.
+/// - Stage 3: FUNCTOR binder admits the `Ordered → Module` shape.
 /// - Stage 4: cross-arm wall is dormant here (no FN/FUNCTOR slot mix); the
 ///   test pins the happy-path so the wall isn't exercised.
 /// - Stage 5: LET allowlist admits both the Module-valued `IntOrd` ascription
@@ -93,16 +93,16 @@ fn functor_binder_e2e_makeset_produces_module() {
     // `compatible_sigs` set. The LET partition guard
     // (design/typing/elaboration.md § Binding-map partition) forces the
     // ascription rebind to use a Type-classified identifier
-    // (`LET IntOrd = (IntOrdBase :! OrderedSig)`) so the module/signature
+    // (`LET IntOrd = (IntOrdBase :! Ordered)`) so the module/signature
     // carrier never rides a value-classified alias; the dispatch admission then
     // consults `compatible_sigs` at the signature-typed slot, so no parens-wrap
     // or ascription-view workaround is required at the call site.
     let scope = run(
         &region,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! OrderedSig)\n\
-         FUNCTOR (MAKESET Er :OrderedSig) -> Module = \
+         LET IntOrd = (IntOrdBase :! Ordered)\n\
+         FUNCTOR (MAKESET Er :Ordered) -> Module = \
             (MODULE Generated = ((LET tag = 0)))\n\
          LET IntSet = (MAKESET IntOrd)",
     );
@@ -154,7 +154,7 @@ fn functor_binder_e2e_makeset_produces_module() {
 ///
 /// The named-arg surface keys on the functor's param name, which must be a bare
 /// lowercase identifier to fill a record-literal field — hence a `Number` param
-/// `x`. Satisfying a `:OrderedSig`-typed param through this named-arg path is
+/// `x`. Satisfying a `:Ordered`-typed param through this named-arg path is
 /// pinned by `functor_signature_param_satisfied_via_named_sigil` below.
 #[test]
 fn let_bound_functor_applied_via_sigil_yields_module() {
@@ -210,8 +210,8 @@ fn run_expect_err(src: &str) -> String {
 /// functor param, filled by name with a *satisfying* module, applies through the
 /// named-argument sigil surface.
 ///
-/// `IntOrd` is a module whose `compatible_sigs` carries `OrderedSig` (installed by
-/// the `:! OrderedSig` ascription). The named-arg call `:(MakeSet {base = IntOrd})`
+/// `IntOrd` is a module whose `compatible_sigs` carries `Ordered` (installed by
+/// the `:! Ordered` ascription). The named-arg call `:(MakeSet {base = IntOrd})`
 /// reconstructs the positional call `[MKSET, IntOrd]`; the post-pick tail resolves
 /// the bare-name `base` slot by sub-Dispatch to its module carrier, so `bind`'s
 /// `accepts_part` consults `compatible_sigs` — the same satisfaction check the
@@ -222,10 +222,10 @@ fn functor_signature_param_satisfied_via_named_sigil() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! OrderedSig)\n\
-         LET MakeSet = (FUNCTOR (MKSET base :OrderedSig) -> Module = \
+         LET IntOrd = (IntOrdBase :! Ordered)\n\
+         LET MakeSet = (FUNCTOR (MKSET base :Ordered) -> Module = \
             (MODULE Inner = ((LET tag = 0))))\n\
          LET Got = :(MakeSet {base = IntOrd})",
     );
@@ -249,15 +249,15 @@ fn functor_signature_param_satisfied_via_named_sigil() {
 #[test]
 fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
     let err = run_expect_err(
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE Plain = ((LET other = 1))\n\
-         LET MakeSet = (FUNCTOR (MKSET base :OrderedSig) -> Module = \
+         LET MakeSet = (FUNCTOR (MKSET base :Ordered) -> Module = \
             (MODULE Inner = ((LET tag = 0))))\n\
          LET Got = :(MakeSet {base = Plain})",
     );
     assert!(
-        err.contains("type mismatch") && err.contains("OrderedSig"),
-        "non-satisfying module by name should be a TypeMismatch against OrderedSig, got: {err}",
+        err.contains("type mismatch") && err.contains("Ordered"),
+        "non-satisfying module by name should be a TypeMismatch against Ordered, got: {err}",
     );
 }
 
@@ -270,12 +270,12 @@ fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
 /// [`crate::builtins::type_constructors`].
 ///
 /// Pre-type-language-via-dispatch this test used the PascalCase `Functor` head
-/// (`:(Functor (OrderedSig) -> Module)`) routed through the parser's
+/// (`:(Functor (Ordered) -> Module)`) routed through the parser's
 /// `Functor`-special-cased `Function`-arrow fold. With the
 /// type-language-via-dispatch move the parser does no folding and the
 /// PascalCase `Functor` head has no registered overload — the equivalent
 /// surface is the all-uppercase `FUNCTOR` keyword. `:Signature` substitutes
-/// for `OrderedSig` because the inner sigil sub-Dispatch may race the outer
+/// for `Ordered` because the inner sigil sub-Dispatch may race the outer
 /// SIG declaration; using the always-bound builtin meta-type keeps the test
 /// focused on the disjoint-surface check rather than scheduling.
 #[test]
@@ -283,11 +283,11 @@ fn functor_binder_and_sigil_coexist() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         FUNCTOR (MAKEINNER Er :OrderedSig) -> Module = \
+        "SIG Ordered = (VAL compare :Number)\n\
+         FUNCTOR (MAKEINNER Er :Ordered) -> Module = \
             (MODULE Res = ((LET inner = 1)))\n\
-         FUNCTOR (MAKEOUTER Er :OrderedSig) -> :(FUNCTOR (Ty :Signature) -> Module) = \
-            (FUNCTOR (INNER Fr :OrderedSig) -> Module = (MODULE Res = ((LET v = 2))))",
+         FUNCTOR (MAKEOUTER Er :Ordered) -> :(FUNCTOR (Ty :Signature) -> Module) = \
+            (FUNCTOR (INNER Fr :Ordered) -> Module = (MODULE Res = ((LET v = 2))))",
     );
     let outer = lookup_fn(scope, "MAKEOUTER");
     assert!(outer.is_functor, "outer FUNCTOR carries is_functor");

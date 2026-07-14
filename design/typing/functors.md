@@ -7,7 +7,7 @@ machinery ordinary FNs use. A functor may also take a bare `:Type` parameter;
 generic functions are built this way — see [generics.md](generics.md).
 
 - *Surface semantics* — modules are part of the **type language**. A
-  signature-typed FUNCTOR parameter (`Er: OrderedSig`) is a type-language
+  signature-typed FUNCTOR parameter (`Er: Ordered`) is a type-language
   binder, like an OCaml functor's parameter. `Er.Type` in a type-position
   slot is type-language projection — extracting the module's abstract
   type. Identifier-class names (`er`, `mo` — lowercase-first per
@@ -34,7 +34,7 @@ generic functions are built this way — see [generics.md](generics.md).
   bare `FN` binder.
 
 ```
-LET MakeSet = (FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (
+LET MakeSet = (FUNCTOR (MAKESET Er :Ordered) -> Set = (
   MODULE Result = (
     (LET Type = ...)
     (LET insert = (FN (INSERT s :Type x :Er.Type) -> Type = ...))
@@ -92,7 +92,7 @@ execution.
 FUNCTOR's return-type slot must denote a module, signature, or functor
 kind. The admissible carriers are `KType::OfKind(KKind::Signature)`,
 `KType::Signature { .. }` (the unified constraint-and-value variant, covering a bare
-`:OrderedSig`, a `(… WITH {…})` pin, the `:Module` surface keyword's empty signature,
+`:Ordered`, a `(… WITH {…})` pin, the `:Module` surface keyword's empty signature,
 and a bare module head's `SelfOf` self-sig — a concrete module return lands here
 because a module value's `ktype()` *is* its self-sig), and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
@@ -157,7 +157,7 @@ keeps the generative/applicative choice visible at the declaration. See
 Sharing constraints — pinning a functor's output abstract type to a
 specific concrete type — ride on the `WITH` builtin described in
 [Type expressions and constraints](#type-expressions-and-constraints). A
-FUNCTOR whose return type is `:(SetSig WITH {Elt = Number})` declares
+FUNCTOR whose return type is `:(Set WITH {Elt = Number})` declares
 the constraint at the return slot; the body's `MODULE Result` must mirror
 `Elt = Number` for the return-type check to admit it. There is no separate
 `with type` keyword.
@@ -170,7 +170,7 @@ bound outside the FUNCTOR) both work as pin values resolved eagerly.
 ## Parameters
 
 A FUNCTOR parameter binds per-call in whichever channel its argument travels.
-A **module** argument — what a `:OrderedSig` slot admits — arrives on the value
+A **module** argument — what a `:Ordered` slot admits — arrives on the value
 channel's `Object` arm and binds into the child scope's `bindings.data` through the
 ordinary copied-mode value door, like any other object value: a module is a value,
 so there is no type-side parameter bind for it. A genuinely **type-denoting**
@@ -295,9 +295,9 @@ just nested FUNCTORs whose outer return type is the inner functor's type,
 written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
-LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
-                -> :(FUNCTOR (Vo :MonoidSig) -> :(Map WITH {Key = Er.Type})) = (
-  FUNCTOR (Vo :MonoidSig) -> :(Map WITH {Key = Er.Type}) = (
+LET MakeMap = (FUNCTOR (MAKEMAP Er :Ordered)
+                -> :(FUNCTOR (Vo :Monoid) -> :(Map WITH {Key = Er.Type})) = (
+  FUNCTOR (Vo :Monoid) -> :(Map WITH {Key = Er.Type}) = (
     MODULE Result = ( ... )
   )
 ))
@@ -385,18 +385,18 @@ slot semantics are positional, `WITH {…}` for slot-named constraints.
 
 - **`WITH`.** Infix signature specialization — `<sig> WITH {Slot = Type, …}`
   pins abstract type slots of a signature to specific concrete types.
-  `(OrderedSig WITH {Type = Number})` is `OrderedSig` with its `Type` slot
+  `(Ordered WITH {Type = Number})` is `Ordered` with its `Type` slot
   pinned to `Number`; `(Set WITH {Elt = Number, Ord = IntOrd})` pins multiple
   slots in one call. The bindings are a record literal keyed by slot name
   (capitalized Type-token field names); each `Slot = Type` field is one pin.
 - **Type-valued slot values.** `WITH` slot values accept any
   expression that evaluates to a `KType`, not only bare type-name
-  tokens. `(MySig WITH {Elt = Mo.Type})`
+  tokens. `(Pinnable WITH {Elt = Mo.Type})`
   works because the dotted `Mo.Type` access returns the abstract type of
   module `Mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
   modules. `(Set WITH {Elt = Number, Ord = IntOrd})` works because
-  `Set`'s `Ord` slot is declared `OrderedSig`-kind. Distinct module
+  `Set`'s `Ord` slot is declared `Ordered`-kind. Distinct module
   values bound to the same slot give distinct concrete types — the
   mechanism behind witness types in
   [open-work.md](open-work.md).

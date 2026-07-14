@@ -149,9 +149,9 @@
   The single `Signature` variant is **disambiguated by position**: a
   `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
   arm) whose self-sig structurally
-  satisfies `sig` (the constraint role — what `Er :OrderedSig`
-  lowers to in a FUNCTOR parameter slot, so `:OrderedSig` means "module
-  satisfying OrderedSig," never "the signature value itself"), while a
+  satisfies `sig` (the constraint role — what `Er :Ordered`
+  lowers to in a FUNCTOR parameter slot, so `:Ordered` means "module
+  satisfying Ordered," never "the signature value itself"), while a
   signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only
   by the `OfKind(Signature)` wildcard. `pinned_slots` (empty for a bare
   signature) carries `WITH` abstract-type specializations; because the

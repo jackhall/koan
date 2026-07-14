@@ -8,7 +8,7 @@
 //! - Chained Type access (`:(LIST OF Mo.Ty)`) — `Deferred` arm, not `wrap_indices`. Pinned
 //!   here so the eager-path collapse doesn't accidentally route Deferred through the
 //!   wrap-resolve loop.
-//! - Parens-Expression wrap-slot (`MAKESET IntOrd :| OrderedSig`) — the wrap-slot part
+//! - Parens-Expression wrap-slot (`MAKESET IntOrd :| Ordered`) — the wrap-slot part
 //!   is an `Expression`, not a bare token. The eager wrap-resolve no-ops; the lazy arm
 //!   still sub-Dispatches the Expression.
 
@@ -36,7 +36,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
     Ok(String::from_utf8(bytes).unwrap())
 }
 
-/// Bare leaf Type-token wrap-slot fast path. `MAKESET (IntOrd :! OrderedSig)` carries
+/// Bare leaf Type-token wrap-slot fast path. `MAKESET (IntOrd :! Ordered)` carries
 /// the ascription in parens so the inner sub-Dispatch is well-typed by the time the
 /// MAKESET call dispatches; the fused splice/park/eager walk runs over an empty
 /// `wrap_indices` (Future-bearing slot, not bare-name) and binds the picked function
@@ -45,10 +45,10 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 #[test]
 fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))\n\
-         LET MySet = (MAKESET (IntOrd :! OrderedSig))\n\
+         FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))\n\
+         LET MySet = (MAKESET (IntOrd :! Ordered))\n\
          PRINT MySet.inner",
     )
     .expect("MAKESET on inline-ascribed IntOrd should succeed");
@@ -101,10 +101,10 @@ fn chained_type_access_uses_deferred_path() {
 #[test]
 fn wrap_slot_parens_expression_still_sub_dispatches() {
     let out = run_capturing(
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 2))\n\
-         LET MySet = (MAKESET (IntOrd :| OrderedSig))\n\
+         FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 2))\n\
+         LET MySet = (MAKESET (IntOrd :| Ordered))\n\
          PRINT MySet.inner",
     )
     .expect("MAKESET with parens-Expression wrap-slot should sub-Dispatch");

@@ -288,9 +288,9 @@ fn module_attr_access_returns_type_constructor() {
     register_arity1_constructor(scope, "Wrapper");
     run(
         scope,
-        "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
+        "SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE IntList = ((LET Wrap = Wrapper))\n\
-         LET Mo = (IntList :| MonadSig)",
+         LET Mo = (IntList :| Monad)",
     );
     let mo = lookup_module(scope, "Mo");
     let wrap_t = mo.type_members.borrow().get("Wrap").cloned();

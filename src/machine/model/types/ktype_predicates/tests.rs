@@ -325,7 +325,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value))));
     let sig = region
         .brand()
-        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
     let kt_sig: &KType<'_> = region
         .brand()
         .alloc_ktype_checked(KType::signature(SigSource::Declared(sig), Vec::new()))
@@ -430,7 +430,7 @@ fn is_type_denoting_table() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let sig = region
         .brand()
-        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
     let sb = KType::signature(SigSource::Declared(sig), Vec::new());
     assert!(sb.is_type_denoting());
     let sb_pinned = KType::signature(
@@ -485,20 +485,20 @@ fn is_more_specific_for_pinned_signature_bound() {
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
-            "OrderedSig".into(),
+            "Ordered".into(),
         ));
     let hashed_scope = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
-            "HashedSig".into(),
+            "Hashed".into(),
         ));
     let ordered = region
         .brand()
-        .alloc_signature(ModuleSignature::new("OrderedSig".into(), ordered_scope));
+        .alloc_signature(ModuleSignature::new("Ordered".into(), ordered_scope));
     let hashed = region
         .brand()
-        .alloc_signature(ModuleSignature::new("HashedSig".into(), hashed_scope));
+        .alloc_signature(ModuleSignature::new("Hashed".into(), hashed_scope));
 
     let bare = KType::signature(SigSource::Declared(ordered), Vec::new());
     let pinned_number = KType::signature(

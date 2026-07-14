@@ -15,7 +15,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    run(scope, "SIG Ordered = (VAL compare :Number)");
     run(scope, "MODULE IntOrd = (LET compare = 7)");
     run(scope, "FN (USE_ID Er :Signature) -> Er = (IntOrd :| Er)");
     let f = lookup_fn(scope, "USE_ID");
@@ -24,7 +24,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    let result = run_one(scope, parse_one("USE_ID OrderedSig"));
+    let result = run_one(scope, parse_one("USE_ID Ordered"));
     match result {
         KObject::Module(_) => {}
         other => {
@@ -125,14 +125,14 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+        "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     run(
         scope,
-        "FN (MK Er :OrderedSig) -> :(Set WITH {Elt = Er.Type}) = \
+        "FN (MK Er :Ordered) -> :(Set WITH {Elt = Er.Type}) = \
          (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");
@@ -271,15 +271,15 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
+        "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| Ordered)",
     );
     // `Er.Carrier` is the SIG's abstract type member; under opaque ascription it is not
     // `Number`, so the `(1)` body fails the per-call return-type check. (Referencing a real
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
-    run(scope, "FN (BAD Er :OrderedSig) -> Er.Carrier = (1)");
+    run(scope, "FN (BAD Er :Ordered) -> Er.Carrier = (1)");
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
     runtime

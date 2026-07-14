@@ -10,13 +10,13 @@ use crate::machine::KErrorKind;
 fn val_inside_sig_binds_typeexpr_carrier() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "SIG OrderedSig = ((VAL zero :Number))");
-    let s = match scope.resolve_type("OrderedSig") {
+    run(scope, "SIG Ordered = ((VAL zero :Number))");
+    let s = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
             sig: SigSource::Declared(sig),
             ..
         }) => *sig,
-        _ => panic!("OrderedSig must bind a Signature KType"),
+        _ => panic!("Ordered must bind a Signature KType"),
     };
     let zero = s.decl_scope().bindings().expect_type("zero");
     assert_eq!(*zero, KType::Number);
@@ -94,14 +94,14 @@ fn val_function_typed_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
+        "SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
     );
-    let s = match scope.resolve_type("OrderedSig") {
+    let s = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
             sig: SigSource::Declared(sig),
             ..
         }) => *sig,
-        _ => panic!("OrderedSig must bind a Signature KType"),
+        _ => panic!("Ordered must bind a Signature KType"),
     };
     let compare = s.decl_scope().bindings().expect_type("compare");
     match compare {

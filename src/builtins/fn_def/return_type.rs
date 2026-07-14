@@ -159,7 +159,7 @@ fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdi
 }
 
 /// Bare-leaf `Er` matching a parameter name admits iff that parameter's declared
-/// `KType` is type-denoting (e.g. `:OrderedSig`, `:Module`). A `Functor`-headed
+/// `KType` is type-denoting (e.g. `:Ordered`, `:Module`). A `Functor`-headed
 /// parameterized form admits via the type-position sigil; other shapes are rejected
 /// so the diagnostic surfaces at the FUNCTOR site.
 fn verdict_for_deferred_type_expr<'a>(

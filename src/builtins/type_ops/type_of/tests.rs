@@ -55,9 +55,9 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Elt) (VAL zero :Elt))\n\
+        "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         LET View = (IntOrd :| OrderedSig)",
+         LET View = (IntOrd :| Ordered)",
     );
     let view = lookup_module(scope, "View");
     let source = lookup_module(scope, "IntOrd");
@@ -95,9 +95,9 @@ fn type_of_transparent_view_reports_concrete_slots() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Elt) (VAL zero :Elt))\n\
+        "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         LET View = (IntOrd :! OrderedSig)",
+         LET View = (IntOrd :! Ordered)",
     );
     match run_one_type(scope, parse_one("TYPE OF View")) {
         KType::Signature {
@@ -141,9 +141,9 @@ fn type_of_parameter_defers_a_return_type() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Elt) (VAL zero :Elt))\n\
+        "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         FN (USE_ORD er :OrderedSig) -> :(TYPE OF er) = (er)",
+         FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
     let result = run_one(scope, parse_one("USE_ORD IntOrd"));
     assert!(

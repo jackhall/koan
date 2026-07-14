@@ -190,19 +190,19 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
+            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
         );
-        let sig_id = match scope.resolve_type("OrderedSig") {
+        let sig_id = match scope.resolve_type("Ordered") {
             Some(KType::Signature { sig, .. }) => sig.sig_id(),
-            _ => panic!("OrderedSig must bind a Signature KType"),
+            _ => panic!("Ordered must bind a Signature KType"),
         };
-        let result = run_one_type(scope, parse_one("OrderedSig WITH {Carrier = Number}"));
+        let result = run_one_type(scope, parse_one("Ordered WITH {Carrier = Number}"));
         match result {
             KType::Signature {
                 sig, pinned_slots, ..
             } => {
                 assert_eq!(sig.sig_id(), sig_id);
-                assert_eq!(sig.path(), "OrderedSig");
+                assert_eq!(sig.path(), "Ordered");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Carrier");
                 assert_eq!(pinned_slots[0].1, KType::Number);
@@ -216,8 +216,14 @@ mod tests {
     fn with_two_slots_preserve_order() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "SIG Set = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
-        let result = run_one_type(scope, parse_one("Set WITH {Elt = Number, Ord = Str}"));
+        run(
+            scope,
+            "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))",
+        );
+        let result = run_one_type(
+            scope,
+            parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"),
+        );
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 2);
@@ -240,11 +246,11 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
-             SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
-             LET Elem = (IntOrd :| OrderedSig)",
+             SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
+             SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
+             LET Elem = (IntOrd :| Ordered)",
         );
-        let result = run_one_type(scope, parse_one("SetSig WITH {Elt = Elem.Carrier}"));
+        let result = run_one_type(scope, parse_one("Set WITH {Elt = Elem.Carrier}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);
@@ -267,10 +273,10 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
+            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
         );
         let mut runtime = KoanRuntime::new();
-        let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {Bogus = Number}"), scope);
+        let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {Bogus = Number}"), scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
@@ -368,10 +374,10 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
+            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
         );
         let mut runtime = KoanRuntime::new();
-        let id = runtime.dispatch_in_scope(parse_one("OrderedSig WITH {type = Number}"), scope);
+        let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {type = Number}"), scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");

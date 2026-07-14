@@ -24,11 +24,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
             scope,
-            "OrderedSig".into(),
+            "Ordered".into(),
         ));
     let sig = region
         .brand()
-        .alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
+        .alloc_signature(ModuleSignature::new("Ordered".into(), sig_scope));
 
     // `NoElemPin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
     // with. `NumBare` is a second `Elem = Number` module, ascribed to nothing: admission is
@@ -70,14 +70,14 @@ fn functor_with_two_pinned_slots_round_trips() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG Set = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
-         SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
+         SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     run(
         scope,
-        "FN (TWOPIN p :OrderedSig) -> :(Set WITH {Elt = Number, Ord = Number}) = \
+        "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
          (MODULE Generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     let f = lookup_fn(scope, "TWOPIN");
@@ -86,7 +86,7 @@ fn functor_with_two_pinned_slots_round_trips() {
         ReturnType::Resolved(KType::Signature {
             sig, pinned_slots, ..
         }) => {
-            assert_eq!(sig.path(), "Set");
+            assert_eq!(sig.path(), "OrderedSet");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
             assert_eq!(pinned_slots[0].1, KType::Number);
@@ -100,7 +100,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     }
 }
 
-/// FN-construction-time capture: a declared `(SetSig WITH {Elt = Number})`
+/// FN-construction-time capture: a declared `(Set WITH {Elt = Number})`
 /// return type lands on the FN's stored signature with `Elt` pinned to `Number`.
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
@@ -109,14 +109,14 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
+        "SIG Ordered = (VAL compare :Number)\n\
+         SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     run(
         scope,
-        "FN (MAKESETN p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
+        "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MAKESETN");
@@ -125,7 +125,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         ReturnType::Resolved(KType::Signature {
             sig, pinned_slots, ..
         }) => {
-            assert_eq!(sig.path(), "SetSig");
+            assert_eq!(sig.path(), "Set");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
@@ -136,7 +136,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 }
 
 /// Return-type admissibility rejects a body whose module fails the `Signature { .. }`
-/// constraint check — here the body module bare-satisfies `SetSig` but its `Elt = Str`
+/// constraint check — here the body module bare-satisfies `Set` but its `Elt = Str`
 /// disagrees with the `{Elt = Number}` pin, so `satisfies_pins` rejects it. The positive
 /// counterpart is `functor_return_with_matching_sharing_constraint_passes`.
 #[test]
@@ -146,14 +146,14 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
+        "SIG Ordered = (VAL compare :Number)\n\
+         SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     run(
         scope,
-        "FN (MAKEBAD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
+        "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut runtime = KoanRuntime::new();
@@ -171,7 +171,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
 
 /// Return-type admissibility passes an unascribed body module that structurally satisfies the
 /// pinned return signature: the body binds `Elt = Number` and `insert`, so it bare-satisfies
-/// `SetSig` and its `Elt` manifest member agrees with the `{Elt = Number}` pin — no ascription
+/// `Set` and its `Elt` manifest member agrees with the `{Elt = Number}` pin — no ascription
 /// required. Counterpart to `functor_return_with_mismatched_sharing_constraint_errors`.
 #[test]
 fn functor_return_with_matching_sharing_constraint_passes() {
@@ -180,14 +180,14 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG SetSig = ((TYPE Elt) (VAL insert :Number))\n\
+        "SIG Ordered = (VAL compare :Number)\n\
+         SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     run(
         scope,
-        "FN (MAKEGOOD p :OrderedSig) -> :(SetSig WITH {Elt = Number}) = \
+        "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let mut runtime = KoanRuntime::new();
@@ -199,7 +199,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     assert!(
         res.is_ok(),
         "MAKEGOOD must pass return-type check — the unascribed body module structurally \
-         satisfies `SetSig WITH {{Elt = Number}}`, got Err({:?})",
+         satisfies `Set WITH {{Elt = Number}}`, got Err({:?})",
         res.err(),
     );
 }
@@ -219,16 +219,16 @@ fn transparent_view_pin_agreement_reads_source_types() {
         scope,
         "MODULE NumMod = ((LET Elem = Number) (LET compare = 0))\n\
          MODULE StrMod = ((LET Elem = Str) (LET compare = 0))\n\
-         SIG OrderedSig = ((TYPE Elem) (VAL compare :Number))\n\
-         LET NumView = (NumMod :! OrderedSig)\n\
-         LET StrView = (StrMod :! OrderedSig)",
+         SIG Ordered = ((TYPE Elem) (VAL compare :Number))\n\
+         LET NumView = (NumMod :! Ordered)\n\
+         LET StrView = (StrMod :! Ordered)",
     );
-    let sig = match scope.resolve_type("OrderedSig") {
+    let sig = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
             sig: SigSource::Declared(sig),
             ..
         }) => *sig,
-        _ => panic!("OrderedSig must bind a Signature KType"),
+        _ => panic!("Ordered must bind a Signature KType"),
     };
     let slot = KType::signature(
         SigSource::Declared(sig),
@@ -259,15 +259,15 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     run(
         scope,
         "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
-         SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
-         LET View = (IntOrd :| OrderedSig)",
+         SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
+         LET View = (IntOrd :| Ordered)",
     );
-    let sig = match scope.resolve_type("OrderedSig") {
+    let sig = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
             sig: SigSource::Declared(sig),
             ..
         }) => *sig,
-        _ => panic!("OrderedSig must bind a Signature KType"),
+        _ => panic!("Ordered must bind a Signature KType"),
     };
     let view = lookup_module(scope, "View");
     let carrier_abstract = view

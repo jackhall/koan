@@ -98,16 +98,16 @@ fn mutually_satisfying_distinct_sigs_are_ambiguous() {
     memo_reset();
     run(
         scope,
-        "SIG SigOne = ((VAL x :Number))\n\
-         SIG SigTwo = ((VAL x :Number))",
+        "SIG Alpha = ((VAL x :Number))\n\
+         SIG Beta = ((VAL x :Number))",
     );
     run(
         scope,
-        "FN (CHOOSE m :SigOne) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (CHOOSE m :Alpha) -> Module = (MODULE Generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (CHOOSE m :SigTwo) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (CHOOSE m :Beta) -> Module = (MODULE Generated = (LET tag = 2))",
     );
     run(scope, "MODULE Impl = ((LET x = 1))");
     run(scope, "LET Arg = Impl");

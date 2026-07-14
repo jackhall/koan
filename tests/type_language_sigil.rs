@@ -94,8 +94,8 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
 #[test]
 fn sigil_list_of_lowers_to_list_carrier() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Sig = ((VAL items :(LIST OF Number)))");
-    let items_kt = lookup_sig_value_kt(scope, "Sig", "items");
+    let scope = run(&region, "SIG Holder = ((VAL items :(LIST OF Number)))");
+    let items_kt = lookup_sig_value_kt(scope, "Holder", "items");
     match items_kt {
         KType::List { element: elem, .. } => assert_eq!(*elem, KType::Number),
         other => panic!("items must be KType::List(Number), got {other:?}"),
@@ -121,8 +121,8 @@ fn sigil_list_of_missing_of_keyword_errors() {
 #[test]
 fn sigil_map_lowers_to_dict_carrier() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Sig = ((VAL table :(MAP Str -> Number)))");
-    let table_kt = lookup_sig_value_kt(scope, "Sig", "table");
+    let scope = run(&region, "SIG Holder = ((VAL table :(MAP Str -> Number)))");
+    let table_kt = lookup_sig_value_kt(scope, "Holder", "table");
     match table_kt {
         KType::Dict {
             key: k, value: v, ..
@@ -143,9 +143,9 @@ fn sigil_fn_lowers_to_kfunction_named() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG Sig = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
+        "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
-    let cmp = lookup_sig_value_kt(scope, "Sig", "compare");
+    let cmp = lookup_sig_value_kt(scope, "Holder", "compare");
     match cmp {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 2);
@@ -161,8 +161,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Sig = ((VAL gen :(FN () -> Number)))");
-    let gen = lookup_sig_value_kt(scope, "Sig", "gen");
+    let scope = run(&region, "SIG Holder = ((VAL gen :(FN () -> Number)))");
+    let gen = lookup_sig_value_kt(scope, "Holder", "gen");
     match gen {
         KType::KFunction { params, ret, .. } => {
             assert!(params.is_empty());
@@ -181,9 +181,9 @@ fn sigil_functor_lowers_to_kfunctor() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG Sig = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
+        "SIG Holder = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
     );
-    let mk = lookup_sig_value_kt(scope, "Sig", "mk");
+    let mk = lookup_sig_value_kt(scope, "Holder", "mk");
     match mk {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
@@ -276,27 +276,27 @@ fn union_field_accepts_keyworded_map_sigil() {
 /// later-sibling top-level SIG can't see the forward sibling at submission
 /// time, so the type-language sigil's resolver parks. Submission order:
 /// top-level SIG `Outer` (which contains the VAL), then top-level SIG
-/// `OrderedSig`. The VAL's sigiled FUNCTOR type annotation parks on
-/// `OrderedSig`'s producer and resumes via dep-finish.
+/// `Ordered`. The VAL's sigiled FUNCTOR type annotation parks on
+/// `Ordered`'s producer and resumes via dep-finish.
 #[test]
 fn sigil_functor_forward_reference_defers_via_combine() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG Outer = ((VAL mk :(FUNCTOR (Ty :OrderedSig) -> Module)))\n\
-         SIG OrderedSig = (VAL compare :Number)",
+        "SIG Outer = ((VAL mk :(FUNCTOR (Ty :Ordered) -> Module)))\n\
+         SIG Ordered = (VAL compare :Number)",
     );
     let mk = lookup_sig_value_kt(scope, "Outer", "mk");
     match mk {
         KType::KFunctor { params, ret, .. } => {
             assert_eq!(params.len(), 1);
-            // OrderedSig resolves to its `Signature { .. }` identity post-dep-finish.
-            // The carrier type's name (`OrderedSig`) is enough to confirm the
+            // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
+            // The carrier type's name (`Ordered`) is enough to confirm the
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                ty.name().contains("OrderedSig") || *ty == KType::OfKind(KKind::Signature),
-                "param `Ty` should carry OrderedSig identity, got {ty:?}",
+                ty.name().contains("Ordered") || *ty == KType::OfKind(KKind::Signature),
+                "param `Ty` should carry Ordered identity, got {ty:?}",
             );
             assert_eq!(*ret, KType::empty_signature());
         }
@@ -318,10 +318,10 @@ fn sigil_user_functor_application_through_dispatch() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! OrderedSig)\n\
-         FUNCTOR (MAKESET Er :OrderedSig) -> Module = \
+         LET IntOrd = (IntOrdBase :! Ordered)\n\
+         FUNCTOR (MAKESET Er :Ordered) -> Module = \
             (MODULE Generated = ((LET tag = 0)))\n\
          LET MySet = (MAKESET IntOrd)",
     );

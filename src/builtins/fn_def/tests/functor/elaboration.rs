@@ -35,7 +35,7 @@ fn elaborator_lowers_ktype_value_binding() {
     }
 }
 
-/// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_identifier` into
+/// A parameter typed `Er :Ordered` lowers via `elaborate_type_identifier` into
 /// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
 /// declaring `ModuleSignature::sig_id()`. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.
@@ -46,13 +46,13 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         FN (USE_ORD Er :OrderedSig) -> Null = (PRINT \"ok\")",
+        "SIG Ordered = (VAL compare :Number)\n\
+         FN (USE_ORD Er :Ordered) -> Null = (PRINT \"ok\")",
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
-    let sig_id = match scope.resolve_type("OrderedSig") {
+    let sig_id = match scope.resolve_type("Ordered") {
         Some(KType::Signature { sig, .. }) => sig.sig_id(),
-        other => panic!("OrderedSig should be a Signature KType, got {:?}", other),
+        other => panic!("Ordered should be a Signature KType, got {:?}", other),
     };
     let f = lookup_fn(scope, "USE_ORD");
     match f.signature.elements.as_slice() {
@@ -68,11 +68,8 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                         sig_id,
                         "sig_id must match ModuleSignature::sig_id()"
                     );
-                    assert_eq!(sig.path(), "OrderedSig");
-                    assert!(
-                        pinned_slots.is_empty(),
-                        "bare OrderedSig has no pinned slots"
-                    );
+                    assert_eq!(sig.path(), "Ordered");
+                    assert!(pinned_slots.is_empty(), "bare Ordered has no pinned slots");
                 }
                 other => panic!("expected Signature, got {:?}", other),
             }

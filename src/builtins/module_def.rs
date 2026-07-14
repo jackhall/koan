@@ -174,7 +174,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "SIG OrderedSig = (VAL compare :Number)\n\
+            "SIG Ordered = (VAL compare :Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         // A parenthesized module expression evaluates to the Object-arm module value, so the list

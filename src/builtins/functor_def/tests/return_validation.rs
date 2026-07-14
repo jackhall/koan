@@ -52,11 +52,11 @@ fn functor_return_slot_dotted_type_member_rejects() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))",
+        "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
     );
     let err = run_one_err(
         scope,
-        parse_one("FUNCTOR (USE_TYPE Er :OrderedSig) -> Er.Type = (1)"),
+        parse_one("FUNCTOR (USE_TYPE Er :Ordered) -> Er.Type = (1)"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => assert!(

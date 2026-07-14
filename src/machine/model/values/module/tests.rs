@@ -35,7 +35,7 @@ fn signature_decl_scope_transmute_does_not_dangle() {
     let scope = default_scope(&region, Box::new(sink()));
     let sig = region
         .brand()
-        .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));
+        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
     let recovered = sig.decl_scope();
     assert!(ptr::eq(recovered, scope));
     let _other = region

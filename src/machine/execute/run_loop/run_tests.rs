@@ -247,9 +247,9 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
-        "LET AResult = (IntOrd :| OrderedSig)\n\
+        "LET AResult = (IntOrd :| Ordered)\n\
          MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)",
+         SIG Ordered = (VAL compare :Number)",
     ) {
         runtime.dispatch_in_scope(e, scope);
     }

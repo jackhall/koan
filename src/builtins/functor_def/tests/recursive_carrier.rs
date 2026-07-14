@@ -12,10 +12,10 @@ fn functor_return_slot_curried_functor_admits() {
     run(
         scope,
         // Inner FUNCTOR uses the builtin `:Signature` rather than the sibling
-        // `OrderedSig` to dodge forward resolution across sub-Dispatches.
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         FUNCTOR (CURRIED Er :OrderedSig) -> :(FUNCTOR (Ty :Signature) -> Module) = \
-            (FUNCTOR (INNER y :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1)))",
+        // `Ordered` to dodge forward resolution across sub-Dispatches.
+        "SIG Ordered = (VAL compare :Number)\n\
+         FUNCTOR (CURRIED Er :Ordered) -> :(FUNCTOR (Ty :Signature) -> Module) = \
+            (FUNCTOR (INNER y :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))",
     );
     let f = lookup_fn(scope, "CURRIED");
     assert!(

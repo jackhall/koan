@@ -349,13 +349,13 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
 
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "SIG MySig = ((TYPE Elt) (VAL v :Number))");
-    let s = match scope.resolve_type("MySig") {
+    run(scope, "SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
+    let s = match scope.resolve_type("Pinnable") {
         Some(KType::Signature {
             sig: SigSource::Declared(sig),
             ..
         }) => *sig,
-        _ => panic!("MySig should resolve to a signature"),
+        _ => panic!("Pinnable should resolve to a signature"),
     };
     // `S WITH {Elt = Number}` fixes the abstract member manifest.
     let pinned = SigSchema::of_sig(s, &[("Elt".to_string(), KType::Number)]);

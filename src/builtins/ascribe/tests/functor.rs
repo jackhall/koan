@@ -14,13 +14,13 @@ fn functor_returns_a_module() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
@@ -40,13 +40,13 @@ fn functor_body_reads_signature_typed_parameter() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
@@ -69,13 +69,13 @@ fn functor_application_is_generative() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET SetOne = (MAKESET (IntOrdA))");
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
@@ -91,7 +91,7 @@ fn functor_application_is_generative() {
 
 /// An unascribed module is admitted by a constraint-role `Signature { sig, .. }` slot iff its
 /// self-sig structurally satisfies the signature — no ascription required. `IntOrd = (LET
-/// compare = 7)` structurally satisfies `OrderedSig = (VAL compare :Number)`, so the call
+/// compare = 7)` structurally satisfies `Ordered = (VAL compare :Number)`, so the call
 /// succeeds and produces the generated module.
 #[test]
 fn functor_admits_unascribed_module_structurally() {
@@ -99,12 +99,12 @@ fn functor_admits_unascribed_module_structurally() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     // Type-classified binder so the auto-wrap pass triggers in the
     // `Signature { .. }` slot. The LET partition guard requires module carriers
@@ -128,7 +128,7 @@ fn functor_admits_unascribed_module_structurally() {
 }
 
 /// A module that does *not* structurally satisfy the slot's signature is a dispatch non-match:
-/// `NoCompare = (LET other = 1)` lacks the `compare` slot `OrderedSig` requires, so `MAKESET`
+/// `NoCompare = (LET other = 1)` lacks the `compare` slot `Ordered` requires, so `MAKESET`
 /// finds no admitting overload and the slot terminates in `DispatchFailed`.
 #[test]
 fn functor_rejects_structurally_unsatisfying_module() {
@@ -136,12 +136,12 @@ fn functor_rejects_structurally_unsatisfying_module() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE NoCompare = (LET other = 1)",
     );
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
     );
     run(scope, "LET Arg = NoCompare");
     let mut runtime = KoanRuntime::new();
@@ -159,30 +159,30 @@ fn functor_rejects_structurally_unsatisfying_module() {
 }
 
 /// Two functors share a keyword `MAKESET` but differ on parameter sig
-/// (`OrderedSig` vs `HashedSig`); dispatch routes by the argument's satisfied sig.
+/// (`Ordered` vs `Hashed`); dispatch routes by the argument's satisfied sig.
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         SIG HashedSig = (VAL hash :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
+         SIG Hashed = (VAL hash :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          MODULE IntHash = (LET hash = 11)",
     );
     run(
         scope,
-        "LET IntOrdA = (IntOrd :! OrderedSig)\n\
-         LET IntHashA = (IntHash :! HashedSig)",
+        "LET IntOrdA = (IntOrd :! Ordered)\n\
+         LET IntHashA = (IntHash :! Hashed)",
     );
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (MAKESET elem :HashedSig) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (MAKESET elem :Hashed) -> Module = (MODULE Generated = (LET tag = 2))",
     );
     run(scope, "LET OrdSet = (MAKESET (IntOrdA))");
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
@@ -203,12 +203,12 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
         .map(|(o, _, _)| *o);
     assert!(
         matches!(to, Some(KObject::Number(n)) if *n == 1.0),
-        "OrderedSig call should pick body with tag=1, got {:?}",
+        "Ordered call should pick body with tag=1, got {:?}",
         to.map(|o| o.ktype())
     );
     assert!(
         matches!(th, Some(KObject::Number(n)) if *n == 2.0),
-        "HashedSig call should pick body with tag=2, got {:?}",
+        "Hashed call should pick body with tag=2, got {:?}",
         th.map(|o| o.ktype())
     );
 }
@@ -221,13 +221,13 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntView = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntView = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntView)");
 
@@ -249,13 +249,13 @@ fn functor_argument_bare_type_token_auto_wraps() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :OrderedSig) -> Module = \
+        "FN (MAKESET elem :Ordered) -> Module = \
          (MODULE Generated = (LET sample = (elem.compare)))",
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
@@ -280,10 +280,10 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     register_arity1_constructor(scope, "Wrapper");
-    let src = "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
+    let src = "SIG Monad = ((TYPE (Type AS Wrap)))\n\
                MODULE IntList = ((LET Wrap = Wrapper))\n\
-               LET First = (IntList :| MonadSig)\n\
-               LET Second = (IntList :| MonadSig)";
+               LET First = (IntList :| Monad)\n\
+               LET Second = (IntList :| Monad)";
     let exprs = parse(src).expect("parse should succeed");
     let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
@@ -347,9 +347,9 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     // and the `KFunction → functions` mirror.
     run(
         scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
+        "SIG Ordered = (VAL compare :Number)\n\
          MODULE IntOrd = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\
-         LET Held = (IntOrd :| OrderedSig)",
+         LET Held = (IntOrd :| Ordered)",
     );
     let held = lookup_module(scope, "Held");
 
@@ -359,7 +359,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     for _ in 0..20 {
         run_one(scope, parse_one("CHURNCALL"));
     }
-    run(scope, "LET Held2 = (IntOrd :| OrderedSig)");
+    run(scope, "LET Held2 = (IntOrd :| Ordered)");
 
     let child = held.child_scope();
     let inner = child.bindings().data();

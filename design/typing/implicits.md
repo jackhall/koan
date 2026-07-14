@@ -21,12 +21,12 @@ module language itself.
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs :(LIST OF Mo.Type) {Mo: OrderedSig}) -> :(LIST OF Mo.Type) = (...))
+LET sort = (FN (SORT xs :(LIST OF Mo.Type) {Mo: Ordered}) -> :(LIST OF Mo.Type) = (...))
 ```
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
 searches in scope for a module satisfying
-`(OrderedSig WITH {Type = Number})`, and inserts it. Searching is
+`(Ordered WITH {Type = Number})`, and inserts it. Searching is
 **lexical**: the candidate set is the implicit modules defined in the current
 module plus those explicitly imported. Nothing leaks through transitive
 dependencies.
@@ -66,7 +66,7 @@ A signature can carry **axioms** — propositional contracts on its
 operations:
 
 ```
-SIG OrderedSig = (
+SIG Ordered = (
   (LET Type = ...)
   (VAL compare :(FN (x :Type, y :Type) -> Number))
   (VAL gen :(FN (r :Random) -> Type))

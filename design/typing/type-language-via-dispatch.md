@@ -17,7 +17,7 @@ their declared keyword skeletons.
 :(LIST OF Number)
 :(MAP Str -> Number)
 :(FN (x :Number, y :Str) -> Bool)
-:(FUNCTOR (T :SomeSig) -> Module)
+:(FUNCTOR (T :Ordered) -> Module)
 :(MyFunctor {T = IntOrd})
 :{x :Number, y :Str}
 ```
@@ -83,7 +83,7 @@ identifier.
 ## Functor-type sigil
 
 Symmetric with the function-type rule:
-`:(FUNCTOR (T :SomeSig) -> Module)`. Parameter names round-trip into
+`:(FUNCTOR (T :Ordered) -> Module)`. Parameter names round-trip into
 `KType::KFunctor { params, ret }`'s parameter `Record<KType>` the same
 way, and render back through `KType::name()`. FUNCTOR's capitalized
 `Type`-token parameter names (`Ty`, `Er`) are admitted by the
@@ -184,7 +184,7 @@ the fields.
 
 ## User-functor application
 
-`FUNCTOR MyFunctor (T :SomeSig) = ...` binds `MyFunctor` to a
+`FUNCTOR MyFunctor (T :Ordered) = ...` binds `MyFunctor` to a
 `KFunction` carrier under both the value-side name and the keyword
 skeleton declared at `FUNCTOR` time. Applying the functor at any
 surface — value-side `(MyFunctor {T = IntOrd})`, sigiled

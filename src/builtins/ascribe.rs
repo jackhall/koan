@@ -294,7 +294,7 @@ fn check_satisfies<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Slots are typed `Module` / `Signature`. Bare Type-token operands
-    // (`IntOrd :| OrderedSig`) ride the auto-wrap rails into a value-typed future, so
+    // (`IntOrd :| Ordered`) ride the auto-wrap rails into a value-typed future, so
     // no parallel Type-Type overload is required.
     let opaque_sig = sig(
         KType::empty_signature(),

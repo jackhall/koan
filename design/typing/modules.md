@@ -29,11 +29,11 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG OrderedSig = ((TYPE Type) (VAL compare :(FN (x :Type, y :Type) -> Number)))
+SIG Ordered = ((TYPE Type) (VAL compare :(FN (x :Type, y :Type) -> Number)))
 ```
 
 Module and signature names use the **Type-token** spelling: first character
-ASCII-uppercase plus at least one lowercase character (`IntOrd`, `OrderedSig`,
+ASCII-uppercase plus at least one lowercase character (`IntOrd`, `Ordered`,
 `MakeSet`). Abstract types declared inside a signature use the same shape —
 the convention is `Type` for the principal abstract type, with additional
 abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed.
@@ -72,8 +72,8 @@ only by a whitespace gap in the visual rendering, expressing "you can see
 through this":
 
 ```
-LET IntOrdView     = (IntOrd :! OrderedSig)   -- transparent
-LET IntOrdAbstract = (IntOrd :| OrderedSig)   -- opaque
+LET IntOrdView     = (IntOrd :! Ordered)   -- transparent
+LET IntOrdAbstract = (IntOrd :| Ordered)   -- opaque
 ```
 
 *Transparent ascription* (`:!`) checks that the structure satisfies the
@@ -203,7 +203,7 @@ binds it into `bindings.data` through
 [`Scope::bind_module`](../../src/machine/core/scope.rs) — a fused door that derives
 the module's stored reach off its child scope directly (never by walking the built
 value) and allocates the value under that same evidence. `LET View = (IntOrd :|
-OrderedSig)` binds a module RHS the same way: a module is a value, so it lands in
+Ordered)` binds a module RHS the same way: a module is a value, so it lands in
 `data` even under a Type-token name, and the `data` / `types` cross-kind exclusion
 keeps it out of `types`. A module-typed FN parameter binds value-side too, through
 the ordinary Object-arm parameter door. **No binding door installs a module into
@@ -212,7 +212,7 @@ the ordinary Object-arm parameter door. **No binding door installs a module into
 `SIG` declarations still bind **type-side**: finalize installs
 `KType::Signature { sig, pinned_slots }` into `bindings.types` via
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET S2 =
-OrderedSig` signature alias routes through `register_type` against that entry. A
+Ordered` signature alias routes through `register_type` against that entry. A
 signature identity rides the `Type` arm, surfaced from the type entry on demand by
 [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
 
@@ -283,13 +283,13 @@ every other module slot rather than a kind wildcard.
 
 The single `KType::Signature` variant serves both the constraint and the
 value role, disambiguated by **position** rather than by variant. A
-`Signature { .. }` *slot annotation* — `(PICK m :OrderedSig)` — matches a
+`Signature { .. }` *slot annotation* — `(PICK m :Ordered)` — matches a
 *module value* on the value channel's Object arm whose self-sig structurally
 satisfies `sig` (via [`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs)),
-so `:OrderedSig` means "any module satisfying OrderedSig." A signature *value* —
-`KType::Signature { .. }` in the `Type` arm, what `OrderedSig` evaluates to in
+so `:Ordered` means "any module satisfying Ordered." A signature *value* —
+`KType::Signature { .. }` in the `Type` arm, what `Ordered` evaluates to in
 expression position — is matched by the `:Signature` (`OfKind(Signature)`)
-wildcard. A slot typed `:OrderedSig` therefore never admits the signature
+wildcard. A slot typed `:Ordered` therefore never admits the signature
 value itself, and `:Signature` never admits a satisfying module.
 
 When a module satisfies two distinct SIG slots at once, dispatch orders them by
@@ -307,22 +307,22 @@ implements this, memoizing each direction under the `SigSatisfies` relation.
 Module-typed bindings reuse the existing ascription operators:
 
 ```
-LET m = (IntOrd :! OrderedSig)   -- transparent: m.Type ≡ Number
-LET m = (IntOrd :| OrderedSig)   -- opaque:      m.Type is fresh
+LET m = (IntOrd :! Ordered)   -- transparent: m.Type ≡ Number
+LET m = (IntOrd :| Ordered)   -- opaque:      m.Type is fresh
 ```
 
 `:!` and `:|` are the typing primitives. There is no third
-`LET m: OrderedSig = IntOrd` form — it would express only the transparent
+`LET m: Ordered = IntOrd` form — it would express only the transparent
 case and would be strictly less expressive than the operators that already
 exist.
 
 FN parameters and return types accept signature names directly. The
-constrained-signature case (`(OrderedSig WITH {Type = Number})`)
+constrained-signature case (`(Ordered WITH {Type = Number})`)
 uses the `WITH` builtin in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
 
 Signature-typed FN parameters plus first-class module values give
-**dictionary-style polymorphism** directly: `(FN sort (ord :OrderedSig, xs :List) ...)` accepts any module satisfying `OrderedSig` as a single
+**dictionary-style polymorphism** directly: `(FN sort (ord :Ordered, xs :List) ...)` accepts any module satisfying `Ordered` as a single
 passable value, and the dispatcher checks satisfaction at the call. The
 witness module is passed by hand at every call site; the call-site
 elision layer that drops the manual argument is described in

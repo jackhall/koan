@@ -4,7 +4,7 @@ The `Type` convention the module docs teach is rejected by the unshadowable-buil
 
 **Problem.** Every design doc that teaches the module surface names the principal abstract
 type member `Type` — [modules.md](../../design/typing/modules.md) (`MODULE IntOrd = ((LET
-Type = Number) …)`, `SIG OrderedSig = ((TYPE Type) …)`),
+Type = Number) …)`, `SIG Ordered = ((TYPE Type) …)`),
 [tokens.md](../../design/typing/tokens.md) ("the convention is `LET Type = ...` for the
 principal abstract type"), [functors.md](../../design/typing/functors.md), and
 [implicits.md](../../design/typing/implicits.md). Neither form runs. `Type` is a builtin

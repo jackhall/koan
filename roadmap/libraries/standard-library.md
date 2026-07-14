@@ -70,7 +70,7 @@ Canonical signatures use the `VAL` declarator
 for value slots. An `ORDERED` signature reads
 
 ```
-SIG OrderedSig = (
+SIG Ordered = (
   (LET Type = Number)
   (VAL compare :(FN (Type, Type) -> Number))
 )
@@ -79,7 +79,7 @@ SIG OrderedSig = (
 and a `SET` functor's signature reads
 
 ```
-SIG SetSig = (
+SIG Set = (
   (LET Elt = Number)
   (VAL empty :Type)
   (VAL insert :(FN (Type, Elt) -> Type))

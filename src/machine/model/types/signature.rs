@@ -56,7 +56,7 @@ pub struct ExpressionSignature<'a> {
 }
 
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
-/// in return-type position (`FN (LIFT Er: OrderedSig) -> Er = ...`); `Deferred` holds the
+/// in return-type position (`FN (LIFT Er: Ordered) -> Er = ...`); `Deferred` holds the
 /// captured surface form for per-call re-elaboration against the per-call scope where the
 /// parameter's type-language identity is registered. See
 /// [functors.md](../../../../design/typing/functors.md).

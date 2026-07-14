@@ -44,9 +44,9 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
         scope,
         "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
-         SIG OrderedSig = ((TYPE Elem) (VAL zero :Elem) \
+         SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
-         LET View = (IntOrd :| OrderedSig)",
+         LET View = (IntOrd :| Ordered)",
     );
     let view = module_named(scope, "View");
     let sig = view.self_sig();
@@ -83,9 +83,9 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
         scope,
         "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
-         SIG OrderedSig = ((TYPE Elem) (VAL zero :Elem) \
+         SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
-         LET View = (IntOrd :! OrderedSig)",
+         LET View = (IntOrd :! Ordered)",
     );
     let view = module_named(scope, "View");
     let sig = view.self_sig();
@@ -110,9 +110,9 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
     run(
         scope,
         "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0))\n\
-         SIG ElemSig = ((TYPE Elem) (VAL zero :Elem))\n\
-         LET First = (IntOrd :| ElemSig)\n\
-         LET Second = (IntOrd :| ElemSig)",
+         SIG Pointed = ((TYPE Elem) (VAL zero :Elem))\n\
+         LET First = (IntOrd :| Pointed)\n\
+         LET Second = (IntOrd :| Pointed)",
     );
     let first = module_named(scope, "First");
     let second = module_named(scope, "Second");
@@ -131,13 +131,13 @@ fn value_slot_type_mismatch_is_rejected() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG NumSig = ((VAL v :Number))\n\
+        "SIG Numeric = ((VAL v :Number))\n\
          MODULE StrMod = ((LET v = (\"hi\")))",
     );
-    let err = run_one_err(scope, parse_one("StrMod :| NumSig"));
+    let err = run_one_err(scope, parse_one("StrMod :| Numeric"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("NumSig") && msg.contains("`v`") && msg.contains("has type")),
+            if msg.contains("Numeric") && msg.contains("`v`") && msg.contains("has type")),
         "expected a value-slot type error naming `v`, got {err}",
     );
 }
@@ -149,10 +149,10 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
     // A proper type cannot fill a `TYPE (Type AS Wrap)` arity-1 slot.
     run(
         scope,
-        "SIG MonadSig = ((TYPE (Type AS Wrap)))\n\
+        "SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE IntList = ((LET Wrap = Number))",
     );
-    let err = run_one_err(scope, parse_one("IntList :| MonadSig"));
+    let err = run_one_err(scope, parse_one("IntList :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("1 parameter")),
@@ -171,10 +171,10 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
     memo_reset();
     run(
         scope,
-        "SIG FullSig = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
+        "SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
          MODULE Impl = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
-         LET FirstView = (Impl :| FullSig)\n\
-         LET SecondView = (Impl :| FullSig)",
+         LET FirstView = (Impl :| Complete)\n\
+         LET SecondView = (Impl :| Complete)",
     );
     assert!(binds_module(scope, "FirstView"));
     assert!(binds_module(scope, "SecondView"));
@@ -191,10 +191,10 @@ fn manifest_member_mismatch_names_the_member() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "SIG TagSig = ((LET Tag = Number) (VAL item :Number))\n\
+        "SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          MODULE Bad = ((LET Tag = Str) (LET item = 5))",
     );
-    let err = run_one_err(scope, parse_one("Bad :| TagSig"));
+    let err = run_one_err(scope, parse_one("Bad :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),

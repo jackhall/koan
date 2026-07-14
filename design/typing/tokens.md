@@ -10,7 +10,7 @@ three classes:
   `K`) and uppercase-plus-digits shapes (`K9`, `AB1`) as syntactic territory
   rather than letting them silently classify as identifiers — see below.
 - **Type** — uppercase-leading with at least one lowercase letter elsewhere
-  (`Number`, `Str`, `KFunction`, `MyType`, `IntOrd`, `OrderedSig`). Type
+  (`Number`, `Str`, `KFunction`, `MyType`, `IntOrd`, `Ordered`). Type
   references, module names, and signature names all share this class.
 - **Identifier** — lowercase-leading or `_`-leading names (`compare`,
   `my_var`, `_internal`).
@@ -27,7 +27,7 @@ shadowing a one-letter type-position identifier.
 
 The [module system](modules.md) reuses the Type class without adding
 a fourth: module names (`IntOrd`, `MakeSet`) and signature names
-(`OrderedSig`, `ShowableSig`) classify the same way as host type names. The
+(`Ordered`, `Showable`) classify the same way as host type names. The
 discrimination between "host type", "module", and "signature" happens at
 scope resolution, not at lex time — a `.`-compound on a module-class token
 resolves to module member access the same way a `.`-compound on a struct

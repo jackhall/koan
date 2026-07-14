@@ -215,9 +215,9 @@ Every type-language alias — struct / union / Result, signature *and*
 bound functor — routes through `register_type` (type-only): the schema,
 `&Signature`, or callable rides the `KType` identity, so a plain
 `types` write preserves dispatch identity without a value-side copy. A
-`LET S2 = OrderedSig` signature alias therefore dispatches identically to the
+`LET S2 = Ordered` signature alias therefore dispatches identically to the
 original, with no separate nominal-install path. A module RHS is the exception:
-`LET View = (IntOrd :| OrderedSig)` binds the module **value** into `data` under
+`LET View = (IntOrd :| Ordered)` binds the module **value** into `data` under
 its Type-classed name, so nothing lands in `types` for it.
 
 The partition is one-way and total against type-language carriers. A

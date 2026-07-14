@@ -16,8 +16,8 @@ fn transparent_ascription_returns_module() {
     run(
         scope,
         "MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)\n\
-         LET IntOrdView = (IntOrd :! OrderedSig)",
+         SIG Ordered = (VAL compare :Number)\n\
+         LET IntOrdView = (IntOrd :! Ordered)",
     );
     // A view is a module value: `LET` binds it on the value channel (`bindings.data`).
     assert!(binds_module(scope, "IntOrdView"));
@@ -30,13 +30,13 @@ fn ascription_missing_member_errors() {
     run(
         scope,
         "MODULE Empty = (LET unrelated = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)",
+         SIG Ordered = (VAL compare :Number)",
     );
-    let err = run_one_err(scope, parse_one("Empty :| OrderedSig"));
+    let err = run_one_err(scope, parse_one("Empty :| Ordered"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("OrderedSig") && msg.contains("`compare`")),
-        "expected ShapeError naming OrderedSig and the missing member, got {err}",
+            if msg.contains("Ordered") && msg.contains("`compare`")),
+        "expected ShapeError naming Ordered and the missing member, got {err}",
     );
 }
 
@@ -45,9 +45,9 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     let src = "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
-         SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
-         LET FirstAbstract = (IntOrd :| OrderedSig)\n\
-         LET SecondAbstract = (IntOrd :| OrderedSig)";
+         SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
+         LET FirstAbstract = (IntOrd :| Ordered)\n\
+         LET SecondAbstract = (IntOrd :| Ordered)";
     let exprs = parse(src).expect("parse should succeed");
     let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
@@ -87,8 +87,8 @@ fn transparent_ascription_does_not_mint_module_types() {
     run(
         scope,
         "MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)\n\
-         LET ViewMod = (IntOrd :! OrderedSig)",
+         SIG Ordered = (VAL compare :Number)\n\
+         LET ViewMod = (IntOrd :! Ordered)",
     );
     let v = lookup_module(scope, "ViewMod");
     assert!(v.type_members.borrow().is_empty());
@@ -102,8 +102,8 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     run(
         scope,
         "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         SIG OrderedSig = ((TYPE Carrier) (VAL compare :Number))\n\
-         LET IntOrdAbstract = (IntOrd :| OrderedSig)",
+         SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
+         LET IntOrdAbstract = (IntOrd :| Ordered)",
     );
 
     let abstract_mod = lookup_module(scope, "IntOrdAbstract");
@@ -142,8 +142,8 @@ fn opaque_view_reads_manifest_type_member_concretely() {
     run(
         scope,
         "MODULE Impl = ((LET Tag = Number) (LET item = 5))\n\
-         SIG TagSig = ((LET Tag = Number) (VAL item :Number))\n\
-         LET View = (Impl :| TagSig)",
+         SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
+         LET View = (Impl :| Tagged)",
     );
     let view = lookup_module(scope, "View");
     let tag = view.type_members.borrow().get("Tag").cloned();
@@ -165,8 +165,8 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
     run(
         scope,
         "MODULE Impl = ((LET Tag = Number) (LET x = 3))\n\
-         SIG TagSig = ((LET Tag = Number) (VAL x :Tag))\n\
-         LET View = (Impl :| TagSig)",
+         SIG Tagged = ((LET Tag = Number) (VAL x :Tag))\n\
+         LET View = (Impl :| Tagged)",
     );
     let view = lookup_module(scope, "View");
     assert!(
@@ -227,12 +227,12 @@ fn manifest_type_member_mismatch_rejected() {
     run(
         scope,
         "MODULE Impl = ((LET Tag = Str) (LET item = 0))\n\
-         SIG TagSig = ((LET Tag = Number) (VAL item :Number))",
+         SIG Tagged = ((LET Tag = Number) (VAL item :Number))",
     );
-    let err = run_one_err(scope, parse_one("Impl :| TagSig"));
+    let err = run_one_err(scope, parse_one("Impl :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("TagSig")
+            if msg.contains("Tagged")
                 && msg.contains("type member `Tag`")
                 && msg.contains("fixes it to")),
         "expected the manifest fixes-it-to error, got {err}",
@@ -248,8 +248,8 @@ fn manifest_type_member_match_accepted() {
     run(
         scope,
         "MODULE Impl = ((LET Tag = Number) (LET item = 0))\n\
-         SIG TagSig = ((LET Tag = Number) (VAL item :Number))\n\
-         LET View = (Impl :| TagSig)",
+         SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
+         LET View = (Impl :| Tagged)",
     );
     assert!(
         binds_module(scope, "View"),
