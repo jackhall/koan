@@ -60,10 +60,11 @@ pub struct Resolved<'step> {
     /// The forward-reference name a binder declares, with the language it binds in, so the
     /// dispatch driver installs a kind-tagged placeholder. `None` for a non-binder pick.
     pub placeholder: Option<(String, BindKind)>,
-    /// `Some(_)` only for binder builtins whose body registers a callable
-    /// function (`FN`): holds the inner-call bucket key so a sibling
-    /// bare-arg call to the to-be-registered overload parks on this slot.
-    pub pending_overload_bucket: Option<crate::machine::model::types::UntypedKey>,
+    /// Non-empty only for binder builtins whose body registers a callable
+    /// function (`FN`, `OP`): holds the inner-call bucket key of every overload the
+    /// body will register, so a sibling call form parks on this slot rather than
+    /// failing dispatch.
+    pub pending_overload_buckets: Vec<crate::machine::model::types::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
 
@@ -499,7 +500,10 @@ fn build_resolved<'step, 'e>(
         placeholder: picked
             .binder_name
             .and_then(|(extractor, kind)| extractor(expr).map(|name| (name, kind))),
-        pending_overload_bucket: picked.binder_bucket.and_then(|extractor| extractor(expr)),
+        pending_overload_buckets: picked
+            .binder_bucket
+            .and_then(|extractor| extractor(expr))
+            .unwrap_or_default(),
         slots: picked.classify_for_pick(expr),
     }
 }

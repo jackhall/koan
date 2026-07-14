@@ -703,6 +703,42 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// The `OP` door onto the `functions` bucket: [`Self::register_function`] without the
+    /// builtin-shadowing guard, so a user module may declare an operator the root already
+    /// declares (`OP #(+) OVER :(LIST OF Number)`). Shadowing an operator is **type-gated**, not
+    /// free: dispatch consults the immutable root bucket first, so the builtin `+` still wins
+    /// for the operand types it declares and only other operand types reach the module's body.
+    /// Ordinary user `FN`s keep the guard — this door is reachable only from `OP`.
+    ///
+    /// Bare-`FN` style: the overload lands in `functions` only, never in `data`. Exact-signature
+    /// collisions still surface as `DuplicateOverload`, and the same conditional-defer shape
+    /// applies.
+    pub fn register_operator_function(
+        &self,
+        name: String,
+        fn_ref: &'a KFunction<'a>,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        if self.bindings.is_borrowed() {
+            return self
+                .write_target()
+                .register_operator_function(name, fn_ref, obj, index);
+        }
+        self.assert_open(&name);
+        match self
+            .bindings
+            .get()
+            .try_register_function(&name, fn_ref, obj, index)?
+        {
+            ApplyOutcome::Applied => Ok(()),
+            ApplyOutcome::Conflict => {
+                self.pending.defer_function(name, fn_ref, obj, index);
+                Ok(())
+            }
+        }
+    }
+
     /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as an
     /// region-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
     /// conditional-defer shape as [`Self::bind_value`]. Infallible: a name collision

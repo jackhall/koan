@@ -179,3 +179,18 @@ fn pairwise_unbound_name_combiner_errors_at_the_use_site() {
         "an unbound combiner must surface as an ordinary use-site name error; got: {message}",
     );
 }
+
+/// A fold-left run over *named* operands. The rewrite nests the run into `[(a ⊙ b), ⊙, c]`, whose
+/// trailing bare name shares the expression with an eager sub-expression: no candidate strict-picks
+/// against an unevaluated operand, so the pick — and with it the bare name's splice — happens on the
+/// post-eager-subs re-resolve (`keyworded::finish`).
+#[test]
+fn fold_left_run_over_named_operands_resolves_the_trailing_name() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, "LET x = 1\nLET y = 2\nLET z = 4");
+    assert!(
+        matches!(run_one(scope, parse_one("x + y + z")), KObject::Number(n) if *n == 7.0),
+        "every operand of a named run reaches its binding",
+    );
+}

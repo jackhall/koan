@@ -151,17 +151,19 @@ pub(crate) fn body_statement_refs<'ast>(
 pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 
 /// Dispatch-time bucket-key extractor for a binder that registers a callable
-/// (`FN`). Returns the `UntypedKey` for a *call* to the to-be-registered
-/// overload (e.g. `(MAKESET er :Ordered)` → `[Keyword("MAKESET"), Slot]`); the
-/// driver installs it in `bindings.pending_overloads` so a sibling call form parks
-/// on the producer instead of failing dispatch.
+/// (`FN`, `OP`). Returns every `UntypedKey` a *call* to the to-be-registered
+/// overloads would compute (e.g. `(MAKESET er :Ordered)` → one key
+/// `[Keyword("MAKESET"), Slot]`; a `UNARY OP` → both the keyword-first list key
+/// `[Keyword(sym), Slot]` and the binary bridge key `[Slot, Keyword(sym), Slot]`);
+/// the driver installs each in `bindings.pending_overloads` so a sibling call form
+/// parks on the producer instead of failing dispatch.
 ///
 /// Separate from [`BinderNameFn`] because the two key different resolvers:
 /// `BinderNameFn` for `Scope::resolve`, `BinderBucketFn` for the no-bucket fallback
 /// in `resolve_dispatch`. Keying on the full bucket (not just the lead keyword)
 /// keeps overloads sharing a head keyword but differing in later keywords
 /// (`MAKESET _` vs `MAKESET _ USING _`) from colliding on the park edge.
-pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
+pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<Vec<UntypedKey>>;
 
 /// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
 /// error-frame attribution walk into the captured expression.

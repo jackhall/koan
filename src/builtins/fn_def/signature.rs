@@ -190,10 +190,11 @@ pub(crate) fn parse_fn_param_list<'a>(
 ///
 /// Unknown shapes advance silently — the body's full parse surfaces `ShapeError` on
 /// real malformations, so we err toward producing the bucket key for well-formed
-/// signatures. Returns `None` only when the signature slot itself is missing.
+/// signatures. An FN registers exactly one overload, so the returned vector holds one key.
+/// Returns `None` only when the signature slot itself is missing.
 pub(crate) fn binder_bucket(
     expr: &KExpression<'_>,
-) -> Option<crate::machine::model::types::UntypedKey> {
+) -> Option<Vec<crate::machine::model::types::UntypedKey>> {
     use crate::machine::model::types::UntypedElement;
     let signature_expr = signature_expr_part(expr)?;
     let parts = &signature_expr.parts;
@@ -246,7 +247,7 @@ pub(crate) fn binder_bucket(
             }
         }
     }
-    Some(key)
+    Some(vec![key])
 }
 
 fn signature_expr_part<'a, 'b>(expr: &'b KExpression<'a>) -> Option<&'b KExpression<'a>> {

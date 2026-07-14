@@ -27,10 +27,11 @@ struct BinderInstall {
     eager_slot_mask: Vec<bool>,
 }
 
-/// The two install channels a binder may use, mutually exclusive per binder.
+/// The two install channels a binder may use, mutually exclusive per binder. `Bucket` carries
+/// every key the binder's body registers an overload under — a `UNARY OP` declares two.
 enum BinderKey {
     Name(String, BindKind),
-    Bucket(UntypedKey),
+    Bucket(Vec<UntypedKey>),
 }
 
 /// Find the binder overload (if any) the dispatching scope's chain declares for `expr`, and the
@@ -58,7 +59,7 @@ fn extract_binder_install<'ast, 'step>(
             } else {
                 f.binder_bucket
                     .and_then(|extractor| extractor(expr))
-                    .map(|bucket| (*f, BinderKey::Bucket(bucket)))
+                    .map(|buckets| (*f, BinderKey::Bucket(buckets)))
             }
         });
         let Some((picked_fn, install_key)) = picked else {
@@ -155,8 +156,10 @@ impl<'run> KoanRuntime<'run> {
                 BinderKey::Name(name, kind) => {
                     let _ = scope.install_placeholder(name, id, bind_index, kind);
                 }
-                BinderKey::Bucket(bucket) => {
-                    let _ = scope.install_pending_overload(bucket, id, bind_index);
+                BinderKey::Bucket(buckets) => {
+                    for bucket in buckets {
+                        let _ = scope.install_pending_overload(bucket, id, bind_index);
+                    }
                 }
             }
         }

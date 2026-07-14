@@ -54,30 +54,44 @@ pub(crate) enum ReturnTypeCapture<'a> {
 
 /// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
 pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTypeRaw<'a>, KError> {
+    extract_type_slot_raw(args, "return_type", "FN return-type slot")
+}
+
+/// Read any type-denoting slot from a `BodyCtx::args` record into a [`ReturnTypeRaw`]. The two
+/// carriers a type slot arrives on: a `ProperType` cell (`Number`, or an `Unresolved` name a
+/// scope walk still has to resolve) and a raw `:(…)` sigil expression that sub-dispatches to its
+/// type. `slot` names the args field; `label` names the surface in the shape error. Shared by
+/// `FN`'s return slot and `OP`'s operand / return slots.
+pub(crate) fn extract_type_slot_raw<'a>(
+    args: &KObject<'a>,
+    slot: &str,
+    label: &str,
+) -> Result<ReturnTypeRaw<'a>, KError> {
     use crate::machine::core::kfunction::action::{arg_object, arg_type};
-    if let Some(kt) = arg_type(args, "return_type") {
+    if let Some(kt) = arg_type(args, slot) {
         match kt {
             KType::Unresolved(te) => Ok(ReturnTypeRaw::TypeExprCarrier(te.clone())),
             t => Ok(ReturnTypeRaw::Resolved(t.clone())),
         }
-    } else if let Some(KObject::KExpression(e)) = arg_object(args, "return_type") {
+    } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
         Ok(ReturnTypeRaw::ExprCarrier(e.clone()))
     } else {
-        Err(KError::new(KErrorKind::ShapeError(
-            "FN return-type slot must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
-                .to_string(),
-        )))
+        Err(KError::new(KErrorKind::ShapeError(format!(
+            "{label} must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
+        ))))
     }
 }
 
-/// Classify the return-type carrier. The parameter-name scan runs first so a match
+/// Classify a type-slot carrier. The parameter-name scan runs first so a match
 /// short-circuits eager elaboration and the carrier survives verbatim to the dispatch
-/// boundary.
+/// boundary. `label` names the slot in the unbound-name error; `param_names` is empty for a
+/// slot no parameter can reference (`OP`'s operand / return), which never classifies `Deferred`.
 pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
+    label: &str,
 ) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
         ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
@@ -92,9 +106,7 @@ pub(crate) fn classify_return_type<'a>(
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
                 // `Unbound` here is neither a type binder nor a builtin — a hard miss.
-                TypeResolution::Unbound(detail) => {
-                    Err(unbound_error("FN return-type slot", &detail))
-                }
+                TypeResolution::Unbound(detail) => Err(unbound_error(label, &detail)),
             }
         }
         ReturnTypeRaw::ExprCarrier(e) => {

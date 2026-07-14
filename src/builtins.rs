@@ -20,6 +20,7 @@ mod match_case;
 mod module_def;
 pub(crate) mod newtype_def;
 mod nominal_schema;
+mod op_def;
 mod parameterized_types;
 mod print;
 mod record_projection;
@@ -224,6 +225,7 @@ pub fn default_scope<'a>(
     type_ops::register(scope);
     parameterized_types::register(scope);
     type_union::register(scope);
+    op_def::register(scope);
     arithmetic::register(scope);
     arithmetic::register_builtin_operator_groups(scope);
 

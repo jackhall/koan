@@ -19,6 +19,7 @@ digraph {
     "koan::builtins::module_def" [label="koan::builtins::module_def"];
     "koan::builtins::newtype_def" [label="koan::builtins::newtype_def"];
     "koan::builtins::nominal_schema" [label="koan::builtins::nominal_schema"];
+    "koan::builtins::op_def" [label="koan::builtins::op_def"];
     "koan::builtins::parameterized_types" [label="koan::builtins::parameterized_types"];
     "koan::builtins::parameterized_types::action_bodies" [label="koan::builtins::parameterized_types::action_bodies"];
     "koan::builtins::print" [label="koan::builtins::print"];
@@ -138,6 +139,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::module_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::newtype_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::nominal_schema" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::op_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::parameterized_types" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::print" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::record_projection" [label="owns", style="solid"];
@@ -379,6 +381,21 @@ digraph {
     "koan::builtins::nominal_schema" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::nominal_schema" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::builtins::fn_def::return_type" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::execute" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::operators" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::builtins::op_def" -> "koan::source" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::parameterized_types" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -754,6 +771,7 @@ digraph {
     "koan::machine::execute::dispatch::literal" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::literal" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::operator_chain" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
@@ -761,6 +779,7 @@ digraph {
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model::operators" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::operator_chain" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::operator_chain" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::core" [label="uses", style="dashed"];
