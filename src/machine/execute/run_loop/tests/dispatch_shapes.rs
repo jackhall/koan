@@ -827,51 +827,58 @@ fn operator_chain_undeclared_errors_cleanly() {
     );
 }
 
-/// A fixture-registered `FoldRight` group resolves the chain's probe and reduces the run
-/// right-associated, observably distinct from `FoldLeft`'s `10 - 3 - 2` = 5: right-association
-/// gives `10 - (3 - 2)` = `10 - 1` = 9.
+/// A `FoldRight` group registered in an inner scope over `-` — a symbol the run-global root
+/// already seeds into the builtin additive `FoldLeft` group — reduces that scope's runs
+/// right-associated, while the root's default still reduces runs written outside it. This is the
+/// registry's innermost-wins walk end to end
+/// ([`crate::machine::core::Scope::resolve_operator_group_with_chain`]): the builtin groups are
+/// found last, so a declaring scope overrides them. The two associations are observably distinct:
+/// `10 - 3 - 2` is `(10 - 3) - 2` = 5 folded left and `10 - (3 - 2)` = 9 folded right.
 ///
-/// This fixture cannot ride
-/// `default_scope`: `default_scope`'s root seeds `-` into the builtin additive `FoldLeft` group,
-/// and [`crate::machine::core::Scope::resolve_operator_group_with_chain`] resolves
-/// builtin-first — a probe the run-global root has already claimed as a builtin operator
-/// always resolves to the root's own group, so a same-probe registration on any
-/// `default_scope`-derived scope (however it's indexed) is dead on arrival. Instead this test
-/// builds its own bare root ([`crate::builtins::test_support::run_root_bare`]) and calls
-/// [`crate::builtins::arithmetic::register`] directly — the same `-` body Phase 2 wires into
-/// `default_scope` — without the group-seeding step, so `-` reaches this scope's dispatch bucket
-/// but is not yet a builtin-claimed operator probe; registering the fixture group here at
-/// `BindingIndex::BUILTIN` is then the *only* claim on `-`, and resolution hits it.
+/// Both runs dispatch through the same builtin `-` body — the registry decides the *shape* of the
+/// reduction, not which body runs.
 #[test]
-fn operator_chain_registered_group_folds_right() {
-    use crate::builtins::arithmetic;
-    use crate::builtins::test_support::run_root_bare;
+fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use crate::machine::model::operators::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
 
     let region = run_root_storage();
-    let scope = run_root_bare(&region);
-    arithmetic::register(scope);
+    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let inner = scope.brand().alloc_scope(scope.child_for_call());
 
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
     let group = scope
         .brand()
         .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldRight));
-    scope
-        .register_operator_group("-".to_string(), group, BindingIndex::BUILTIN)
-        .expect("register operator group");
+    inner
+        .register_operator_group("-".to_string(), group, BindingIndex::value(0))
+        .expect("an inner scope may register a builtin operator's probe");
 
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
-    runtime
+    // One runtime per scope: a run adopts one root scope in its run frame.
+    let mut inner_runtime = KoanRuntime::new();
+    let inner_id = inner_runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), inner);
+    inner_runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let result = runtime
-        .read_result_with(id, |v| v.summarize())
+    let inner_result = inner_runtime
+        .read_result_with(inner_id, |v| v.summarize())
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
-        result, "9",
-        "10 - 3 - 2 must fold right to 9 (10 - (3 - 2)); got {result}"
+        inner_result, "9",
+        "inside the declaring scope, 10 - 3 - 2 folds right to 9 (10 - (3 - 2)); got {inner_result}"
+    );
+
+    let mut root_runtime = KoanRuntime::new();
+    let root_id = root_runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
+    root_runtime
+        .execute()
+        .expect("scheduler drains without deadlock");
+    let root_result = root_runtime
+        .read_result_with(root_id, |v| v.summarize())
+        .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
+    assert_eq!(
+        root_result, "5",
+        "outside it, the root's fold-left default stands: (10 - 3) - 2 = 5; got {root_result}"
     );
 }
 

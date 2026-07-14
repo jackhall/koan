@@ -132,7 +132,8 @@ fn additive_multiplicative_mix_is_registry_miss() {
 // registration, only `default_scope`'s own `register_builtin_operator_groups` seeding.
 // =====================================================================
 
-/// `1 < 2 < 3` — the comparison group is seeded `Pairwise { combiner: "AND" }`, so the chain
+/// `1 < 2 < 3` — the comparison group is seeded `Pairwise` with the `AND` keyword combiner
+/// folded left, so the chain
 /// stages `1`, `2`, and `3` as three independent dispatches, splices `2`'s resolved cell into
 /// both the `1 < 2` and `2 < 3` pairs, and folds the two Bool results through `AND`.
 #[test]

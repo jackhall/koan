@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
 use crate::machine::core::BindingIndex;
-use crate::machine::model::operators::{probe_key, OperatorGroup, ReductionMode};
+use crate::machine::model::operators::{Combiner, FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -188,39 +188,18 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and);
 }
 
-/// Registers `group` under every nonempty subset of `members` — the powerset-key story
-/// [`OperatorGroup`]'s module doc describes. `members.len()` stays small (≤4 for the builtin
-/// seeds below), so the `2^n - 1` bitmask walk over subsets is cheap; each subset's key is
-/// derived through [`probe_key`] rather than hand-enumerated, so a registration key always
-/// agrees with a real chain's probe.
-fn register_group_under_all_subsets<'a>(
-    scope: &'a Scope<'a>,
-    members: &[&str],
-    group: &'a OperatorGroup,
-) {
-    let subset_count = 1usize << members.len();
-    for mask in 1..subset_count {
-        let subset: Vec<&str> = members
-            .iter()
-            .enumerate()
-            .filter(|(bit, _)| mask & (1 << bit) != 0)
-            .map(|(_, op)| *op)
-            .collect();
-        let key = probe_key(&subset);
-        scope
-            .register_operator_group(key, group, BindingIndex::BUILTIN)
-            .expect("builtin operator-group seeding must not collide");
-    }
-}
-
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
 /// `AND`), additive (`+ -`, fold-left), and multiplicative (`* /`, fold-left). Each group is
-/// allocated once and registered under every nonempty subset of its member set, so any chain
-/// probe drawn from that set resolves to the same shared record.
+/// allocated once and registered — through [`Scope::register_group_under_all_subsets`] — under
+/// every nonempty subset of its member set, so any chain probe drawn from that set resolves to
+/// the same shared record.
+///
+/// These seeds land in the run-global root, which the innermost-wins registry walk reaches last:
+/// they are the defaults a declaring scope may override, not unshadowable claims on the symbols.
 ///
 /// A comparison chain (`1 < 2 < 3`, `1 <= x < 10`) resolves to this group and reduces through the
 /// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
-/// own operator's body above, and the pair results fold left through `AND`.
+/// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
 pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
     let region = scope.brand();
 
@@ -230,10 +209,11 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
     let comparison_group = region.alloc_operator_group(OperatorGroup::new(
         comparison_members,
         ReductionMode::Pairwise {
-            combiner: "AND".to_string(),
+            combiner: Combiner::Keyword("AND".to_string()),
+            direction: FoldDirection::Left,
         },
     ));
-    register_group_under_all_subsets(scope, &comparison_operators, comparison_group);
+    seed(scope, &comparison_operators, comparison_group);
 
     let additive_operators = ["+", "-"];
     let additive_members: HashSet<String> =
@@ -242,7 +222,7 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
         additive_members,
         ReductionMode::FoldLeft,
     ));
-    register_group_under_all_subsets(scope, &additive_operators, additive_group);
+    seed(scope, &additive_operators, additive_group);
 
     let multiplicative_operators = ["*", "/"];
     let multiplicative_members: HashSet<String> = multiplicative_operators
@@ -253,7 +233,14 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
         multiplicative_members,
         ReductionMode::FoldLeft,
     ));
-    register_group_under_all_subsets(scope, &multiplicative_operators, multiplicative_group);
+    seed(scope, &multiplicative_operators, multiplicative_group);
+}
+
+/// One builtin seed: the group's powerset keys, at [`BindingIndex::BUILTIN`].
+fn seed<'a>(scope: &'a Scope<'a>, members: &[&str], group: &'a OperatorGroup) {
+    scope
+        .register_group_under_all_subsets(members, group, BindingIndex::BUILTIN)
+        .expect("builtin operator-group seeding must not collide");
 }
 
 #[cfg(test)]

@@ -18,9 +18,11 @@
 //! because that root is off the lexical chain (its cutoff is `None`, so every entry in
 //! it is visible) and is consulted in one hop through each scope's direct root
 //! reference — not through an `idx == 0`-always-visible carve-out. The `idx == 0` tag
-//! is what [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_function`] /
-//! [`Bindings::has_builtin_operator`] read to mark a genuine builtin for the no-shadow
-//! and root-first consults.
+//! is what [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_function`] read to
+//! mark a genuine builtin for the no-shadow and root-first consults. The operator
+//! registry takes no such consult: its walk is innermost-wins, so the root's builtin
+//! groups are found last and act as defaults (see
+//! [`crate::machine::core::Scope::resolve_operator_group_with_chain`]).
 //!
 //! Production reads use the visibility-aware [`Bindings::lookup_value`] /
 //! [`Bindings::lookup_type`] / [`Bindings::lookup_function`], passing a
@@ -524,11 +526,15 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    /// Register `probe → group` in the operator registry. The `OP` binder installs
-    /// one entry per size-≥2 subset of the declared operators (all pointing at the
-    /// same `group`); test fixtures register the subsets they exercise. Idempotent on
-    /// a pointer-equal re-register; a different group under the same key is a
-    /// programming error (`Rebind`).
+    /// Register `probe → group` in the operator registry. The `OP` / `GROUP` binder
+    /// installs one entry per nonempty subset of the declared operators (all pointing at
+    /// the same `group`); test fixtures register the subsets they exercise.
+    ///
+    /// Upsert: an existing entry whose record is the one being registered — pointer-equal,
+    /// or an equal mode + member set (two `OP` statements over the same symbol and distinct
+    /// operand types are two bucket overloads but one registry entry) — is a no-op
+    /// `Applied`, keeping the first entry's index. A record that disagrees is a chaining-mode
+    /// conflict on `probe`: the same scope cannot say the symbol both folds and pairs.
     pub fn try_register_operator_group(
         &self,
         probe: String,
@@ -540,10 +546,13 @@ impl<'a> Bindings<'a> {
             Err(_) => return Ok(ApplyOutcome::Conflict),
         };
         if let Some((existing, _)) = operators.get(&probe).copied() {
-            if std::ptr::eq(existing, group) {
+            if std::ptr::eq(existing, group) || existing == group {
                 return Ok(ApplyOutcome::Applied);
             }
-            return Err(KError::new(KErrorKind::Rebind { name: probe }));
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "operator `{probe}` is already declared in this scope with a different \
+                 chaining mode or member set; one scope declares one chaining mode per operator",
+            ))));
         }
         operators.insert(probe, (group, index));
         Ok(ApplyOutcome::Applied)
@@ -617,14 +626,6 @@ impl<'a> Bindings<'a> {
             .borrow()
             .get(key)
             .is_some_and(|bucket| bucket.iter().any(|(_, idx)| *idx == BindingIndex::BUILTIN))
-    }
-
-    /// True iff `operators[probe]` was registered at [`BindingIndex::BUILTIN`].
-    pub fn has_builtin_operator(&self, probe: &str) -> bool {
-        self.operators
-            .borrow()
-            .get(probe)
-            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
     }
 
     /// Visibility predicate: `None` ⇒ everything visible; `Some(c)` ⇒ `b.idx < c`.

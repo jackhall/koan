@@ -20,7 +20,7 @@
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::ReductionMode;
+use crate::machine::model::operators::{Combiner, FoldDirection, ReductionMode};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
@@ -61,8 +61,18 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 ReductionMode::FoldLeft => reduce_fold_left(ctx, expr),
                 ReductionMode::FoldRight => reduce_fold_right(ctx, expr),
                 ReductionMode::Unary => reduce_unary(ctx, expr),
-                ReductionMode::Pairwise { combiner } => {
-                    reduce_pairwise(ctx, expr, combiner.clone())
+                ReductionMode::Pairwise {
+                    combiner: Combiner::Keyword(keyword),
+                    direction: FoldDirection::Left,
+                } => reduce_pairwise(ctx, expr, keyword.clone()),
+                // The named-combiner and fold-right pairwise lanes are the reducer work the
+                // `OP` / `GROUP` declaration surface depends on (roadmap item
+                // `user-defined-operator-modules`); no group the builtins seed reaches here.
+                ReductionMode::Pairwise { .. } => {
+                    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
+                        expr: expr.summarize(),
+                        reason: unsupported_pairwise_reason(probe),
+                    })))
                 }
             }
         }
@@ -249,6 +259,13 @@ fn undeclared_operator_reason(probe: &str) -> String {
     format!(
         "no operator group declares all of `{probe}`; chainable operators must be \
          declared together in one module"
+    )
+}
+
+fn unsupported_pairwise_reason(probe: &str) -> String {
+    format!(
+        "the operator group declaring `{probe}` folds its pairs through a combiner shape the \
+         chain reducer does not fold"
     )
 }
 

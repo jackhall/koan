@@ -3,6 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
+use crate::machine::model::operators::{probe_key, OperatorGroup};
 use crate::machine::model::types::{KType, RecursiveSet};
 
 use super::arena::{FrameSet, FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
@@ -67,6 +68,11 @@ pub struct Scope<'a> {
     /// cross-references inside the block resolve regardless of lexical order — the block is
     /// the one cross-order resolution that survives strict source-order type-name lookup.
     recursive_set: Option<Rc<RecursiveSet<'a>>>,
+    /// Set iff this is a `GROUP` body's child scope: the one shared [`OperatorGroup`] record its
+    /// member `OP` declarations belong to, read through [`Scope::nearest_group_context`]. The record
+    /// is lifetime-free (member set + mode + combiner *name*), so holding it costs the scope no
+    /// region borrow.
+    group: Option<&'a OperatorGroup>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
@@ -144,6 +150,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
             recursive_set: None,
+            group: None,
             closed: Cell::new(false),
             root_region: true,
         }
@@ -325,6 +332,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind,
             recursive_set,
+            group: None,
             closed: Cell::new(false),
             root_region: outer.root_region,
         }
@@ -365,6 +373,7 @@ impl<'a> Scope<'a> {
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
             recursive_set: None,
+            group: None,
             closed: Cell::new(false),
             root_region: false,
         }
@@ -389,6 +398,25 @@ impl<'a> Scope<'a> {
             ScopeKind::Module { name },
             None,
         )
+    }
+
+    /// `child_under_module`, carrying the [`OperatorGroup`] whose members the body declares —
+    /// a `GROUP` body. The kind stays `Module` (a group *is* a module: it binds a module value
+    /// and `USING` opens it), and the group record is what
+    /// [`Self::nearest_group_context`] hands back to the `OP` declarations inside.
+    pub fn child_under_group(
+        outer: &'a Scope<'a>,
+        name: String,
+        group: &'a OperatorGroup,
+    ) -> Scope<'a> {
+        let mut child = Self::child_inheriting(
+            outer,
+            ScopeBindings::Owned(Bindings::new()),
+            ScopeKind::Module { name },
+            None,
+        );
+        child.group = Some(group);
+        child
     }
 
     /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
@@ -514,13 +542,6 @@ impl<'a> Scope<'a> {
         self.root_scope().bindings().has_builtin_function(key)
     }
 
-    /// True iff `probe` resolves a builtin operator group in the run-global root.
-    /// Operators are builtins too — a user operator over a builtin probe is rejected
-    /// rather than shadowing or extending it.
-    fn shadows_builtin_operator(&self, probe: &str) -> bool {
-        self.root_scope().bindings().has_builtin_operator(probe)
-    }
-
     /// True iff the nearest non-`Anonymous` enclosing scope is a SIG decl_scope. A
     /// `Module` short-circuits to `false`; `Anonymous` frames are transparent.
     pub fn is_in_sig_body(&self) -> bool {
@@ -531,6 +552,23 @@ impl<'a> Scope<'a> {
                 ScopeKind::Root | ScopeKind::Anonymous => None,
             })
             .unwrap_or(false)
+    }
+
+    /// The [`OperatorGroup`] whose body this scope sits in, if any — the context an `OP`
+    /// declaration reads to know it is a group member (its registry write belongs to the
+    /// group, and a heterogeneous `->` is admissible only under a pairwise mode). Walks
+    /// outward like [`Self::is_in_sig_body`]: `Anonymous` frames are transparent, a
+    /// `Sig` or `Module` scope short-circuits to `None`. The `group` field is consulted
+    /// **before** the kind, because a group body is itself stamped `Module` (a group is a
+    /// module) — a plain module nested inside a group body still short-circuits.
+    pub fn nearest_group_context(&self) -> Option<&'a OperatorGroup> {
+        self.ancestors()
+            .find_map(|s| match (s.group, &s.kind) {
+                (Some(group), _) => Some(Some(group)),
+                (None, ScopeKind::Sig { .. } | ScopeKind::Module { .. }) => Some(None),
+                (None, ScopeKind::Root | ScopeKind::Anonymous) => None,
+            })
+            .flatten()
     }
 
     /// Bind `name` in this scope. Errors `Rebind` if `data` already holds `name`
@@ -960,7 +998,7 @@ impl<'a> Scope<'a> {
     /// Builtin-first resolution: a builtin entry is unshadowable and authoritative, so consult the
     /// immutable run-global root in one hop and return its hit; a non-builtin name finds nothing in
     /// the root and falls through to the innermost-wins [`Self::walk_chain`]. The `is_builtin` gate is
-    /// the `idx == 0` [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_operator`] predicate,
+    /// the `idx == 0` [`Bindings::has_builtin_type`] / [`Bindings::has_builtin_function`] predicate,
     /// so a synthetic root-position user entry still resolves by the chain walk below.
     fn resolve_builtin_first<T>(
         &self,
@@ -1326,47 +1364,46 @@ impl<'a> Scope<'a> {
             .unwrap_or_else(StoredReach::empty)
     }
 
-    /// Resolve a chain's operator-group probe against this scope and the `outer`
-    /// chain, paralleling [`Self::resolve_type_with_chain`]: per-scope `operators`
-    /// hits are filtered through [`visible`], so the innermost visible registration
-    /// wins (operator shadowing falls out of the walk). `chain = None` is the
-    /// test/builtin-registration unfiltered mode.
+    /// Resolve a chain's operator-group probe against this scope and the `outer` chain:
+    /// per-scope `operators` hits are filtered through [`visible`], so the innermost
+    /// visible registration wins and operator shadowing falls out of the walk. The
+    /// builtin groups the run-global root seeds are found last, so they are defaults a
+    /// declaring scope may override. Unlike the type and function ladders this walk is
+    /// **not** builtin-first: a registry hit carries a member set and a mode but no
+    /// operand types, so it cannot type-gate the way the root's function buckets do —
+    /// the root's `+` still wins for `Number` operands through the strict bucket gate,
+    /// while a scope that declares `+` over its own operand type reduces its own runs.
+    /// `chain = None` is the test/builtin-registration unfiltered mode.
     pub fn resolve_operator_group_with_chain(
         &self,
         probe: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<&'a crate::machine::model::operators::OperatorGroup> {
-        self.resolve_builtin_first(
-            |root| root.has_builtin_operator(probe),
-            |root| root.lookup_operator_group(probe, None),
-            |scope| {
-                scope
-                    .bindings()
-                    .lookup_operator_group(probe, scope.binding_cutoff(chain))
-            },
-        )
+    ) -> Option<&'a OperatorGroup> {
+        self.walk_chain(|scope| {
+            scope
+                .bindings()
+                .lookup_operator_group(probe, scope.binding_cutoff(chain))
+        })
     }
 
-    /// Register `probe → group` in this scope's operator registry. The `OP` binder
-    /// installs one entry per size-≥2 subset of the declared operators; test fixtures
-    /// register the subsets they exercise. Same conditional-defer-free shape as the
-    /// type registry — a borrow conflict is queued is not expected here (registration
-    /// runs outside the re-entrant bind hot path), so `Conflict` panics.
+    /// Register `probe → group` in this scope's operator registry. The `OP` / `GROUP`
+    /// binder installs one entry per nonempty subset of the declared operators (see
+    /// [`Self::register_group_under_all_subsets`]); test fixtures register the subsets
+    /// they exercise. Same conditional-defer-free shape as the type registry — a borrow
+    /// conflict is not expected here (registration runs outside the re-entrant bind hot
+    /// path), so `Conflict` panics. Re-registering an equal record under the same probe
+    /// is an idempotent no-op; a record that disagrees is an error
+    /// ([`Bindings::try_register_operator_group`]).
     pub fn register_operator_group(
         &self,
         probe: String,
-        group: &'a crate::machine::model::operators::OperatorGroup,
+        group: &'a OperatorGroup,
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
                 .register_operator_group(probe, group, index);
-        }
-        // Operators are builtins too: a user operator over a builtin probe is a
-        // `Rebind`, never a shadow. The root registers its own at `BUILTIN`.
-        if index != BindingIndex::BUILTIN && self.shadows_builtin_operator(&probe) {
-            return Err(KError::new(KErrorKind::Rebind { name: probe }));
         }
         match self
             .bindings
@@ -1379,6 +1416,32 @@ impl<'a> Scope<'a> {
                  registration runs outside the re-entrant bind hot path",
             ),
         }
+    }
+
+    /// Register `group` in this scope under every nonempty subset of `members` — the
+    /// powerset-key story [`crate::machine::model::operators`] describes, shared by the
+    /// builtin seeds and by the `GROUP` binder. `members.len()` stays small, so the
+    /// `2^n - 1` bitmask walk over subsets is cheap; each subset's key is derived through
+    /// [`probe_key`] rather than hand-enumerated, so a registration key always agrees with a
+    /// real chain's probe.
+    pub fn register_group_under_all_subsets(
+        &self,
+        members: &[&str],
+        group: &'a OperatorGroup,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        let subset_count = 1usize << members.len();
+        for mask in 1..subset_count {
+            let subset: Vec<&str> = members
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << bit) != 0)
+                .map(|(_, op)| *op)
+                .collect();
+            let key = probe_key(&subset);
+            self.register_operator_group(key, group, index)?;
+        }
+        Ok(())
     }
 
     /// Write `bytes` to the nearest writer up the `outer` chain. Writer errors are
