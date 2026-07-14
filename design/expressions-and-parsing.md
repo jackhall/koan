@@ -141,8 +141,11 @@ sub-dispatches the scheduler already knows how to run.
   become `[ Keyword(sym), ListLiteral([x1 x2 x3]) ]` — the same shape
   `HEAD [1 2 3]` dispatches through — so prefix and infix coincide on one body.
 - **Pairwise** dispatches each adjacent pair through its own operator's binary
-  body and folds the pair results left through the group's named combiner
-  keyword (`AND` for the comparisons). A shared middle operand evaluates
+  body and folds the pair results through the group's combiner, in the direction
+  the group declares. The combiner is an *operator*, synthesized infix
+  (`[left, Keyword(<combiner>), right]` — `AND` for the comparisons) and resolved
+  by the ordinary scope walk at the use site, so it binds its two inputs
+  positionally. A shared middle operand evaluates
   **once**: every operand is staged as its own sub-dispatch, and each resolved
   cell is spliced into the up-to-two adjacent pairs it feeds — so `f x < g y < h z`
   runs `g y` a single time. This is the one mode that runs sub-dispatches itself
@@ -150,18 +153,29 @@ sub-dispatches the scheduler already knows how to run.
 
 A run whose probe spans two groups, or names an operator no group declares, is a
 registry miss surfaced as a structured `DispatchFailed`; the user resolves a
-cross-group mix (`a + b * c`) with explicit parentheses (`a + (b * c)`). The
-builtin comparison (pairwise), additive, and multiplicative (both fold-left)
-groups and their binary bodies are seeded by `register_builtin_operator_groups`
-in [`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs). The type-union `|`
-operator is its own single-member **Unary** group, seeded alongside its builtin in
-[`builtins/type_union.rs`](../src/builtins/type_union.rs) so the operator and its
-target live together, so `:(A | B | C)` reduces to one keyword-first call over the
-whole member run (see
+cross-group mix (`a + b * c`) with explicit parentheses (`a + (b * c)`). (A miss
+first parks on a still-finalizing `OP` declaration of one of the chain's
+operators, if the scope walk sees one — a declaration earlier in the same
+submitted block resolves whatever order the scheduler pops the statements in.)
+
+The registry walk is **innermost-wins**, like every other name. The builtin
+comparison (pairwise), additive, and multiplicative (both fold-left) groups and
+their binary bodies are seeded into the run-global root by
+`register_builtin_operator_groups` in
+[`builtins/arithmetic.rs`](../src/builtins/arithmetic.rs), so they are found
+*last*: they are chaining defaults a declaring scope may override, not
+unshadowable claims on their symbols. Unlike the type and function ladders this
+walk is not builtin-first, because a registry hit carries a member set and a mode
+but no operand types — it cannot type-gate the way a function bucket does. The
+type-union `|` operator is its own single-member **Unary** group, seeded alongside
+its builtin in [`builtins/type_union.rs`](../src/builtins/type_union.rs) so the
+operator and its target live together, so `:(A | B | C)` reduces to one
+keyword-first call over the whole member run (see
 [typing/type-language-via-dispatch.md § Anonymous-union sigil](typing/type-language-via-dispatch.md#anonymous-union-sigil)).
-The `OP`/`GROUP`
-declaration surface that lets user modules populate the registry is owned by
-[user-defined operator modules](../roadmap/operator_chaining/user-defined-operator-modules.md).
+
+User modules populate the registry through the `OP` / `GROUP` declaration surface
+— a quoted operator symbol, a chaining mode, and (for pairwise) a combiner — which
+[operators.md](operators.md) specifies.
 
 The four call-shape lanes that resolve a head to a callable —
 `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` — converge on

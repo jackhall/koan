@@ -18,9 +18,10 @@
 //! the builtin comparison / additive / multiplicative groups seeded into the run-global root
 //! by `register_builtin_operator_groups` (`src/builtins/arithmetic.rs`) are found last, so they
 //! are chaining defaults a declaring scope may override — a registry hit carries no operand
-//! types and so cannot type-gate the way a function bucket does. The `OP` / `GROUP` binder that
-//! lets user modules populate the registry is the declaration surface owned by the
-//! user-defined-operator-modules roadmap item. This module is the record and lookup key only.
+//! types and so cannot type-gate the way a function bucket does. User modules populate the
+//! registry through the `OP` / `GROUP` declaration surface
+//! ([design/operators.md](../../../design/operators.md), `builtins::op_def` /
+//! `builtins::group_def`). This module is the record and lookup key only.
 
 use std::collections::HashSet;
 

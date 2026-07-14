@@ -382,10 +382,14 @@ The block runs in a single *transparent* scope
 the call site and whose bindings are a read-only window onto the module's
 child-scope façade (`ScopeBindings::Borrowed`). Reads consult the window first,
 then the call-site chain, so module names win inside the block; the resolver walk
-is unchanged. Only the module's `data` (values) and `functions` (dispatch
-overloads) are surfaced — the whole `Bindings` façade is borrowed, while a
-module's abstract type ascriptions live in `Module::type_members`, *not* in
-`Bindings`, so opacity is preserved inside the block.
+is unchanged. Only the module's `data` (values), `functions` (dispatch
+overloads), and `operators` (the per-scope operator registry) are surfaced — the
+whole `Bindings` façade is borrowed, while a module's abstract type ascriptions
+live in `Module::type_members`, *not* in `Bindings`, so opacity is preserved
+inside the block. Because the registry rides the same façade, opening a module
+that declares operators ([operators.md](../operators.md)) puts both their bodies
+and their chaining mode in scope: a run inside the block reduces by the module's
+own group.
 
 Binds made inside the block forward to the call site and persist after it; a bind
 whose name collides with a surfaced member is rejected

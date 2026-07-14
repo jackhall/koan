@@ -22,6 +22,8 @@
 //!
 //! An operator body captures its declaring scope, so it sees its sibling module bindings exactly as
 //! a bare `FN` body does, and an `OP` statement evaluates to the function it declares.
+//!
+//! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::core::kfunction::action::{
     arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepRequest,

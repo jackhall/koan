@@ -33,6 +33,8 @@
 //! statements are members: an `OP` nested inside an `FN` or a branch declares an operator in *that*
 //! scope and joins no group. Members' own registry writes are skipped ([`super::op_def`]) — the
 //! group is the sole registrar for its members.
+//!
+//! Surface design: [design/operators.md](../../design/operators.md).
 
 use std::collections::HashSet;
 

@@ -64,6 +64,11 @@ Root concerns:
   operators), the `KExpression` shape it produces, the
   eager-by-default evaluation rule, and how `FN` definitions extend
   the surface syntax without macros.
+- [operators.md](operators.md) — the `OP` / `GROUP` declaration
+  surface: the parse-static quote that makes an operator symbol an
+  ordinary argument, the binary / unary / pairwise forms, the combiner
+  invoked infix, groups as modules, and shadowing that is type-gated
+  rather than forbidden.
 - [functional-programming.md](functional-programming.md) — functions
   as first-class `KObject` values, signature-driven evaluation,
   tail-call optimization, and the FN-as-extension-mechanism property.

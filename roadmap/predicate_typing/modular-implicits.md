@@ -34,9 +34,8 @@ site needs.
   consults a searched witness.
 - A function over "anything that forms a group" is written with a
   `{Gp : GROUP}` implicit parameter — `GROUP` being a binary operator with
-  identity and inverse over an abstract `t`, its paired operators declared via
-  [user-defined operator
-  modules](../operator_chaining/user-defined-operator-modules.md) — and its
+  identity and inverse over an abstract `t`, its paired operators declared with
+  the [`OP` / `GROUP` surface](../../design/operators.md) — and its
   laws are checked as [stage-4 axioms](axioms-and-generators.md).
 
 **Directions.**
