@@ -38,14 +38,6 @@ impl<'a> KType<'a> {
         )
     }
 
-    pub fn is_type_denoting(&self) -> bool {
-        matches!(
-            self,
-            KType::Signature { .. }
-                | KType::OfKind(KKind::ProperType | KKind::AnyType | KKind::Signature)
-        )
-    }
-
     /// Strict specificity ordering. Concrete types outrank `Any` and the
     /// unconstrained-name slot types (`Identifier`, `ProperType`), so an overload
     /// like `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit.

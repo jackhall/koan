@@ -419,52 +419,6 @@ fn user_type_specificity_lattice() {
     assert!(!ctor_kind.is_more_specific_than(&point));
 }
 
-/// `is_type_denoting` admission table: variants whose declared `KType` makes
-/// the bound value's nominal identity meaningful at the type level.
-#[test]
-fn is_type_denoting_table() {
-    use crate::builtins::default_scope;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::ModuleSignature;
-    let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let sig = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
-    let sb = KType::signature(SigSource::Declared(sig), Vec::new());
-    assert!(sb.is_type_denoting());
-    let sb_pinned = KType::signature(
-        SigSource::Declared(sig),
-        vec![("Type".into(), KType::Number)],
-    );
-    assert!(sb_pinned.is_type_denoting());
-    assert!(KType::OfKind(KKind::Signature).is_type_denoting());
-    assert!(KType::OfKind(KKind::AnyType).is_type_denoting());
-    assert!(KType::OfKind(KKind::ProperType).is_type_denoting());
-    // Nominal-family `OfKind` slots are type-channel-only but never name a type binder —
-    // the value carries no nominal identity the caller hasn't already named.
-    assert!(!KType::OfKind(KKind::NewType).is_type_denoting());
-    assert!(!KType::OfKind(KKind::TypeConstructor).is_type_denoting());
-    // Per-declaration `SetRef`: nominal identity already lives in the declaring
-    // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
-    let ut = record_newtype_setref("Foo", ScopeId::from_raw(0, 1));
-    assert!(!ut.is_type_denoting());
-    assert!(!KType::Number.is_type_denoting());
-    assert!(!KType::Str.is_type_denoting());
-    assert!(!KType::Bool.is_type_denoting());
-    assert!(!KType::Null.is_type_denoting());
-    assert!(!KType::Any.is_type_denoting());
-    assert!(!KType::Identifier.is_type_denoting());
-    assert!(!KType::KExpression.is_type_denoting());
-    assert!(!KType::list(Box::new(KType::Number)).is_type_denoting());
-    assert!(!KType::dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
-    assert!(!KType::function_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Number),
-    )
-    .is_type_denoting());
-}
-
 /// `KType::Signature { pinned_slots }` specificity rules (constraint role):
 /// - A non-empty `pinned_slots` strictly refines an empty same-`sig_id` form when
 ///   every pin in the empty side appears (with equal `KType`) in the non-empty side.
