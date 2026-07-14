@@ -167,9 +167,11 @@ their binary bodies are seeded into the run-global root by
 unshadowable claims on their symbols. Unlike the type and function ladders this
 walk is not builtin-first, because a registry hit carries a member set and a mode
 but no operand types — it cannot type-gate the way a function bucket does. The
-type-union `|` operator is its own single-member **Unary** group, seeded alongside
-its builtin in [`builtins/type_union.rs`](../src/builtins/type_union.rs) so the
-operator and its target live together, so `:(A | B | C)` reduces to one
+type-union `|` operator is its own single-member **Unary** group:
+[`builtins/type_union.rs`](../src/builtins/type_union.rs) seeds it — its two
+overloads and its group entry — through the same unary-operator registration door
+a `UNARY OP` declaration uses ([operators.md § Unary operators](operators.md#unary-operators)),
+supplying native bodies. So `:(A | B | C)` reduces to one
 keyword-first call over the whole member run (see
 [typing/type-language-via-dispatch.md § Anonymous-union sigil](typing/type-language-via-dispatch.md#anonymous-union-sigil)).
 

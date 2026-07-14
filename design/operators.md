@@ -71,6 +71,18 @@ plain keyworded call rather than a chain; the declaration registers a synthesize
 binary **bridge** whose body is `sym [left right]`, so that surface lands on the
 one list body the user wrote.
 
+A unary operator is therefore always the same **triple**: the list-form overload
+under the key a prefix use or a reduced run computes, the binary-form overload
+under the key a two-operand use computes, and a size-1 `Unary` registry entry
+under the symbol. One door writes it
+([`register_unary_operator`](../src/builtins/op_def.rs)), deriving each key from
+the signature it is handed rather than spelling it — an overload keyed any other
+way would sit in a bucket no koan expression ever computes, and the operator
+would silently never dispatch. The caller supplies the two bodies: a `UNARY OP`
+synthesizes koan-AST bodies (the user's list body plus the bridge), while the
+builtin type-union `|` — itself a unary operator — supplies native ones that
+compose a [`KType`](../src/machine/model/types/ktype.rs) directly.
+
 Because it chains with nothing, a unary operator can be no group's member.
 
 ## Groups
@@ -201,8 +213,6 @@ run by the run's operand type.
 - [Stage 5 — Modular implicits](../roadmap/predicate_typing/modular-implicits.md)
   — implicit *selection* of a group by operand type, so a run finds its group
   without a `USING` window.
-- [Unify the unary-operator registration shape](../roadmap/operator_chaining/unify-unary-operator-registration.md)
-  — the builtin `|` hand-rolls the same registration triple `UNARY OP` synthesizes.
 - [Reject the unquoted operator symbol](../roadmap/operator_chaining/reject-the-unquoted-operator-symbol.md)
   — an unquoted `OP (+)` still registers, but installs no park edges and errors
   inside a `GROUP` body; the quote is the sole spelling this doc gives.

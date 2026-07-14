@@ -663,10 +663,11 @@ impl<'a> Scope<'a> {
         Ok((obj, stored))
     }
 
-    /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature, then
-    /// insert `obj` into `data[name]`. Errors:
+    /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature. `data[name]` is
+    /// left untouched: a bare `FN` is dispatchable but not nameable as a value (use
+    /// `LET f = (FN …)` for that). Errors:
     /// - `DuplicateOverload` if the bucket already holds an exact-signature match.
-    /// - `Rebind` if `data[name]` holds a non-function.
+    /// - `Rebind` if a non-`BUILTIN` overload would join a builtin's bucket.
     ///
     /// Same conditional-defer shape as `bind_value`.
     pub fn register_function(

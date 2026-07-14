@@ -39,7 +39,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
 - [Reject the unquoted operator symbol](operator_chaining/reject-the-unquoted-operator-symbol.md)
-- [Unify the unary-operator registration shape](operator_chaining/unify-unary-operator-registration.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Fold the two type-write paths](refactor/fold-type-write-paths.md)
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
