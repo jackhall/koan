@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType};
+use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -117,10 +117,10 @@ fn module_body_backward_value_reference_resolves() {
     let region = run_root_storage();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&region, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
-    // MODULE is type-only — the `&Module` rides the identity in `types`.
-    let m = match scope.resolve_type("Mod") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Mod should be a module identity in types"),
+    // A module is a value — the `&Module` rides the Object-arm value in `data`.
+    let m = match scope.lookup("Mod") {
+        Some(KObject::Module(m)) => *m,
+        _ => panic!("Mod should bind a module value"),
     };
     let y = m.child_scope().lookup("y");
     assert!(matches!(y, Some(KObject::Number(n)) if *n == 1.0));

@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KKind, KType, ProjectedSchema, RecursiveSet, SigSource};
+use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet, SigSource};
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -325,10 +325,10 @@ fn sigil_user_functor_application_through_dispatch() {
             (MODULE Generated = ((LET tag = 0)))\n\
          LET MySet = (MAKESET IntOrd)",
     );
-    // `MySet` is a module bound under a Type-classed name — type-only, so its identity
-    // lives in `types`.
-    match scope.resolve_type("MySet") {
-        Some(KType::Module { .. }) => {}
-        other => panic!("MySet must be a Module identity in types, got {other:?}"),
-    }
+    // `MySet` is a module bound under a Type-classed name — a module is a value, so it binds
+    // on the value channel.
+    assert!(
+        matches!(scope.lookup("MySet"), Some(KObject::Module(_))),
+        "MySet must bind the produced module value",
+    );
 }

@@ -24,6 +24,10 @@ pub fn body<'a>(
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     let mut type_for_types_map: Option<KType<'a>> = None;
+    // Whether the binder name is Type-classified (`LET <Name> = …`). A module RHS under such a name
+    // still binds value-side, so "type-classified name" and "lands in `types`" are distinct facts:
+    // the SIG-body VAL guard below keys on the former.
+    let mut type_classified_name = false;
     let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
         (Some(KObject::KString(s)), _) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
@@ -63,20 +67,23 @@ pub fn body<'a>(
                 }
                 other => other.name(),
             };
-            type_for_types_map = Some(match rhs {
-                Held::Type(kt) => kt.clone(),
-                // A module rides the Object arm but binds type-side: install its `KType::Module`
-                // identity into `bindings.types` — today's storage shape — so `LET View = (m :| S)`
-                // keeps a type-side binding and `-> Er.Carrier` elaboration resolves through it.
-                Held::Object(KObject::Module(module)) => KType::Module { module },
-                Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => o.ktype(),
+            type_classified_name = true;
+            match rhs {
+                Held::Type(kt) => type_for_types_map = Some(kt.clone()),
+                // A module is a value: `LET View = (m :| S)` binds it into `data` like any other
+                // object value, under its Type-token name. The value/type partition commits the
+                // name to exactly one map, so nothing lands in `types` here.
+                Held::Object(KObject::Module(_)) => {}
+                Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => {
+                    type_for_types_map = Some(o.ktype())
+                }
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
                         got: o.ktype().name(),
                     }));
                 }
-            });
+            }
             resolved_name
         }
         (Some(other), None) => {
@@ -88,7 +95,7 @@ pub fn body<'a>(
         }
         (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
-    if type_for_types_map.is_none() && ctx.scope.is_in_sig_body() {
+    if !type_classified_name && ctx.scope.is_in_sig_body() {
         return done_err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",

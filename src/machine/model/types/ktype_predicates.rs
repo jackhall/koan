@@ -517,12 +517,9 @@ impl<'a> KType<'a> {
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
-            // required. A built argument cell carries the module on the Object channel; the
-            // `Carried::Type` arm classifies the overload-picker probe, which resolves a bare module
-            // name to `KType::Module` on the type channel because a module binds type-side (its cell
-            // re-resolves type-side in `part_walk`). Both collapse once modules bind value-side
-            // (module-naming-flip). A signature *value* is admitted by the `OfKind(Signature)`
-            // wildcard above, never here.
+            // required. A module is a value, so both the overload-picker probe and the built
+            // argument cell carry it on the Object channel. A signature *value* is admitted by the
+            // `OfKind(Signature)` wildcard above, never here.
             KType::Signature {
                 sig, pinned_slots, ..
             } => match c {

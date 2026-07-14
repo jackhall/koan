@@ -113,16 +113,15 @@ fn functor_binder_e2e_makeset_produces_module() {
         makeset.is_functor,
         "MAKESET must carry is_functor: true (Stage-2 / Stage-3 plumbing)",
     );
-    // `IntSet` landed as a Module — bound type-only (the LET allowlist routes Module
-    // identities through `register_type`), so the `&Module` rides the `KType::Module`
-    // identity in `bindings.types`, with no value-side carrier in `bindings.data`.
+    // `IntSet` landed as a module value: a module is a value, so LET binds it on the value
+    // channel (`bindings.data`) under its Type-token name and nothing lands in `types`.
     assert!(
-        scope.lookup("IntSet").is_none(),
-        "IntSet must be type-only — no value-side carrier in data",
+        scope.resolve_type("IntSet").is_none(),
+        "a module is a value — nothing lands in `types`",
     );
-    let m = match scope.resolve_type("IntSet") {
-        Some(KType::Module { module, .. }) => *module,
-        other => panic!("IntSet should be a Module identity in types, got {other:?}"),
+    let m = match scope.lookup("IntSet") {
+        Some(KObject::Module(module)) => *module,
+        _ => panic!("IntSet should bind a module value in data"),
     };
     // The functor body's `(LET tag = 0)` lifted into the result module's
     // child scope — verifies the per-call body actually ran and the
@@ -133,14 +132,12 @@ fn functor_binder_e2e_makeset_produces_module() {
         "IntSet's `tag` member should be 0, got {:?}",
         tag.map(|o| o.ktype()),
     );
-    // Type-side: `IntSet` is reachable as a type via `Scope::resolve_type`
-    // (the nominal binder installs both the type identity and the carrier).
-    let int_set_type = scope
-        .resolve_type("IntSet")
-        .expect("IntSet should be reachable via resolve_type");
-    assert!(
-        matches!(int_set_type, KType::Module { .. }),
-        "IntSet's type entry should be a Module carrier",
+    // The module value's `ktype()` is its principal signature, whose name renders as the
+    // module path — the type a `:Signature` slot matches it against.
+    assert_eq!(
+        KObject::Module(m).ktype().name(),
+        m.path,
+        "a module value is typed by its self-sig",
     );
 }
 
@@ -182,9 +179,9 @@ fn let_bound_functor_applied_via_sigil_yields_module() {
         "ApplyIt should resolve type-side to a body-bearing KFunctor",
     );
     // Applying the functor produced a module that the outer LET bound as `Got`.
-    let m = match scope.resolve_type("Got") {
-        Some(KType::Module { module, .. }) => *module,
-        other => panic!("Got should be a Module produced by applying ApplyIt, got {other:?}"),
+    let m = match scope.lookup("Got") {
+        Some(KObject::Module(module)) => *module,
+        _ => panic!("Got should be the module value produced by applying ApplyIt"),
     };
     let tag = m.child_scope().lookup("tag");
     assert!(
@@ -232,9 +229,9 @@ fn functor_signature_param_satisfied_via_named_sigil() {
             (MODULE Inner = ((LET tag = 0))))\n\
          LET Got = :(MakeSet {base = IntOrd})",
     );
-    let m = match scope.resolve_type("Got") {
-        Some(KType::Module { module, .. }) => *module,
-        other => panic!("Got should be a Module produced by applying MakeSet, got {other:?}"),
+    let m = match scope.lookup("Got") {
+        Some(KObject::Module(module)) => *module,
+        _ => panic!("Got should be the module value produced by applying MakeSet"),
     };
     let tag = m.child_scope().lookup("tag");
     assert!(

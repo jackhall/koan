@@ -17,13 +17,13 @@
 use crate::machine::DeliveredCarried;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, KErrorKind, RegionBrand};
+use crate::machine::core::{BindingIndex, CallFrame, KError, RegionBrand};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
     elaborate_type_identifier, DeferredReturn, Elaborator, KType, Record, ReturnType,
     TypeResolution,
 };
-use crate::machine::model::values::{Carried, KObject};
+use crate::machine::model::values::Carried;
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -84,24 +84,18 @@ pub enum PerCallReturn<'step> {
 /// the reach-set fold pins the argument), but it must not lengthen to the captured region's lifetime,
 /// which can outlive the caller.
 ///
-/// A concrete first-class **module is rejected**: a module value's identity is not a return type, and
-/// its borrow points into the dying per-call frame rather than the caller — invalid even at `'step`.
-/// (A module returned as a *value* rides the value channel's witness set, unaffected.)
+/// A bare module-valued parameter in return position (`-> Er`) elaborates to the module's principal
+/// signature (`Signature { SelfOf }`), which homes here like any other region-borrowing type: slots
+/// and returns name signatures, so the contract is "a module satisfying `Er`'s interface".
 pub(crate) fn home_return_type<'a>(
     kt: &KType<'_>,
     region: RegionBrand<'a>,
 ) -> Result<&'a KType<'a>, KError> {
-    if matches!(kt, KType::Module { .. }) {
-        return Err(KError::new(KErrorKind::ShapeError(
-            "a module cannot be a function's return type; return a signature or `Module`"
-                .to_string(),
-        )));
-    }
     // A region-free return type takes the compile-enforced `'static` tier. One embedding a scope
-    // borrow (a `Signature`'s `decl_scope_ref`, an `AbstractType`'s `Module` source) cannot rebuild
-    // at `'static`; it re-anchors to `region` at the caller's contract lifetime `'a` through the
-    // checked tier, which passes because this fn's caller-region invariant already homes it in
-    // `region`'s own region.
+    // borrow (a `Signature`'s `decl_scope_ref` or `SelfOf` module, an `AbstractType`'s `Module`
+    // source) cannot rebuild at `'static`; it re-anchors to `region` at the caller's contract
+    // lifetime `'a` through the checked tier, which passes because this fn's caller-region invariant
+    // already homes it in `region`'s own region.
     match kt.to_static() {
         Some(owned) => Ok(region.alloc_ktype(owned)),
         None => region.alloc_ktype_checked(kt.clone()),
@@ -139,19 +133,6 @@ where
         for (name, carried) in args.iter() {
             let carrier = arg_carriers.get(name).copied();
             match *carried {
-                // A module argument arrives on the Object arm but binds type-side (a module reaching
-                // a binding door installs `KType::Module` into `bindings.types`): the same fused type
-                // door the `Carried::Type` arm uses registers its identity, so a functor body still
-                // sees `Er` in the types table and `-> Er.Carrier` deferred-return elaboration resolves
-                // through it. The carrier-derived reach already names the module child scope's region.
-                Carried::Object(KObject::Module(module)) => {
-                    child.register_type_delivered(
-                        name.clone(),
-                        KType::Module { module },
-                        carrier,
-                        BindingIndex::value(0),
-                    )?;
-                }
                 Carried::Object(object) => match carrier {
                     // The projection is identity — the whole delivered value binds. The copy is a
                     // deep clone into the frame region, so the carrier's residence-only host is not
@@ -169,9 +150,10 @@ where
                         )?;
                     }
                 },
-                // Type-denoting params (`Er`-style) register a type, not a value binding. The arg is
-                // already a resolved type; the fused door derives its reach off the carrier (a
-                // module-typed argument reaches its child scope's region) and registers it directly.
+                // Type-denoting params (a `:Signature`-kind slot, a type alias) register a type, not a
+                // value binding. The arg is already a resolved type; the fused door derives its reach
+                // off the carrier and registers it directly. A *module* argument is a value and takes
+                // the Object arm above.
                 Carried::Type(kt) => {
                     child.register_type_delivered(
                         name.clone(),

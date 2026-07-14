@@ -342,9 +342,9 @@ impl<'a> Scope<'a> {
     /// materialized `StoredReach`). Widens [`RegionBrand::alloc_object_checked`]'s dest-only audit to
     /// "this scope's region, `evidence`'s reach members, or a region
     /// [`Self::covers_region_ambiently`] covers" — the same coverage predicate, honest-partial in the
-    /// one place the `KObject` walk is (`Wrapped { type_id }`). Surfacing a resolved `KType::Module`
-    /// hit as the Object-arm module value takes this door: the module child scope's region is named by
-    /// the hit's stored reach.
+    /// one place the `KObject` walk is (`Wrapped { type_id }`). Placing an Object-arm module value
+    /// takes this door — a module binds value-side — because the module's child scope lives in a
+    /// region named by the derived stored reach, not necessarily this scope's own.
     pub(crate) fn alloc_object_reaching(
         &self,
         o: KObject<'_>,
@@ -743,9 +743,10 @@ pub(crate) trait KoanRegionExt {
     #[allow(dead_code)]
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
 
-    /// Whether `ptr` was returned by a prior `alloc_module` on this region — the
-    /// [`KType::resident_in`](crate::machine::model::types::KType::resident_in) audit's check for
-    /// a `KType::Module` / `AbstractType { source: AbstractSource::Module(_), .. }` payload.
+    /// Whether `ptr` was returned by a prior `alloc_module` on this region — the residence audit's
+    /// check for any payload that borrows a `&Module`: a `KObject::Module` value, a
+    /// `KType::Signature { sig: SelfOf(_), .. }`, a `KType::Module`, or an
+    /// `AbstractType { source: AbstractSource::Module(_), .. }`.
     fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_signature` on this region — the residence

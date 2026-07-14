@@ -1,14 +1,14 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
-use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{
+    binds_module, lookup_fn, parse_one, run, run_one, run_root_silent,
+};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::witnessed::region_metrics;
 
-/// Bare parameter-name return type: `-> Er` resolves per-call to the carried type via
-/// `Scope::resolve_type`. The parameter is `:Signature`-kind, so `Er` resolves to a *signature* — a
-/// valid return type (a concrete module identity is not; see
-/// [`home_return_type`](crate::machine::execute)). The body returns a module ascribed to that
+/// Bare parameter-name return type: `-> Er` resolves per-call to the carried type. The parameter is
+/// `:Signature`-kind, so `Er` resolves to a *signature*. The body returns a module ascribed to that
 /// per-call signature (`IntOrd :| Er`), which the per-call return contract admits.
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
@@ -52,11 +52,8 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
          LET IntOrdView = (IntOrd :| WithZero)",
     );
     assert!(
-        matches!(
-            scope.resolve_type("IntOrdView"),
-            Some(KType::Module { module: _ })
-        ),
-        "IntOrdView should be an opaquely-ascribed module (type-only) satisfying WithZero's \
+        binds_module(scope, "IntOrdView"),
+        "IntOrdView should be an opaquely-ascribed module value satisfying WithZero's \
          VAL zero slot",
     );
     run(scope, "FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero)");

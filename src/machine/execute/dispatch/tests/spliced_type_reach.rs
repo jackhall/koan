@@ -46,8 +46,8 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     let produced: Sealed<CarriedFamily, CarrierWitness> =
         Sealed::seal(foreign_scope.resident_type_carrier(foreign_hit.kt, foreign_hit.stored));
 
-    // Adopt the sealed type into `scope` and register it there with the foreign reach — the
-    // type-channel mirror of a `LET` binding a module value returned from elsewhere. The envelope
+    // Adopt the sealed type into `scope` and register it there with the foreign reach — a
+    // type-channel binding whose identity borrows a foreign region. The envelope
     // host is the foreign frame the type resides in, exactly what a delivered dep would carry.
     let cell = Delivered::hosted(produced.duplicate(), Rc::clone(&foreign));
     let stored = scope.host_reach_of(&cell);

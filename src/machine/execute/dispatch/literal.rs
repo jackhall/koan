@@ -338,8 +338,6 @@ impl<'step> KoanRuntime<'step> {
                     let stored = s
                         .resolve_type_stored(leaf_name, active_chain.map(|c| &**c))
                         .unwrap_or_default();
-                    // A `KType::Module` in an aggregate cell surfaces as the Object-arm module value,
-                    // so a module in a list/dict/record cell becomes a `Held::Object`.
                     Some(Slot::Static(
                         s.seal_resident_delivered(s.surface_type_hit(kt, stored)),
                     ))

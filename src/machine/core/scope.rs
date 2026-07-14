@@ -717,8 +717,7 @@ impl<'a> Scope<'a> {
     ///
     /// The region-pure nominal finalizes (STRUCT / named UNION / Result / recursive-types / SIG)
     /// call this directly with the empty token — their identity reaches nothing foreign — and consume
-    /// the returned `&KType`; the MODULE finish routes through the fused [`Self::register_module_upsert`],
-    /// which derives the child-scope token before delegating here.
+    /// the returned `&KType`.
     pub(crate) fn register_type_upsert(
         &self,
         name: String,
@@ -817,20 +816,27 @@ impl<'a> Scope<'a> {
         self.register_type_delivered(name, ktype, carrier, index)
     }
 
-    /// Fused MODULE-finish upsert: derive the module's stored reach off its `child` scope
-    /// ([`Self::child_module_reach`]), then run the [`Self::register_type_upsert`] install under it,
-    /// returning the resident `&KType` paired with the token so the caller seals its terminal from
-    /// the same evidence. The home-borrow bit is derived by the mint, never hand-asserted.
-    pub(crate) fn register_module_upsert(
+    /// Fused MODULE-finish value bind: derive the module's stored reach off its `child` scope
+    /// ([`Self::child_module_reach`]) — never by walking the built value — allocate the Object-arm
+    /// module value under that evidence, and bind it into [`Bindings::data`]. Returns the resident
+    /// `&KObject` paired with the token so the caller seals its terminal from the same evidence
+    /// ([`Self::resident_value_carrier`]). The home-borrow bit is derived by the mint, never
+    /// hand-asserted. A module name is a Type token, so a collision with a builtin type is a
+    /// `Rebind` — builtins are immutable and unshadowable, in either channel.
+    pub(crate) fn bind_module(
         &self,
         name: String,
-        identity: crate::machine::model::types::KType<'a>,
+        module: &'a crate::machine::model::values::Module<'a>,
         child: &Scope<'a>,
         index: BindingIndex,
-    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+        if self.shadows_builtin_type(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
         let stored = self.child_module_reach(child);
-        let kt_ref = self.register_type_upsert(name, identity, index, stored)?;
-        Ok((kt_ref, stored))
+        let obj = self.alloc_object_reaching(KObject::Module(module), &stored)?;
+        self.bind_value(name, obj, index, stored)?;
+        Ok((obj, stored))
     }
 
     /// Builtin type registration: no reach parameter — builtins are region-pure by the pure/checked
@@ -1334,6 +1340,28 @@ impl<'a> Scope<'a> {
                     })
             },
         )
+    }
+
+    /// The whole stored token the `data` binding `name` resolves to under `chain` — the
+    /// value-channel twin of [`Self::resolve_type_stored`], walking the same chain as
+    /// [`Self::resolve_value_carrier`] through the reach-carrying [`Bindings::lookup_value_carrier`].
+    /// A type-position path whose head names a module reads its reach here: the module is bound
+    /// value-side, so its child-scope token lives on the `data` entry. `None` when the name resolves
+    /// nowhere on the chain; a placeholder yields the empty token.
+    pub(crate) fn resolve_value_stored(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<StoredReach<'a>> {
+        self.walk_chain(|scope| {
+            scope
+                .bindings()
+                .lookup_value_carrier(name, scope.binding_cutoff(chain))
+                .map(|hit| match hit {
+                    NameLookup::Bound(bound) => bound.stored,
+                    NameLookup::Parked(_) => StoredReach::empty(),
+                })
+        })
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer`

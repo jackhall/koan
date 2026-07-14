@@ -152,9 +152,9 @@ pub fn body_opaque<'a>(
     // carrier, witnessing the module in place. The opaque view's `new_scope` is a same-region child
     // of this frame, so the derived bit records the module's home borrow.
     let stored = ctx.scope.child_module_reach(new_scope);
-    // The opaque view is a returned value, not a named binding, so it surfaces as the Object-arm
-    // module value directly (`new_module` lives in `region`'s own region, so the audit passes on the
-    // dest-only check alone). LET's binding door mints the type-side identity at bind time.
+    // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
+    // region, so the audit passes on the dest-only check alone); a LET around it binds that value
+    // like any other.
     let obj = crate::try_action!(ctx
         .scope
         .alloc_object_reaching(KObject::Module(new_module), &stored));
@@ -192,9 +192,8 @@ pub fn body_transparent<'a>(
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
     seal_view_self_sig(new_module, s);
-    // The transparent view is a returned value, not a named binding, so it surfaces as the Object-arm
-    // module value directly under the same token that pins the reused source's (foreign) child-scope
-    // region. LET's binding door mints the type-side identity at bind time.
+    // The view surfaces as the Object-arm module value under the same token that pins the reused
+    // source's (foreign) child-scope region; a LET around it binds that value like any other.
     let obj = crate::try_action!(ctx
         .scope
         .alloc_object_reaching(KObject::Module(new_module), &stored));

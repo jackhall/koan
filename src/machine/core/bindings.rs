@@ -1,9 +1,10 @@
 //! Lexical binding façade: co-mutating `RefCell` maps (`types`, `data`,
 //! `functions`, `placeholders`, `pending_overloads`) behind validated write
 //! paths that keep the function-mirror invariant — every `data[name]` wrapping
-//! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal
-//! declarations (NEWTYPE / UNION / MODULE / SIG) install their identity into
-//! `types` only — there is no value-side carrier. The `data` and `types` maps
+//! a `KFunction` lives in `functions[signature.untyped_key()]`. Nominal type
+//! declarations (NEWTYPE / UNION / SIG) install their identity into `types`
+//! only — there is no value-side carrier; a module is a value and binds into
+//! `data`. The `data` and `types` maps
 //! are a structural partition: a name is committed to one xor the other, never
 //! both, enforced by the cross-kind check the value and type write paths run.
 //!
@@ -152,9 +153,8 @@ pub enum MemberResolution<'a> {
     },
     Type {
         kt: &'a KType<'a>,
-        /// The member type's stored reach (non-empty foreign reach for a nested `KType::Module`),
-        /// copied whole off the module's own `types` entry — so an ATTR type read witnesses the
-        /// existing `&KType` in place from the replayed token.
+        /// The member type's stored reach, copied whole off the module's own `types` entry — so an
+        /// ATTR type read witnesses the existing `&KType` in place from the replayed token.
         stored: StoredReach<'a>,
     },
 }
@@ -241,11 +241,11 @@ impl BindingIndex {
 pub struct Bindings<'a> {
     /// Each type entry stores its bound type, its lexical [`BindingIndex`], and its **reach** — the
     /// home-omitted foreign [`FrameSet`] the type borrows into. Empty for owned data (`Number`, a
-    /// struct `SetRef`, an abstract member); non-empty for a `KType::Module`, whose reach is folded
-    /// from its child scope at construction. A carrier-oriented read ([`Self::lookup_type_carrier`])
-    /// hands the reach back so the read witnesses the existing `&'a KType` in place from its stored
-    /// reach, never re-deriving it by walking the value. Foreign-only (home-omitted) for the same
-    /// cycle-safety rule as [`Self::data`].
+    /// struct `SetRef`, an abstract member); non-empty for a type borrowing a foreign region (a
+    /// module-sourced `AbstractType`, a `Signature`). A carrier-oriented read
+    /// ([`Self::lookup_type_carrier`]) hands the reach back so the read witnesses the existing
+    /// `&'a KType` in place from its stored reach, never re-deriving it by walking the value.
+    /// Foreign-only (home-omitted) for the same cycle-safety rule as [`Self::data`].
     types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex, StoredReach<'a>)>>,
     /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
     /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
@@ -1027,6 +1027,14 @@ impl<'a> Bindings<'a> {
         drop(data);
         drop(functions_handle);
         self.clear_placeholder_best_effort(name, BindKind::Value);
+        // Module names spell as Type tokens, so a module binder (`MODULE`, `LET <Name> = <module
+        // expr>`) installs a `BindKind::Type` placeholder at submit while its value lands in `data`.
+        // Clear that placeholder here too, so the finalized name resolves through the value channel
+        // instead of parking on a producer that has already run. module-naming-flip retires
+        // Type-token module names and this clear with them.
+        if write_data && matches!(obj, KObject::Module(_)) {
+            self.clear_placeholder_best_effort(name, BindKind::Type);
+        }
         if let Some(bucket) = cleared_overload_bucket {
             // Remove only this binder's pending entry; siblings stay as wake sources.
             self.clear_pending_overload_best_effort(&bucket, index);

@@ -1,6 +1,8 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+use crate::builtins::test_support::{
+    binds_module, lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
+};
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
@@ -17,12 +19,8 @@ fn transparent_ascription_returns_module() {
          SIG OrderedSig = (VAL compare :Number)\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
-    // Transparent ascription `:!` of a module is type-only — its module identity lives
-    // in `types`.
-    assert!(matches!(
-        scope.resolve_type("IntOrdView"),
-        Some(KType::Module { module: _ }),
-    ));
+    // A view is a module value: `LET` binds it on the value channel (`bindings.data`).
+    assert!(binds_module(scope, "IntOrdView"));
 }
 
 #[test]
@@ -62,14 +60,8 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = match scope.resolve_type("FirstAbstract") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("FirstAbstract should be a module identity in types"),
-    };
-    let b = match scope.resolve_type("SecondAbstract") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SecondAbstract should be a module identity in types"),
-    };
+    let a = lookup_module(scope, "FirstAbstract");
+    let b = lookup_module(scope, "SecondAbstract");
     let a_t = a.type_members.borrow().get("Carrier").cloned();
     let b_t = b.type_members.borrow().get("Carrier").cloned();
     // Post-collapse: opaque-ascription abstract-type members are minted as
@@ -98,10 +90,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          SIG OrderedSig = (VAL compare :Number)\n\
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
-    let v = match scope.resolve_type("ViewMod") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("ViewMod should be a module identity in types"),
-    };
+    let v = lookup_module(scope, "ViewMod");
     assert!(v.type_members.borrow().is_empty());
 }
 
@@ -117,10 +106,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
          LET IntOrdAbstract = (IntOrd :| OrderedSig)",
     );
 
-    let abstract_mod = match scope.resolve_type("IntOrdAbstract") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("IntOrdAbstract should be a module identity in types"),
-    };
+    let abstract_mod = lookup_module(scope, "IntOrdAbstract");
     let minted = abstract_mod
         .type_members
         .borrow()
@@ -159,10 +145,7 @@ fn opaque_view_reads_manifest_type_member_concretely() {
          SIG TagSig = ((LET Tag = Number) (VAL item :Number))\n\
          LET View = (Impl :| TagSig)",
     );
-    let view = match scope.resolve_type("View") {
-        Some(KType::Module { module: m }) => *m,
-        other => panic!("View should be a module identity in types, got {other:?}"),
-    };
+    let view = lookup_module(scope, "View");
     let tag = view.type_members.borrow().get("Tag").cloned();
     assert_eq!(
         tag,
@@ -185,10 +168,7 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
          SIG TagSig = ((LET Tag = Number) (VAL x :Tag))\n\
          LET View = (Impl :| TagSig)",
     );
-    let view = match scope.resolve_type("View") {
-        Some(KType::Module { module: m }) => *m,
-        other => panic!("View should be a module identity in types, got {other:?}"),
-    };
+    let view = lookup_module(scope, "View");
     assert!(
         view.slot_type_tags.borrow().get("x").is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
@@ -272,7 +252,7 @@ fn manifest_type_member_match_accepted() {
          LET View = (Impl :| TagSig)",
     );
     assert!(
-        matches!(scope.resolve_type("View"), Some(KType::Module { .. })),
+        binds_module(scope, "View"),
         "a matching manifest member must satisfy the signature",
     );
 }
@@ -290,7 +270,7 @@ fn abstract_member_bound_to_any_type_accepted() {
          LET View = (Impl :| Container)",
     );
     assert!(
-        matches!(scope.resolve_type("View"), Some(KType::Module { .. })),
+        binds_module(scope, "View"),
         "an abstract member supplied at any concrete type must satisfy the signature",
     );
 }

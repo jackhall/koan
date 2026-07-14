@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::ExpressionPart;
@@ -130,10 +130,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
          LET View = (Impl :| Container)",
     );
-    let view = match scope.resolve_type("View") {
-        Some(KType::Module { module }) => *module,
-        other => panic!("View must be a module identity, got {other:?}"),
-    };
+    let view = lookup_module(scope, "View");
     let elt = view.type_members.borrow().get("Elt").cloned();
     match elt {
         Some(KType::AbstractType {
@@ -283,10 +280,7 @@ fn module_attr_access_returns_type_constructor() {
          MODULE IntList = ((LET Wrap = Wrapper))\n\
          LET Mo = (IntList :| MonadSig)",
     );
-    let mo = match scope.resolve_type("Mo") {
-        Some(KType::Module { module }) => *module,
-        other => panic!("Mo should be a module identity in types, got {other:?}"),
-    };
+    let mo = lookup_module(scope, "Mo");
     let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
     match wrap_t {
         Some(kt) => {

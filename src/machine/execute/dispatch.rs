@@ -23,7 +23,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::{Carried, Parseable};
+use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
@@ -95,7 +95,10 @@ pub(super) fn resolve_name_part<'step>(
         Some(NameLookup::Parked(producer)) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
         }
-        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
+        // A module is a value, so a value-side module hit resolves to the Object arm whatever the
+        // part's token class. Module names spell as Type tokens, so a Type part carries them too;
+        // module-naming-flip retires Type-token module names and this half of the guard with them.
+        Some(NameLookup::Bound(obj)) if is_type.is_none() || matches!(obj, KObject::Module(_)) => {
             return NameOutcome::Resolved(Carried::Object(obj));
         }
         Some(NameLookup::Bound(_)) | None => {}
@@ -108,11 +111,6 @@ pub(super) fn resolve_name_part<'step>(
         Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
             // The `&KType` rides the type channel; its stored token is recomputed at the read site
             // (`literal.rs`) via `resolve_type_stored`, since `NameOutcome` carries only the value.
-            // A module name resolves here to `KType::Module`: it is bound type-side (Decision: a
-            // module reaching a binding door installs `KType::Module` into `bindings.types`), so the
-            // probe classifies it on the type channel and the built cell re-resolves it type-side in
-            // `part_walk`. Surfacing it to the Object arm here would route the built cell through
-            // `part_walk`'s value-side `resolve_value_carrier`, which misses a type-side binding.
             TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
             TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
             TypeResolution::Park(producers) => match producers.first() {

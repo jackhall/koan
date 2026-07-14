@@ -9,9 +9,10 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
+use crate::builtins::test_support::lookup_module;
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::model::{KObject, Parseable};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::parse::parse;
 
@@ -116,10 +117,7 @@ fn nested_block_cutoff_is_per_scope() {
         "LET top = 1\n\
          MODULE Mo = ((LET a = 2) (LET b = a))",
     );
-    let m = match scope.resolve_type("Mo") {
-        Some(KType::Module { module }) => *module,
-        _ => panic!("Mo should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "Mo");
     let data = m.child_scope().bindings().data();
     assert!(
         matches!(data.get("b").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0),

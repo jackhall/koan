@@ -4,7 +4,8 @@
 //! them; a transparent view records the source's concrete types.
 
 use crate::builtins::test_support::{
-    parse_one, register_arity1_constructor, run, run_one_err, run_root_silent,
+    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one_err,
+    run_root_silent,
 };
 use crate::machine::core::run_root_storage;
 use crate::machine::model::types::{memo_hit_count, memo_reset};
@@ -13,10 +14,7 @@ use crate::machine::model::KType;
 use crate::machine::{KErrorKind, Scope};
 
 fn module_named<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {
-    match scope.resolve_type(name) {
-        Some(KType::Module { module }) => module,
-        other => panic!("`{name}` should resolve to a module identity, got {other:?}"),
-    }
+    lookup_module(scope, name)
 }
 
 #[test]
@@ -178,14 +176,8 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
          LET FirstView = (Impl :| FullSig)\n\
          LET SecondView = (Impl :| FullSig)",
     );
-    assert!(matches!(
-        scope.resolve_type("FirstView"),
-        Some(KType::Module { .. })
-    ));
-    assert!(matches!(
-        scope.resolve_type("SecondView"),
-        Some(KType::Module { .. })
-    ));
+    assert!(binds_module(scope, "FirstView"));
+    assert!(binds_module(scope, "SecondView"));
     // The second ascription's satisfaction check is a registry hit on the first's verdict.
     assert!(
         memo_hit_count() > 0,

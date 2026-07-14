@@ -1,7 +1,7 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{lookup_module, parse_one, run, run_one, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
@@ -24,10 +24,7 @@ fn functor_returns_a_module() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetValue should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "SetValue");
     let inner = m
         .child_scope()
         .bindings()
@@ -53,10 +50,7 @@ fn functor_body_reads_signature_typed_parameter() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetValue should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "SetValue");
     let sample = m
         .child_scope()
         .bindings()
@@ -86,14 +80,8 @@ fn functor_application_is_generative() {
     run(scope, "LET SetOne = (MAKESET (IntOrdA))");
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
 
-    let m1 = match scope.resolve_type("SetOne") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetOne should be a module identity in types"),
-    };
-    let m2 = match scope.resolve_type("SetTwo") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetTwo should be a module identity in types"),
-    };
+    let m1 = lookup_module(scope, "SetOne");
+    let m2 = lookup_module(scope, "SetTwo");
     assert_ne!(
         m1.scope_id(),
         m2.scope_id(),
@@ -125,12 +113,7 @@ fn functor_admits_unascribed_module_structurally() {
     run(scope, "LET Unascribed = IntOrd");
     run(scope, "LET SetValue = (MAKESET Unascribed)");
 
-    let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!(
-            "SetValue should be a module identity in types — the structural admission failed"
-        ),
-    };
+    let m = lookup_module(scope, "SetValue");
     let inner = m
         .child_scope()
         .bindings()
@@ -204,14 +187,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     run(scope, "LET OrdSet = (MAKESET (IntOrdA))");
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
 
-    let mo = match scope.resolve_type("OrdSet") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("OrdSet not a module identity in types"),
-    };
-    let mh = match scope.resolve_type("HashSet") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("HashSet not a module identity in types"),
-    };
+    let mo = lookup_module(scope, "OrdSet");
+    let mh = lookup_module(scope, "HashSet");
     let to = mo
         .child_scope()
         .bindings()
@@ -254,10 +231,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     );
     run(scope, "LET SetValue = (MAKESET IntView)");
 
-    let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetValue should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "SetValue");
     let sample = m
         .child_scope()
         .bindings()
@@ -286,10 +260,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let m = match scope.resolve_type("SetValue") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("SetValue should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "SetValue");
     let sample = m
         .child_scope()
         .bindings()
@@ -325,14 +296,8 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = match scope.resolve_type("First") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("First should be a module identity in types"),
-    };
-    let b = match scope.resolve_type("Second") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Second should be a module identity in types"),
-    };
+    let a = lookup_module(scope, "First");
+    let b = lookup_module(scope, "Second");
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
     let is_type_constructor = |kt: &Option<KType<'_>>| {
@@ -386,11 +351,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
          MODULE IntOrd = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\
          LET Held = (IntOrd :| OrderedSig)",
     );
-    // `Held` is a type-only `:|`-ascribed module alias — its identity lives in `types`.
-    let held = match scope.resolve_type("Held") {
-        Some(KType::Module { module: m }) => *m,
-        other => panic!("Held should be a module identity in types, got {other:?}"),
-    };
+    let held = lookup_module(scope, "Held");
 
     // Churn the run-root region, then re-ascribe to allocate a second re-bind
     // scope. The original `held` must still walk through to its own pair.

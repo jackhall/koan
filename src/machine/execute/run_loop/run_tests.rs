@@ -2,6 +2,7 @@
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
+use crate::builtins::test_support::binds_module;
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
@@ -254,11 +255,8 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     }
     runtime.execute().unwrap();
     assert!(
-        matches!(
-            scope.resolve_type("AResult"),
-            Some(KType::Module { module: _ })
-        ),
-        "AResult should bind to a Module identity (type-only) after replay-park on \
+        binds_module(scope, "AResult"),
+        "AResult should bind to the ascribed module value after replay-park on \
          forward-declared MODULE / SIG",
     );
 }

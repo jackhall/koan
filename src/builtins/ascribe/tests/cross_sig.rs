@@ -2,11 +2,11 @@
 //! comparable when one structurally `sig_subtype`s the other. See
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
-use crate::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::types::memo_reset;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s
@@ -34,10 +34,7 @@ fn strict_cross_sig_subtype_wins_dispatch() {
     run(scope, "LET Arg = Impl");
     run(scope, "LET Picked = (PICK Arg)");
 
-    let m = match scope.resolve_type("Picked") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Picked should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "Picked");
     let tag = m
         .child_scope()
         .bindings()
@@ -75,10 +72,7 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     run(scope, "LET Arg = Impl");
     run(scope, "LET Picked = (PICK Arg)");
 
-    let m = match scope.resolve_type("Picked") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Picked should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "Picked");
     let tag = m
         .child_scope()
         .bindings()
@@ -160,10 +154,7 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
     run(scope, "LET Arg = Impl");
     run(scope, "LET Picked = (PICKPIN Arg)");
 
-    let m = match scope.resolve_type("Picked") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Picked should be a module identity in types"),
-    };
+    let m = lookup_module(scope, "Picked");
     let tag = m
         .child_scope()
         .bindings()

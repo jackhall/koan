@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::{Carried, KType, Parseable, RecursiveSet};
+use crate::machine::model::{Carried, KObject, KType, Parseable, RecursiveSet};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
@@ -86,12 +86,21 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     s: &'b Scope<'b>,
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
+    // A module is a value, and module names spell as Type tokens: a bare Type leaf whose value-side
+    // hit is a module evaluates to the Object-arm module value, so it takes the value-channel read
+    // rather than the type ladder (which would lower the head to its self-sig). module-naming-flip
+    // retires Type-token module names and this consult with them.
+    if matches!(
+        s.resolve_with_chain(t.as_str(), ctx.chain_deref()),
+        Some(NameLookup::Bound(KObject::Module(_)))
+    ) {
+        return bare_identifier(ctx, s, t.as_str().to_string());
+    }
     match s.resolve_type_identifier(t, ctx.active_chain()) {
         // A resolved type leaf is witnessed in place under `s` (the scope it was resolved against) from
         // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
-        // re-home, no `child_scope()` walk. A `KType::Module` hit surfaces as the Object-arm module
-        // value, so a bare module name evaluates to its principal-signature-typed value.
+        // re-home, no `child_scope()` walk.
         TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
             s.surface_type_hit(resolved.kt, resolved.stored),
         ))),

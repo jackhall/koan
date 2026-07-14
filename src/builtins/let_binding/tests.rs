@@ -419,7 +419,7 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
 }
 
 /// Companion to `let_value_class_lhs_with_module_rhs_rejects` — pinned
-/// independently because the predicate matches `KType::Module` and
+/// independently because the cross-kind guard classifies a module value and a
 /// `KType::Signature` on separate arms.
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
@@ -439,4 +439,29 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
         }
         _ => panic!("expected ShapeError, got {err}"),
     }
+}
+
+/// A module is a value, so a Type-classified LET of a module RHS routes to the **value** bind:
+/// `LET View = (m :| S)` lands in `data`, never `types`. The cross-kind exclusion means exactly
+/// one map holds the name.
+#[test]
+fn let_type_class_with_module_rhs_binds_value_side() {
+    use crate::builtins::test_support::{binds_module, run, run_root_silent};
+    use crate::machine::core::run_root_storage;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE IntOrd = (LET compare = 7)\n\
+         LET View = (IntOrd :! OrderedSig)",
+    );
+    assert!(
+        binds_module(scope, "View"),
+        "a module RHS under a Type-classified name binds the module value",
+    );
+    assert!(
+        scope.resolve_type("View").is_none(),
+        "the name is committed to `data` xor `types` — nothing lands in `types`",
+    );
 }

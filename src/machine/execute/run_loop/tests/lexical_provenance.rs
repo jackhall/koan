@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::builtins::test_support::parse_one;
+use crate::builtins::test_support::{lookup_module, parse_one};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::source::Spanned;
@@ -80,12 +80,9 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     assert!(top_chain.parent.is_none());
     runtime.execute().expect("module runs");
     // Body slot has terminalized by now and dropped its chain; the body-chain
-    // shape is exercised end-to-end by the recursive smoke tests below. MODULE is
-    // type-only, so the `&Module` rides the identity in `types`.
-    let module = match root.resolve_type("Foo") {
-        Some(crate::machine::model::KType::Module { module: m, .. }) => *m,
-        _ => panic!("Foo should be a module identity in types"),
-    };
+    // shape is exercised end-to-end by the recursive smoke tests below. A module is a value,
+    // so the `&Module` rides the Object-arm value in `data`.
+    let module = lookup_module(root, "Foo");
     let _: &Module<'_> = module;
 }
 

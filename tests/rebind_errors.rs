@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType};
+use koan::machine::model::KObject;
 use koan::machine::{run_root_storage, FrameStorage, KError, KErrorKind, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -125,10 +125,10 @@ fn cross_scope_shadowing_succeeds() {
     );
     // Outer x stays 1.
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
-    // Module's x is 99. MODULE is type-only — its `&Module` rides the identity in `types`.
-    let m = match scope.resolve_type("Mod") {
-        Some(KType::Module { module: m }) => *m,
-        _ => panic!("Mod should be a module identity in types"),
+    // Module's x is 99. A module is a value — its `&Module` rides the Object-arm value in `data`.
+    let m = match scope.lookup("Mod") {
+        Some(KObject::Module(m)) => *m,
+        _ => panic!("Mod should bind a module value"),
     };
     let x = m.child_scope().lookup("x");
     assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));

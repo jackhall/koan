@@ -1,6 +1,10 @@
-//! Per-call type-side bind — functor bodies see the right `KType` for module-typed params at dispatch time.
+//! Per-call parameter bind — functor bodies see the right carrier for module-typed params at
+//! dispatch time. A module argument binds value-side (`bindings.data`), so the body reads it back
+//! as the Object-arm module value and projects members off it.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_type, run_root_silent};
+use crate::builtins::test_support::{
+    lookup_module, parse_one, run, run_one, run_one_type, run_root_silent,
+};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType, Parseable};
 
@@ -29,10 +33,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     }
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
-    let m = match scope.resolve_type("HeldSet") {
-        Some(KType::Module { module: m }) => *m,
-        other => panic!("HeldSet should be a module identity in types, got {other:?}"),
-    };
+    let m = lookup_module(scope, "HeldSet");
     let inner = m
         .child_scope()
         .bindings()
@@ -45,10 +46,10 @@ fn functor_body_module_dispatch_does_not_dangle() {
     );
 }
 
-/// Functor body resolves a type-class parameter via the per-call type-side bind:
-/// without it the body's auto-wrapped `(Er)` would hit `UnboundName` against the
-/// FN's captured outer scope. Uses opaque ascription (`:|`) so the bound module
-/// carries an abstract `Carrier` member for the dotted `Er.Carrier` access to return.
+/// Functor body resolves a module-typed parameter via the per-call bind: without it the body's
+/// auto-wrapped `(Er)` would hit `UnboundName` against the FN's captured outer scope. Uses opaque
+/// ascription (`:|`) so the bound module carries an abstract `Carrier` member for the dotted
+/// `Er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
     let region = run_root_storage();
@@ -74,11 +75,9 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     }
 }
 
-/// Per-call type-side bind survives closure escape: an inner FN returned from an
-/// outer functor reads its captured `Er` from the outer's per-call
-/// `bindings.types` after the outer call has returned. The
-/// `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the value-side region; this
-/// pins the type-side entry alongside it.
+/// The per-call parameter bind survives closure escape: an inner FN returned from an outer functor
+/// reads its captured `Er` from the outer's per-call `bindings.data` after the outer call has
+/// returned. The `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the region the binding lives in.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
     let region = run_root_storage();
@@ -111,7 +110,7 @@ fn functor_closure_escape_pins_type_class_bind() {
 }
 
 /// `FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)` dispatches and the
-/// auto-wrapped `(Er)` body resolves `Er` through the per-call type-side binding,
+/// auto-wrapped `(Er)` body resolves `Er` through the per-call value-side binding,
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {

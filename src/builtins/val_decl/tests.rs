@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::builtins::test_support::{binds_module, parse_one, run, run_one_err, run_root_silent};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::types::SigSource;
 use crate::machine::model::KType;
@@ -152,12 +152,8 @@ fn val_slot_satisfied_by_module_let_member() {
          MODULE IntOrd = (LET compare = 0)\n\
          LET Ord = (IntOrd :| WithCompare)",
     );
-    // The `:|`-ascribed module alias `Ord` is type-only (no value-side carrier), so its
-    // module identity lives in `types`.
-    assert!(matches!(
-        scope.resolve_type("Ord"),
-        Some(KType::Module { module: _ })
-    ));
+    // The `:|`-ascribed view `Ord` is a module value, so it binds on the value channel.
+    assert!(binds_module(scope, "Ord"));
 }
 
 /// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL

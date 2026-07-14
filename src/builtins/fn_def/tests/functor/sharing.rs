@@ -1,6 +1,8 @@
 //! `WITH` sharing constraints on functor parameters and return types.
 
-use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent, spliced_part};
+use crate::builtins::test_support::{
+    lookup_fn, lookup_module, parse_one, run, run_root_silent, spliced_part,
+};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::SigSource;
 use crate::machine::model::Carried;
@@ -285,14 +287,15 @@ fn transparent_view_pin_agreement_reads_source_types() {
         SigSource::Declared(sig),
         vec![("Elem".to_string(), KType::Number)],
     );
-    let num_view = scope.resolve_type("NumView").expect("NumView bound");
-    let str_view = scope.resolve_type("StrView").expect("StrView bound");
+    // A view binds value-side, so its argument cell carries the module on the Object channel.
+    let num_view = scope.lookup("NumView").expect("NumView bound");
+    let str_view = scope.lookup("StrView").expect("StrView bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Type(num_view))),
+        slot.accepts_part(&spliced_part(Carried::Object(num_view))),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_part(&spliced_part(Carried::Type(str_view))),
+        !slot.accepts_part(&spliced_part(Carried::Object(str_view))),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -319,10 +322,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         }) => *sig,
         _ => panic!("OrderedSig must bind a Signature KType"),
     };
-    let view = match scope.resolve_type("View") {
-        Some(KType::Module { module }) => module,
-        _ => panic!("View must bind a Module KType"),
-    };
+    let view = lookup_module(scope, "View");
     let carrier_abstract = view
         .type_members
         .borrow()
@@ -333,9 +333,10 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         SigSource::Declared(sig),
         vec![("Carrier".to_string(), carrier_abstract)],
     );
-    let view_kt = scope.resolve_type("View").expect("View bound");
+    // A view binds value-side, so its argument cell carries the module on the Object channel.
+    let view_obj = scope.lookup("View").expect("View bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Type(view_kt))),
+        slot.accepts_part(&spliced_part(Carried::Object(view_obj))),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

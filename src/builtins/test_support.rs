@@ -13,6 +13,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
 };
+use crate::machine::model::values::Module;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{DeliveredCarried, KError, Scope};
 use crate::parse::parse;
@@ -171,6 +172,24 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
         runtime.dispatch_in_scope(expr, scope);
     }
     runtime.execute().expect("scheduler should succeed");
+}
+
+/// The module `name` binds to. Modules are values, so the binding lives on the value channel
+/// (`bindings.data`) and reads back as the Object-arm module value. Panics when `name` is unbound
+/// or binds a non-module.
+pub(crate) fn lookup_module<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {
+    match scope.lookup(name) {
+        Some(KObject::Module(module)) => module,
+        other => panic!(
+            "expected `{name}` to bind a module value in data, got {:?}",
+            other.map(|o| o.ktype().name()),
+        ),
+    }
+}
+
+/// Whether `name` binds a module value — the predicate form of [`lookup_module`].
+pub(crate) fn binds_module(scope: &Scope<'_>, name: &str) -> bool {
+    matches!(scope.lookup(name), Some(KObject::Module(_)))
 }
 
 /// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`.

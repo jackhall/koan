@@ -25,9 +25,9 @@ use super::super::types::{
 };
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
-/// `"Outer.Inner"`). Opaque-ascription members mint `KType::AbstractType { source:
-/// Module(self), name }`; the module value itself rides `KType::Module { module }` — the two
-/// are distinguished by `KType` variant.
+/// `"Outer.Inner"`). The module value rides the value channel as `KObject::Module(self)` and is
+/// typed by its principal signature (`KType::Signature { sig: SelfOf(self), .. }`);
+/// opaque-ascription members mint `KType::AbstractType { source: Module(self), name }`.
 pub struct Module<'a> {
     pub path: String,
     child_scope_ref: &'a Scope<'a>,
@@ -106,10 +106,10 @@ impl<'a> Module<'a> {
         self.child_scope_ref
     }
 
-    /// Stable identity keyed by `KType::Module` equality (and recorded on per-call abstract
-    /// members minted from this module). Two distinct opaque ascriptions of the same source
-    /// module compare distinct because each allocates a fresh child scope (and thus a fresh
-    /// `ScopeId`).
+    /// Stable identity: the key every module-referencing `KType` compares and digests on (a
+    /// `Signature { SelfOf }`, an `AbstractType` minted from this module). Two distinct opaque
+    /// ascriptions of the same source module compare distinct because each allocates a fresh child
+    /// scope (and thus a fresh `ScopeId`).
     pub fn scope_id(&self) -> ScopeId {
         self.child_scope().id
     }

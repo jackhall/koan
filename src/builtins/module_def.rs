@@ -17,8 +17,8 @@ use crate::machine::{NameLookup, Scope, TraceFrame};
 use super::{arg, kw, sig};
 
 /// The MODULE body: mints the child scope, dispatches the body block against it via
-/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish installs
-/// the `KType::Module` identity into the parent scope.
+/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish binds
+/// the module **value** into the parent scope's `data`.
 pub fn body<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -40,24 +40,25 @@ pub fn body<'a>(
         body_expr,
         ChildScopeSeal::SealBeforeFinish,
         move |fctx| {
-            // Idempotent-finalize guard: a re-bound name short-circuits, surfacing the
-            // already-installed identity from its **stored** reach as the Object-arm module value.
+            // Idempotent-finalize guard: a re-bound name short-circuits, re-surfacing the
+            // already-bound module value from its **stored** reach.
             if let Some(NameLookup::Bound(hit)) = fctx
                 .scope
                 .bindings()
-                .lookup_type_carrier(&name_for_finish, None)
+                .lookup_value_carrier(&name_for_finish, None)
             {
                 return Action::Done(Ok(StepCarried::born(
-                    fctx.scope.surface_type_hit(hit.kt, hit.stored),
+                    fctx.scope.resident_value_carrier(hit.obj, hit.stored),
                 )));
             }
             let module: &'a Module<'a> = fctx
                 .scope
                 .brand()
                 .alloc_module(Module::new(name_for_finish.clone(), child_scope));
-            // Mirror the module's type-side bindings into `type_members`. The cross-kind exclusion
-            // keeps `data` and `types` disjoint by name, so this is an exact mirror of `iter_types`
-            // (no value-member name can also be a type name to filter out).
+            // Mirror the module's type members into `type_members`. The cross-kind exclusion keeps
+            // `data` and `types` disjoint by name, so this is an exact mirror of `iter_types` (no
+            // value-member name can also be a type name to filter out). A nested `MODULE` is a
+            // value member, so it lives in the child's `data` and is typed by its own self-sig.
             {
                 let mut tm = module.type_members.borrow_mut();
                 for (member, kt) in child_scope.bindings().iter_types() {
@@ -67,21 +68,18 @@ pub fn body<'a>(
             // Seal the module's self-sig now that `type_members` reflects the body — a plain
             // module carries no SIG, so the raw derivation is the whole signature.
             module.seal_self_sig(SigSchema::raw_self_sig(module));
-            let identity = KType::Module { module };
-            // Fused MODULE-finish upsert: the module's stored reach is derived off the child scope held
-            // **directly** here (never by walking the built `KType::Module`) — the home-borrow bit
-            // included, `true` because the same-region child's own region owner covers this scope's
-            // region before home-omission — then upsert-installed under it. The install stays
-            // type-side (`bindings.types`); the returned terminal surfaces the same identity as the
-            // Object-arm module value from that stored reach.
-            match fctx.scope.register_module_upsert(
-                name_for_finish.clone(),
-                identity,
-                child_scope,
-                bind_index,
-            ) {
-                Ok((kt_ref, stored)) => Action::Done(Ok(StepCarried::born(
-                    fctx.scope.surface_type_hit(kt_ref, stored),
+            // Fused MODULE-finish bind: the module's stored reach is derived off the child scope held
+            // **directly** here (never by walking the built value) — the home-borrow bit included,
+            // `true` because the same-region child's own region owner covers this scope's region
+            // before home-omission — and the Object-arm module value is allocated and bound
+            // value-side (`bindings.data`) under it. The returned terminal witnesses that same value
+            // from the same stored reach.
+            match fctx
+                .scope
+                .bind_module(name_for_finish.clone(), module, child_scope, bind_index)
+            {
+                Ok((obj, stored)) => Action::Done(Ok(StepCarried::born(
+                    fctx.scope.resident_value_carrier(obj, stored),
                 ))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
@@ -115,20 +113,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{
+        lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
+    };
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
-    use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, Scope};
-
-    /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
-    /// `bindings.types`. Recover it for inspection.
-    fn resolve_module<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {
-        match scope.resolve_type(name) {
-            Some(KType::Module { module, .. }) => module,
-            other => panic!("expected {name} to be a Module identity in types, got {other:?}"),
-        }
-    }
+    use crate::machine::model::KObject;
+    use crate::machine::{BindingIndex, KErrorKind};
 
     #[test]
     fn binder_name_extracts_module_name() {
@@ -142,13 +133,14 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
-        assert!(matches!(
-            scope.resolve_type("Foo"),
-            Some(KType::Module { .. })
-        ));
         assert!(
-            scope.bindings().data().get("Foo").is_none(),
-            "MODULE is type-only — no value-side carrier in data",
+            matches!(scope.bindings().data().get("Foo").map(|(o, _, _)| *o),
+                Some(KObject::Module(m)) if m.path == "Foo"),
+            "MODULE binds the module value on the value channel",
+        );
+        assert!(
+            scope.resolve_type("Foo").is_none(),
+            "a module is a value — nothing lands in `types`",
         );
     }
 
@@ -157,23 +149,14 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "MODULE Foo = (LET x = 1)");
-        // A module named in expression position surfaces on the value channel's Object arm.
+        // A module named in expression position reads back on the value channel's Object arm.
         match run_one(scope, parse_one("Foo")) {
             KObject::Module(module) => assert_eq!(module.path, "Foo"),
             other => panic!(
-                "bare module name must surface as an Object-arm module value, got {}",
+                "bare module name must read back as an Object-arm module value, got {}",
                 other.ktype().name()
             ),
         }
-        // The binding itself stays type-side (Decision: binding doors install `KType::Module`).
-        assert!(matches!(
-            scope.resolve_type("Foo"),
-            Some(KType::Module { .. })
-        ));
-        assert!(
-            scope.bindings().data().get("Foo").is_none(),
-            "the module's value channel is a read-time surfacing, not a data binding",
-        );
         // PRINT returns the rendered string — a bare module renders as its path.
         match run_one(scope, parse_one("PRINT Foo")) {
             KObject::KString(s) => assert_eq!(s, "Foo"),
@@ -242,7 +225,7 @@ mod tests {
             scope,
             "MODULE Foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
         );
-        let foo = resolve_module(scope, "Foo");
+        let foo = lookup_module(scope, "Foo");
         assert!(foo.child_scope().bindings().data().contains_key("double"));
     }
 
@@ -291,9 +274,9 @@ mod tests {
         );
     }
 
-    /// Pre-seed the type-only `Foo` identity, then re-dispatch `MODULE Foo = ...`. The
-    /// finalize guard reads `types`, short-circuits on the existing identity, and leaves
-    /// the pre-seeded `&Module` pointer intact.
+    /// Pre-seed the `Foo` module value through the value-side door, then re-dispatch
+    /// `MODULE Foo = ...`. The finalize guard reads `data`, short-circuits on the existing
+    /// binding, and leaves the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
         let region = run_root_storage();
@@ -307,13 +290,11 @@ mod tests {
         let module: &Module<'_> = region
             .brand()
             .alloc_module(Module::new("Foo".into(), child));
-        let identity = KType::Module { module };
-        // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
-        // guard reads `types`, finds the pre-seeded identity, and short-circuits without
-        // re-binding — the original `&Module` pointer survives.
-        scope.register_builtin_type("Foo".into(), identity, BindingIndex::value(0));
+        scope
+            .bind_module("Foo".into(), module, child, BindingIndex::value(0))
+            .expect("pre-seed the module value binding");
         run(scope, "MODULE Foo = (LET y = 2)");
-        let foo = resolve_module(scope, "Foo");
+        let foo = lookup_module(scope, "Foo");
         assert!(std::ptr::eq(foo, module));
     }
 
@@ -324,7 +305,7 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
-        let foo = resolve_module(scope, "Foo");
+        let foo = lookup_module(scope, "Foo");
         let inner = foo.child_scope().bindings().data();
         assert!(
             matches!(inner.get("x").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)

@@ -41,13 +41,21 @@ impl<'step> Scope<'step> {
         elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self }.pending_producers(&kt);
             if pending.is_empty() {
-                // A bare `TypeIdentifier` resolves to at most one `types` binding, so its token is
-                // that binding's stored token (empty for a builtin / owned type; the child-scope
-                // reach for a module) — replayed whole with its home-borrow bit, and minted *before*
-                // the alloc below so `kt`'s own residence audit can see it. Cached alongside `kt` so a
-                // hit rebuilds the read carrier.
+                // A bare `TypeIdentifier` resolves to at most one binding, so its token is that
+                // binding's stored token (empty for a builtin / owned type) — replayed whole with its
+                // home-borrow bit, and minted *before* the alloc below so `kt`'s own residence audit
+                // can see it. Cached alongside `kt` so a hit rebuilds the read carrier. A module head
+                // lowers to `Signature { SelfOf }`, which borrows the module; the module is bound
+                // value-side, so its child-scope reach comes off the `data` entry.
                 let stored = self
                     .resolve_type_stored(te.as_str(), chain_for_reach.as_deref())
+                    .or_else(|| match &kt {
+                        KType::Signature {
+                            sig: SigSource::SelfOf(_),
+                            ..
+                        } => self.resolve_value_stored(te.as_str(), chain_for_reach.as_deref()),
+                        _ => None,
+                    })
                     .unwrap_or_default();
                 let kt_ref: &'step KType<'step> = self
                     .alloc_ktype_reaching(kt, &stored)

@@ -5,12 +5,12 @@
 //! newtype's `.x` reads through to the wrapped record), [`body_module`] for chained module
 //! access.
 //!
-//! The lhs is matched by *type*, never by a kind: a type-channel lhs (a module / type token)
-//! picks `body_module` / `body_type_lhs` through its `OfKind` kind, while a
-//! value-channel lhs is caught by the least-specific `s: Any` slot and validated in
-//! [`access_field`]. Specificity (`Any` < `OfKind` < `Identifier`) resolves the overloads: an
-//! `Identifier` lhs wins `body_identifier`, a module / type-token lhs wins its `OfKind`
-//! overload, and only a bare runtime value falls through to [`body_newtype`].
+//! The lhs is matched by *type*, never by a kind: a module value picks `body_module` through the
+//! empty-signature slot every module's self-sig satisfies, a type-token lhs picks `body_type_lhs`
+//! through its `OfKind` kind, and any other value-channel lhs is caught by the least-specific
+//! `s: Any` slot and validated in [`access_field`]. Specificity (`Any` < `OfKind` < `Identifier`)
+//! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
+//! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
 
 use crate::machine::core::StepAllocator;
 use crate::machine::execute::StepCarried;
@@ -61,10 +61,10 @@ fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
 }
 
 /// Value-then-type lookup of the `s` identifier against `ctx.scope`, returning the projected
-/// member as `Action::Done`. A FUNCTOR's signature-typed parameter is bound only into
-/// `bindings.types`, so a lowercase (Identifier-classed) parameter member access like
-/// `elem.compare` inside the functor body reaches the carried `&Module` through `resolve_type` —
-/// hence value-side first, then type-side.
+/// member as `Action::Done`. A module-valued parameter binds value-side, so a lowercase
+/// (Identifier-classed) parameter member access like `elem.compare` inside a functor body reaches
+/// the module through the value arm; the type-side probe serves a type-channel lhs (an
+/// opaque-ascription abstract type naming its source module).
 pub fn body_identifier<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -95,12 +95,6 @@ pub fn body_identifier<'a>(
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
         match kt {
-            // A lowercase (Identifier-classed) signature-typed FUNCTOR parameter — e.g. `elem` in
-            // `(MAKESET elem :OrderedSig)` — is bound only into `bindings.types` as
-            // `KType::Module`, so `elem.compare` in the body reaches the module through
-            // `resolve_type` and projects the member directly (a type-position use). This arm
-            // collapses into the value-side `lookup` above once modules bind value-side
-            // (module-naming-flip).
             KType::Module { module: m, .. } => return route(access_module_member(m, &field_name)),
             KType::AbstractType {
                 source: AbstractSource::Module(m),
@@ -219,9 +213,6 @@ pub fn body_module<'a>(
 /// the same TypeMismatch a static struct field access produces.
 fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     match kt {
-        // Type-position use: `body_type_lhs`'s `Unresolved` path resolves a bare module name to
-        // `KType::Module` at dispatch time and projects the member directly, never re-emitting a
-        // value-channel module.
         KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
         // member lives in that decl region, so it seals under the decl scope's home frame. Only a
@@ -345,12 +336,10 @@ fn access_field<'a>(
 }
 
 /// Look `field` up inside a [`Module`]'s child scope: opaque-ascription `type_members`,
-/// then value-side `data`, then type-side `bindings.types`.
+/// then the classified `data`-then-`types` member lookup ([`Bindings::lookup_member`]).
 ///
-/// Preferring `data` over `bindings.types` matters for nominal binders like
-/// `MODULE Sub = (...)` and `NEWTYPE P = :{...}`, which install into both: chained access
-/// `Outer.Inner.X` needs the inner *module value* from `data`, not its type identity,
-/// so the next ATTR step can recurse into the inner module's child scope.
+/// A nested `MODULE Sub = (...)` is a value member, so chained access `Outer.Inner.X` reads the
+/// inner module value from `data` and the next ATTR step recurses into its child scope.
 ///
 /// On a value-side hit, an opaque-ascription `slot_type_tags` entry re-tags the read: the
 /// raw value is rewrapped in a `KObject::Wrapped` carrier whose `ktype()` is the per-call
@@ -368,12 +357,10 @@ fn access_field<'a>(
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
-        // Prefer the child scope's own binding — witness its `&KType` in place from the stored reach
-        // (non-empty for a nested module). A member present only in the mirror is an `:|`-minted
-        // abstract type; it is alloc'd fresh and sealed under the bit the checked audit derives from
-        // its own walk (`true` iff the minted identity embeds a pointer into the module region).
-        // A nested `MODULE` mirrored here surfaces as the Object-arm module value, so the next ATTR
-        // step in a chained `Outer.Inner.X` recurses into the inner module's child scope.
+        // Prefer the child scope's own binding — witness its `&KType` in place from the stored
+        // reach. A member present only in the mirror is an `:|`-minted abstract type; it is alloc'd
+        // fresh and sealed under the bit the checked audit derives from its own walk (`true` iff the
+        // minted identity embeds a pointer into the module region).
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type_carrier(field, None) {
                 Some(NameLookup::Bound(hit)) => module_scope.surface_type_hit(hit.kt, hit.stored),

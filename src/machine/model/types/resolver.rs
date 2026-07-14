@@ -15,10 +15,11 @@ use std::rc::Rc;
 
 use crate::machine::core::{LexicalFrame, NameLookup, Scope, ScopeId};
 use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::values::KObject;
 use crate::machine::NodeId;
 
 use super::kkind::KKind;
-use super::ktype::KType;
+use super::ktype::{KType, SigSource};
 use super::recursive_set::{NominalMember, RecursiveSet};
 
 #[cfg(test)]
@@ -119,11 +120,19 @@ pub fn elaborate_type_identifier<'a>(
         Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }
-    // Not a type. Consult the value side only to sharpen the miss message: a name bound (or
-    // binding) in the value language gets the layering diagnostic, an unknown name the
-    // unknown-name failure. The builtin-table fallback via `from_type_identifier` is tried in
-    // both arms so fixture scopes that skip builtin registration still resolve builtin names.
+    // Not a type binding. Consult the value side: a module head lowers to its principal signature,
+    // and any other value-language hit only sharpens the miss message (an unknown name gets the
+    // unknown-name failure). The builtin-table fallback via `from_type_identifier` is tried in the
+    // non-module arms so fixture scopes that skip builtin registration still resolve builtin names.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
+        // A bare module head in type position is the module's self-sig: slots and returns name
+        // signatures, so `x :IntOrd` is the structural slot admitting any module whose self-sig
+        // subtypes IntOrd's, and `-> Er` (a module-valued parameter) returns a module satisfying
+        // `Er`'s interface. Module names spell as Type tokens, so the head reaches here as one;
+        // module-naming-flip retires Type-token module names and this arm with them.
+        Some(NameLookup::Bound(KObject::Module(m))) => {
+            TypeResolution::Done(KType::signature(SigSource::SelfOf(m), Vec::new()))
+        }
         Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
             match KType::<'a>::from_type_identifier(t) {
                 Ok(kt) => TypeResolution::Done(kt),
