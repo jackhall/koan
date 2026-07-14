@@ -671,7 +671,6 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
         captured,
         None,
         None,
-        false,
     )
 }
 
@@ -987,7 +986,6 @@ fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run>
             child,
             None,
             None,
-            true,
         );
         let kf_ref: &KFunction = home.brand().alloc_function(kf);
         let kt = KType::functor_type(Record::new(), Box::new(KType::Null), Some(kf_ref));

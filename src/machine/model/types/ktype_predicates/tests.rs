@@ -780,24 +780,19 @@ fn deferred_return_admission_via_function_compat() {
     let slot_er = KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf(
         "er".into(),
     )));
-    assert!(function_compat(&candidate, &no_params, &slot_er, false));
+    assert!(function_compat(&candidate, &no_params, &slot_er));
 
     // Differing shadow → reject.
     let slot_ar = KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf(
         "Ar".into(),
     )));
-    assert!(!function_compat(&candidate, &no_params, &slot_ar, false));
+    assert!(!function_compat(&candidate, &no_params, &slot_ar));
 
     // Resolved slot → reject (opaque until elaboration).
-    assert!(!function_compat(
-        &candidate,
-        &no_params,
-        &KType::Number,
-        false
-    ));
+    assert!(!function_compat(&candidate, &no_params, &KType::Number));
 
     // `Any` slot → admit.
-    assert!(function_compat(&candidate, &no_params, &KType::Any, false));
+    assert!(function_compat(&candidate, &no_params, &KType::Any));
 }
 
 /// `DeferredReturnSurface` identity is syntactic: two `Expression` shadows built from the

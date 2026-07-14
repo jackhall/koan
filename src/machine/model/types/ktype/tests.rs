@@ -665,7 +665,6 @@ fn to_static_none_for_functor_with_body() {
         scope,
         None,
         None,
-        true,
     ));
     let t = KType::functor_type(Record::new(), Box::new(KType::Number), Some(func));
     assert!(t.to_static().is_none());

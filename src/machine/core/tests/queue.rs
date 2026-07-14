@@ -63,7 +63,6 @@ fn drain_debug_asserts_on_invariant_violation() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -75,7 +74,6 @@ fn drain_debug_asserts_on_invariant_violation() {
         scope,
         None,
         None,
-        false,
     ));
     let obj2 = region
         .brand()
@@ -111,7 +109,6 @@ fn register_function_defers_and_drains_through_function_arm() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()
@@ -170,7 +167,6 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()
@@ -226,7 +222,6 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -238,7 +233,6 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         scope,
         None,
         None,
-        false,
     ));
     let obj2 = region
         .brand()

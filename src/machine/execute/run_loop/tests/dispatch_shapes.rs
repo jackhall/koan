@@ -77,7 +77,6 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
         scope,
         None,
         None,
-        false,
     ));
     let obj = scope
         .brand()

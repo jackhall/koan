@@ -77,9 +77,6 @@ pub fn body<'a>(
                         suggestion = snake_case_identifier(&resolved_name),
                     ))));
                 }
-                Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => {
-                    type_for_types_map = Some(o.ktype())
-                }
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
@@ -126,14 +123,6 @@ pub fn body<'a>(
         let value = rhs
             .as_object()
             .expect("value-route LET RHS is the Object arm");
-        if matches!(value, KObject::KFunction(f) if f.is_functor) {
-            return done_err(KError::new(KErrorKind::ShapeError(format!(
-                "a functor must be bound to a Type-class (capitalized) name; `{name}` \
-                 is value-class — rebind under a Type-classified identifier instead \
-                 (uppercase-leading plus at least one lowercase letter, e.g. `{suggestion}`)",
-                suggestion = capitalize_identifier(&name),
-            ))));
-        }
         // An empty container has no element type to infer. The check reads the source value; a
         // deep-clone into the region preserves the unstamped shape, so it settles here before the
         // fused bind installs anything.
@@ -241,7 +230,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder_name, crate::machine::BindKind::Value)),
         None,
-        false,
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -250,7 +238,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
-        false,
     );
 }
 

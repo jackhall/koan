@@ -5,11 +5,11 @@
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
 //!
-//! - `HeadDeferred` (`type_only = false`): admits any `KFunction`, a type-bound
-//!   functor, or a `SetRef` constructor.
+//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value, a body-bearing
+//!   `KType::KFunctor`, or a `SetRef` constructor.
 //! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only
-//!   type-shaped heads — a `SetRef` constructor, a functor, or a type-bound functor.
-//!   A plain function or a bare functor annotation surfaces a type-shaped
+//!   type-shaped heads — a `SetRef` constructor or a body-bearing `KType::KFunctor`.
+//!   A function value or a body-less type annotation surfaces a type-shaped
 //!   `TypeMismatch`.
 //!
 //! The park/resume pair mirrors `park_on_literal` + the `type_call`
@@ -94,10 +94,9 @@ fn classify_head<'step>(
     reach: StoredReach<'step>,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
-        // A functor's result is a module, so it is admitted in both modes; a plain function is the
-        // pruned arm under `type_only` and falls through to the `TypeMismatch`.
+        // A function value is the pruned arm under `type_only` — the type-only lane admits no
+        // value-channel callable — and falls through to the `TypeMismatch`.
         Carried::Object(obj) => match obj {
-            KObject::KFunction(f) if f.is_functor => Ok(ResolvedCallable::Function(f)),
             KObject::KFunction(f) if !type_only => Ok(ResolvedCallable::Function(f)),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),

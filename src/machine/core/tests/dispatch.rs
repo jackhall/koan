@@ -138,7 +138,6 @@ fn resolve_carries_placeholder_name_for_binder_function() {
         body_a,
         Some((name_extractor, crate::machine::BindKind::Value)),
         None,
-        false,
     );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
@@ -412,7 +411,6 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         scope,
         None,
         None,
-        false,
     ));
     let pick_num_obj = region
         .brand()
@@ -467,7 +465,6 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         scope,
         None,
         None,
-        false,
     ));
     let sibling_obj = region
         .brand()

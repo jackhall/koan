@@ -152,14 +152,14 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
     assert!(!pick.picked_has_binder_name);
 }
 
-/// `is_functor`-flagged `KFunction` projects through `KObject::ktype()` as
-/// `KType::KFunctor`; unflagged stays `KType::KFunction`.
+/// Every `KFunction` value projects through `KObject::ktype()` as `KType::KFunction`,
+/// carrying its parameter record and return slot.
 #[test]
-fn function_value_ktype_projects_kfunctor_when_flagged() {
+fn function_value_ktype_projects_kfunction() {
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    let make_sig = || ExpressionSignature {
+    let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![
             SignatureElement::Keyword("CALL".into()),
@@ -169,91 +169,16 @@ fn function_value_ktype_projects_kfunctor_when_flagged() {
             }),
         ],
     };
-    let plain = KFunction::new(
-        make_sig(),
-        Body::Builtin(body_any),
-        scope,
-        None,
-        None,
-        false,
-    );
-    let plain_obj = KObject::KFunction(region.brand().alloc_function(plain));
-    assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
-    let functor = KFunction::new(make_sig(), Body::Builtin(body_any), scope, None, None, true);
-    let functor_obj = KObject::KFunction(region.brand().alloc_function(functor));
-    match functor_obj.ktype() {
-        KType::KFunctor {
-            params, ret, body, ..
-        } => {
+    let f = KFunction::new(sig, Body::Builtin(body_any), scope, None, None);
+    let obj = KObject::KFunction(region.brand().alloc_function(f));
+    match obj.ktype() {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.get("x"), Some(&KType::Number));
             assert_eq!(params.len(), 1);
             assert_eq!(*ret, KType::Number);
-            // The projection carries the callable body so a type-bound functor
-            // name can be applied through it.
-            assert!(body.is_some(), "a functor value projects body: Some(f)");
         }
-        other => panic!("expected KFunctor, got {:?}", other),
+        other => panic!("expected KFunction, got {other:?}"),
     }
-}
-
-/// `KType::KFunctor`'s `body` is identity-inert: two distinct functor values with
-/// identical signatures project functor types that compare AND hash equal,
-/// despite carrying different `body` pointers.
-#[test]
-fn functor_ktype_identity_ignores_body() {
-    use crate::machine::model::types::{ExpressionSignature, ReturnType};
-    use std::hash::{Hash, Hasher};
-    let region = run_root_storage();
-    let scope = run_root_bare(&region);
-    let make_sig = || ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
-        elements: vec![
-            SignatureElement::Keyword("CALL".into()),
-            SignatureElement::Argument(crate::machine::model::types::Argument {
-                name: "x".into(),
-                ktype: KType::Number,
-            }),
-        ],
-    };
-    let mk_functor = || {
-        let f = KFunction::new(make_sig(), Body::Builtin(body_any), scope, None, None, true);
-        KObject::KFunction(region.brand().alloc_function(f))
-    };
-    let a = mk_functor().ktype();
-    let b = mk_functor().ktype();
-    // Distinct `body` pointers (two independent allocations) but identical shape.
-    assert!(matches!(
-        (&a, &b),
-        (
-            KType::KFunctor { body: Some(_), .. },
-            KType::KFunctor { body: Some(_), .. }
-        )
-    ));
-    assert_eq!(
-        a, b,
-        "functor types with different bodies must compare equal"
-    );
-    let hash_of = |t: &KType<'_>| {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        t.hash(&mut h);
-        h.finish()
-    };
-    assert_eq!(
-        hash_of(&a),
-        hash_of(&b),
-        "functor types with different bodies must hash equal",
-    );
-    // And both equal the body-less annotation form (the `:(FUNCTOR …)` surface).
-    let annotation = KType::functor_type(
-        crate::machine::model::types::Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Number),
-        None,
-    );
-    assert_eq!(
-        a, annotation,
-        "a body-bearing functor equals its annotation"
-    );
-    assert_eq!(hash_of(&a), hash_of(&annotation));
 }
 
 /// A bare leaf Type-token in an `Any` slot lands in `wrap_indices` — the auto-wrap

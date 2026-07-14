@@ -138,7 +138,6 @@ fn register_function_dedupes_exact_signature() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -153,7 +152,6 @@ fn register_function_dedupes_exact_signature() {
         scope,
         None,
         None,
-        false,
     ));
     let obj2 = region
         .brand()
@@ -181,7 +179,6 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -196,7 +193,6 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
         scope,
         None,
         None,
-        false,
     ));
     let obj2 = region
         .brand()
@@ -229,7 +225,6 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -287,7 +282,6 @@ fn register_function_allows_overload_with_different_arg_types() {
         scope,
         None,
         None,
-        false,
     ));
     let f2 = region.brand().alloc_function(KFunction::new(
         sig_str,
@@ -295,7 +289,6 @@ fn register_function_allows_overload_with_different_arg_types() {
         scope,
         None,
         None,
-        false,
     ));
     let obj1 = region
         .brand()
@@ -334,7 +327,6 @@ fn register_function_coexists_with_same_name_value() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()
@@ -374,7 +366,6 @@ fn register_function_coexists_with_same_name_type() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()

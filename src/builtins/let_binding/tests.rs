@@ -236,9 +236,9 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     }
 }
 
-/// Plain FN bound to a Type-class name errors at the LET site — a plain
-/// `KFunction` carries neither `KTypeValue`, nominal identity, nor the
-/// `is_functor` flag, so the allowlist rejects it.
+/// An FN bound to a Type-class name errors at the LET site: a function is a value,
+/// and a Type-class binder admits only a type carrier, so `bindings.types` never
+/// holds a callable.
 #[test]
 fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};

@@ -451,17 +451,7 @@ fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType<'a> {
             DeferredReturnSurface::from_deferred(d),
         )),
     };
-    // `is_functor` projects into the disjoint `KFunctor` family; cross-arm
-    // admissibility is refused in `function_compat` — see
-    // [design/typing/functors.md](../../../../design/typing/functors.md). The
-    // projected functor type carries `body: Some(f)` — the callable handle that a
-    // type-bound functor name (`LET F = (FUNCTOR …)`) is applied through — while
-    // staying identity-inert under equality/hashing.
-    if f.is_functor {
-        KType::functor_type(params, ret, Some(f))
-    } else {
-        KType::function_type(params, ret)
-    }
+    KType::function_type(params, ret)
 }
 
 impl<'a> Parseable<'a> for KObject<'a> {

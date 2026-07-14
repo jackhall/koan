@@ -312,21 +312,11 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::KFunction { params, ret, .. } => match obj {
-                KObject::KFunction(f) => {
-                    if f.is_functor {
-                        return false;
-                    }
-                    function_compat(&f.signature, params, ret, false)
-                }
+                KObject::KFunction(f) => function_compat(&f.signature, params, ret),
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match obj {
-                KObject::KFunction(f) => {
-                    if !f.is_functor {
-                        return false;
-                    }
-                    function_compat(&f.signature, params, ret, true)
-                }
+                KObject::KFunction(f) => function_compat(&f.signature, params, ret),
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
@@ -461,19 +451,13 @@ impl<'a> KType<'a> {
             },
             KType::KFunction { params, ret, .. } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
-                    if f.is_functor {
-                        return false;
-                    }
-                    function_compat(&f.signature, params, ret, false)
+                    function_compat(&f.signature, params, ret)
                 }
                 _ => false,
             },
             KType::KFunctor { params, ret, .. } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
-                    if !f.is_functor {
-                        return false;
-                    }
-                    function_compat(&f.signature, params, ret, true)
+                    function_compat(&f.signature, params, ret)
                 }
                 _ => false,
             },
@@ -760,7 +744,6 @@ pub(super) fn function_compat<'a>(
     sig: &ExpressionSignature<'a>,
     params: &Record<KType<'a>>,
     ret: &KType<'a>,
-    _slot_is_functor: bool,
 ) -> bool {
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     let ret_ok = match &sig.return_type {

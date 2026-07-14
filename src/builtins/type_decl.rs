@@ -180,7 +180,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_bare,
         Some((binder_name, crate::machine::BindKind::Type)),
         None,
-        false,
     );
     let hk_signature = sig(
         KType::Any,
@@ -193,7 +192,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_hk,
         Some((binder_name, crate::machine::BindKind::Type)),
         None,
-        false,
     );
 }
 

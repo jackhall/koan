@@ -80,7 +80,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
-        false,
     );
 }
 

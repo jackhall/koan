@@ -87,11 +87,10 @@ pub(crate) fn identifier_part_binder_name(
     }
 }
 
-/// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
+/// Full-form builtin registration with both binder hooks. The `body` is
 /// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
 /// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`.
 /// `binder_bucket` lets FN key pending-overload entries by inner-call bucket.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -99,7 +98,6 @@ pub(crate) fn register_builtin_full<'a>(
     body: crate::machine::core::kfunction::ActionFn,
     binder_name: Option<(BinderNameFn, crate::machine::core::BindKind)>,
     binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
-    is_functor: bool,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -108,7 +106,6 @@ pub(crate) fn register_builtin_full<'a>(
         scope,
         binder_name,
         binder_bucket,
-        is_functor,
     ));
     let obj: &'a KObject<'a> = region
         .alloc_object_checked(KObject::KFunction(f))
@@ -116,14 +113,14 @@ pub(crate) fn register_builtin_full<'a>(
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
-/// Common-case [`register_builtin_full`]: no binder hooks, not a functor.
+/// Common-case [`register_builtin_full`]: no binder hooks.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
     body: crate::machine::core::kfunction::ActionFn,
 ) {
-    register_builtin_full(scope, name, signature, body, None, None, false);
+    register_builtin_full(scope, name, signature, body, None, None);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -145,7 +142,6 @@ pub(crate) fn register_overload_at<'a>(
         scope,
         None,
         None,
-        false,
     ));
     let obj: &'a KObject<'a> = region
         .alloc_object_checked(KObject::KFunction(f))

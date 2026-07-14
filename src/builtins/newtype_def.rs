@@ -285,7 +285,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder, binder_kind)),
         None,
-        false,
     );
     register_builtin_full(
         scope,
@@ -294,7 +293,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder, binder_kind)),
         None,
-        false,
     );
     register_builtin_full(
         scope,
@@ -303,7 +301,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_record_repr,
         Some((binder, binder_kind)),
         None,
-        false,
     );
 }
 

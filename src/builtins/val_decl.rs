@@ -212,7 +212,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         // (a type-language write), so its forward-reference placeholder is `Type`-kind.
         Some((binder_name, crate::machine::BindKind::Type)),
         None,
-        false,
     );
 }
 

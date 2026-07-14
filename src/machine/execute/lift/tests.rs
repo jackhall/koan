@@ -37,7 +37,6 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             child,
             None,
             None,
-            false,
         );
         home.brand().alloc_function(kf)
     })

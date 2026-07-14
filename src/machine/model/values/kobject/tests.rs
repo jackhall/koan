@@ -265,7 +265,6 @@ fn resident_in_true_for_same_region_kfunction() {
         scope,
         None,
         None,
-        false,
     ));
     let o = KObject::KFunction(f);
     assert!(o.resident_in(storage.region()));
@@ -296,7 +295,6 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
         foreign_scope,
         None,
         None,
-        false,
     ));
     let o = KObject::KFunction(f);
 

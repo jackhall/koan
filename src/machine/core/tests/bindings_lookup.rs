@@ -130,7 +130,6 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()
@@ -180,7 +179,6 @@ fn lookup_function_filters_per_overload_visibility() {
         scope,
         None,
         None,
-        false,
     ));
     let f_late = region.brand().alloc_function(KFunction::new(
         sig_str,
@@ -188,7 +186,6 @@ fn lookup_function_filters_per_overload_visibility() {
         scope,
         None,
         None,
-        false,
     ));
     let obj_early = region
         .brand()
@@ -250,7 +247,6 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()
@@ -280,7 +276,6 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         scope,
         None,
         None,
-        false,
     ));
     let obj = region
         .brand()

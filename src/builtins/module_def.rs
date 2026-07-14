@@ -129,7 +129,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             crate::machine::BindKind::Value,
         )),
         None,
-        false,
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -138,7 +137,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_type_named,
         None,
         None,
-        false,
     );
 }
 

@@ -432,14 +432,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![],
     };
-    let kfunc = KFunction::new(
-        signature,
-        Body::Builtin(probe_body),
-        home_scope,
-        None,
-        None,
-        false,
-    );
+    let kfunc = KFunction::new(signature, Body::Builtin(probe_body), home_scope, None, None);
     let kf_ref = home_storage.brand().alloc_function(kfunc);
     let obligation = ReturnObligation::seal(ReturnContract::Function(kf_ref));
 

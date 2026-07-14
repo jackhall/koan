@@ -43,20 +43,15 @@ pub struct KFunction<'a> {
     /// MODULE, NEWTYPE, RECURSIVE). `extractor` pulls the bound name out of the binder
     /// expression; `kind` records whether the binding lands in the value or the type
     /// language, so the forward-reference placeholder the dispatch driver installs is
-    /// tagged and a value bind never satisfies a type placeholder (or the reverse). FN /
-    /// FUNCTOR carry `binder_bucket` instead and install no name placeholder.
+    /// tagged and a value bind never satisfies a type placeholder (or the reverse). `FN`
+    /// carries `binder_bucket` instead and installs no name placeholder.
     pub binder_name: Option<(BinderNameFn, BindKind)>,
-    /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
-    /// `FUNCTOR`). Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
+    /// `Some(_)` for binder builtins whose body registers a callable function (`FN`).
+    /// Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
     /// dispatch driver installs an entry in `bindings.pending_overloads` and a
     /// sibling bare-arg call form like `(MAKESET int_ord)` parks on the binder slot
     /// instead of surfacing `DispatchFailed` before finalize.
     pub binder_bucket: Option<BinderBucketFn>,
-    /// Flipped on by the `FUNCTOR` binder. Distinguishes the same underlying
-    /// `KFunction` shape into the two type-language families: `function_value_ktype`
-    /// projects `is_functor → KType::KFunctor`, else `KType::KFunction`. See
-    /// [design/typing/functors.md](../../../design/typing/functors.md).
-    pub is_functor: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -66,7 +61,6 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         binder_name: Option<(BinderNameFn, BindKind)>,
         binder_bucket: Option<BinderBucketFn>,
-        is_functor: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -75,7 +69,6 @@ impl<'a> KFunction<'a> {
             captured,
             binder_name,
             binder_bucket,
-            is_functor,
         }
     }
 

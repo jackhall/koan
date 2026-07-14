@@ -258,24 +258,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     use crate::builtins::register_builtin_full;
-    register_builtin_full(
-        scope,
-        "FN",
-        typeexpr_sig(),
-        body,
-        None,
-        Some(binder_bucket),
-        false,
-    );
-    register_builtin_full(
-        scope,
-        "FN",
-        sigil_sig(),
-        body,
-        None,
-        Some(binder_bucket),
-        false,
-    );
+    register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket));
+    register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket));
     register_builtin_full(
         scope,
         "FN",
@@ -283,17 +267,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_value_named_return,
         None,
         Some(binder_bucket),
-        false,
     );
-    register_builtin_full(
-        scope,
-        "FN",
-        record_sig(),
-        body_record_schema,
-        None,
-        None,
-        false,
-    );
+    register_builtin_full(scope, "FN", record_sig(), body_record_schema, None, None);
 }
 
 #[cfg(test)]

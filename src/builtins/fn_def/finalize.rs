@@ -213,7 +213,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope,
         None,
         None,
-        false,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just
