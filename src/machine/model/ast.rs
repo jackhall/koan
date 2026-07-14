@@ -376,8 +376,8 @@ pub enum DispatchShape {
     BareIdentifier,
     BareTypeLeaf,
     /// Bare-`Type`-head call: head is a leaf `Type` and `parts[1..]` is non-empty.
-    /// Resolves the name synchronously and branches into a type construction or a
-    /// functor application via the shared apply-a-callable tail.
+    /// Resolves the name synchronously and launches type construction via the shared
+    /// apply-a-callable tail.
     TypeCall,
     /// Function-value call: head is a lowercase `Identifier`, followed by ≥1
     /// non-keyword parts.
@@ -398,14 +398,14 @@ pub enum DispatchShape {
     /// carves a track that the fold pre-pass folds into nested binary sub-dispatches.
     OperatorChain,
     /// Head-deferred call: head is a nested `Expression` followed by ≥1 non-keyword
-    /// parts. The head is evaluated first; its resulting value (a function, functor,
-    /// or constructible type) is then applied to `parts[1..]` via the shared
+    /// parts. The head is evaluated first; its resulting value (a function or a
+    /// constructible type) is then applied to `parts[1..]` via the shared
     /// apply-a-callable tail.
     HeadDeferred,
     /// Type-position head-deferred call: head is a `:(...)` sigiled type expression
     /// followed by ≥1 non-keyword parts. Like `HeadDeferred`, but the resumed value
-    /// is admitted only when it is type-shaped (a constructible type or a functor);
-    /// a plain function or other value surfaces a type-shaped `TypeMismatch`.
+    /// is admitted only when it is a constructible type; a function or any other value
+    /// surfaces a type-shaped `TypeMismatch`.
     TypeHeadDeferred,
     /// A keyword appears anywhere in `expr.parts` (and the chain shape did not match).
     Keyworded,

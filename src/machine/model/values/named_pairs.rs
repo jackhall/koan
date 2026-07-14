@@ -1,6 +1,6 @@
 //! Consume-by-name view over a call's named arguments — the fields of a `{name = value}`
 //! record literal, reordered into a declaration's parameter / field order by struct
-//! construction ([`struct_value`](crate::machine::execute)) and function / functor calls
+//! construction ([`struct_value`](crate::machine::execute)) and function calls
 //! ([`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction)).
 
 use std::collections::HashMap;

@@ -114,7 +114,7 @@ pub(crate) fn home_ambient_return_type<'captured: 'a, 'a>(
 /// type is a resolved terminal rather than a named binding's resolution, so the evidence is its own
 /// **delivered carrier**, which names every region the produced type borrows: `TYPE OF er` folds the
 /// argument module's reach into its witness, and that module can live in a region neither the call
-/// nor the captured scope owns (a FUNCTOR mints its module in its own per-call region).
+/// nor the captured scope owns (a module-returning FN mints its module in its own per-call region).
 ///
 /// The reach mints in `call_scope` — the per-call scope, which dies with the call — so the evidence
 /// is not retained by the captured region, whose life is the function's, not the call's. As in
@@ -253,9 +253,10 @@ where
                     // Resolve against the param-bound child scope through the reach-carrying door, so
                     // the hit carries the stored reach of the binding the identifier names — for a
                     // module-valued param that is the module's own region, which need be neither the
-                    // frame's nor the captured scope's (a FUNCTOR mints its module in its own per-call
-                    // region). Homing under that reach is what admits such a module; the home is capped
-                    // at `'step` so the contract `ret` can't out-claim the pin — see `home_resolved_return_type`.
+                    // frame's nor the captured scope's (a module-returning FN mints its module in
+                    // its own per-call region). Homing under that reach is what admits such a
+                    // module; the home is capped at `'step` so the contract `ret` can't out-claim
+                    // the pin — see `home_resolved_return_type`.
                     let homed = ctx.region.with_scope(|child| {
                         let captured = func.captured_scope();
                         let homed: Result<&'step KType<'step>, KError> = match child

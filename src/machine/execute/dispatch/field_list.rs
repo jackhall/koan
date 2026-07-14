@@ -1,5 +1,5 @@
 //! Shared deferral for typed field lists whose elaboration parked on a forward type or
-//! scheduled sub-Dispatches for sigil field types — FN/FUNCTOR parameter lists, the
+//! scheduled sub-Dispatches for sigil field types — FN parameter lists, the
 //! NEWTYPE record repr, the UNION schema, and the standalone record-type sigil.
 //!
 //! One dep-finish waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
@@ -7,7 +7,7 @@
 //! sub-Dispatch carriers back through that walker's `results` channel in DFS order. Two
 //! composition surfaces consume the sealed `(name, KType)` pairs:
 //!
-//! - the record-type sigil and the FN/FUNCTOR carrier compose at the store's own fold brand
+//! - the record-type sigil and the FN carrier compose at the store's own fold brand
 //!   via [`fold_fields_at_brand`] and a [`BrandCompose`] closure, so the pairs and every extra
 //!   operand cross as brand-delivered views rather than ambient captures;
 //! - the UNION schema and the NEWTYPE record repr hand the pairs to a caller-supplied
@@ -35,7 +35,7 @@ use super::SchedulerView;
 use crate::machine::DeliveredCarried;
 
 /// Composes the final `KType` at the fold brand from the elaborated pairs and any extra operand
-/// views (e.g. the FN/FUNCTOR return type's carrier view). Runs inside the fold closure of
+/// views (e.g. the FN return type's carrier view). Runs inside the fold closure of
 /// [`fold_fields_at_brand`]; everything it builds from is a declared operand of that fold — the
 /// pairs cloned out of brand-delivered views, plus the `extras` views. The composed `KType<'b>` can
 /// only inhabit the brand from those views or owned data, since the fold's sink
@@ -143,7 +143,7 @@ impl<'step> FieldListRewalk<'step> {
 ///
 /// Dep ORDER contract: `deps` is `[parks.., owned.., extras..]`. `carriers` is `[parks.., owned..]`
 /// in terminal order, `park_count` splits its park prefix from its owned suffix, and `extras` are
-/// compose-only operands (e.g. the FN/FUNCTOR return type's carrier). Inside the fold the walk feed
+/// compose-only operands (e.g. the FN return type's carrier). Inside the fold the walk feed
 /// is `views[park_count..carriers.len()]` (the owned suffix), and the extras are
 /// `views[carriers.len()..]`. Every operand's reach and residence host fold into the result's
 /// witness, so a field or return type reaching a producer region carries that reach forward.
@@ -327,7 +327,7 @@ pub(crate) fn defer_field_list_action<'a>(
 /// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] vector,
 /// but its finish runs the re-walk at the store's own fold brand through [`fold_fields_at_brand`]
 /// rather than folding an ambient `finalize`. `extras` are compose-only operand carriers (e.g. the
-/// FN/FUNCTOR return type's carrier), and `compose` folds the elaborated pairs plus those extra
+/// FN return type's carrier), and `compose` folds the elaborated pairs plus those extra
 /// brand views into the result `KType` inside the fold closure. Used by `build_carrier`
 /// (`src/builtins/parameterized_types.rs`); `nominal_schema` keeps the ambient-`finalize` twin.
 #[allow(clippy::too_many_arguments)]

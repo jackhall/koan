@@ -1,5 +1,5 @@
 //! `Record<V>` — an ordered identifier-keyed map: the shape behind a struct schema's
-//! `(name, type)` fields, the FN/FUNCTOR parameter list, and the runtime binding
+//! `(name, type)` fields, the FN parameter list, and the runtime binding
 //! carriers. Generic over the value, so the type level stores `Record<KType>` and the
 //! value level stores `Record<KObject>`.
 //!

@@ -61,7 +61,7 @@ pub struct Resolved<'step> {
     /// dispatch driver installs a kind-tagged placeholder. `None` for a non-binder pick.
     pub placeholder: Option<(String, BindKind)>,
     /// `Some(_)` only for binder builtins whose body registers a callable
-    /// function (FN, FUNCTOR): holds the inner-call bucket key so a sibling
+    /// function (`FN`): holds the inner-call bucket key so a sibling
     /// bare-arg call to the to-be-registered overload parks on this slot.
     pub pending_overload_bucket: Option<crate::machine::model::types::UntypedKey>,
     pub slots: ClassifiedSlots,
@@ -72,7 +72,7 @@ pub enum DispatchOutcome<'step> {
     Ambiguous(usize),
     Deferred,
     /// Park on forward-reference placeholders (or an in-flight sibling
-    /// FN/FUNCTOR `pending_overloads[key]`) and re-dispatch once they bind.
+    /// FN `pending_overloads[key]`) and re-dispatch once they bind.
     /// Distinct from `Deferred`: waits on existing producers without
     /// scheduling new work.
     ParkOnProducers(Vec<NodeId>),
@@ -379,7 +379,7 @@ fn relaxed_admits<'e>(
 /// Lazy-candidate gate: a `KType::KExpression` slot bound by an
 /// `ExpressionPart::Expression` relaxes other non-`KExpression` slots to admit
 /// `Expression` / `SigiledTypeExpr` parts speculatively (they route through
-/// `eager_indices` post-pick). Required by FN / FUNCTOR overloads.
+/// `eager_indices` post-pick). Required by FN overloads.
 fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) -> bool {
     sig.elements
         .iter()

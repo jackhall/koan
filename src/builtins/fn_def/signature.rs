@@ -183,7 +183,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     ParamListOutcome::Done(elements)
 }
 
-/// Dispatch-time bucket-key extractor for FN / FUNCTOR. The key must match what a
+/// Dispatch-time bucket-key extractor for FN. The key must match what a
 /// future call would compute via `KExpression::untyped_key`: each Keyword maps to
 /// `UntypedElement::Keyword`, and each `<name> :<Type>` pair collapses to one
 /// `UntypedElement::Slot`.

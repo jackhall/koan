@@ -11,7 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
 ///
 /// STRUCT / record fields are lowercase user identifiers, so they require `Identifier`.
-/// FN / FUNCTOR parameters may be capitalized (`Ty`, `Er`) when they name a type or a
+/// FN parameters may be capitalized (`Ty`, `Er`) when they name a type or a
 /// signature value, which lexes as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
 /// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
 /// type-token case the name string is read via `TypeIdentifier::render()`.
@@ -46,7 +46,7 @@ pub fn parse_pair_list<'a, T>(
                 FieldNameKind::Identifier | FieldNameKind::IdentifierOrType,
             ) => s.clone(),
             // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
-            // `Type` tokens; admitted under `IdentifierOrType` (FN / FUNCTOR) and `Type`
+            // `Type` tokens; admitted under `IdentifierOrType` (FN) and `Type`
             // (UNION tags), never for STRUCT / record fields.
             (ExpressionPart::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {
                 t.render()
@@ -82,7 +82,7 @@ mod tests {
     use crate::source::Spanned;
 
     /// `[name, slot]` parts where the name rides as a `Type` token (e.g. a capitalized
-    /// FUNCTOR param `Ty`) and the slot is an arbitrary leaf, here a `Type` too.
+    /// FN param `Ty`) and the slot is an arbitrary leaf, here a `Type` too.
     fn type_named_pair<'a>() -> KExpression<'a> {
         KExpression::new(vec![
             Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Ty".into()))),

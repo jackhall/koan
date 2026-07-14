@@ -164,8 +164,8 @@ pub(in crate::machine::execute) struct PartWalkResult<'step> {
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
 ///
-/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function and
-///   functor calls, struct construction).
+/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function
+///   calls, struct construction).
 /// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
 ///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
 ///   surfaces a loud `DispatchFailed`.

@@ -604,7 +604,7 @@ fn set_resident_in(
         })
 }
 
-/// Render an FN/FUNCTOR parameter record as the comma-free `name :type` group the
+/// Render an FN parameter record as the comma-free `name :type` group the
 /// `:(FN (...) -> _)` surface re-parses. A leaf type surface gets a `:` prefix; one that
 /// already opens a sigil (`:(LIST OF Number)`) is left as-is (no `::`).
 fn render_param_record(params: &Record<KType<'_>>) -> String {

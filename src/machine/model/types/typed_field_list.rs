@@ -52,11 +52,11 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
     }
 }
 
-/// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
+/// Entry point used by STRUCT / UNION / FN. Routes each field type through the
 /// scheduler-aware [`elaborate_type_identifier`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller installs one dep-finish for
 /// the merged set. `name_kind` selects valid field-name tokens (STRUCT / UNION pass
-/// `Identifier`; FN / FUNCTOR pass `IdentifierOrType` to accept capitalized type-parameter
+/// `Identifier`; FN passes `IdentifierOrType` to accept capitalized type-parameter
 /// names).
 ///
 /// `results` is `None` on the first walk (each sigil field schedules a sub-Dispatch) and

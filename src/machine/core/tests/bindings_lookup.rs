@@ -222,7 +222,7 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // No bucket for this key, but a pending-overload entry stands in for an
-    // in-flight FN/FUNCTOR producer.
+    // in-flight FN producer.
     let sig = unit_signature();
     let key = sig.untyped_key();
     scope

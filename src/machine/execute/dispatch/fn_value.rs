@@ -48,7 +48,7 @@ pub(super) fn initial<'step>(
 
 /// Resolve the already-bound head value to a [`ResolvedCallable`] and hand
 /// off to the shared apply-a-callable tail. The head is a value-bound
-/// lowercase identifier, so only a `KFunction` (functor or not) is callable —
+/// lowercase identifier, so only a `KFunction` is callable —
 /// the partition invariant keeps a type out of `bindings.data`, so a
 /// constructor-typed head reaches dispatch through the type channel
 /// (`HeadDeferred`), never here. Anything else is a non-callable `TypeMismatch`.

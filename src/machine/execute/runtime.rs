@@ -310,9 +310,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                         // The type is a sub-dispatch's result, so its evidence is its own delivered
                         // carrier — which names every region it borrows, including one the captured
                         // scope does not cover (`-> :(TYPE OF er)` over a module minted in a
-                        // FUNCTOR's per-call region). The reach mints in the FN's own per-call
-                        // scope, so it dies with the call. Without a frame block there is no such
-                        // scope, and the type takes the evidence-free ambient door.
+                        // module-returning FN's per-call region). The reach mints in the FN's own
+                        // per-call scope, so it dies with the call. Without a frame block there is
+                        // no such scope, and the type takes the evidence-free ambient door.
                         let homed = match &block_entry {
                             BlockEntry::FrameScope(frame) => frame.with_scope(|call| {
                                 home_delivered_return_type(

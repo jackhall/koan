@@ -5,9 +5,9 @@
 //! Not to be confused with the **module-signature** type (`SIG`-declared) at
 //! [`crate::machine::model::values::module::ModuleSignature`].
 //!
-//! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so functor return types
-//! that reference a per-call parameter (`-> er`, `-> er.Type`) survive
-//! FN-definition without sub-dispatching against the outer scope.
+//! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so return types that
+//! reference a per-call parameter (`-> er`, `-> er.Type`) survive FN-definition without
+//! sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 

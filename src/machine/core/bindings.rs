@@ -198,7 +198,7 @@ pub struct TypeHit<'a> {
 /// pending sibling at once. A no-hit lookup is `overloads.is_empty() &&
 /// pending.is_none()`.
 ///
-/// `pending` names a visible `pending_overloads` entry — a sibling FN/FUNCTOR
+/// `pending` names a visible `pending_overloads` entry — a sibling FN
 /// binder has dispatched a matching overload whose body hasn't finalized. The
 /// consumer parks on the earliest-index visible producer; on wake it
 /// re-dispatches and either picks from the now-live bucket or re-parks on the
@@ -234,7 +234,7 @@ impl BindingIndex {
 /// Co-mutating `RefCell` maps backing every lexical binding. `placeholders`
 /// and `pending_overloads` are intentionally separate: the former is consulted
 /// by name (value/type forward references); the latter by full dispatch bucket
-/// key (a bare-arg call whose FN/FUNCTOR overload is still finalizing). Keying
+/// key (a bare-arg call whose FN overload is still finalizing). Keying
 /// dispatch parks by the full bucket key keeps `(MAKESET _)` and
 /// `(MAKESET _ USING _)` from colliding.
 ///
@@ -266,7 +266,7 @@ pub struct Bindings<'a> {
     data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex, StoredReach<'a>)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex, BindKind)>>,
-    /// Bucket-key → entries for FN / FUNCTOR overloads whose binder has
+    /// Bucket-key → entries for FN overloads whose binder has
     /// dispatched but not finalized. Sibling binders sharing one inner-call
     /// bucket key each install their own entry; consumers park on the
     /// earliest-index visible one. On finalize only that entry is removed;
@@ -862,7 +862,7 @@ impl<'a> Bindings<'a> {
     /// The bucket key MUST equal what `KExpression::untyped_key` would compute
     /// for a *call* to the eventual overload (not the binder call itself).
     ///
-    /// **Append, never deduplicate**: sibling FN/FUNCTOR binders sharing one
+    /// **Append, never deduplicate**: sibling FN binders sharing one
     /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
     /// `FN (PICK xs :B) -> ...` — each install their own entry at their own
     /// [`BindingIndex`]. The entry is removed in [`Bindings::try_apply`] when

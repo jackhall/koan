@@ -480,7 +480,7 @@ impl<'a> KType<'a> {
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no argument.
             KType::RecursiveGroup(_) => false,
-            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing argument slot.
+            // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             KType::DeferredReturn(_) => false,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply` `ktype()`, so admit
             // only a `Carried::Type` with structurally-equal inner `KType`.
@@ -573,7 +573,7 @@ impl<'a> KType<'a> {
             // A whole-set handle names a group of types, not a value type — it admits no argument;
             // the `RECURSIVE TYPES` group name is a reserved value-language seam.
             KType::RecursiveGroup(_) => false,
-            // Confined to a synthesized FN/FUNCTOR `ret` slot — never a free-standing argument slot.
+            // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             KType::DeferredReturn(_) => false,
         }
     }

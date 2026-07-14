@@ -2,7 +2,7 @@
 //! resolution rule. Forward references at the same lexical level are no longer parked
 //! through to a later sibling: the strict `b.idx < c` visibility predicate hides
 //! later-sibling bindings from earlier consumers, and only nominal binders (STRUCT,
-//! named UNION, SIG, FUNCTOR, MODULE) carry the D7 carve-out that re-exposes them to
+//! named UNION, SIG, MODULE) carry the D7 carve-out that re-exposes them to
 //! siblings on the same block. This file pins both shapes — the value-style
 //! `UnboundName` surface for LET / FN forward references, and the nominal-binder
 //! continued-resolution path.

@@ -507,7 +507,7 @@ impl<'a> Scope<'a> {
 
     /// True iff `key` names a builtin dispatch bucket — a finalized overload lives
     /// under it in the run-global root. Builtins are immutable and unshadowable, so a
-    /// user FN/FUNCTOR whose untyped signature key collides with a builtin is a
+    /// user FN whose untyped signature key collides with a builtin is a
     /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
     /// root directly.
     fn shadows_builtin_function(&self, key: &crate::machine::model::types::UntypedKey) -> bool {
@@ -1234,7 +1234,7 @@ impl<'a> Scope<'a> {
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a
     /// `pending_overloads[bucket]` entry so dispatch's no-bucket fallback parks
-    /// bare-arg calls on the producing FN/FUNCTOR binder. Sibling installs sharing the
+    /// bare-arg calls on the producing FN binder. Sibling installs sharing the
     /// bucket each append a distinct entry; entries are removed on finalize by
     /// matching the producing binder's `BindingIndex`. See
     /// [`Bindings::try_install_pending_overload`].

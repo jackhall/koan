@@ -13,8 +13,7 @@
 //!   newtype / `TypeConstructor` identity). Reuses the `constructors` module
 //!   (`CtorKind` + `launch`).
 //! - `Function(&KFunction)` — call a `KFunction` by name. Every function rides this
-//!   arm, whatever it returns: a functor — a module-returning function — is an
-//!   ordinary `KFunction`, so its application is this arm too.
+//!   arm, whatever it returns.
 
 use std::rc::Rc;
 
@@ -44,7 +43,7 @@ pub(in crate::machine::execute) enum ResolvedCallable<'step> {
         identity: &'step KType<'step>,
         reach: StoredReach<'step>,
     },
-    /// Call a `KFunction` by name — functor or not; a functor's result is a module.
+    /// Call a `KFunction` by name.
     Function(&'step KFunction<'step>),
 }
 
@@ -210,7 +209,7 @@ fn union_member_names(members: &[KType<'_>]) -> String {
     names.join(", ")
 }
 
-/// Call a `KFunction` by name. Functions and functors take `{name = value}` only; a
+/// Call a `KFunction` by name. A function takes `{name = value}` only; a
 /// positional body is a loud `DispatchFailed`. Named args reconstruct the exact-arity
 /// positional expression, then eager-resolve the value slots before binding.
 fn apply_function<'step>(

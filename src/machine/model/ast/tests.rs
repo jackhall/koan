@@ -396,12 +396,12 @@ fn head_deferred_for_nested_expression_head() {
     assert_eq!(e.shape(), DispatchShape::HeadDeferred);
 }
 
-/// `:(MyFunctor {T = Number}) {x = 1}` — `:(...)` sigil head followed by a
-/// non-keyword part. Routes to `TypeHeadDeferred` (the type-shaped head lane).
+/// `:(MyCarrier) {x = 1}` — `:(...)` sigil head followed by a non-keyword part.
+/// Routes to `TypeHeadDeferred` (the type-shaped head lane).
 #[test]
 fn type_head_deferred_for_sigiled_head() {
     let e = KExpression::new(parts_of(vec![
-        sigil(vec![ty("MyFunctor")]),
+        sigil(vec![ty("MyCarrier")]),
         record(vec![("x", num(1.0))]),
     ]));
     assert_eq!(e.shape(), DispatchShape::TypeHeadDeferred);
