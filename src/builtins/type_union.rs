@@ -20,6 +20,7 @@ use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
+use super::op_def::OperatorForm;
 use super::resolve_or_await::expect_type_terminal;
 use super::{arg, kw, sig};
 
@@ -99,20 +100,26 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     super::op_def::register_unary_operator(
         scope,
         "|",
-        sig(
-            KType::OfKind(KKind::AnyType),
-            vec![kw("|"), arg("members", KType::KExpression)],
-        ),
-        Body::Builtin(body_nary),
-        sig(
-            KType::OfKind(KKind::AnyType),
-            vec![
-                arg("left", KType::OfKind(KKind::AnyType)),
-                kw("|"),
-                arg("right", KType::OfKind(KKind::AnyType)),
-            ],
-        ),
-        Body::Builtin(body_binary),
+        OperatorForm {
+            signature: sig(
+                KType::OfKind(KKind::AnyType),
+                vec![kw("|"), arg("members", KType::KExpression)],
+            ),
+            body: Body::Builtin(body_nary),
+        },
+        OperatorForm {
+            signature: sig(
+                KType::OfKind(KKind::AnyType),
+                vec![
+                    arg("left", KType::OfKind(KKind::AnyType)),
+                    kw("|"),
+                    arg("right", KType::OfKind(KKind::AnyType)),
+                ],
+            ),
+            body: Body::Builtin(body_binary),
+        },
+        // A natively seeded builtin has no group context at all.
+        false,
         BindingIndex::BUILTIN,
     )
     .expect("builtin `|` unary-operator seeding must not collide");

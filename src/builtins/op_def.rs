@@ -420,22 +420,34 @@ impl<'a> OpPlan<'a> {
                     result_type,
                     vec![arg(LEFT, operand.clone()), kw(&sym), arg(RIGHT, operand)],
                 );
-                // The door writes the registry entry unconditionally, which is what a unary
-                // declaration always wants: `check_group_context` rejects `UNARY OP` inside a
-                // `GROUP`, so `in_group` cannot hold on this arm.
+                // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
+                // built, so `in_group` cannot hold here; the door asserts that rather than take
+                // it on trust, since it writes the single-member group unconditionally.
                 register_unary_operator(
                     scope,
                     &sym,
-                    list_signature,
-                    Body::UserDefined(body_expr),
-                    bridge_signature,
-                    Body::UserDefined(bridge_body(&sym)),
+                    OperatorForm {
+                        signature: list_signature,
+                        body: Body::UserDefined(body_expr),
+                    },
+                    OperatorForm {
+                        signature: bridge_signature,
+                        body: Body::UserDefined(bridge_body(&sym)),
+                    },
+                    in_group,
                     bind_index,
                 )?
             }
         };
         Ok(scope.resident_value_carrier(obj, stored))
     }
+}
+
+/// One dispatchable form of an operator: the signature naming a surface, and the body that surface
+/// reaches. A unary operator is registered from two — the list form and the binary form.
+pub(super) struct OperatorForm<'a> {
+    pub signature: ExpressionSignature<'a>,
+    pub body: Body<'a>,
 }
 
 /// Register the fixed triple every unary operator consists of: the list-form overload under
@@ -447,17 +459,30 @@ impl<'a> OpPlan<'a> {
 ///
 /// Registration derives each bucket key from the signature the caller hands in, so a caller that
 /// spells a signature the use site never computes would register into a bucket no koan expression
-/// reaches — the operator would silently never dispatch. The two asserts close that channel; a
-/// mismatch can only come from crate code, never from koan source.
+/// reaches — the operator would silently never dispatch. The signature asserts close that channel;
+/// a mismatch can only come from crate code, never from koan source.
+///
+/// `in_group` is the caller's group context, and must be `false`: a single-member group is the only
+/// group a unary operator can be in, because its reduction hands the whole run to one body as a
+/// single list, which presupposes the run names no other operator. The door writes that group
+/// unconditionally, so it asserts the context rather than trusting it — a grouped caller would
+/// write a size-1 `Unary` record under the very key its `GROUP` already claims.
 pub(super) fn register_unary_operator<'a>(
     scope: &'a Scope<'a>,
     sym: &str,
-    list_signature: ExpressionSignature<'a>,
-    list_body: Body<'a>,
-    binary_signature: ExpressionSignature<'a>,
-    binary_body: Body<'a>,
+    list: OperatorForm<'a>,
+    binary: OperatorForm<'a>,
+    in_group: bool,
     bind_index: BindingIndex,
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    let OperatorForm {
+        signature: list_signature,
+        body: list_body,
+    } = list;
+    let OperatorForm {
+        signature: binary_signature,
+        body: binary_body,
+    } = binary;
     assert_eq!(
         list_signature.untyped_key(),
         unary_key(sym),
@@ -469,6 +494,11 @@ pub(super) fn register_unary_operator<'a>(
         binary_key(sym),
         "unary operator `{sym}`: the binary-form signature must key the bucket a two-operand use \
          computes",
+    );
+    assert!(
+        !in_group,
+        "unary operator `{sym}`: a unary operator chains with nothing, so it can only be its own \
+         single-member group",
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
