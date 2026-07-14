@@ -73,5 +73,4 @@ insert guard for pre-seal pointer transients live in
 
 ## Open work
 
-- [Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md)
 - [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)

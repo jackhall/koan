@@ -17,7 +17,9 @@
 use crate::machine::DeliveredCarried;
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, RegionBrand, Scope, StoredReach};
+use crate::machine::core::{
+    BindingIndex, CallFrame, KError, RegionBrand, Scope, StoredReach, TypeHit,
+};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
 use crate::machine::model::values::Carried;
@@ -63,7 +65,7 @@ pub enum ExecOutcome<'ast, 'step> {
 /// signature (`FromSignature` → `ReturnContract::Function`); a deferred-`Type` return whose type
 /// resolved synchronously carries it already re-homed into the captured-scope region (`Resolved` →
 /// `ReturnContract::PerCall`), so the lift boundary checks + stamps against it — no dep-finish, TCO
-/// preserved. The re-home (via [`home_return_type`]) lets the elaboration read the param-bound child
+/// preserved. The re-home (via [`home_resolved_return_type`]) lets the elaboration read the param-bound child
 /// scope at the frame brand yet hand back a `ret` reference at the call's `'step`.
 pub enum PerCallReturn<'step> {
     FromSignature,
@@ -81,24 +83,43 @@ pub enum PerCallReturn<'step> {
 /// the destination — valid for `'step` (the caller awaits the callee and the reach-set fold pins the
 /// argument), but it must not lengthen to the captured region's lifetime, which can outlive that pin.
 ///
-/// `reach` is the borrowed region's evidence: the stored reach of the binding `kt` was resolved
-/// through, which names exactly the foreign regions that binding pins. Homing under it
-/// ([`Scope::alloc_ktype_reaching`]) is what lets a return type name a module living outside the
-/// captured region — the audit still refuses a borrow no evidence member, ambient coverage, or the
-/// destination itself covers.
+/// The evidence is the [`TypeHit`]'s own stored reach — the reach of the binding `hit.kt` was
+/// resolved through, which names exactly the foreign regions that binding pins. The door takes the
+/// hit whole rather than a type and a reach side by side, so the reach audited can only be the one
+/// the resolver derived for that very type. Homing under it ([`Scope::alloc_ktype_reaching`]) is
+/// what lets a return type name a module living outside the captured region — the audit still
+/// refuses a borrow no evidence member, ambient coverage, or the destination itself covers.
 ///
 /// A bare module-valued parameter in return position (`-> Er`) elaborates to the module's principal
 /// signature (`Signature { SelfOf }`), which homes here like any other region-borrowing type: slots
 /// and returns name signatures, so the contract is "a module satisfying `Er`'s interface".
-pub(crate) fn home_return_type<'captured: 'a, 'a>(
+pub(crate) fn home_resolved_return_type<'captured: 'a, 'a>(
+    hit: &TypeHit<'_>,
+    captured: &Scope<'captured>,
+) -> Result<&'a KType<'a>, KError> {
+    home(hit.kt, captured, &hit.stored)
+}
+
+/// Home a return type that no name resolution produced — the `Expression` form's sub-dispatch
+/// result. There is no binding to derive a reach from, so the type homes under the captured scope's
+/// ambient coverage alone: a borrow of a region that scope does not already pin is refused.
+pub(crate) fn home_ambient_return_type<'captured: 'a, 'a>(
+    kt: &KType<'_>,
+    captured: &Scope<'captured>,
+) -> Result<&'a KType<'a>, KError> {
+    home(kt, captured, &StoredReach::empty())
+}
+
+/// A region-free return type takes the compile-enforced `'static` tier. One embedding a scope borrow
+/// (a `Signature`'s `decl_scope_ref` or `SelfOf` module) cannot rebuild at `'static`; it re-anchors
+/// into the captured scope's region at the caller's contract lifetime `'a` through the reaching tier,
+/// audited against `reach`. Private so a reach reaches the audit only from one of the two doors
+/// above, each of which derives it — never as a reach a caller asserts.
+fn home<'captured: 'a, 'a>(
     kt: &KType<'_>,
     captured: &Scope<'captured>,
     reach: &StoredReach<'_>,
 ) -> Result<&'a KType<'a>, KError> {
-    // A region-free return type takes the compile-enforced `'static` tier. One embedding a scope
-    // borrow (a `Signature`'s `decl_scope_ref` or `SelfOf` module) cannot rebuild at `'static`; it
-    // re-anchors into the captured scope's region at the caller's contract lifetime `'a` through the
-    // reaching tier, audited against `reach`.
     match kt.to_static() {
         Some(owned) => {
             let brand: RegionBrand<'a> = captured.brand();
@@ -215,18 +236,20 @@ where
                     // module-valued param that is the module's own region, which need be neither the
                     // frame's nor the captured scope's (a FUNCTOR mints its module in its own per-call
                     // region). Homing under that reach is what admits such a module; the home is capped
-                    // at `'step` so the contract `ret` can't out-claim the pin — see `home_return_type`.
+                    // at `'step` so the contract `ret` can't out-claim the pin — see `home_resolved_return_type`.
                     let homed = ctx.region.with_scope(|child| {
-                        let (kt, reach) = match child.resolve_type_identifier(type_expr, None) {
-                            TypeResolution::Done(hit) => (hit.kt.clone(), hit.stored),
-                            // The param install + fn_def carrier scan jointly guarantee resolution;
-                            // fall back to Any so the body's own dispatch surfaces any real error.
+                        let captured = func.captured_scope();
+                        let homed: Result<&'step KType<'step>, KError> = match child
+                            .resolve_type_identifier(type_expr, None)
+                        {
+                            TypeResolution::Done(hit) => home_resolved_return_type(&hit, captured),
+                            // The param install + fn_def carrier scan jointly guarantee
+                            // resolution; fall back to Any so the body's own dispatch surfaces
+                            // any real error. Any is region-free, so it needs no evidence.
                             TypeResolution::Park(_) | TypeResolution::Unbound(_) => {
-                                (KType::Any, StoredReach::default())
+                                home_ambient_return_type(&KType::Any, captured)
                             }
                         };
-                        let homed: Result<&'step KType<'step>, KError> =
-                            home_return_type(&kt, func.captured_scope(), &reach);
                         homed
                     });
                     let ret_ref = match homed {

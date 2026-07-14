@@ -28,10 +28,12 @@ PRINT NumberSet.sample
 ```
 
 `MAKESET` takes any module satisfying `Ordered` and builds a module around it,
-reading the argument's members with `.` just like any module. The argument must
-be a module that has been ascribed to a signature; applying a functor to a raw,
-unascribed module fails to match. Each application is *generative* — it produces
-a fresh module distinct from every other application.
+reading the argument's members with `.` just like any module. A signature slot is
+**structural**: any module whose own members satisfy `Ordered` is admitted, so
+`(MAKESET IntOrder)` on the raw module works too — ascription (`:!` / `:|`) is a
+way to *narrow* what the argument exposes, never a prerequisite for passing it.
+Each application is *generative* — it produces a fresh module distinct from every
+other application.
 
 The return type must denote a module-like thing (a module, signature, or
 functor); a functor that claims to return an ordinary value is rejected at
@@ -45,6 +47,42 @@ FUNCTOR (BADMAKE x :Ordered) -> Number = (5)
 ```text
 error: shape error: FUNCTOR return-type slot must denote a module, signature, or functor; got `Number`
 ```
+
+## Modules in type position
+
+A module name is an ordinary value, and it may also head a *type*. Name a module
+parameter as the return type — `-> Elem` — and the contract reads "returns a
+module with `Elem`'s interface", resolved per call. Name a module as a slot type —
+`x :IntOrder` — and the slot accepts any module whose members satisfy
+`IntOrder`'s, the same structural test a signature slot runs. (A parameter you
+mean to name in type position needs a type-token name — `Elem`, not `elem` — the
+spelling module names take today.)
+
+Both forms work on a module a functor just built, not only on one declared up
+front:
+
+```koan
+SIG Ordered = (VAL compare :Number)
+MODULE IntOrder = (LET compare = 7)
+FUNCTOR (MAKESET Elem :Ordered) -> Module =
+  MODULE Built =
+    LET compare = 3
+LET NumberSet = (MAKESET IntOrder)
+FN (ECHO Elem :Ordered) -> Elem = (Elem)
+LET Same = (ECHO NumberSet)
+PRINT Same.compare
+PRINT (ECHO IntOrder)
+```
+
+```text
+3
+IntOrder
+```
+
+`ECHO` returns whichever module it was handed, and the returned module stays live
+after the call — `Same.compare` reads `3` out of the module `MAKESET` built. A
+dotted head projects instead of naming the whole interface: `-> Elem.Carrier` as a
+return type resolves to the argument module's `Carrier` type member.
 
 ## Specializing signatures with `WITH`
 

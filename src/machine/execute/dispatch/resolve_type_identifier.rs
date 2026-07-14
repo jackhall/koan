@@ -47,16 +47,8 @@ impl<'step> Scope<'step> {
                 // can see it. Cached alongside `kt` so a hit rebuilds the read carrier. A module head
                 // lowers to `Signature { SelfOf }`, which borrows the module; the module is bound
                 // value-side, so its child-scope reach comes off the `data` entry.
-                let stored = self
-                    .resolve_type_stored(te.as_str(), chain_for_reach.as_deref())
-                    .or_else(|| match &kt {
-                        KType::Signature {
-                            sig: SigSource::SelfOf(_),
-                            ..
-                        } => self.resolve_value_stored(te.as_str(), chain_for_reach.as_deref()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
+                let stored =
+                    self.reach_for_resolved_type(te.as_str(), chain_for_reach.as_deref(), &kt);
                 let kt_ref: &'step KType<'step> = self
                     .alloc_ktype_reaching(kt, &stored)
                     .expect("resolve_type_identifier: kt must be covered by its own stored reach");

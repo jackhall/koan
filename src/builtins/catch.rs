@@ -55,10 +55,7 @@ pub fn body<'a>(
     };
     // The `Result` identity's stored per-binding type token, captured at body time so the
     // construction operand's witness names its own region. Empty while `RecursiveSet` is heap-`Rc`'d.
-    let reach = ctx
-        .scope
-        .resolve_type_stored("Result", None)
-        .unwrap_or_default();
+    let reach = ctx.scope.type_reach("Result", None);
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
         // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.

@@ -335,9 +335,7 @@ impl<'step> KoanRuntime<'step> {
                     // scope's home frame pins the type's (ancestor) region via its `outer` chain, the
                     // token's foreign reach names any genuinely-foreign region (a module's child scope),
                     // and its home-borrow bit rides too — replayed whole, never re-asserted.
-                    let stored = s
-                        .resolve_type_stored(leaf_name, active_chain.map(|c| &**c))
-                        .unwrap_or_default();
+                    let stored = s.type_reach(leaf_name, active_chain.map(|c| &**c));
                     Some(Slot::Static(s.seal_resident_delivered(
                         s.resident_type_carrier(kt, stored),
                     )))

@@ -109,6 +109,14 @@ pub struct StoredReach<'a> {
 
 impl<'a> StoredReach<'a> {
     /// The empty reach that borrows into no home — the region-pure / no-carrier default.
+    ///
+    /// Deliberately **not** a [`Default`] impl, and deliberately not visible outside
+    /// `crate::machine::core`. A `Default` would be a public trait method on a public struct, which
+    /// hands the whole crate the power to mint a reach out of thin air and pair it with a value it
+    /// was never derived from — the exact forgery the reach-token discipline exists to prevent. The
+    /// only reaches code outside `core` can hold are ones a fused door derived for a specific value
+    /// (a [`TypeHit`], a delivered carrier's bind), so it cannot assert coverage it has no evidence
+    /// for. Keep it that way: a `#[derive(Default)]` here silently reopens that door.
     pub(in crate::machine::core) fn empty() -> Self {
         StoredReach {
             foreign: None,
@@ -130,12 +138,6 @@ impl<'a> StoredReach<'a> {
     #[cfg(test)]
     pub(crate) fn names_a_region(&self) -> bool {
         self.foreign.is_some()
-    }
-}
-
-impl Default for StoredReach<'_> {
-    fn default() -> Self {
-        StoredReach::empty()
     }
 }
 

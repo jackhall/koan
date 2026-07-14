@@ -242,7 +242,13 @@ consequences:
 - `-> Er`, where `Er` is a module-valued parameter, is a legal deferred return
   meaning "returns a module satisfying `Er`'s interface". The per-call contract is
   the argument module's self-sig, re-homed into the captured-scope region by
-  [`home_return_type`](../../src/machine/core/kfunction/exec.rs).
+  [`home_return_type`](../../src/machine/core/kfunction/exec.rs). The argument
+  module need not live in that region: the self-sig borrows the module's own
+  region, so the home is audited against the **stored reach of the parameter's
+  binding** — the delivered argument carrier's reach, which pins whatever region
+  minted the module. A FUNCTOR-produced module, minted in the functor's per-call
+  region, therefore rides a `-> Er` return like a root-bound one (see
+  [per-call-region/lifecycle.md](../per-call-region/lifecycle.md)).
 - `x :IntOrd` is a **structural** slot: it admits any module whose self-sig
   satisfies `IntOrd`'s, not only `IntOrd` itself. Admission runs the same
   `sig_subtype` walk every signature slot runs, so ascription is never required.

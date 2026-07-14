@@ -345,10 +345,33 @@ compile-only capability with no runtime audit at all:
   nested per-call functor body). Mint and audit share the one predicate, so they stay exact
   complements; and unlike the other tiers these live on `Scope`, not `RegionBrand` — a `StoredReach`
   is meaningful only relative to its minting scope, so taking the destination from `self` binds
-  evidence, ambient coverage, and destination region together by construction. These tiers' callers are the
-  fused bind/register doors (`Scope::bind_delivered` / `register_type_delivered` and siblings): the `StoredReach`
-  is an opaque token those doors derive from the value's own witness and thread whole into the alloc, never a
-  free parameter a caller asserts. `Residence`
+  evidence, ambient coverage, and destination region together by construction. These tiers' callers
+  are fused doors: the `StoredReach` is an opaque token they derive and thread whole into the alloc,
+  never a free parameter a caller asserts. The bind/register doors (`Scope::bind_delivered` /
+  `register_type_delivered` and siblings) derive it from the value's own witness. The read door
+  ([`Scope::resolve_type_identifier`](../src/machine/execute/dispatch/resolve_type_identifier.rs))
+  materializes it from the binding entry a name resolves to and hands it back *fused with that type*
+  in a `TypeHit`. A consumer that re-homes such a type takes the hit whole —
+  [`home_resolved_return_type`](../src/machine/core/kfunction/exec.rs) re-homes a deferred FN's
+  per-call return type into the captured-scope region, and because it accepts the hit rather than a
+  type and a reach side by side, the reach it audits under can only be the one the resolver derived
+  for that very type. That is how a return type may name a module living in neither the callee
+  frame's nor the captured scope's region (a FUNCTOR mints its module in its own per-call region; the
+  delivered argument carrier pins it), while the re-home stays capped at the contract lifetime so the
+  stored reference cannot outlive that pin. A type no name resolution produced — the return-type
+  expression form's sub-dispatch result — has no binding to derive evidence from and takes a separate
+  door (`home_ambient_return_type`) that supplies none, leaving the audit at the destination's own
+  region plus ambient coverage.
+
+  "Never a free parameter a caller asserts" is enforced, not merely intended: `StoredReach::empty` —
+  the only way to mint a token from nothing — is visible only within `crate::machine::core`, and
+  `StoredReach` deliberately has **no `Default` impl**, since a public trait method would hand the
+  rest of the crate that same power under another name. Code outside `core` therefore cannot conjure
+  a reach at all; it can only hold one some door derived for a specific value, and the doors that
+  consume a reach take it fused to that value. Reads that want "this binding's reach, empty if it
+  names none" call `Scope::type_reach` / `Scope::reach_for_resolved_type`, which collapse the miss on
+  `core`'s side of the wall — the `Option`-returning lookups behind them are not exported, because an
+  `Option<StoredReach>` in a caller's hands is an invitation to forge the `None` case. `Residence`
   ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
   compose from.
 - **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — no runtime audit at all,

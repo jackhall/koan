@@ -4,7 +4,7 @@
 //! - [`elaboration`] — scope-aware type elaboration of FN signatures.
 //! - [`sharing`] — `WITH` sharing constraints on functor parameters and
 //!   return types.
-//! - [`per_call_type_side_bind`] — per-call parameter bind for module-typed
+//! - [`per_call_param_bind`] — per-call parameter bind for module-typed
 //!   parameters at dispatch time.
 //! - [`deferred_return`] — return-type expressions that reference earlier
 //!   parameters, resolved per-call.
@@ -17,5 +17,5 @@ mod bare_type_token;
 mod deferred_return;
 mod elaboration;
 mod module_head_in_type_position;
-mod per_call_type_side_bind;
+mod per_call_param_bind;
 mod sharing;

@@ -313,9 +313,7 @@ pub(super) fn type_call<'step>(
             // construction finish so its operand names the identity's own region rather than relying
             // on the dest frame's storage `outer` chain, which omits lexical ancestors under TCO.
             // Empty while `RecursiveSet` is heap-`Rc`'d.
-            let reach = scope
-                .resolve_type_stored(head_t.as_str(), chain)
-                .unwrap_or_default();
+            let reach = scope.type_reach(head_t.as_str(), chain);
             apply_callable(
                 ctx,
                 ResolvedCallable::Constructor { identity, reach },

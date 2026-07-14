@@ -40,9 +40,6 @@ parked on the type ladder still wakes.
 
 ## Dependencies
 
-**Requires:**
-
-- [Value-head type paths](value-head-type-paths.md) — snake_case heads in type position
-  need value-head elaboration, and the bridge arms this item deletes are built there.
+**Requires:** none — value-side module binding and value-head type paths have shipped.
 
 **Unblocks:** none tracked yet.

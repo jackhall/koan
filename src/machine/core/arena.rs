@@ -315,7 +315,7 @@ impl<'a> Scope<'a> {
     ///
     /// The stored reference comes back at a caller-chosen `'c` no longer than this scope's own `'a`:
     /// the destination stays this scope's region, but a caller homing a type it may use only for a
-    /// shorter window ([`home_return_type`](crate::machine::core::kfunction::exec::home_return_type)'s
+    /// shorter window ([`home_resolved_return_type`](crate::machine::core::kfunction::exec::home_resolved_return_type)'s
     /// contract cap) shortens the brand before the store, so the borrow checker refuses any use past
     /// that window.
     pub(crate) fn alloc_ktype_reaching<'c>(

@@ -256,12 +256,22 @@ per-call frame (see
 runs `per_call_ret.matches_value(body_value)` and surfaces mismatches with
 `(per-call return type)` wording — a passing value is returned as-is (no
 return-type stamp). The
-`TypeExpr` carrier elaborates inline against the per-call scope where
-the per-call type-side bind has installed the parameter-name
-identities; both carriers feed the same dep-finish. The inline elaboration
-is the standard
+`TypeExpr` carrier elaborates inline against the per-call scope, where the
+parameter bind has installed the parameter-name identity — type-side for a
+genuinely type-denoting argument, value-side for a module — and both carriers feed
+the same dep-finish. The inline elaboration is the standard
 [elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
-the per-call scope. The lift-time return-type check in
+the per-call scope, run through
+[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
+so the hit arrives with the *stored reach* of the binding it names. That reach is
+what lets the resolved type be re-homed:
+[`home_return_type`](../../src/machine/core/kfunction/exec.rs) moves it into the
+captured-scope region (a live ancestor of the call), capped at the caller's
+contract lifetime, and audits any region borrow it carries — a `Signature`'s
+`decl_scope_ref`, or a bare module head's `SelfOf` module, which may live in some
+*other* call's per-call region — against that reach. A region no evidence member,
+no ambient coverage, and not the destination itself names is refused. The lift-time
+return-type check in
 [`run_loop.rs`](../../src/machine/execute/run_loop.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the dep-finish
