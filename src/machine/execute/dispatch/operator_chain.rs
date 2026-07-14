@@ -25,7 +25,7 @@
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::{Combiner, FoldDirection, ReductionMode};
+use crate::machine::model::operators::{FoldDirection, ReductionMode};
 use crate::machine::model::types::{UntypedElement, UntypedKey};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
@@ -255,7 +255,7 @@ fn as_list_item<'step>(operand: ExpressionPart<'step>) -> ExpressionPart<'step> 
 fn reduce_pairwise<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: &KExpression<'step>,
-    combiner: Combiner,
+    combiner: String,
     direction: FoldDirection,
 ) -> Outcome<'step> {
     let (operands, operators) = split_chain_parts(expr);
@@ -277,61 +277,32 @@ fn reduce_pairwise<'step>(
     )
 }
 
-/// The argument names a [`Combiner::Name`] call binds its two inputs to — the same pair an `OP`
-/// body binds, so one naming rule covers the operator bodies and the combiner that folds their
-/// results. A combiner function declaring other parameter names is an ordinary use-site error
-/// (a missing argument), like any other call-by-name mismatch.
-const COMBINER_LEFT: &str = "left";
-const COMBINER_RIGHT: &str = "right";
-
 /// One combiner application over two already-built sub-expressions — the fold step
-/// [`SchedulerView::install_pairwise_fold`] repeats over a pairwise run's pair results. Both
-/// combiner kinds produce the same *shape* one dispatch lane apart:
+/// [`SchedulerView::install_pairwise_fold`] repeats over a pairwise run's pair results.
 ///
-/// - [`Combiner::Keyword`] builds the 3-part keyworded expression `[left, <kw>, right]`, which
-///   re-enters ordinary keyworded dispatch (the builtin comparison group's `AND`).
-/// - [`Combiner::Name`] builds the 2-part call-by-name expression
-///   `[Identifier(<name>), {left = …, right = …}]` — the `FunctionValueCall` lane, which resolves
-///   `<name>` through the ordinary scope walk at the chain's *use site* (a group's `USING` window
-///   surfaces the combiner alongside the operator bodies). A missing, non-callable, or
-///   wrong-arity combiner therefore surfaces as an ordinary error there.
+/// The combiner is an **operator**, invoked infix: the synthesized shape is the 3-part keyworded
+/// expression `[left, Keyword(<sym>), right]`, which re-enters ordinary keyworded dispatch and so
+/// binds its two inputs *positionally*, by signature shape — the builtin comparison group's `AND`,
+/// or a group member declared `OP #(<sym>) OVER <PairResult> = (…)`. Resolution is the ordinary
+/// scope walk at the chain's *use site* (a group's `USING` window surfaces the combiner alongside
+/// the operator bodies), so a missing, non-callable, or wrong-arity combiner surfaces as an
+/// ordinary error there.
 ///
-/// `span` labels the synthesized head parts, which have no source token of their own.
+/// `span` labels the synthesized keyword part, which has no source token of its own.
 pub(super) fn combine<'step>(
-    combiner: &Combiner,
+    combiner: &str,
     left: KExpression<'step>,
     right: KExpression<'step>,
     span: Option<Span>,
 ) -> KExpression<'step> {
-    match combiner {
-        Combiner::Keyword(keyword) => KExpression::new(vec![
-            wrap_as_operand(left),
-            Spanned {
-                value: ExpressionPart::Keyword(keyword.clone()),
-                span,
-            },
-            wrap_as_operand(right),
-        ]),
-        Combiner::Name(name) => KExpression::new(vec![
-            Spanned {
-                value: ExpressionPart::Identifier(name.clone()),
-                span,
-            },
-            Spanned {
-                value: ExpressionPart::RecordLiteral(vec![
-                    (
-                        COMBINER_LEFT.to_string(),
-                        ExpressionPart::Expression(Box::new(left)),
-                    ),
-                    (
-                        COMBINER_RIGHT.to_string(),
-                        ExpressionPart::Expression(Box::new(right)),
-                    ),
-                ]),
-                span,
-            },
-        ]),
-    }
+    KExpression::new(vec![
+        wrap_as_operand(left),
+        Spanned {
+            value: ExpressionPart::Keyword(combiner.to_string()),
+            span,
+        },
+        wrap_as_operand(right),
+    ])
 }
 
 /// Registry miss: an operator of this chain may still be *being declared*. An `OP` binder installs

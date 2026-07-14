@@ -16,7 +16,7 @@ use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::{Combiner, FoldDirection};
+use crate::machine::model::operators::FoldDirection;
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
@@ -283,15 +283,15 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// `operands`/`operators` are the chain's own parts in source order
     /// (`operators.len() == operands.len() - 1`); `is_operator_chain_shape` guarantees at least
     /// 5 parts, so there are always at least 3 operands / 2 operators / 2 pairs — the
-    /// combiner-fold loop below always runs at least once. `combiner` and `direction` are the
-    /// group's declared fold (see [`combine`](super::operator_chain::combine) for the two
-    /// combiner shapes); `chain_span` labels the synthesized combiner parts, which have no single
-    /// source token of their own.
+    /// combiner-fold loop below always runs at least once. `combiner` is the group's combiner
+    /// symbol and `direction` its declared fold (see [`combine`](super::operator_chain::combine)
+    /// for the synthesized shape); `chain_span` labels the synthesized combiner parts, which have
+    /// no single source token of their own.
     pub(super) fn install_pairwise_fold(
         &self,
         operands: Vec<Spanned<ExpressionPart<'step>>>,
         operators: Vec<Spanned<ExpressionPart<'step>>>,
-        combiner: Combiner,
+        combiner: String,
         direction: FoldDirection,
         chain_span: Option<Span>,
         dep_error_frame: Option<crate::machine::TraceFrame>,

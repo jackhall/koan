@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
 use crate::machine::core::BindingIndex;
-use crate::machine::model::operators::{Combiner, FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::operators::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -209,7 +209,7 @@ pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
     let comparison_group = region.alloc_operator_group(OperatorGroup::new(
         comparison_members,
         ReductionMode::Pairwise {
-            combiner: Combiner::Keyword("AND".to_string()),
+            combiner: "AND".to_string(),
             direction: FoldDirection::Left,
         },
     ));

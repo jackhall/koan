@@ -15,6 +15,7 @@ mod branch_walk;
 mod catch;
 mod eval;
 mod fn_def;
+mod group_def;
 mod let_binding;
 mod match_case;
 mod module_def;
@@ -226,6 +227,7 @@ pub fn default_scope<'a>(
     parameterized_types::register(scope);
     type_union::register(scope);
     op_def::register(scope);
+    group_def::register(scope);
     arithmetic::register(scope);
     arithmetic::register_builtin_operator_groups(scope);
 

@@ -123,10 +123,12 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
 
 /// Borrowing twin of [`split_body_statements`]: returns references to the body's top-level
 /// statements rather than owned clones, so the body AST is never duplicated on the call path. Same
-/// multi-statement detection.
-pub(crate) fn body_statement_refs<'ast>(
-    body: &'ast KExpression<'ast>,
-) -> Vec<&'ast KExpression<'ast>> {
+/// multi-statement detection. The borrow lifetime is independent of the expression's own `'a`, so a
+/// caller holding the body by value can scan it in place (`GROUP` reads its members off the
+/// unevaluated body block this way).
+pub(crate) fn body_statement_refs<'ast, 'a>(
+    body: &'ast KExpression<'a>,
+) -> Vec<&'ast KExpression<'a>> {
     let is_multi = body.parts.len() >= 2
         && body
             .parts

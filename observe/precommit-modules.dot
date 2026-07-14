@@ -14,6 +14,7 @@ digraph {
     "koan::builtins::fn_def::param_refs" [label="koan::builtins::fn_def::param_refs"];
     "koan::builtins::fn_def::return_type" [label="koan::builtins::fn_def::return_type"];
     "koan::builtins::fn_def::signature" [label="koan::builtins::fn_def::signature"];
+    "koan::builtins::group_def" [label="koan::builtins::group_def"];
     "koan::builtins::let_binding" [label="koan::builtins::let_binding"];
     "koan::builtins::match_case" [label="koan::builtins::match_case"];
     "koan::builtins::module_def" [label="koan::builtins::module_def"];
@@ -134,6 +135,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::eval" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::fn_def" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::group_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::let_binding" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::match_case" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::module_def" [label="owns", style="solid"];
@@ -338,6 +340,17 @@ digraph {
     "koan::builtins::fn_def::signature" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::fn_def::signature" -> "koan::source" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::builtins::op_def" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::core::kfunction::body" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::model::operators" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::group_def" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -361,6 +374,7 @@ digraph {
     "koan::builtins::module_def" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::module_def" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::module_def" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::module_def" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::module_def" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::module_def" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::newtype_def" -> "koan::builtins" [label="uses", style="dashed"];

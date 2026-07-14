@@ -44,8 +44,9 @@ use super::fn_def::return_type::{classify_return_type, extract_type_slot_raw, Re
 use super::resolve_or_await::{classify_type_hit, expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 
-/// The two operand names a binary operator body binds — the same pair a pairwise group's combiner
-/// binds, so one naming rule covers the operator bodies and the combiner that folds their results.
+/// The two operand names a binary operator body binds. A pairwise group's combiner is itself an
+/// `OP`, so it binds the same pair — but positionally, by the infix shape the reducer synthesizes,
+/// not by name.
 const LEFT: &str = "left";
 const RIGHT: &str = "right";
 /// The single parameter a unary operator body binds: the whole run as one list.
@@ -99,21 +100,31 @@ fn symbol_shape_error() -> KError {
     ))
 }
 
-/// Body-side symbol read: the `symbol` slot's raw `KObject::KExpression` is the quote body.
-fn symbol_from_args(args: &KObject<'_>) -> Result<String, KError> {
-    let quoted = require_kexpression(args, "OP", "symbol")?;
+/// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
+/// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
+pub(super) fn symbol_from_slot(
+    args: &KObject<'_>,
+    builtin: &str,
+    slot: &str,
+) -> Result<String, KError> {
+    let quoted = require_kexpression(args, builtin, slot)?;
     symbol_from_quote_body(&quoted)
 }
 
-/// Binder-hook-side symbol read: the declaration's first `QuotedExpression` part. `None` for
-/// anything that is not a well-formed declaration — the body's own extraction surfaces the
-/// diagnostic; the hook only decides whether to install park edges.
-fn symbol_from_parts(expr: &KExpression<'_>) -> Option<String> {
-    let quoted = expr.parts.iter().find_map(|part| match &part.value {
-        ExpressionPart::QuotedExpression(inner) => Some(inner.as_ref()),
-        _ => None,
-    })?;
-    symbol_from_quote_body(quoted).ok()
+/// Statement-side symbol read: the declaration's first `QuotedExpression` part. `GROUP` scans its
+/// unevaluated body block with this to collect its members; the binder hook uses it to decide
+/// whether to install park edges (discarding the diagnostic — the body's own extraction surfaces
+/// it).
+pub(super) fn symbol_from_parts(expr: &KExpression<'_>) -> Result<String, KError> {
+    let quoted = expr
+        .parts
+        .iter()
+        .find_map(|part| match &part.value {
+            ExpressionPart::QuotedExpression(inner) => Some(inner.as_ref()),
+            _ => None,
+        })
+        .ok_or_else(symbol_shape_error)?;
+    symbol_from_quote_body(quoted)
 }
 
 /// True iff the declaration leads with `UNARY`.
@@ -147,7 +158,7 @@ fn unary_key(sym: &str) -> UntypedKey {
 /// while the declaration is still finalizing. A `UNARY OP` registers two bodies, so it names two
 /// keys.
 fn binder_bucket(expr: &KExpression<'_>) -> Option<Vec<UntypedKey>> {
-    let sym = symbol_from_parts(expr)?;
+    let sym = symbol_from_parts(expr).ok()?;
     if is_unary_form(expr) {
         Some(vec![unary_key(&sym), binary_key(&sym)])
     } else {
@@ -235,7 +246,7 @@ fn resolve_capture<'a>(
 /// type slot naming a still-finalizing type binder — or spelled as a `:(…)` expression that has to
 /// sub-dispatch — defers the whole build to a dep-finish.
 fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_args(ctx.args));
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "OP", "body"));
     let has_result = arg_held(ctx.args, "return_type").is_some();
     let group = ctx.scope.nearest_group_context();
@@ -506,7 +517,7 @@ fn body_unary<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// nothing to default it to. This overload exists only to say so; without it the shape is a bare
 /// dispatch miss.
 fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let sym = crate::try_action!(symbol_from_args(ctx.args));
+    let sym = crate::try_action!(symbol_from_slot(ctx.args, "OP", "symbol"));
     Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
         "`UNARY OP #({sym})` must declare its result type: \
          `UNARY OP #({sym}) OVER <Operand> -> <Result> = (…)`",

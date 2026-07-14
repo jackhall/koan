@@ -8,10 +8,10 @@
 //!
 //! A group's record is its member set plus one [`ReductionMode`] describing how a
 //! recognized run of its operators reduces. The record is **lifetime-free**: a pairwise
-//! group's combiner is a [`Combiner`] *name*, not a resolved function, so the chain reducer
-//! resolves it at the use site through the ordinary scope walk and the record borrows no
-//! region. That is what lets `RegionBrand::alloc_operator_group` stay a trivial no-op-gate
-//! door.
+//! group's combiner is an operator *symbol*, not a resolved function, so the chain reducer
+//! synthesizes an infix call the ordinary scope walk resolves at the use site, and the record
+//! borrows no region. That is what lets `RegionBrand::alloc_operator_group` stay a trivial
+//! no-op-gate door.
 //!
 //! Registry lookup is innermost-wins
 //! ([`Scope::resolve_operator_group_with_chain`](crate::machine::core::Scope::resolve_operator_group_with_chain)):
@@ -33,24 +33,6 @@ pub enum FoldDirection {
     Right,
 }
 
-/// The binary combiner a [`ReductionMode::Pairwise`] group folds its pair results through,
-/// held as a **name** rather than a resolved function: the chain reducer synthesizes a call
-/// and the ordinary scope walk resolves it at the use site, which is what keeps
-/// [`OperatorGroup`] lifetime-free (no region borrow, no reaching-tier allocation door).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Combiner {
-    /// A keyword token (the builtin comparison group's `AND`): the reducer synthesizes a
-    /// keyworded call `left <kw> right`.
-    Keyword(String),
-    /// A value binding naming a two-argument function: the reducer synthesizes a call-by-name
-    /// `<name> {left = …, right = …}`, resolved through the `FunctionValueCall` lane in the scope
-    /// the chain is written in. The two arguments carry the names an `OP` body binds, so one
-    /// naming rule covers the operator bodies and the combiner folding their results; a combiner
-    /// that is missing, non-callable, or declares other parameters is an ordinary error at the
-    /// chain's use site.
-    Name(String),
-}
-
 /// How a recognized run of this group's operators reduces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReductionMode {
@@ -63,7 +45,15 @@ pub enum ReductionMode {
     /// Each adjacent pair dispatches through its own operator's binary body; the pair
     /// results fold through the group's combiner in the declared direction.
     Pairwise {
-        combiner: Combiner,
+        /// The **keyword** of the operator the pair results fold through — the builtin comparison
+        /// group's `AND`, or a member `OP` declared over the pair-result type. The reducer
+        /// synthesizes the infix shape `[left, Keyword(combiner), right]`, so the combiner binds
+        /// its two inputs positionally, by signature shape, and imposes no parameter-naming
+        /// convention. Holding the symbol rather than a resolved function is what keeps
+        /// [`OperatorGroup`] lifetime-free (no region borrow, no reaching-tier allocation door):
+        /// the ordinary scope walk resolves it at the chain's use site, so a combiner that is
+        /// missing, non-callable, or of the wrong arity is an ordinary error there.
+        combiner: String,
         direction: FoldDirection,
     },
 }

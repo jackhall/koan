@@ -3,13 +3,13 @@
 //! snake_case name; a second overload takes the Type-token name and reports the respelling. See
 //! [design/typing/modules.md](../../design/typing/modules.md) for the surface design.
 //!
-//! Body statements dispatch on the OUTER scheduler against a fresh child scope via
-//! [`await_body_in_scope`](super::await_body::await_body_in_scope), so a body statement
-//! referencing an earlier sibling at the same outer block parks on the outer placeholder
-//! like any other forward reference, and the parent binding lands at dep-finish, not when
-//! MODULE's body returns to the dispatcher.
+//! [`await_module_body`] is the body-dispatch-and-bind tail, shared with `GROUP`
+//! ([`super::group_def`]) — a group *is* a module, so it differs only in the child scope it mints.
 
+use crate::machine::core::kfunction::action::{Action, BodyCtx};
+use crate::machine::core::BindingIndex;
 use crate::machine::execute::StepCarried;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{KKind, SigSchema};
 use crate::machine::model::values::Module;
 use crate::machine::model::KType;
@@ -17,16 +17,10 @@ use crate::machine::{NameLookup, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
-/// The MODULE body: mints the child scope, dispatches the body block against it via
-/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish binds
-/// the module **value** into the parent scope's `data`.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use super::await_body::{await_body_in_scope, ChildScopeSeal};
-    use crate::machine::core::kfunction::action::{
-        require_identifier_name, require_kexpression, Action,
-    };
+/// The MODULE body: mints the child scope and hands it to [`await_module_body`], which dispatches
+/// the body block against it and binds the module **value** into the parent scope's `data`.
+pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    use crate::machine::core::kfunction::action::{require_identifier_name, require_kexpression};
 
     let name = crate::try_action!(require_identifier_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
@@ -34,7 +28,29 @@ pub fn body<'a>(
         .scope
         .brand()
         .alloc_scope(Scope::child_under_module(ctx.scope, name.clone()));
-    let bind_index = ctx.bind_index();
+    await_module_body(child_scope, name, body_expr, ctx.bind_index(), "MODULE")
+}
+
+/// Dispatch a module body block against an already-minted `child_scope` and bind the resulting
+/// module value in the parent scope — the tail every module-shaped declaration shares. `GROUP`
+/// (`super::group_def`) mints its child through [`Scope::child_under_group`] and pre-registers the
+/// group's operator powerset into it before calling this; `MODULE` mints a plain
+/// [`Scope::child_under_module`]. `surface` labels the trace frame an erroring finalize carries.
+///
+/// Body statements dispatch on the OUTER scheduler (see
+/// [`await_body_in_scope`](super::await_body::await_body_in_scope)), so a body statement
+/// referencing an earlier sibling at the same outer block parks on the outer placeholder like any
+/// other forward reference, and the parent binding lands at dep-finish, not when the declaration's
+/// body returns to the dispatcher.
+pub(super) fn await_module_body<'a>(
+    child_scope: &'a Scope<'a>,
+    name: String,
+    body_expr: KExpression<'a>,
+    bind_index: BindingIndex,
+    surface: &'static str,
+) -> Action<'a> {
+    use super::await_body::{await_body_in_scope, ChildScopeSeal};
+
     let name_for_finish = name;
     await_body_in_scope(
         child_scope,
@@ -84,19 +100,18 @@ pub fn body<'a>(
                 ))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<module>",
-                    format!("MODULE {} body", name_for_finish),
+                    format!("{surface} {name_for_finish} body"),
                 )))),
             }
         },
     )
 }
 
-/// The Type-token-named overload (`MODULE IntOrd = …`): a module is a value, so its name belongs in
-/// the value namespace. Registered with no binder hook — it always errors, so it installs nothing.
-fn body_type_named<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_bare_type_name, Action};
+/// The Type-token-named overload (`MODULE IntOrd = …`, `GROUP VecOps FOLD LEFT = …`): a module is a
+/// value, so its name belongs in the value namespace. Registered with no binder hook — it always
+/// errors, so it installs nothing.
+pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
+    use crate::machine::core::kfunction::action::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
