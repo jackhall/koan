@@ -25,8 +25,7 @@
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::{FoldDirection, ReductionMode};
-use crate::machine::model::types::{UntypedElement, UntypedKey};
+use crate::machine::model::operators::{binary_key, unary_key, FoldDirection, ReductionMode};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::scheduler::{ProducerDisposition, ResolvedDeps};
@@ -376,23 +375,6 @@ fn pending_operator_producers<'b>(
         }
     }
     producers
-}
-
-/// The bucket key a binary use of `operator` computes.
-fn binary_key(operator: &str) -> UntypedKey {
-    vec![
-        UntypedElement::Slot,
-        UntypedElement::Keyword(operator.to_string()),
-        UntypedElement::Slot,
-    ]
-}
-
-/// The bucket key a reduced unary run of `operator` computes.
-fn unary_key(operator: &str) -> UntypedKey {
-    vec![
-        UntypedElement::Keyword(operator.to_string()),
-        UntypedElement::Slot,
-    ]
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {

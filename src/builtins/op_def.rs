@@ -33,8 +33,8 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{BindingIndex, StoredReach};
 use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::operators::{OperatorGroup, ReductionMode};
-use crate::machine::model::types::{ExpressionSignature, KKind, UntypedElement, UntypedKey};
+use crate::machine::model::operators::{binary_key, unary_key, OperatorGroup, ReductionMode};
+use crate::machine::model::types::{ExpressionSignature, KKind, UntypedKey};
 use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
@@ -135,24 +135,6 @@ fn is_unary_form(expr: &KExpression<'_>) -> bool {
         expr.parts.first().map(|p| &p.value),
         Some(ExpressionPart::Keyword(k)) if k == "UNARY",
     )
-}
-
-/// The bucket key a binary use site computes: `[Slot, Keyword(sym), Slot]`.
-fn binary_key(sym: &str) -> UntypedKey {
-    vec![
-        UntypedElement::Slot,
-        UntypedElement::Keyword(sym.to_string()),
-        UntypedElement::Slot,
-    ]
-}
-
-/// The bucket key a unary use site computes: `[Keyword(sym), Slot]` — the prefix form
-/// `sym [a b c]` and a reduced infix run are the same shape.
-fn unary_key(sym: &str) -> UntypedKey {
-    vec![
-        UntypedElement::Keyword(sym.to_string()),
-        UntypedElement::Slot,
-    ]
 }
 
 /// Submission-time park keys: every bucket this declaration's body registers an overload under, so

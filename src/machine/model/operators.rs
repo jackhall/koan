@@ -21,9 +21,13 @@
 //! types and so cannot type-gate the way a function bucket does. User modules populate the
 //! registry through the `OP` / `GROUP` declaration surface
 //! ([design/operators.md](../../../design/operators.md), `builtins::op_def` /
-//! `builtins::group_def`). This module is the record and lookup key only.
+//! `builtins::group_def`). This module is the record and lookup keys only — the registry's
+//! [`probe_key`], and the function-bucket keys [`binary_key`] / [`unary_key`] an operator's
+//! overloads live under.
 
 use std::collections::HashSet;
+
+use super::types::{UntypedElement, UntypedKey};
 
 /// Which way a fold nests a run of more than two operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,4 +105,26 @@ pub fn probe_key(operators: &[&str]) -> String {
     sorted.sort_unstable();
     sorted.dedup();
     sorted.join(" ")
+}
+
+/// The function-bucket key a binary use of `sym` computes — `[Slot, Keyword(sym), Slot]` — and the
+/// key every declaration of `sym` registers its binary overload under. The two must agree
+/// byte-for-byte: an overload registered under any other key sits in a bucket no koan expression
+/// ever computes, so the operator silently never dispatches.
+pub fn binary_key(sym: &str) -> UntypedKey {
+    vec![
+        UntypedElement::Slot,
+        UntypedElement::Keyword(sym.to_string()),
+        UntypedElement::Slot,
+    ]
+}
+
+/// The function-bucket key a reduced unary run of `sym` computes — `[Keyword(sym), Slot]`, the same
+/// shape as the prefix form `sym [a b c]` — and the key every declaration of `sym` registers its
+/// list-form overload under. Same byte-for-byte agreement contract as [`binary_key`].
+pub fn unary_key(sym: &str) -> UntypedKey {
+    vec![
+        UntypedElement::Keyword(sym.to_string()),
+        UntypedElement::Slot,
+    ]
 }
