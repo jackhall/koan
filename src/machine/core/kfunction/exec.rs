@@ -14,7 +14,7 @@
 //! out-claiming the caller region a resolved parameter type borrows into. `KExpression`'s invariance
 //! blocks collapsing the two.
 
-use crate::machine::DeliveredCarried;
+use crate::machine::{DeliveredCarried, KErrorKind};
 use std::rc::Rc;
 
 use crate::machine::core::{
@@ -100,14 +100,33 @@ pub(crate) fn home_resolved_return_type<'captured: 'a, 'a>(
     home(hit.kt, captured, &hit.stored)
 }
 
-/// Home a return type that no name resolution produced — the `Expression` form's sub-dispatch
-/// result. There is no binding to derive a reach from, so the type homes under the captured scope's
-/// ambient coverage alone: a borrow of a region that scope does not already pin is refused.
+/// Home a return type that no name resolution produced and no carrier accompanies. There is no
+/// evidence to derive a reach from, so the type homes under the captured scope's ambient coverage
+/// alone: a borrow of a region that scope does not already pin is refused.
 pub(crate) fn home_ambient_return_type<'captured: 'a, 'a>(
     kt: &KType<'_>,
     captured: &Scope<'captured>,
 ) -> Result<&'a KType<'a>, KError> {
     home(kt, captured, &StoredReach::empty())
+}
+
+/// Home the `Expression` form's sub-dispatch result (`-> :(TYPE OF er)`, `-> :(sig WITH {…})`). The
+/// type is a resolved terminal rather than a named binding's resolution, so the evidence is its own
+/// **delivered carrier**, which names every region the produced type borrows: `TYPE OF er` folds the
+/// argument module's reach into its witness, and that module can live in a region neither the call
+/// nor the captured scope owns (a FUNCTOR mints its module in its own per-call region).
+///
+/// The reach mints in `call_scope` — the per-call scope, which dies with the call — so the evidence
+/// is not retained by the captured region, whose life is the function's, not the call's. As in
+/// [`home_resolved_return_type`], the result is capped at the caller's contract lifetime, and the
+/// audit still refuses a borrow no evidence member, ambient coverage, or the destination covers.
+pub(crate) fn home_delivered_return_type<'captured: 'a, 'a>(
+    kt: &KType<'_>,
+    delivered: &DeliveredCarried,
+    call_scope: &Scope<'_>,
+    captured: &Scope<'captured>,
+) -> Result<&'a KType<'a>, KError> {
+    home(kt, captured, &call_scope.adopted_reach_of(delivered))
 }
 
 /// A region-free return type takes the compile-enforced `'static` tier. One embedding a scope borrow
@@ -243,11 +262,18 @@ where
                             .resolve_type_identifier(type_expr, None)
                         {
                             TypeResolution::Done(hit) => home_resolved_return_type(&hit, captured),
-                            // The param install + fn_def carrier scan jointly guarantee
-                            // resolution; fall back to Any so the body's own dispatch surfaces
-                            // any real error. Any is region-free, so it needs no evidence.
-                            TypeResolution::Park(_) | TypeResolution::Unbound(_) => {
+                            // A park at this point cannot be honored — the body is about to run —
+                            // so fall back to Any and let the body's own dispatch surface any real
+                            // error. Any is region-free, so it needs no evidence.
+                            TypeResolution::Park(_) => {
                                 home_ambient_return_type(&KType::Any, captured)
+                            }
+                            // A miss is a real error: the return names no type. Surfacing it here
+                            // rather than widening to Any is what makes `-> some_value` (a return
+                            // slot naming a value — a module included) a diagnostic instead of a
+                            // silently unconstrained return.
+                            TypeResolution::Unbound(message) => {
+                                Err(KError::new(KErrorKind::ShapeError(message)))
                             }
                         };
                         homed

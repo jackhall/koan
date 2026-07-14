@@ -6,7 +6,7 @@
 //! [design/typing/modules.md](../../../design/typing/modules.md)).
 
 use crate::machine::core::kfunction::action::{arg_held, Action, BodyCtx};
-use crate::machine::model::values::Held;
+use crate::machine::model::values::{Carried, Held};
 use crate::machine::{KError, KErrorKind};
 
 pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -29,19 +29,27 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
                 .into(),
         ))));
     }
+    // A region-free type rebuilds owned at `'static` and seals with an empty reach — the scalar
+    // gate, which also covers a literal argument (region-pure, so it carries no reach carrier).
+    if let Some(owned) = value.ktype().to_static() {
+        return Action::Done(Ok(ctx.ctx.alloc_type(owned)));
+    }
     match ctx.arg_carrier("value") {
-        // The value arrived resolved, so its type may borrow the value's own region — a module's
-        // self-sig borrows the module. Home the result under the argument carrier's stored reach.
-        Some(dep) => Action::Done(Ok(ctx.ctx.alloc_type_of_value(dep))),
-        // No carrier: a literal argument is region-pure, so its type rebuilds owned at `'static`.
-        None => match value.ktype().to_static() {
-            Some(owned) => Action::Done(Ok(ctx.ctx.alloc_type(owned))),
-            None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
-                "`TYPE OF`: the value's type reaches a region but the value arrived without a \
-                 carrier"
-                    .into(),
-            )))),
-        },
+        // The type borrows the value's own region — a module's self-sig borrows the module — so it
+        // is built at the fold brand from the argument's own view, folding that carrier's reach into
+        // the result's witness. Reading `ktype()` off the ambient value instead would produce a type
+        // whose region borrow no evidence covers.
+        Some(dep) => Action::Done(Ok(ctx.ctx.alloc_carried_with(
+            &[dep],
+            |brand, views| match views[0] {
+                Carried::Object(o) => Carried::Type(brand.alloc_ktype_folded(o.ktype())),
+                Carried::Type(_) => unreachable!("the `value` slot's carrier is an object"),
+            },
+        ))),
+        None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
+            "`TYPE OF`: the value's type reaches a region but the value arrived without a carrier"
+                .into(),
+        )))),
     }
 }
 

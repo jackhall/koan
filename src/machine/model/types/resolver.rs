@@ -15,11 +15,10 @@ use std::rc::Rc;
 
 use crate::machine::core::{LexicalFrame, NameLookup, Scope, ScopeId};
 use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::values::KObject;
 use crate::machine::NodeId;
 
 use super::kkind::KKind;
-use super::ktype::{KType, SigSource};
+use super::ktype::KType;
 use super::recursive_set::{NominalMember, RecursiveSet};
 
 #[cfg(test)]
@@ -120,25 +119,20 @@ pub fn elaborate_type_identifier<'a>(
         Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }
-    // Not a type binding. Consult the value side: a module head lowers to its principal signature,
-    // and any other value-language hit only sharpens the miss message (an unknown name gets the
-    // unknown-name failure). The builtin-table fallback via `from_type_identifier` is tried in the
-    // non-module arms so fixture scopes that skip builtin registration still resolve builtin names.
+    // Not a type binding. Consult the value side: a value-language hit only sharpens the miss
+    // message (an unknown name gets the unknown-name failure). The builtin-table fallback via
+    // `from_type_identifier` is tried first in each arm so fixture scopes that skip builtin
+    // registration still resolve builtin names. Slots and returns name *types*, so no value —
+    // module included — lowers to a type here: a module reaches type position only through
+    // `TYPE OF`, which yields its principal signature as an ordinary type value.
     match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
-        // A bare module head in type position is the module's self-sig: slots and returns name
-        // signatures, so `x :IntOrd` is the structural slot admitting any module whose self-sig
-        // subtypes IntOrd's, and `-> Er` (a module-valued parameter) returns a module satisfying
-        // `Er`'s interface. Module names spell as Type tokens, so the head reaches here as one;
-        // module-naming-flip retires Type-token module names and this arm with them.
-        Some(NameLookup::Bound(KObject::Module(m))) => {
-            TypeResolution::Done(KType::signature(SigSource::SelfOf(m), Vec::new()))
-        }
         Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
             match KType::<'a>::from_type_identifier(t) {
                 Ok(kt) => TypeResolution::Done(kt),
                 Err(_) => TypeResolution::Unbound(format!(
                     "`{name}` is value-language only — a type slot needs a type-language \
-                     binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
+                     binder (a builtin type, a `LET {name} = <type>` alias, or a signature). \
+                     For the type of a value, write `:(TYPE OF {name})`"
                 )),
             }
         }

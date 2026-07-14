@@ -23,7 +23,7 @@ use crate::machine::core::kfunction::action::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
 use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
-use crate::machine::core::kfunction::exec::home_ambient_return_type;
+use crate::machine::core::kfunction::exec::{home_ambient_return_type, home_delivered_return_type};
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
@@ -295,7 +295,8 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     // cart keeps live — like the `Type` form's `PerCall.ret`.
                     TailContract::FromLastResult { func } => {
                         let owned = terminals.owned_slice();
-                        let kt = match owned[owned.len() - 1].value {
+                        let terminal = owned[owned.len() - 1];
+                        let kt = match terminal.value {
                             Carried::Type(t) => t,
                             Carried::Object(other) => {
                                 return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
@@ -306,11 +307,26 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 ))))
                             }
                         };
-                        // No binding-derived evidence here: the type is a sub-dispatch's result, not
-                        // the reach-carrying resolution of a named binding, so it takes the ambient
-                        // door — audited against the captured scope's own region and ambient
-                        // coverage alone.
-                        let ret = match home_ambient_return_type(kt, func.captured_scope()) {
+                        // The type is a sub-dispatch's result, so its evidence is its own delivered
+                        // carrier — which names every region it borrows, including one the captured
+                        // scope does not cover (`-> :(TYPE OF er)` over a module minted in a
+                        // FUNCTOR's per-call region). The reach mints in the FN's own per-call
+                        // scope, so it dies with the call. Without a frame block there is no such
+                        // scope, and the type takes the evidence-free ambient door.
+                        let homed = match &block_entry {
+                            BlockEntry::FrameScope(frame) => frame.with_scope(|call| {
+                                home_delivered_return_type(
+                                    kt,
+                                    &terminal.delivered,
+                                    call,
+                                    func.captured_scope(),
+                                )
+                            }),
+                            BlockEntry::None | BlockEntry::Overlay(_) => {
+                                home_ambient_return_type(kt, func.captured_scope())
+                            }
+                        };
+                        let ret = match homed {
                             Ok(ret) => ret,
                             Err(error) => return Outcome::Done(Err(error)),
                         };
