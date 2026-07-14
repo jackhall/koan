@@ -375,63 +375,111 @@ impl<'a> OpPlan<'a> {
             in_group,
             bind_index,
         } = self;
-        let (elements, result_type, mode) = match kind {
-            OpKind::Binary => (
-                vec![
+        let (obj, stored) = match kind {
+            OpKind::Binary => {
+                let elements = vec![
                     arg(LEFT, operand.clone()),
                     kw(&sym),
                     arg(RIGHT, operand.clone()),
-                ],
-                result.unwrap_or_else(|| operand.clone()),
-                ReductionMode::FoldLeft,
-            ),
-            OpKind::Unary => (
-                vec![
-                    kw(&sym),
-                    arg(OPERANDS, KType::list(Box::new(operand.clone()))),
-                ],
-                result.ok_or_else(|| {
+                ];
+                let result_type = result.unwrap_or(operand);
+                let registered = register_body(
+                    scope,
+                    &sym,
+                    sig(result_type, elements),
+                    Body::UserDefined(body_expr),
+                    bind_index,
+                )?;
+                if !in_group {
+                    let members = std::iter::once(sym.clone()).collect();
+                    let group = scope
+                        .brand()
+                        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::FoldLeft));
+                    scope.register_group_under_all_subsets(&[sym.as_str()], group, bind_index)?;
+                }
+                registered
+            }
+            OpKind::Unary => {
+                let result_type = result.ok_or_else(|| {
                     KError::new(KErrorKind::ShapeError(
                         "UNARY OP requires an explicit `-> Result`".to_string(),
                     ))
-                })?,
-                ReductionMode::Unary,
-            ),
+                })?;
+                let list_signature = sig(
+                    result_type.clone(),
+                    vec![
+                        kw(&sym),
+                        arg(OPERANDS, KType::list(Box::new(operand.clone()))),
+                    ],
+                );
+                // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
+                // keyworded call, not an operator chain — without a two-operand body it would
+                // simply miss. Its body is the AST `sym [left right]`, the shape a reduced run
+                // takes, so both surfaces land on the one list body the user wrote.
+                let bridge_signature = sig(
+                    result_type,
+                    vec![arg(LEFT, operand.clone()), kw(&sym), arg(RIGHT, operand)],
+                );
+                // The door writes the registry entry unconditionally, which is what a unary
+                // declaration always wants: `check_group_context` rejects `UNARY OP` inside a
+                // `GROUP`, so `in_group` cannot hold on this arm.
+                register_unary_operator(
+                    scope,
+                    &sym,
+                    list_signature,
+                    Body::UserDefined(body_expr),
+                    bridge_signature,
+                    Body::UserDefined(bridge_body(&sym)),
+                    bind_index,
+                )?
+            }
         };
-        let (obj, stored) = register_body(
-            scope,
-            &sym,
-            sig(result_type.clone(), elements),
-            body_expr,
-            bind_index,
-        )?;
-        if kind == OpKind::Unary {
-            // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain keyworded
-            // call, not an operator chain — without a two-operand body it would simply miss. Its
-            // body is the AST `sym [left right]`, the shape a reduced run takes, so both surfaces
-            // land on the one list body the user wrote.
-            let bridge = vec![
-                arg(LEFT, operand.clone()),
-                kw(&sym),
-                arg(RIGHT, operand.clone()),
-            ];
-            register_body(
-                scope,
-                &sym,
-                sig(result_type, bridge),
-                bridge_body(&sym),
-                bind_index,
-            )?;
-        }
-        if !in_group {
-            let members = std::iter::once(sym.clone()).collect();
-            let group = scope
-                .brand()
-                .alloc_operator_group(OperatorGroup::new(members, mode));
-            scope.register_group_under_all_subsets(&[sym.as_str()], group, bind_index)?;
-        }
         Ok(scope.resident_value_carrier(obj, stored))
     }
+}
+
+/// Register the fixed triple every unary operator consists of: the list-form overload under
+/// [`unary_key`], the binary-form overload under [`binary_key`], and the size-1
+/// [`ReductionMode::Unary`] group entry (key derived through
+/// [`Scope::register_group_under_all_subsets`]). The bodies are the caller's own — `UNARY OP`
+/// synthesizes koan-AST bodies, the builtin `|` supplies native ones. Returns the list-form
+/// function's object and stored reach: the list body is the operator's primary value.
+///
+/// Registration derives each bucket key from the signature the caller hands in, so a caller that
+/// spells a signature the use site never computes would register into a bucket no koan expression
+/// reaches — the operator would silently never dispatch. The two asserts close that channel; a
+/// mismatch can only come from crate code, never from koan source.
+pub(super) fn register_unary_operator<'a>(
+    scope: &'a Scope<'a>,
+    sym: &str,
+    list_signature: ExpressionSignature<'a>,
+    list_body: Body<'a>,
+    binary_signature: ExpressionSignature<'a>,
+    binary_body: Body<'a>,
+    bind_index: BindingIndex,
+) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
+    assert_eq!(
+        list_signature.untyped_key(),
+        unary_key(sym),
+        "unary operator `{sym}`: the list-form signature must key the bucket a reduced run or a \
+         prefix use computes",
+    );
+    assert_eq!(
+        binary_signature.untyped_key(),
+        binary_key(sym),
+        "unary operator `{sym}`: the binary-form signature must key the bucket a two-operand use \
+         computes",
+    );
+    // The list body first: its function is the operator's primary value, the one an `OP`
+    // declaration evaluates to.
+    let (obj, stored) = register_body(scope, sym, list_signature, list_body, bind_index)?;
+    register_body(scope, sym, binary_signature, binary_body, bind_index)?;
+    let members = std::iter::once(sym.to_string()).collect();
+    let group = scope
+        .brand()
+        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
+    scope.register_group_under_all_subsets(&[sym], group, bind_index)?;
+    Ok((obj, stored))
 }
 
 /// Allocate one operator body as a `KFunction` capturing `scope`, and register it in `scope`'s
@@ -442,16 +490,12 @@ fn register_body<'a>(
     scope: &'a Scope<'a>,
     sym: &str,
     signature: ExpressionSignature<'a>,
-    body_expr: KExpression<'a>,
+    body: Body<'a>,
     bind_index: BindingIndex,
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-    let f: &'a KFunction<'a> = scope.brand().alloc_function(KFunction::new(
-        signature,
-        Body::UserDefined(body_expr),
-        scope,
-        None,
-        None,
-    ));
+    let f: &'a KFunction<'a> = scope
+        .brand()
+        .alloc_function(KFunction::new(signature, body, scope, None, None));
     let (obj, stored) = scope
         .alloc_object_checked_stored(KObject::KFunction(f))
         .expect("f was just allocated into scope's own region");
