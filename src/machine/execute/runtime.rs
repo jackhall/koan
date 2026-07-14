@@ -24,7 +24,7 @@ use crate::machine::core::kfunction::action::{
 };
 use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
 use crate::machine::core::kfunction::exec::home_return_type;
-use crate::machine::core::{FoldingBrand, ScopeRefFamily};
+use crate::machine::core::{FoldingBrand, ScopeRefFamily, StoredReach};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
@@ -292,8 +292,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                     // The return-type expression is the last leading statement (all owned), so its
                     // resolved value is the last owned terminal, read live at the step brand. The
                     // per-call type is re-homed into the captured-scope region — a strict ancestor the
-                    // cart keeps live — like the `Type` form's `PerCall.ret`; a concrete module return
-                    // type is rejected there (see `home_return_type`).
+                    // cart keeps live — like the `Type` form's `PerCall.ret` (see `home_return_type`).
                     TailContract::FromLastResult { func } => {
                         let owned = terminals.owned_slice();
                         let kt = match owned[owned.len() - 1].value {
@@ -307,7 +306,14 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 ))))
                             }
                         };
-                        let ret = match home_return_type(kt, func.captured_scope().brand()) {
+                        // No binding-derived evidence here: the type is a sub-dispatch's result, not
+                        // the reach-carrying resolution of a named binding, so the home is audited
+                        // against the captured scope's own region and ambient coverage alone.
+                        let ret = match home_return_type(
+                            kt,
+                            func.captured_scope(),
+                            &StoredReach::default(),
+                        ) {
                             Ok(ret) => ret,
                             Err(error) => return Outcome::Done(Err(error)),
                         };

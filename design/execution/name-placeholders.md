@@ -88,6 +88,17 @@ The six binder builtins (`LET`, `FN`, `NEWTYPE`, `SIG`, `UNION`,
 [`register_builtin_with_binder`](../../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
 
+A placeholder is keyed by `BindKind` (value or type), and `MODULE` straddles the
+two: a module name is a Type token, so the binder parks in-flight forward
+references through the *type* ladder (`BindKind::Type`), while the module itself
+binds value-side into `data` ([modules.md § First-class
+modules](../typing/modules.md#first-class-modules)). The value write therefore
+clears the Type-kind placeholder as well as the value-kind one
+([`Bindings::try_apply`](../../src/machine/core/bindings.rs)); without that, a
+forward reference like `x :View` would park forever on a producer that has already
+run. The [naming flip](../../roadmap/type_memos/module-naming-flip.md) retires
+Type-token module names and this cross-kind clear with them.
+
 Production reads thread the three-layer
 [lookup → admit protocol](../typing/lookup-protocol.md): `Scope::resolve_*_with_chain`
 walks ancestors, the `Bindings::lookup_*` accessors apply the

@@ -1401,6 +1401,39 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
     );
 }
 
+/// The reaching tier is evidence-gated, not a rubber stamp: the same foreign-region `Signature`,
+/// sealed into region B's `alloc_ktype_reaching` under an **empty** `StoredReach`, is refused just
+/// like the dest-only tier refuses it — B's own region and its ambient coverage name nothing in A.
+/// This is the tier a deferred `-> Er` return homes through, so a return type borrowing a region
+/// the parameter's binding does not pin still errors loudly.
+#[test]
+fn alloc_ktype_reaching_rejects_foreign_signature_with_no_evidence() {
+    use crate::machine::model::values::ModuleSignature;
+
+    let region_a = run_root_storage();
+    let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
+    let sig = region_a
+        .brand()
+        .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
+    let kt = KType::signature(SigSource::Declared(sig), Vec::new());
+
+    let region_b = run_root_storage();
+    let scope_b = default_scope(&region_b, Box::new(std::io::sink()));
+    let before = region_b.region().alloc_count();
+    let result: Result<&KType<'_>, _> = scope_b.alloc_ktype_reaching(kt, &StoredReach::empty());
+
+    let err = result.expect_err("no evidence names region A, so the seal must be refused");
+    assert!(
+        matches!(&err.kind, crate::machine::core::KErrorKind::ShapeError(_)),
+        "expected ShapeError, got {err:?}"
+    );
+    assert_eq!(
+        region_b.region().alloc_count(),
+        before,
+        "a rejected reaching seal must store nothing"
+    );
+}
+
 /// `alloc_carried_with_scope` crosses two operands to the fold brand at once: a delivered dep view
 /// and the consumer's own scope, re-anchored as `&'b Scope<'b>`. The build closure composes a
 /// `KType::Record` whose `flag` field is a type read out of the dep view and whose `count` field is

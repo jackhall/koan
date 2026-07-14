@@ -14,10 +14,10 @@ generic functions are built this way — see [generics.md](generics.md).
   [tokens.md](tokens.md)) are value-language only and a hard error in any
   type-position slot.
 - *Machine semantics* — modules are **first-class values**.
-  `KType::Module { module, frame }` flows through the
-  scheduler in the value channel's `Type` arm like any other type (the same
-  [`Carried::Type`](../../src/machine/model/values/carried.rs) arm `Number`,
-  `Str`, and other type values ride), and a FUNCTOR is internally an
+  `KObject::Module(&Module)` flows through the
+  scheduler in the value channel's `Object` arm like any other value (a signature,
+  by contrast, rides the [`Carried::Type`](../../src/machine/model/values/carried.rs)
+  arm alongside `Number`, `Str`, and other type values), and a FUNCTOR is internally an
   ordinary `KFunctionValue` with an `is_functor` flag set at binder time.
   The flag drives two separable effects:
   definition-time validation of the return-type slot, and a distinct
@@ -91,9 +91,10 @@ execution.
 
 FUNCTOR's return-type slot must denote a module, signature, or functor
 kind. The admissible carriers are `KType::OfKind(KKind::Signature)`,
-`KType::Signature { .. }` (the unified constraint-and-value variant,
-covering both a bare `:OrderedSig` and a `(… WITH {…})` pin),
-`KType::OfKind(KKind::Module)`, `KType::Module { .. }`, and `KType::KFunctor { … }`
+`KType::Signature { .. }` (the unified constraint-and-value variant, covering a bare
+`:OrderedSig`, a `(… WITH {…})` pin, the `:Module` surface keyword's empty signature,
+and a bare module head's `SelfOf` self-sig — a concrete module return lands here
+because a module value's `ktype()` *is* its self-sig), and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
 multi-module functors and any deeper nesting flow through one rule). Any
 other denotation — `Number`, a structural function type, a plain user
@@ -168,27 +169,27 @@ bound outside the FUNCTOR) both work as pin values resolved eagerly.
 
 ## Parameters
 
-A Type-class FUNCTOR parameter (`Er: OrderedSig`) binds the parameter name as
-a type-language binder at the call site: at each call,
-[`run_user_fn`](../../src/machine/core/kfunction/exec.rs) writes the per-call
-argument into the child scope's `bindings.types` only (not `bindings.data`)
-via `register_type`. The argument arrives already resolved, so the write is a
-direct `register_type` — no per-call transient identity elaboration at the bind
-site. The
-[`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
-predicate gates the write — `Signature { .. }` and every `OfKind(_)` slot
-(`:Type`, a bare type-name slot, `:Module`, `:Signature`) carry meaningful
-type-language identity at the binder, and the corresponding argument arrives in the
-value channel's `Type` arm. Body-position references to the
-parameter (`Er.compare`, `Er.Type`) resolve through
-`Scope::resolve_type`'s outer-chain walk against the per-call scope, and
-[`attr.rs`](../../src/builtins/attr.rs)'s `body_identifier` arm falls
-through to `resolve_type` for `KType::Module` / `AbstractType` so ATTR on
-a signature-typed parameter projects through the type-side carrier.
+A FUNCTOR parameter binds per-call in whichever channel its argument travels.
+A **module** argument — what a `:OrderedSig` slot admits — arrives on the value
+channel's `Object` arm and binds into the child scope's `bindings.data` through the
+ordinary copied-mode value door, like any other object value: a module is a value,
+so there is no type-side parameter bind for it. A genuinely **type-denoting**
+argument — a `:Type` slot, a bare type-name slot, `:Signature` — arrives on the
+`Type` arm and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs) writes it
+into `bindings.types` via `register_type`; the argument arrives already resolved, so
+the write is direct, with no per-call transient identity elaboration at the bind
+site.
+
+Body-position references to a module parameter (`Er.compare`, `Er.Carrier`) resolve
+through the value channel: [`attr.rs`](../../src/builtins/attr.rs)'s
+`body_identifier` finds the module in `data` and `body_module` projects the member
+off the module value. A bare `Er` in type position (`-> Er`) lowers to the argument
+module's self-sig — see
+[modules.md § Module heads in type position](modules.md#module-heads-in-type-position).
 
 FUNCTOR parameters are otherwise **unrestricted ordinary FN parameters**.
 Because koan unifies the value and module languages — a module is a
-first-class `KType::Module { .. }` in the value channel's `Type` arm, a FUNCTOR an
+first-class `KObject::Module` in the value channel's `Object` arm, a FUNCTOR an
 `is_functor`-flagged `KFunctionValue` — a FUNCTOR parameter can be
 anything an FN parameter can be, including a bare value
 (`FUNCTOR (MAKETREE factor :Number) -> …`, with
@@ -215,10 +216,10 @@ with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
 return like `-> :Elt` re-elaborates through the same dep-finish slot
-check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
-`KType::Signature { .. }` carriers stays in place — those route through
-`OfKind(Module)` / `OfKind(Signature)` / `Signature { .. }` slots, keeping the
-`:Type` vs `:Module` overload distinction. OCaml structurally cannot match
+check the nominal-keyed path uses. The wall stays in place on the other side: a
+signature value routes through the `OfKind(Signature)` slot and a module *value*
+through a `Signature { .. }` slot, neither of which a `:Type` slot admits — keeping
+the `:Type` vs `:Module` overload distinction. OCaml structurally cannot match
 this without modular implicits, because its module language is stratified
 above the value language.
 

@@ -53,6 +53,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
 - [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
+- [Abstract member names versus builtin type names](type_language/abstract-member-names-vs-builtin-types.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)

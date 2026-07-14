@@ -2,7 +2,7 @@
 
 **Problem.** Generic dictionary-style polymorphism already works:
 modules are first-class values
-([`KType::Module`](../../src/machine/model/types/ktype.rs)), signatures are
+([`KObject::Module`](../../src/machine/model/values/kobject.rs)), signatures are
 first-class values ([`KType::Signature`](../../src/machine/model/types/ktype.rs)),
 and dispatch on `:(Signature Foo)` slots picks behavior by signature
 satisfaction. A user can write `(SORT IntOrd xs)` today — the witness

@@ -9,7 +9,8 @@
 //! The digest is a pure function of type content, so two independently built types with the
 //! same content digest equal with no shared interner. The two generative exceptions fold a
 //! minted `ScopeId` into the content — opaque ascription's per-application nonce (a set's
-//! `generative_nonce`) and the id-keyed leaves (`Signature` / `Module` / `AbstractType`) —
+//! `generative_nonce`) and the id-keyed leaves (`Signature`, whose `SelfOf` source keys on the
+//! module's scope id, and `AbstractType`) —
 //! so distinct abstractions stay distinct; the order-independence property is scoped to
 //! types without such minted leaves.
 //!

@@ -235,12 +235,17 @@ or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
 `NonCallableHead` (a record type is a value, not a callable).
 
 The sigil boundary — "the result must ride the value channel's `Type` arm
-(a `Module`, `Signature`, `SetRef`, `KFunctor`, or any other `&KType`)" — is
+(a `Signature`, `SetRef`, `KFunctor`, or any other `&KType`)" — is
 enforced implicitly by the consuming slot's KType machinery rather
 than by a dedicated tail at the sigil. An `Object`-arm value (number,
-instance struct, plain function value) flowing out of `:(...)`
-reaches an `OfKind(Proper)` / `OfKind(Any)` / `OfKind(Module)` / `OfKind(Signature)` slot
-and surfaces a standard `TypeMismatch`. The sigil handler itself does
+instance struct, plain function value, or a **module** — a module is a value)
+flowing out of `:(...)`
+reaches an `OfKind(Proper)` / `OfKind(Any)` / `OfKind(Signature)` slot
+and surfaces a standard `TypeMismatch`. That is why type-language dispatch
+(`:(LIST OF IntOrd)`) refuses a module head: only `TypeIdentifier` elaboration
+lowers a bare module head to its self-sig (see
+[modules.md § Module heads in type position](modules.md#module-heads-in-type-position)).
+The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
 Every parameterized type rides one surface: the keyworded sigil

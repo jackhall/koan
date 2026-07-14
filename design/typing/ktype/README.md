@@ -32,20 +32,22 @@
   flowing in the value channel's `Type` arm is classified by `KType::kind_of` and matched
   against it by subsumption. `OfKind` is **type-channel-only**: it admits a type value, never
   a runtime instance — a value is matched by a type, never by a kind. The kinds form one
-  subsumption lattice, `Any > {Module, Signature, Proper > {Newtype, TypeConstructor}}`:
+  subsumption lattice, `Any > {Signature, Proper > {Newtype, TypeConstructor}}`:
   a parsed type-name slot is `OfKind(Proper)`, the `:Type` surface is `OfKind(Any)`, the
   `:Signature` wildcard is `OfKind(Signature)` (`:Module` instead lowers to the empty
   signature — see the module / signature carriers below), and the two
-  nominal families sit strictly below `Proper`. `KKind::admits` is reflexive subsumption (a
-  `Proper` / `Any` slot admits any proper-subtree type value, while the module/signature wall
-  keeps each of those families to itself); `KKind::strictly_below` orders specificity, so an
+  nominal families sit strictly below `Proper`. There is no `Module` kind: a module is a
+  *value*, matched by a signature type, so it never reaches an `OfKind` slot at all.
+  `KKind::admits` is reflexive subsumption (a
+  `Proper` / `Any` slot admits any proper-subtree type value, while the signature wall
+  keeps that family to itself); `KKind::strictly_below` orders specificity, so an
   `OfKind(Newtype)` slot out-specifies an `OfKind(Proper)` sibling. See
   [Type-position slot kinds](slots-and-signatures.md#type-position-slot-kinds).
 - First-class type values: a type flows raw as a `&KType` in the value channel's `Type`
   arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
   `OfKind(Any)` likewise) admits any *proper* type value: bare builtin type tokens (`Number`,
   `Str`, `Bool`, `Null`), newtype and union nominal tokens, an anonymous `Union` type value, and
-  any other non-module / non-signature type. A signature value routes through the dedicated
+  any other non-signature type. A signature value routes through the dedicated
   `OfKind(Signature)` slot, and a module value (riding the value channel's Object arm as
   `KObject::Module`) through a `Signature { .. }` slot, so the `:Type` vs `:Module` overload
   distinction stays intact — see
@@ -105,33 +107,40 @@
   finalize seals it to `SetLocal(index)`. It never appears in a sealed type and
   never reaches the predicates. Equality is by name only.
 - Module / signature carriers (the [module system](../modules.md) rests on
-  these): `Module { module: &'a Module<'a>, frame: Option<Rc<FrameStorage>> }`
-  is a module's **type-position** identity — the region-pinned `&Module`
-  pointer plus the per-call frame anchor for functor-built modules — held by
-  `bindings.types` and read during type-path elaboration; a module *value* rides
-  the value channel's Object arm as `KObject::Module`, typed by its self-sig.
+  these): **there is no module variant.** A module is a value — it rides the value
+  channel's Object arm as `KObject::Module`, and its `ktype()` is its principal
+  signature, so the type channel names a module only through
+  `Signature { sig: SelfOf(m), .. }`. A bare module head in type position
+  (`x :IntOrd`, `-> Er`) lowers to exactly that self-sig — see
+  [modules.md § Module heads in type position](../modules.md#module-heads-in-type-position).
   `Signature { sig: SigSource<'a>, pinned_slots: Vec<(String, KType)> }`
   serves both signature roles in one variant — its `sig` names one of three
   module-lattice points ([`SigSource`](../../../src/machine/model/types/ktype.rs):
   `Declared` SIG, `SelfOf` module self-sig, `Empty`) — the introspectable value
   (a `Declared`, carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
-  module satisfying this signature"); `AbstractType { source:
-  AbstractSource<'a>, name: String }` is the per-abstract-type-member tag.
-  `AbstractSource` is `Sig(ScopeId) | Module(&'a Module<'a>)`: a
-  `Sig`-rooted member is named at SIG-declaration time (a SIG-local
-  `LET Type = ...` that would otherwise collapse to its underlying type binds
-  this name-bearing tag instead), while a `Module`-rooted member is the per-call
-  mint `:|` opaque ascription produces (`Foo.Type`, with a module to project
-  further members off). Manual `PartialEq` keys the id-carrying variants on
-  `module.scope_id()` for `KType::Module` and `(source.scope_id(), name)` for
-  `KType::AbstractType`, while `KType::Signature` compares by its stored content
+  module satisfying this signature"). It is the one variant holding a live region
+  pointer (`&'a Module` / `&'a Signature`), so it is also the one that cannot rebuild
+  at `'static`.
+  `AbstractType { source: ScopeId, name: String }` is the per-abstract-type-member
+  tag — **owned data**, id-keyed, with no `&Module` inside it. The single variant has
+  two **minting sites**, and the distinction between them is load-bearing for
+  generativity even though the representation is one shape: `source` is the SIG decl
+  scope's id for a member named at SIG-declaration time (a SIG-local `LET Type = ...`
+  that would otherwise collapse to its underlying type binds this name-bearing tag
+  instead), or the freshly-allocated ascription module's scope id for the per-call
+  mint `:|` opaque ascription produces (`Foo.Type`). Because each `:|` application
+  allocates a fresh child scope, the two never collide.
+  Manual `PartialEq` keys `KType::AbstractType` on `(source, name)`, while
+  `KType::Signature` compares by its stored content
   digest (which folds `sig.sig_id()` and `pinned_slots`; the `SigSource`'s `path()`
   is diagnostic-only) — so two
-  opaque ascriptions of the same source module produce distinct
-  `KType::Module` identities (the abstraction barrier) but their
-  `AbstractType` minting for the same slot name compares equal, and a
-  per-call `Module`-rooted mint stays distinct from the `Sig`-rooted member it
-  was threaded from.
+  opaque ascriptions of the same source module mint distinct abstract identities
+  (the abstraction barrier) while two `AbstractType` carriers minted from the *same*
+  ascription for the same slot name compare equal, and a per-call mint stays distinct
+  from the SIG-declared member it was threaded from.
+  Projecting a member off a bare type-channel `AbstractType` is an error: the
+  identity names no receiver, and further members project off the module value
+  ([`attr.rs`](../../../src/builtins/attr.rs)).
   The companion wildcard `OfKind(Signature)` admits any signature value; the
   surface keyword `Signature` lowers to it in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs),

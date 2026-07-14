@@ -5,12 +5,16 @@ with no `Sig` suffix.
 
 **Problem.** Module names use the Type-token spelling, so modules — values — occupy the
 token namespace whose job is naming things that type fields, and signature names carry a
-`Sig` suffix to stay out of their modules' way. [Value-head type
-paths](value-head-type-paths.md) moves module bindings value-side but keeps the Type-token
-names, resolved through bridge arms in the resolver ladder (a Type-token part whose
-value-side hit is a module resolves to the Object arm in
-[`resolve_name_part`](../../src/machine/execute/dispatch.rs)) — interim machinery that
-exists only because module names still spell as type tokens.
+`Sig` suffix to stay out of their modules' way. Module bindings live value-side, but the
+Type-token names keep four marked bridge sites alive, each existing only because a module
+name still spells as a type token: the overload-picker probe's Type-token arm
+([`resolve_name_part`](../../src/machine/execute/dispatch.rs)), the bare-Type-leaf value
+consult ([`bare_type_leaf`](../../src/machine/execute/dispatch/single_poll.rs)), the
+Type-token head's self-sig lowering in elaboration
+([`elaborate_type_identifier`](../../src/machine/model/types/resolver.rs)), and the
+Type-kind placeholder clear a module's value write performs
+([`bindings.rs`](../../src/machine/core/bindings.rs)) so an in-flight forward reference
+parked on the type ladder still wakes.
 
 **Acceptance criteria.**
 
@@ -21,8 +25,8 @@ exists only because module names still spell as type tokens.
 - Module names are snake_case across stdlib, tests, tutorial, and docs; bare module
   references, ATTR receivers, `USING`, ascription, and value-head type paths resolve through
   the ordinary value channel for Identifier tokens.
-- No resolver-ladder arm accepts a Type-token-named module — the bridge arms left by
-  [value-head type paths](value-head-type-paths.md) are deleted.
+- The four Type-token bridge sites are deleted: no resolver-ladder arm accepts a
+  Type-token-named module, and a module's value write clears no Type-kind placeholder.
 
 **Directions.**
 

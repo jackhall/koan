@@ -312,18 +312,30 @@ impl<'a> Scope<'a> {
     /// value legitimately reaching one (a module bound at an outer/root scope, read by a nested
     /// per-call functor body). Exact for `KType`, since its only region pointers (`&Module` /
     /// `&ModuleSignature` / `&KFunction`) are all side-table-recorded.
-    pub(crate) fn alloc_ktype_reaching(
+    ///
+    /// The stored reference comes back at a caller-chosen `'c` no longer than this scope's own `'a`:
+    /// the destination stays this scope's region, but a caller homing a type it may use only for a
+    /// shorter window ([`home_return_type`](crate::machine::core::kfunction::exec::home_return_type)'s
+    /// contract cap) shortens the brand before the store, so the borrow checker refuses any use past
+    /// that window.
+    pub(crate) fn alloc_ktype_reaching<'c>(
         &self,
         t: KType<'_>,
         evidence: &StoredReach<'_>,
-    ) -> Result<&'a KType<'a>, KError> {
+    ) -> Result<&'c KType<'c>, KError>
+    where
+        'a: 'c,
+    {
         let name = t.name();
         let sets: &[&FrameSet] = match &evidence.foreign {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
         };
         let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
-        self.brand()
+        // Shorten the brand (covariant) before the store: `KType` is invariant, so the returned
+        // `&'c KType<'c>` can only be had by allocating through a `RegionBrand<'c>`.
+        let brand: RegionBrand<'c> = self.brand();
+        brand
             .0
             .alloc_resident_checked::<KType<'static>>(
                 t,

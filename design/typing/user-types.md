@@ -42,16 +42,16 @@ classified by `kind_of`, never a runtime instance. The nominal-family keywords a
 for diagnostic rendering only and are not registered as writable surface names (no entry
 in [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
 
-Modules and signatures live in their own KType variants —
-[`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
-for first-class module values,
+Signatures live in their own KType variant —
 [`KType::Signature { sig, pinned_slots }`](../../src/machine/model/types/ktype.rs)
 for first-class signature values (and for the satisfies-this-signature slot
-constraint — one variant, disambiguated by position), and
+constraint — one variant, disambiguated by position) — with
+`KType::OfKind(KKind::Signature)` as the matching wildcard, alongside
 [`KType::AbstractType { source, name }`](../../src/machine/model/types/ktype.rs)
-for abstract-type members (SIG-declared or minted by opaque ascription) — with
-`KType::OfKind(KKind::Module)` and `KType::OfKind(KKind::Signature)` as the matching wildcards
-(see [modules.md](modules.md) for the carrier model).
+for abstract-type members (SIG-declared or minted by opaque ascription). A **module**
+has no KType variant: it is a value, typed by its principal signature
+(`Signature { sig: SelfOf(m), .. }`) — see [modules.md](modules.md) for the carrier
+model.
 
 ## Identity is the set pointer plus index
 
@@ -81,9 +81,8 @@ strictly below `OfKind(Proper)`, and that below `Any` in `is_more_specific_than`
 `OfKind` is type-channel-only, an `OfKind(K)` slot ranks against *type values* by
 `kind_of` subsumption (`KKind::admits` / `KKind::strictly_below`), reading the member's
 kind via `set.member(index).kind` — so each family ranks alongside the others with no
-per-kind branching at the dispatcher. The module/signature
-variants follow the parallel stratification: `KType::Module { .. }` ≺
-`KType::OfKind(KKind::Module)` ≺ `Any`, and `KType::Signature { .. }` ≺
+per-kind branching at the dispatcher. The signature
+variant follows the parallel stratification: `KType::Signature { .. }` ≺
 `KType::OfKind(KKind::Signature)` ≺ `Any`. This is the identity-and-wildcard slice of Layer 3 of the
 [lookup → admit protocol](lookup-protocol.md); the predicate is the same one
 every dispatch admit pass runs.
@@ -97,17 +96,20 @@ synthesizes `KType::SetRef { set, index }` by `Rc::clone`ing the carried set —
 dispatch identity is the set pointer and index, not the schema. Newtype instances —
 scalar, record-repr, *and every user-`UNION` variant* — instead ride
 [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs), which carries a
-`type_id: &KType` (the member `SetRef`). Module and
-signature values ride the value channel's `Type` arm as
-[`KType::Module { .. }`](../../src/machine/model/types/ktype.rs) /
-`KType::Signature { .. }` ([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
-identity is the carried `&KType` itself rather than a synthesized shadow.
+`type_id: &KType` (the member `SetRef`). A **signature** value rides the value
+channel's `Type` arm as
+[`KType::Signature { .. }`](../../src/machine/model/types/ktype.rs)
+([`Carried::Type`](../../src/machine/model/values/carried.rs)); the
+identity is the carried `&KType` itself rather than a synthesized shadow. A
+**module** value rides the Object arm as `KObject::Module` — it is a value, not a
+type identity.
 
-`bindings.data` holds only runtime instances. A value-position reference to a
-nominal type token (passing `Outcome` to a constructor or ATTR call) surfaces the
+`bindings.data` holds runtime instances, including module values. A value-position
+reference to a nominal type token (passing `Outcome` to a constructor or ATTR call)
+surfaces the
 [`bindings.types` identity in the `Type` arm](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
 on demand via `Scope::resolve_type_identifier` — no
-value-side schema carrier exists for newtype / union / module / Result.
+value-side schema carrier exists for newtype / union / Result.
 
 ## Unions dissolve into per-variant newtypes
 
@@ -186,9 +188,8 @@ untouched, and `TRY` still selects arms by error-tag string
 
 ## Type-only nominal install
 
-NEWTYPE / UNION-named / MODULE / Result finalize write **only** `bindings.types`:
-each builds its identity (a `KType::SetRef` into its sealed set, or
-`KType::Module { module, frame }`) and installs it through
+NEWTYPE / UNION-named / Result finalize write **only** `bindings.types`: each builds
+its identity (a `KType::SetRef` into its sealed set) and installs it through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), which inserts if
 absent and overwrites a `PartialEq`-equal entry, surfacing `Rebind` on a genuine
 non-equal collision. The schema rides inside the set member, so construction reads
@@ -196,6 +197,13 @@ fields / variant types straight off the projected member; there is no
 second-namespace write to keep in sync. The single-home invariant —
 Type-classed name lookups go through `Scope::resolve_type` only — holds because
 the identity *is* the only entry.
+
+`MODULE` is the exception that proves the rule: a module is a *value*, so it binds
+into `bindings.data` through
+[`Scope::bind_module`](../../src/machine/core/scope.rs) and nothing lands in
+`types`. Its Type-classed name is resolved through the value channel by a bridge arm
+in the resolver ladder (see
+[modules.md § First-class modules](modules.md#first-class-modules)).
 
 SIG installs the same way, through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs): a single
@@ -288,7 +296,7 @@ placeholder that survives into a sealed type.
 `NEWTYPE Distance = Number` declares a fresh nominal identity over a transparent
 representation. Declaration seals a singleton set whose one member is a
 [`NominalSchema::Newtype { repr }`](../../src/machine/model/types/recursive_set.rs)
-and writes only `bindings.types` — the same type-only shape NEWTYPE / UNION / MODULE
+and writes only `bindings.types` — the same type-only shape NEWTYPE / UNION
 / Result use. The `repr` is not part of identity. A record repr
 (`NEWTYPE Point = :{x :Number, y :Number}`) is a `NominalSchema::Newtype` over a
 `KType::Record` — the product-side nominal form; `.x` reads the field through ATTR's

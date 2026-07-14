@@ -85,16 +85,18 @@ definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
-`KType::AbstractType { source: Module(view), name }` per declared abstract
+`KType::AbstractType { source: view.scope_id(), name }` per declared abstract
 type, where `view` is the freshly allocated child module the ascription
-introduces. `AbstractType`'s `source` is an
-[`AbstractSource`](../../src/machine/model/types/ktype.rs) enum —
-`Module(&'a Module<'a>)` for this per-call mint, `Sig(ScopeId)` for the
-SIG-declaration-time member (below) — and manual `PartialEq` compares
-`(source.scope_id(), name)`, so two opaque ascriptions of the same source
-module yield distinct `scope_id`s and therefore distinct types that cannot be
-confused, while two `KType::AbstractType` carriers minted from the same
-ascription compare equal. The carrier lives in
+introduces. `AbstractType`'s `source` is a plain
+[`ScopeId`](../../src/machine/core/scope_id.rs), so the variant is owned data
+carrying no `&Module`. It has two **minting sites** — this per-call ascription
+module, and the SIG decl scope for a declaration-time member (below) — which the
+representation no longer distinguishes: they differ only in *which* scope id
+`source` names, and that is exactly what keeps them apart. Manual `PartialEq`
+compares `(source, name)`, so two opaque ascriptions of the same source module
+yield distinct `scope_id`s and therefore distinct types that cannot be confused,
+while two `KType::AbstractType` carriers minted from the same ascription compare
+equal. The carrier lives in
 [`KType`](../../src/machine/model/types/ktype.rs); the operators are registered as
 ordinary builtins in [`ascribe.rs`](../../src/builtins/ascribe.rs).
 
@@ -105,7 +107,7 @@ through an opaque view reports the abstract type rather than the underlying
 representation. Three sites cooperate.
 
 A `TYPE Type` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
-the name-bearing `KType::AbstractType { source: Sig(decl_scope_id), name }`, so a
+the name-bearing `KType::AbstractType { source: <decl scope id>, name }`, so a
 later `VAL zero :Type` records that `zero` *names* the abstract member `Type`. The
 higher-kinded `TYPE (Type AS Wrap)` binds a sentinel `TypeConstructor` so
 ascription's per-call constructor mint preserves the parameterization. A manifest
@@ -113,7 +115,7 @@ ascription's per-call constructor mint preserves the parameterization. A manifes
 and a `VAL x :Tag` slot reads through concretely. Classification is by
 *representation*, not name class:
 [`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)'s `is_abstract_sig_member`
-reads the member's `KType` shape (a `Sig`-sourced `AbstractType` or a sentinel constructor
+reads the member's `KType` shape (an `AbstractType` or a sentinel constructor
 is abstract; everything else is manifest). Outer aliases and builtin annotations
 (`:Number`, an outer `LET MyAlias = Number`) stay concrete.
 
@@ -122,7 +124,7 @@ mints a per-call `AbstractType` into `type_members` for each abstract member and
 mirrors each manifest member's fixed `KType` in concretely (the view scope carries
 no type entries of its own), then records on the new `Module` a `slot_type_tags` map
 (VAL-slot name → per-call `AbstractType`) for each slot whose SIG-declared type is
-a `Sig`-rooted abstract member. Transparent `:!` leaves the map empty, so
+an abstract member sourced at the SIG's decl scope. Transparent `:!` leaves the map empty, so
 transparent reads stay concrete.
 
 **Satisfaction and `WITH`.** Satisfaction is a **signature-subtyping** check
@@ -196,26 +198,61 @@ only when `IntOrd` declares a `Type` member (the `LET Type = …` convention),
 never to the builtin `Type` meta-type. Signature member access
 (`access_type_member` over `KType::Signature`) reads its decl scope the same way.
 
-`MODULE` and `SIG` declarations both bind **type-side**: finalize installs the
-identity (`KType::Module { module }` for MODULE, `KType::Signature {
-sig, pinned_slots }` for SIG) into `bindings.types` via
-[`Scope::register_type_upsert`](../../src/machine/core/scope.rs) and writes no
-value-side carrier — `bindings.data` carries zero type carriers. `LET M2 = M1`
-module aliases and `LET S2 = OrderedSig` signature aliases likewise route
-through `register_type` against the type entry. Value-position references — a
-module named as an ATTR receiver, a signature introspected by `:|` or `WITH`,
-or either surfaced by `USING … SCOPE` — surface the
-stored identity on demand from the type entry via
-[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
-and [`Scope::surface_type_hit`](../../src/machine/core/scope.rs): a module
-reference surfaces as the `KObject::Module` value on the Object arm, while a
-signature identity rides the `Type` arm. ATTR's `body_module` reads its module
-receiver off the Object arm; `body_type_lhs`'s unresolved path still resolves a
-bare module name to `KType::Module` at dispatch time and projects the member
-directly, a type-position use.
+`MODULE` binds **value-side**: finalize allocates the Object-arm module value and
+binds it into `bindings.data` through
+[`Scope::bind_module`](../../src/machine/core/scope.rs) — a fused door that derives
+the module's stored reach off its child scope directly (never by walking the built
+value) and allocates the value under that same evidence. `LET View = (IntOrd :|
+OrderedSig)` binds a module RHS the same way: a module is a value, so it lands in
+`data` even under a Type-token name, and the `data` / `types` cross-kind exclusion
+keeps it out of `types`. A module-typed FN parameter binds value-side too, through
+the ordinary Object-arm parameter door. **No binding door installs a module into
+`bindings.types`**, and `KType` carries no module variant.
 
-`KType::Module` carries the live `&Module` pointer. Each
-[`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
+`SIG` declarations still bind **type-side**: finalize installs
+`KType::Signature { sig, pinned_slots }` into `bindings.types` via
+[`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET S2 =
+OrderedSig` signature alias routes through `register_type` against that entry. A
+signature identity rides the `Type` arm, surfaced from the type entry on demand by
+[`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
+
+Module names spell as Type tokens ([tokens.md](tokens.md)), so the resolver ladder
+consults the **value** channel for them: a Type-token part whose value-side hit is a
+module resolves to the Object arm rather than the type channel —
+[`resolve_name_part`](../../src/machine/execute/dispatch.rs) for the overload-picker
+probe and the built argument cell, and
+[`bare_type_leaf`](../../src/machine/execute/dispatch/single_poll.rs) for a bare
+Type-token expression. These are explicitly-marked bridge arms; [module naming
+flip](../../roadmap/type_memos/module-naming-flip.md) retires Type-token module names
+and deletes them. ATTR's `body_module` reads its module receiver off the Object arm,
+so `IntOrd.Type` and `Er.Carrier` alike project off the module *value*; there is no
+type-side module projection anywhere.
+
+### Module heads in type position
+
+A type expression whose head names a module resolves through the value channel. A
+*dotted* head projects the named type member off the module value (`IntOrd.Type` as
+an annotation head, `Er.Carrier` in a deferred return). A *bare* head lowers to the
+module's **principal signature** — `KType::Signature { sig: SigSource::SelfOf(m),
+pinned_slots: [] }`
+([`elaborate_type_identifier`](../../src/machine/model/types/resolver.rs)) — because
+slots and returns name signatures, and a module's self-sig is its type. Two
+consequences:
+
+- `-> Er`, where `Er` is a module-valued parameter, is a legal deferred return
+  meaning "returns a module satisfying `Er`'s interface". The per-call contract is
+  the argument module's self-sig, re-homed into the captured-scope region by
+  [`home_return_type`](../../src/machine/core/kfunction/exec.rs).
+- `x :IntOrd` is a **structural** slot: it admits any module whose self-sig
+  satisfies `IntOrd`'s, not only `IntOrd` itself. Admission runs the same
+  `sig_subtype` walk every signature slot runs, so ascription is never required.
+
+The lowering is scoped to `TypeIdentifier` elaboration alone. In *type-language
+dispatch* (`:(LIST OF IntOrd)`) the head resolves to the module **value**, which a
+type slot refuses — a deliberate asymmetry, pinned by
+[`module_head_in_type_position`](../../src/builtins/fn_def/tests/functor/module_head_in_type_position.rs).
+
+Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
 structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
 `KType::Signature { sig, pinned_slots }`
@@ -223,13 +260,13 @@ carries a [`SigSource`](../../src/machine/model/types/ktype.rs) — the three
 points of the module lattice: `Declared(&Signature)` for a `SIG` declaration,
 `SelfOf(&Module)` for a module value's principal signature, and `Empty` for the
 empty signature — plus any `WITH` abstract-type
-pins; `KType::AbstractType { source, name }` carries an abstract-type member —
-either a SIG-declared member (`source: Sig(scope_id)`) or the per-call mint of an
-opaquely-ascribed module (`source: Module(view)`). Module identity is by
-`module.scope_id()`; signature identity by `sig.sig_id()` + `pinned_slots`;
-abstract-type identity by `(source.scope_id(), name)`. `KType::Module` now names
-a module only in type position — the `bindings.types` install above and
-type-path elaboration; the value channel carries a module as `KObject::Module`.
+pins; `KType::AbstractType { source, name }` carries an abstract-type member, its
+`source` naming either the SIG decl scope (a declared member) or the per-call
+ascription module (an opaque mint). Module identity is by `module.scope_id()` — the
+key both `SelfOf` and an `AbstractType` minted off that module digest on; signature
+identity by `sig.sig_id()` + `pinned_slots`; abstract-type identity by
+`(source, name)`. The value channel carries a module as `KObject::Module`; the type
+channel never names one directly, only through the self-sig that types it.
 The type-position wildcard `KType::OfKind(KKind::Signature)` admits any
 first-class signature value; the surface keyword `Signature` lowers to it in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs). The

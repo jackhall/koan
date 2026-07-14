@@ -201,12 +201,15 @@ visibility exemption.
 **Builtins are immutable and unshadowable.** A user binding that collides with a builtin is
 a `Rebind` at any scope depth — never a shadow, never a merge:
 
-- A user *type* (nominal `UNION` / `MODULE` / `SIG` / `NEWTYPE` / `RECURSIVE`
+- A user *type* (nominal `UNION` / `SIG` / `NEWTYPE` / `RECURSIVE`
   declaration, or a SIG-body `TYPE` abstract / `LET <TypeName> = …` manifest type member)
   naming a builtin type is
   rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
   [`register_user_type_delivered`](../../src/machine/core/scope.rs) consult
   [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.
+  A `MODULE` binds value-side but its name is Type-classed, so
+  [`Scope::bind_module`](../../src/machine/core/scope.rs) runs the same consult and
+  raises the same `Rebind` — builtins are unshadowable in *either* channel.
 - A user *FN / FUNCTOR* overload whose untyped signature key collides with a builtin
   dispatch bucket is rejected rather than joining it —
   [`Scope::register_function`](../../src/machine/core/scope.rs) consults

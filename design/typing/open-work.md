@@ -34,11 +34,18 @@ Future work on the type and module system. Each entry points at a
 - The module-value chain ([Value-head type paths](../../roadmap/type_memos/value-head-type-paths.md),
   then [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)) — modules move to
   the value channel, typed by the creation-time principal signature under canonical signature
-  subtyping (the relation, self-sig, structural dispatch admission, and the `KObject::Module`
-  value carrier have shipped; see [First-class modules](modules.md#first-class-modules)). The
-  remaining items retire the type-position `KType::Module` variant and flip module names to
-  value-side snake_case. The combined end state is pinned in
+  subtyping. The relation, self-sig, structural dispatch admission, the `KObject::Module` value
+  carrier, value-side binding, and the retirement of the type-position `KType::Module` variant
+  have all shipped (see [First-class modules](modules.md#first-class-modules) and
+  [Module heads in type position](modules.md#module-heads-in-type-position)). What remains is
+  the residence tier for a bare module-parameter return (`-> Er`) over a module minted in a
+  per-call region, and the naming flip: module names to value-side snake_case, retiring the
+  Type-token bridge arms in the resolver ladder. The combined end state is pinned in
   [module-values-and-type-identity.md](module-values-and-type-identity.md).
+- [Abstract member names versus builtin type names](../../roadmap/type_language/abstract-member-names-vs-builtin-types.md)
+  — the `Type` member convention this tree teaches (`LET Type = Number`, `TYPE Type`) is
+  rejected by the unshadowable-builtins rule
+  ([lookup-protocol.md](lookup-protocol.md)). One of the two has to move.
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as FUNCTORs over their element/key types. Parks the **applicative
   functor semantics** open question: the FUNCTOR binder

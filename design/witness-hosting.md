@@ -163,8 +163,9 @@ The Koan layers compose the substrate; they hold no witness state of their own.
   folded into the one resident set.
 - **The mint and the store are one fused door.** A production bind derives the
   reach off the value's *own* delivered witness and pins it in a single call
-  (`Scope::bind_delivered` / `bind_checked` for values, `register_type_delivered`
-  / `register_module_upsert` and siblings for types), rather than pairing a
+  (`Scope::bind_delivered` / `bind_checked` for values, `Scope::bind_module` for a
+  module's fused reach-derive-and-bind, `register_type_delivered` and siblings for
+  types), rather than pairing a
   separate mint with an adjacent store — so scope entry cannot state a reach the
   value's borrows don't back.
 - **Binding entries** store the erased value and an opaque `StoredReach` token —

@@ -174,7 +174,7 @@ reachable through
 [`Scope::resolve_type`](../../src/machine/core/scope.rs) on the same
 pointer as the builtin.
 
-NEWTYPE / UNION / MODULE / Result / SIG declarations are all single
+NEWTYPE / UNION / Result / SIG declarations are all single
 type-namespace writes: each installs only its identity-bearing `&KType` into
 `bindings.types` (see
 [type-only nominal install](user-types.md#type-only-nominal-install)), so
@@ -184,7 +184,11 @@ carrier; construction reads the schema straight off the identity, and a
 signature value is synthesized on demand from the type entry. SIG's single
 `KType::Signature { sig, pinned_slots }` variant serves both its constraint
 role and its value role, so it installs one type-side identity like every other
-nominal binder — no binder dual-writes `(bindings.types, bindings.data)`.
+nominal binder. `MODULE` is the one declarator that writes the *value* side: a
+module is a value, so it binds into `bindings.data`
+([modules.md § First-class modules](modules.md#first-class-modules)). No binder
+dual-writes `(bindings.types, bindings.data)` — the cross-kind exclusion commits
+each name to exactly one map.
 
 [LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
 Type-class LHS and dispatches through `register_type` for type-valued-alias
@@ -192,8 +196,10 @@ RHSes. A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
 **allowlist**, `is_admissible_type_class_rhs`: a Type-class LET admits an RHS
 only if it carries type-language identity — any value-channel `Type` arm
-(struct / union / module / Result / signature identities all flow raw as `&KType`),
-or `KObject::KFunction(f, _)` with `f.is_functor` set (the
+(struct / union / Result / signature identities all flow raw as `&KType`), a
+`KObject::Module` (a module is a value but its *name* is Type-classed, so it is
+admitted here and bound into `data`), or `KObject::KFunction(f, _)` with
+`f.is_functor` set (the
 `FUNCTOR` binder's output). Plain `KFunction` rejects, closing the
 `LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
 that a pure value-shape gate cannot discriminate; the `is_functor` flag
@@ -203,27 +209,32 @@ each admitted value to the `KType` identity that lands in `bindings.types`: a
 `KType::KFunctor { body: Some(f) }` projection so the callable rides the
 type-table identity and a later `:(F {…})` / `F {…}` application can invoke it
 (see [functors.md § Application and binding](functors.md#application-and-binding)).
-The two functions must agree: anything the allowlist admits must produce a
-type-side identity here, or a functor would fall through to `bindings.data`.
-Every type-language alias — struct / union / module / Result, signature *and*
+The two functions must agree: anything the allowlist admits (a module aside) must
+produce a type-side identity here, or a functor would fall through to `bindings.data`.
+Every type-language alias — struct / union / Result, signature *and*
 bound functor — routes through `register_type` (type-only): the schema,
-`&Module`, `&Signature`, or callable rides the `KType` identity, so a plain
+`&Signature`, or callable rides the `KType` identity, so a plain
 `types` write preserves dispatch identity without a value-side copy. A
 `LET S2 = OrderedSig` signature alias therefore dispatches identically to the
-original, with no separate nominal-install path.
+original, with no separate nominal-install path. A module RHS is the exception:
+`LET View = (IntOrd :| OrderedSig)` binds the module **value** into `data` under
+its Type-classed name, so nothing lands in `types` for it.
 
 The partition is one-way and total against type-language carriers. A
 value-classified LET (lowercase-leading binder name) rejects **any** type
 RHS at the LET site with a `ShapeError` redirecting the user to a
-Type-classified name: every value-channel `Type` arm (struct / union / module /
+Type-classified name: every value-channel `Type` arm (struct / union /
 Result / signature / builtin type, including the `KType::Unresolved` parser-form
 transient), plus an `is_functor`-flagged `KFunction` (a functor lives in the type
-namespace only). A type therefore binds only under a Type-classified name; construction
+namespace only) and a `KObject::Module` (a value, but one whose name is
+Type-classed until the [naming flip](../../roadmap/type_memos/module-naming-flip.md)
+lands). A type therefore binds only under a Type-classified name; construction
 names the type directly (`Point {…}`) or through a Type-classified alias
 (`LET Pt2 = Point` then `Pt2 {…}`), never a value-classified one. Combined with
 the Type-class LET allowlist above, this makes `bindings.types` the single home
 for every type identity, so `bindings.data` is unconditionally free of
-type-language carriers and the value-side and type-class lookup paths never both
+type-language carriers (a module value is not one — it is a value) and the
+value-side and type-class lookup paths never both
 find one under the same name. This exclusion is **structural**, not just a
 LET-site convention: the [`Bindings`](../../src/machine/core/bindings.rs) write
 paths themselves reject a cross-kind collision — a value bind whose name is a
@@ -280,8 +291,10 @@ name-resolve pass calls
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
 On a resolved leaf its `TypeResolution::Done(TypeHit)` surfaces the bridge's cached
 `&KType` in the value channel's `Type` arm for every type-only nominal — struct / union /
-module / Result *and* signature; on an earlier still-finalizing binder it parks; on a
-miss it surfaces `Unbound`.
+Result *and* signature; on an earlier still-finalizing binder it parks; on a
+miss it surfaces `Unbound`. A module head instead lowers to its self-sig
+(`Signature { SelfOf(m) }`), read off the value channel — see
+[modules.md § Module heads in type position](modules.md#module-heads-in-type-position).
 
 FN's deferred return-type slot is parsed at definition time via
 [`extract_return_type_raw`](../../src/builtins/fn_def/return_type.rs), which reads any

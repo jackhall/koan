@@ -246,7 +246,7 @@ run-global root region the same way.
 A relocated closure / future / module survives its producer's dying frame because the copy keeps its
 bare borrow and the *consumer* keeps that borrow's region alive. Both channels carry the regions they
 reach on their [delivered carrier](per-node-memory.md#storage-and-access-seal-open-transfer_into): a
-**closure / future** seals its captured-scope reach at construction, and a **`KType::Module`** seals its
+**closure / future** seals its captured-scope reach at construction, and a **module value** seals its
 child scope's home frame and binding-entry reaches the same way (via
 [`Scope::child_module_reach`](../src/machine/core/scope.rs)). The embedding or binding site mints that
 carrier's reach into its own arena (`transfer_into` at an `attr` / `FROM` projection,

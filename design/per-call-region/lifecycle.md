@@ -15,7 +15,8 @@ hop drops the shell while the escapee keeps its snapshot
 
 A value-side reference into a per-call region is a *bare borrow*: a `KObject::KFunction(&'a
 KFunction<'a>)` reaches the per-call region that owns its captured
-scope only through that reference, and a `KType::Module { module }` reaches its child scope's region
+scope only through that reference, and a `KObject::Module(&'a Module<'a>)` reaches its child
+scope's region
 the same way. None of these carries an owning `Rc<FrameStorage>` on the value. The region such a value
 reaches is kept alive by the value's *carrier* — a producer slot's `FrameSet` witness while the value
 rides the scheduler, and the consumer scope's own arena once the value is bound out of it (below) —
@@ -102,7 +103,7 @@ consumer scope's own arena for a bound value.
 
 Both channels carry the regions a relocated value reaches on its delivered
 [`Sealed`](../per-node-memory.md#storage-and-access-seal-open-transfer_into) carrier. A **closure /
-future** seals its captured-scope reach at construction; a **`KType::Module`** seals its child scope's
+future** seals its captured-scope reach at construction; a **module value** seals its child scope's
 home frame and binding-entry reaches the same way, via
 [`Scope::child_module_reach`](../../src/machine/core/scope.rs). The embedding or binding site mints that
 carrier's reach into its own arena — `merge` at an `attr` / `FROM` projection,

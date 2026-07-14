@@ -120,7 +120,8 @@ the Resolved arm through the binding scope's own
 names every region it reaches by construction. No construction terminal pairs an *already-built* value
 with a separately-asserted witness: the **type** family seals the same way — a delivered type terminal
 through the step context's [`alloc_type_of`](../src/machine/core/arena.rs), which rebuilds the type at the
-fold brand from the dep's own view, a region-referencing `KType::Module` through
+fold brand from the dep's own view, a region-referencing module self-sig
+(`KType::Signature { sig: SelfOf(m), .. }`) through
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
 construction ([`Scope::child_module_reach`](../src/machine/core/scope.rs), from the child scope the birth
 site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
@@ -273,10 +274,12 @@ they project; and a `let` or user-fn arg bind mints the bound value's carrier in
 the step context's [`alloc_type_of`](../src/machine/core/arena.rs), which rebuilds the type at the fold
 brand from the dep's view, folding its own region (the producer's home frame) plus the dep's reach at
 the alloc site itself; a
-region-referencing `KType::Module` seals via [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
+region-referencing module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals via
+[`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
 under the child-scope reach minted once at construction from the child scope the birth site holds
-directly ([`Scope::child_module_reach`](../src/machine/core/scope.rs)), never recovered by walking the built
-`KType::Module`. A relocated module therefore names every region it reaches on its own witness, read
+directly ([`Scope::child_module_reach`](../src/machine/core/scope.rs)) — the same token the module
+*value*'s own bind ([`Scope::bind_module`](../src/machine/core/scope.rs)) derives, never recovered by
+walking the built value. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
 [`copy_carried`](../src/machine/execute/lift.rs) structural copy, transient reach rides each dep's

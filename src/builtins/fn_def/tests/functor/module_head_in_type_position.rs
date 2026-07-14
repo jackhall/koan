@@ -38,6 +38,37 @@ fn deferred_bare_module_param_return_yields_the_module() {
     }
 }
 
+/// The module a `-> Er` return names need not live in the captured scope's region: a FUNCTOR mints
+/// its module in its own per-call region, so `Signature { SelfOf(m) }` borrows a region that is
+/// neither the callee frame's nor the captured scope's. The home audits against the reach stored on
+/// the parameter's own binding — which pins that region — so the module rides the return, and the
+/// member read afterwards proves its child scope is still live.
+#[test]
+fn deferred_bare_module_param_return_admits_a_per_call_region_module() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE IntOrd = (LET compare = 7)\n\
+         FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Generated = (LET compare = 3))\n\
+         LET IntSet = (MAKESET IntOrd)\n\
+         FN (USE_ORD Er :OrderedSig) -> Er = (Er)",
+    );
+    match run_one(scope, parse_one("USE_ORD IntSet")) {
+        KObject::Module(m) => assert_eq!(m.path, "Generated"),
+        other => panic!(
+            "USE_ORD IntSet must return the functor-minted module, got {}",
+            other.ktype().name(),
+        ),
+    }
+    run(scope, "LET Back = (USE_ORD IntSet)");
+    assert!(
+        matches!(run_one(scope, parse_one("Back.compare")), KObject::Number(n) if *n == 3.0),
+        "the returned module's child scope must still be readable",
+    );
+}
+
 /// The per-call return contract for `-> Er` is the argument module's self-sig: a body producing a
 /// non-module value fails the check, and the diagnostic names the module (its self-sig renders as
 /// the module path).
