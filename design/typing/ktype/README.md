@@ -8,16 +8,10 @@
   [Container type parameterization](parameterization-and-variance.md#container-type-parameterization) below.
   `params` is a name-keyed [parameter `Record<KType>`](records-and-limits.md#record-fields-and-ktype-hashing),
   so a function-typed slot's identity is its parameters by name and type
-  (order-blind). The sibling
-  `KFunctor { params: Record<KType>, ret, body: Option<&KFunction> }` shares the
-  storage and identity rules; the variant tag keeps the two families admissibly
-  disjoint (see [functors.md](../functors.md)). The `body` is an **identity-inert**
-  carrier — `None` for the `:(FUNCTOR …)` type annotation (just a shape), `Some(f)`
-  for a bound functor value whose callable rides the type-table identity so a later
-  `:(F {…})` / `F {…}` application can invoke it. `body` is excluded from equality,
-  hashing, admissibility, join, and rendering, all of which compare `params` + `ret`
-  only, so two structurally-identical functor types compare and hash equal
-  regardless of body. When a function's source return is
+  (order-blind). `KFunction` is the *only* function-type variant: a functor — a
+  module-returning function — reports it too, so it is admissible wherever a
+  same-shape `:(FN …)` slot matches (see [functors.md](../functors.md)). When a
+  function's source return is
   per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
   carrier — see [Record fields and `KType` hashing](records-and-limits.md#record-fields-and-ktype-hashing).
 - Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
@@ -151,7 +145,7 @@
   `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
   arm) whose self-sig structurally
   satisfies `sig` (the constraint role — what `er :Ordered`
-  lowers to in a FUNCTOR parameter slot, so `:Ordered` means "module
+  lowers to in an FN parameter slot, so `:Ordered` means "module
   satisfying Ordered," never "the signature value itself"), while a
   signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only
   by the `OfKind(Signature)` wildcard. `pinned_slots` (empty for a bare

@@ -1,34 +1,35 @@
 # Generic functions
 
-Generic functions in koan are functors over their type parameters, selected and
+Generic functions in koan are functors — module-returning functions — over their
+type parameters, selected and
 applied by modular-implicit resolution at the call site. There is no separate
-free-type-parameter form: a type parameter is always a functor parameter, and so
+free-type-parameter form: a type parameter is always an FN parameter, and so
 always has a binder.
 
 ## Shape
 
-A generic function is a functor taking one or more `:Type` parameters and
+A generic function is an FN taking one or more `:Type` parameters and
 returning a module that holds the function specialized to those types:
 
 ```
-MakeHead = (FUNCTOR (Ty :Type) -> ... = (
-  MODULE = ((FN head (xs :(LIST OF Ty)) -> Ty = ...))
+LET make_head = (FN (MAKEHEAD Ty :Type) -> Module = (
+  MODULE built = ((FN (HEAD xs :(LIST OF Ty)) -> Ty = ...))
 ))
 ```
 
-Inside the functor body `Ty` is a bound parameter, so the inner FN is ordinary:
-`Ty` resolves through the functor's per-call scope, the same path body-position
+Inside the body `Ty` is a bound parameter, so the inner FN is ordinary:
+`Ty` resolves through the outer FN's per-call scope, the same path body-position
 `er.Type` references use ([functors.md](functors.md)). No free type-parameter
 name is introduced anywhere.
 
 At a call site `HEAD some_list`, modular-implicit resolution
-([implicits.md](implicits.md)) selects `MakeHead`, supplies its type argument,
+([implicits.md](implicits.md)) selects `make_head`, supplies its type argument,
 applies it, and calls the produced `head`. Defining and invoking a generic needs
-no syntax beyond the existing FUNCTOR binder and an ordinary call.
+no syntax beyond the FN binder and an ordinary call.
 
 ## Why functors
 
-- **One surface.** A type parameter is always a functor parameter — one spelling,
+- **One surface.** A type parameter is always an FN parameter — one spelling,
   always bound. A misspelled type name resolves to nothing and errors, rather
   than silently registering as a fresh parameter.
 - **One engine.** A single resolution path handles every generic, whether or not
@@ -72,8 +73,9 @@ implicit parameter, and does not conflict with the restriction that implicit
 modules cannot take implicit parameters.
 
 Dependent parameters — a value parameter whose type is an earlier type parameter
-— are expressed by lifting the type to a functor parameter (`(FUNCTOR (Ty :Type)
--> ... = (MODULE ((FN make (elt :Ty) -> ...))))`), with the type argument either
+— are expressed by lifting the type to a parameter of the outer FN
+(`FN (MAKEIT Ty :Type) -> Module = (MODULE built = ((FN (MAKE elt :Ty) -> ...)))`),
+with the type argument either
 inferred from the value's carried type or named through a `USING-SCOPE` block.
 
 ## Disambiguation

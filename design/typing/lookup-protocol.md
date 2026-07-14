@@ -126,7 +126,7 @@ clears an in-flight type producer's placeholder (nor the reverse).
   surfaces both maps in one pass as a `FunctionLookup` struct:
   `overloads` is the visibility-filtered `functions[key]` bucket (possibly
   empty) and `pending` is the earliest-index visible `pending_overloads[key]`
-  producer (an in-flight FN / FUNCTOR binder to park on, if any). The two are
+  producer (an in-flight FN binder to park on, if any). The two are
   returned together — a bucket may hold a finalized overload *and* an in-flight
   pending sibling at once — so the scope walk decides pending-vs-finalized
   precedence with both in hand rather than the lookup shadowing one. A scope
@@ -218,7 +218,7 @@ a `Rebind` at any scope depth — never a shadow, never a merge:
   [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.
   Builtins are unshadowable in *either* channel: a value bind colliding with a
   committed type name is a `Rebind` too, through the same cross-kind exclusion.
-- A user *FN / FUNCTOR* overload whose untyped signature key collides with a builtin
+- A user *FN* overload whose untyped signature key collides with a builtin
   dispatch bucket is rejected rather than joining it —
   [`Scope::register_function`](../../src/machine/core/scope.rs) consults
   [`Bindings::has_builtin_function`](../../src/machine/core/bindings.rs). A user operator over

@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN (args) -> Out)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -156,7 +156,7 @@ src/
 │   ├── catch.rs              CATCH — error-handling primitive
 │   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
 │   ├── result.rs             Result tagged-union builtin
-│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
+│   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN)
 │   ├── type_ops.rs           WITH — infix signature specialization; TYPE OF — value → type
 │   ├── type_ops/with.rs               WITH — abstract-slot pinning + manifest fixity
 │   ├── type_ops/type_of.rs            TYPE OF — a value's own type (a module's is its signature)
@@ -168,7 +168,6 @@ src/
 │   ├── recursive_types.rs    RECURSIVE TYPES — co-declare a mutually-recursive nominal group
 │   ├── module_def.rs         MODULE
 │   ├── sig_def.rs            SIG
-│   ├── functor_def.rs        FUNCTOR — modules parameterized by modules
 │   ├── val_decl.rs           VAL (SIG-body value-slot declarator)
 │   ├── type_decl.rs          TYPE — SIG-body abstract type-member declarators (bare + higher-kinded)
 │   ├── ascribe.rs            :| / :! module ascription
@@ -186,7 +185,7 @@ src/
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
-    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing record-type schemas and FN/FUNCTOR parameter identity
+    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo

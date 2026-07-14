@@ -18,8 +18,8 @@ wrapping the raw inner expression verbatim, with no shape recognition at
 parse time. (The one structurally-recognized sigil is `:{…}`, which emits a
 first-class `ExpressionPart::RecordType` instead — see
 [type-language-via-dispatch.md § Record-type sigil](../type-language-via-dispatch.md#record-type-sigil).)
-Shape decisions (keyworded `:(LIST OF Number)`, user-functor
-`:(MyFunctor {T = int_ord})`, etc.) are the dispatcher's responsibility — the
+Shape decisions (keyworded `:(LIST OF Number)`, nominal construction
+`:(MyStruct {x = 1})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../../src/parse/frame.rs) (`Frame::TypeExpr`);
@@ -29,9 +29,8 @@ tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [type-language-via-dispatch.md](../type-language-via-dispatch.md) for the full
 sigil-and-dispatch contract.
 
-**Keyworded surface overloads** for the four builtin parameterized
-constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
-`FUNCTOR <sig> -> _` — register in
+**Keyworded surface overloads** for the three builtin parameterized
+constructors — `LIST OF`, `MAP _ -> _`, and `FN <sig> -> _` — register in
 [`builtins/parameterized_types.rs`](../../../src/builtins/parameterized_types.rs)
 and produce `KType::...` results in the value channel's `Type` arm; they are the canonical
 type-language surface, dispatched and assembled as ordinary sub-expressions
@@ -55,7 +54,7 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `OfKind(Proper)`, so a concrete-typed `ATTR` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function` / `Functor`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `OfKind(Proper)`, so a concrete-typed `ATTR` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant** for `List` / `Dict` (element, key, value): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`. **Contravariant params (with width-subset) + covariant return** for `Function`, matching `function_compat`: `:(FN (x :Any) -> Str)` ≺ `:(FN (x :Number) -> Str)` (more-general param wins), `:(FN (x) -> Number)` ≺ `:(FN (x) -> Any)` (narrower return wins), and a nullary `:(FN () -> R)` ≺ a unary `:(FN (x) -> R)` (narrower width wins). |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Function subtyping** — contravariant params (width + depth) + covariant return. A value `(x :Any) -> Str` fills a slot typed `:(FN (x :Number) -> Str)`; a value `(x :Number) -> Number` fills `:(FN (x :Number) -> Any)`; a unary value fills a binary slot (the extra slot param arrives unbound under call-by-name). A value requiring a param the slot doesn't promise is a non-match. |
 
 Admission (`function_compat`) and specificity (`is_more_specific_than`) share
@@ -73,7 +72,7 @@ is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 
 **Return admission splits on whether the value's return is resolved or
 deferred.** A `Resolved` value return admits covariantly as above — `sig_ret ==
-ret || sig_ret ≺ ret`. A *deferred* value return (a per-call-elaborated functor
+ret || sig_ret ≺ ret`. A *deferred* value return (a per-call-elaborated
 return like `-> :(TYPE OF er)`) carries no resolved `KType`, so `function_compat` admits it
 by **syntactic equality of its surface shadow**: an `Any` slot admits any
 deferred return; a slot whose `ret` is a `KType::DeferredReturn` carrier admits
@@ -148,8 +147,8 @@ type in O(1) rather than re-walking the contents on every call. Values are
 immutable `Rc`, so the join is sound to compute exactly once. Functions project
 their declared signature (`KObject::KFunction(f, _)` → `KFunction { params, ret }`,
 the parameter record read off `f.signature`'s named slots). `KType::join` joins
-two same-shape `KFunction`s (and same-shape `KFunctor`s) name-keyed, coarsening a
-mismatched parameter-name set or a function-vs-functor pair to `Any`.
+two same-shape `KFunction`s name-keyed, coarsening a
+mismatched parameter-name set to `Any`.
 
 **Empty containers carry no element type to infer**, so an unstamped empty `[]`
 / `{}` (element type memoized as `Any`, never stamped by an annotation) is an

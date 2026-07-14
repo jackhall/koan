@@ -41,7 +41,7 @@ paragraphs name the gap, not the fix.
 - **A parameter's token class is checked at the call, not the definition.** A parameter's name
   picks its universe: a Type token names a type, a value token names a value
   ([design/typing/tokens.md § Token class is a binding rule](../../design/typing/tokens.md)). A
-  parameter whose name contradicts what its slot admits — `FUNCTOR (MAKETREE elt :Type)`, a
+  parameter whose name contradicts what its slot admits — `FN (MAKETREE elt :Type)`, a
   value-token name on a type-denoting slot — defines without complaint, and every call then fails
   when the binding maps refuse the crossing. The diagnostic names the call site, not the
   declaration that is actually wrong. A definition-time check comparing each parameter's token

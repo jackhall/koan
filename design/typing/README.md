@@ -49,7 +49,8 @@ Module-system mechanics:
   the transparent and opaque ascription operators (`:!` and `:|`), and
   first-class module values flowing through `LET`, ATTR, and function
   calls.
-- [functors.md](functors.md) — modules parameterized by modules: surface
+- [functors.md](functors.md) — functors: module-returning FNs, which
+  parameterize a module by another module. Surface
   vs machine semantics, per-call generativity, deferred return types,
   higher-kinded type-constructor slots, and the `WITH` infix
   builtin family for sharing constraints and witness-typed
@@ -66,9 +67,8 @@ Module-system mechanics:
   `Infer` / `ImplicitSearch` node-kind track.
 - [type-language-via-dispatch.md](type-language-via-dispatch.md) — the
   sigil `:(...)` as a parse-context marker; parameterized type
-  construction (`LIST`, `MAP`, `FN`, `Functor`) and user-defined
-  functor application registered as keyworded overloads sharing the
-  value-side candidate-bucket and binder-admission machinery.
+  construction (`LIST`, `MAP`, `FN`) registered as keyworded overloads
+  sharing the value-side candidate-bucket and binder-admission machinery.
 
 [open-work.md](open-work.md) carries the roadmap pointers for the
 module-system stages plus the cross-cutting standard-library,
@@ -84,7 +84,7 @@ group-operators, and JIT items.
   against each other. (Multi-parameter dispatch on declared types is already
   native to FN; this property is about the implicit-search layer on top.)
 - **Higher-kinded abstraction is native.** Signatures can declare type
-  constructors (`TYPE (Type AS Wrap)`); functors can take and return them.
+  constructors (`TYPE (Type AS Wrap)`); an FN can take and return them.
 - **Representation hiding is principled.** Opaque ascription is the
   abstraction barrier — privacy is an outcome of the type system rather than
   a separate visibility mechanism.

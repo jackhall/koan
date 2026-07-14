@@ -53,13 +53,13 @@ to-be-bound name structurally out of the expression's parts), stamping
 statement index, gated by the strict `idx < cutoff` rule like every other
 binder.
 
-*Bucket-keyed binders* (`FN`, `FUNCTOR`) install through a
+*Bucket-keyed binders* (`FN`) install through a
 [`binder_bucket`](../../src/machine/core/kfunction/body.rs) extractor
 ([`BinderBucketFn`](../../src/machine/core/kfunction/body.rs)) into a
 separate `pending_overloads` table — a
 `RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>` keyed by
 the inner-call bucket key so a later-arriving call expression can park
-on a not-yet-finalized overload. FN/FUNCTOR carry **only** the
+on a not-yet-finalized overload. FN carries **only** the
 `binder_bucket` extractor — no `binder_name` — because sibling
 overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
 `FN (PICK xs :B) ...` declarations) must not collide on a single
@@ -70,7 +70,7 @@ choice as a
 (`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
 the type rather than as a two-Option convention.
 
-The bucket vec is what admits multiple sibling FN/FUNCTOR binders
+The bucket vec is what admits multiple sibling FN binders
 sharing one bucket key: each install appends a distinct entry at its
 own `BindingIndex`. A consumer looking up the bucket via
 [`Bindings::lookup_function`](../../src/machine/core/bindings.rs) gets the
@@ -149,8 +149,8 @@ chain via `extract_binder_install`: it finds the first overload in the
 matching `functions[expr.untyped_key()]` bucket whose `binder_name` OR
 `binder_bucket` extractor returns `Some(_)` for the expression. The picked
 overload's install channel is reified as `BinderKey::Name(name)` (for `LET` /
-`NEWTYPE` / `UNION` / `SIG` / `MODULE`) or `BinderKey::Bucket(key)` (for `FN` /
-`FUNCTOR`); the install site stamps the corresponding `placeholders[name]` or
+`NEWTYPE` / `UNION` / `SIG` / `MODULE`) or `BinderKey::Bucket(key)` (for `FN`);
+the install site stamps the corresponding `placeholders[name]` or
 `pending_overloads[bucket]` entry on the dispatching scope before the slot is
 ever popped from the work queues. A later sibling that dispatches before the
 binder's slot pops finds the entry and parks rather than surfacing
@@ -166,7 +166,7 @@ bucket — a slot is eager only if *every* binder overload in the bucket marks i
 non-`KType::KExpression`; any overload tagging a slot lazy keeps that slot out
 of the recursive walk because the eventual dispatch may resolve to that
 overload. Lazy slots — FN body, FN signature/return-type-`KExpression` overload,
-FUNCTOR body, MODULE body — dispatch in the callee's scope at body-invoke time,
+MODULE body — dispatch in the callee's scope at body-invoke time,
 not here. Each recursive `submit_dispatch` runs its own
 `extract_binder_install`, so a nested binder's placeholder installs at the same
 outermost step as its parent's; recursion terminates at non-binder leaves and at

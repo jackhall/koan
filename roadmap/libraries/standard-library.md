@@ -60,8 +60,9 @@ boilerplate by hand for every step.
   [design/typing/functors.md](../../design/typing/functors.md), two
   such applications mint distinct Set types and the resulting sets
   cannot interoperate. Applicative semantics — same-functor-applied-to-
-  same-module produces equal types — closes this. The decided seam is
-  the `FUNCTOR` binder's `is_functor` flag; the memoization scheme
+  same-module produces equal types — closes this. The decided seam is the
+  *derived* classification of a function's return slot ("does it name a
+  signature?"), computed on demand rather than stored; the memoization scheme
   (argument-identity hashing vs. structural equality on argument values)
   is the open piece, deferred until predicate typing lands.
 

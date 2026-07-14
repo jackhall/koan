@@ -76,7 +76,7 @@ binds normally and writes through `Scope::register_type` to land in
 ## Every definition-time site is gated to its binder's position
 
 A definition-time type resolution is gated to the lexical position of the binder
-that owns it: NEWTYPE / UNION field types, FN and FUNCTOR parameter
+that owns it: NEWTYPE / UNION field types, FN parameter
 slots, and FN / MATCH / TRY return types all resolve against the chain at their
 binder's cutoff (`classify_return_type` / `resolve_arm_return_contract` thread the
 chain for the return-type sites). A field or parameter naming a type declared
@@ -133,7 +133,7 @@ cross-link this section rather than restating its slice.
   the single owner of that fallback on the resolution path. Parameterized shapes
   (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch through the standalone dispatcher
   rather than recursing here, so the only recursion is the sibling-result reduce.
-  FN-signature, NEWTYPE/UNION field-type, and FUNCTOR per-call return-type dep-finishes
+  FN-signature, NEWTYPE/UNION field-type, and per-call return-type dep-finishes
   reduce to this leaf walk; see
   [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   for the parking integration.
@@ -228,18 +228,16 @@ each name to exactly one map.
 binder name's token class, and each branch admits exactly the RHS kinds its map can
 hold. A **Type-class LHS** admits an RHS only if it carries type-language identity:
 any value-channel `Type` arm (struct / union / Result / signature identities all flow
-raw as `&KType`), or a `KObject::KFunction` with `f.is_functor` set (the `FUNCTOR`
-binder's output), which registers its `KType::KFunctor { body: Some(f) }` projection
-so the callable rides the type-table identity and a later `:(F {…})` / `F {…}`
-application can invoke it (see
-[functors.md § Application and binding](functors.md#application-and-binding)). A
+raw as `&KType`). A
 module RHS is refused with the snake_case respelling — a module is a value, and the
-Type-token namespace names what can type a field. Any other object rejects with
-`KErrorKind::TypeClassBindingExpectsType`, closing the
-`LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole that a pure
-value-shape gate cannot discriminate; the `is_functor` flag is the discrimination
-signal. Every admitted RHS — struct / union / Result, signature *and* bound functor —
-routes through `register_type` (type-only): the schema, `&Signature`, or callable
+Type-token namespace names what can type a field. A **function** RHS is refused the
+same way: a function is a value whatever it returns, so a module-returning FN binds
+value-side like any other (see
+[functors.md § Application and binding](functors.md#application-and-binding)), and
+`bindings.types` holds no callable. Any other object rejects with
+`KErrorKind::TypeClassBindingExpectsType`. Every admitted RHS — struct / union /
+Result, and signature —
+routes through `register_type` (type-only): the schema or `&Signature`
 rides the `KType` identity, so a plain `types` write preserves dispatch identity
 without a value-side copy. A `LET S2 = Ordered` signature alias therefore dispatches
 identically to the original, with no separate nominal-install path.
@@ -249,8 +247,7 @@ The partition is one-way and total against type-language carriers. A
 RHS at the LET site with a `ShapeError` redirecting the user to a
 Type-classified name: every value-channel `Type` arm (struct / union /
 Result / signature / builtin type, including the `KType::Unresolved` parser-form
-transient), plus an `is_functor`-flagged `KFunction` (a functor lives in the type
-namespace only). A `KObject::Module` is *not* rejected — a module is a value, and a
+transient). A `KObject::Module` is *not* rejected — a module is a value, and a
 value-classified name is exactly where it belongs. A type therefore binds only under
 a Type-classified name; construction
 names the type directly (`Point {…}`) or through a Type-classified alias

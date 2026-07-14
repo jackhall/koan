@@ -111,8 +111,9 @@ Type and module system ([typing/](typing/README.md)):
   transparent / opaque ascription operators (`:!` / `:|`), and
   first-class module values flowing through `LET`, ATTR, and function
   calls.
-- [typing/functors.md](typing/functors.md) — modules parameterized by
-  modules: surface vs machine semantics, per-call generativity,
+- [typing/functors.md](typing/functors.md) — functors: module-returning
+  FNs, which parameterize a module by another module. Surface vs machine
+  semantics, per-call generativity,
   deferred return types, higher-kinded type-constructor slots, and
   the `WITH` infix builtin family.
 - [typing/implicits.md](typing/implicits.md) — implicit module
@@ -124,9 +125,8 @@ Type and module system ([typing/](typing/README.md)):
   rather than a parallel node-kind track.
 - [typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
   — the `:(...)` sigil as a parse-context marker; parameterized type
-  construction (`LIST`, `MAP`, `FN`, `Functor`) and user-defined
-  functor application as keyworded overloads sharing the value-side
-  candidate-bucket and binder-admission machinery.
+  construction (`LIST`, `MAP`, `FN`) as keyworded overloads sharing the
+  value-side candidate-bucket and binder-admission machinery.
 - [typing/open-work.md](typing/open-work.md) — roadmap pointers for
   the module-system stages plus the cross-cutting standard-library,
   group-operators, and JIT items.

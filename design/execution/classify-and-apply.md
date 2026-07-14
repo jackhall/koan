@@ -130,16 +130,16 @@ The rails the dispatch driver feeds:
     type. See
     [typing/elaboration.md § Layers](../typing/elaboration.md#layers)
     § Layer 4 for the shared resolver seam.
-  - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = int_ord}`) —
+  - `TypeCall` (`MyStruct {x = 1}`) —
     [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A
-    `SetRef` identity is a `ResolvedCallable::Constructor`; a
-    `KType::KFunctor { body: Some }` (a bound functor in the type table) is a
-    `ResolvedCallable::Function`. Both flow through the shared
+    `SetRef` identity is a `ResolvedCallable::Constructor` — the only invocable
+    type identity, since `bindings.types` holds no callable value — and flows
+    through the shared
     apply-a-callable tail (below). No value-side carrier is fetched — the
     schema rides the identity. Opaque / Module / unbound heads surface a
     `TypeMismatch`. A head token bound to a still-finalizing producer (a
-    forward functor `LET`) parks on it and re-runs `type_call` on resume.
+    forward type `LET`) parks on it and re-runs `type_call` on resume.
   - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `classify_dispatch`
     arm tail-replaces the slot with a fresh `Decide`
     of the wrapped `KExpression`, so the inner expression runs through the
@@ -173,23 +173,23 @@ The rails the dispatch driver feeds:
     the `Err` arm of a node result with the same structured wording the keyworded
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
-    (`:(MyFunctor {base = int_ord})`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
+    (`:(pick_type) {x = 1}`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
     sub-dispatches the head first (an Owned edge; the park/resume pair mirrors
     `CtorState`'s), then branches the resumed value's kind into a
-    `ResolvedCallable`. `HeadDeferred` admits a function, functor, bound functor,
-    or constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
-    type) prunes the plain-function arm and surfaces a type-shaped `TypeMismatch`
-    on a non-type. Both then run the shared apply-a-callable tail.
+    `ResolvedCallable`. `HeadDeferred` admits any function value or a
+    constructible type; `TypeHeadDeferred` (the `:(...)` sigil guarantees a
+    type) prunes the function arm — the type-only lane admits no value-channel
+    callable — and admits only a constructible type, surfacing a type-shaped
+    `TypeMismatch` otherwise. Both then run the shared apply-a-callable tail.
 
   **The shared apply-a-callable tail.** All four head-position call lanes —
   `TypeCall`, `FunctionValueCall`, `HeadDeferred`, `TypeHeadDeferred` —
   converge on [`apply_callable`](../../src/machine/execute/dispatch/apply_callable.rs).
   A `ResolvedCallable` has exactly two execution arms: `Constructor(&KType)`
   builds from a struct / tagged / newtype / `TypeConstructor` schema, and
-  `Function(&KFunction)` calls a `KFunction` by name. A functor is a `KFunction`
-  whose result is a module, so functor application is the `Function` arm — the
-  functor/function distinction survives only at classification (for `KFunctor`
-  typing and the `TypeHeadDeferred` diagnostic gate), never at execution. The
+  `Function(&KFunction)` calls a `KFunction` by name. A functor — a
+  module-returning function — is a `KFunction` like any other, so it takes the
+  `Function` arm with no arm, flag, or classification of its own. The
   tail body-shape-branches `expr.parts[1..]` (`extract_call_body` admits one
   `{name = value}` record literal or one `(value)` paren group) and launches
   construction or a `reconstruct_positional` + eager-subs function call. The

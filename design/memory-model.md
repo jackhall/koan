@@ -313,7 +313,7 @@ it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded 
 lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
 sole exit to node storage is finalize's fold. A value that
 cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines a
-module-family pointer, a bound `KFunctor`'s captured body, or an `Rc`-shared set — `SetRef` / `Variant`
+module-family pointer or an `Rc`-shared set — `SetRef` / `Variant`
 / `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three tiers
 instead. The two runtime-checked tiers route through the library's
 [`RegionHandle::alloc_resident_checked`](../workgraph/src/witnessed/region.rs), which stores only if
@@ -356,7 +356,8 @@ compile-only capability with no runtime audit at all:
   per-call return type into the captured-scope region, and because it accepts the hit rather than a
   type and a reach side by side, the reach it audits under can only be the one the resolver derived
   for that very type. That is how a return type may name a module living in neither the callee
-  frame's nor the captured scope's region (a FUNCTOR mints its module in its own per-call region; the
+  frame's nor the captured scope's region (a module-returning FN mints its module in its own per-call
+  region; the
   delivered argument carrier pins it), while the re-home stays capped at the contract lifetime so the
   stored reference cannot outlive that pin. A type no name resolution produced — the return-type
   expression form's sub-dispatch result — has no binding to derive evidence from and takes a separate

@@ -55,8 +55,8 @@ Read them in order the first time through — each builds on the last.
 10. [Quoting and evaluating](10-quoting.md) — capturing an expression as data
     with `#` and running it with `$`.
 11. [Modules](11-modules.md) — grouping bindings, signatures, and ascription.
-12. [Functors](12-functors.md) — modules parameterized by modules, and signature
-    specialization.
+12. [Functors](12-functors.md) — module-returning functions: parameterizing a
+    module by another module, and signature specialization.
 
 A condensed [surface reference](reference.md) lists every form on one page once
 you know your way around.

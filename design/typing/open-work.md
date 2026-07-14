@@ -36,12 +36,14 @@ Future work on the type and module system. Each entry points at a
   rejected by the unshadowable-builtins rule
   ([lookup-protocol.md](lookup-protocol.md)). One of the two has to move.
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
-  as FUNCTORs over their element/key types. Parks the **applicative
-  functor semantics** open question: the FUNCTOR binder
-  ([functors.md](functors.md)) is the decided seam, but applicative
+  as functors — module-returning FNs — over their element/key types. Parks the
+  **applicative functor semantics** open question: the decided seam is the
+  *derived* classification of a function's return slot ("does it name a
+  signature?", [functors.md](functors.md)), not a binder or a stored flag, but
+  applicative
   semantics are deferred behind the predicate-typing work — the language
   stays generative-only until then. Once predicate typing lands, opt-in
-  syntax and the identity-by-(functor, arguments) machinery let
+  syntax and the identity-by-(function, arguments) machinery let
   independent call sites resolving (via stage 5 implicit search) to the
   same module interoperate.
 - [User-defined operator modules](../../roadmap/operator_chaining/user-defined-operator-modules.md)

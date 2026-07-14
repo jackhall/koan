@@ -33,7 +33,7 @@ The mechanism:
   ([elaboration.md](elaboration.md)).
 - **Refinement rides on dep-finish.** A dep-finish waiting for its sub-Dispatches
   to complete is the existing wake-up mechanism; a type expression that
-  tightens later (e.g. as functor application reaches the body) wakes
+  tightens later (e.g. as a functor's application reaches the body) wakes
   its dependents through the same path.
 - **Implicit search lands as a single new builtin `SEARCH_IMPLICIT`,
   not a new node kind.** Implicit resolution becomes a Dispatch against

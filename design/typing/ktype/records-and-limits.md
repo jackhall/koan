@@ -14,8 +14,8 @@ elaborator wraps the parser's declaration-ordered `(name, KType)` pairs into a `
 at the [`finalize_nominal_member`](../../../src/machine/model/types/recursive_set.rs)
 boundary, and fills the member's schema cell.
 
-The same `Record<KType>` substrate backs `KFunction` / `KFunctor` parameter
-identity: both variants store their parameters as `params: Record<KType>`
+The same `Record<KType>` substrate backs `KFunction` parameter
+identity: the variant stores its parameters as `params: Record<KType>`
 (`(name → type)`), built by `finalize_carrier` in
 [`parameterized_types.rs`](../../../src/builtins/parameterized_types.rs) from the
 shared field-list parser NEWTYPE / UNION use. A function-typed slot is thus
@@ -58,7 +58,7 @@ the canonical `summarize()` render of a parens-form return (the live
 `KExpression` impls neither `Eq` nor `Hash`). It hashes and compares by that
 shadow, so two functions differing only in their deferred returns are distinct
 structural types. The variant is valid *only* inside a synthesized
-`KFunction` / `KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+`KFunction` `ret` box that `function_value_ktype` builds; no runtime
 value's `ktype()` returns it free-standing, and it admits nothing on its own
 (`accepts_part` is `false`).
 

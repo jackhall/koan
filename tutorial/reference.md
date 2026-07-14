@@ -61,7 +61,7 @@ the link in each section to the relevant chapter.
 | `<module> :! <Sig>`                              | Transparent ascription.            |
 | `<module> :\| <Sig>`                             | Opaque ascription.                 |
 | `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
-| `FUNCTOR (<KW> <p> :<Sig>) -> <Type> = (<body>)` | A module parameterized by a module. |
+| `FN (<KW> <p> :<Sig>) -> Module = (<body>)`      | A functor: an FN returning a module (a module parameterized by a module). |
 | `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
 | `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 

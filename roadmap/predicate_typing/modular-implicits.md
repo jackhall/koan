@@ -50,7 +50,8 @@ site needs.
   than supplied at the call site. Stage 1 shipped the unconstrained
   `AnyModule` slot; this stage tightens it.
 - *Type-parameterized implicit functors — decided.* Implicit candidates include
-  functors taking one or more `:Type` parameters, not only module-parameterized
+  functors — module-returning `FN`s — taking one or more `:Type` parameters, not
+  only module-parameterized
   ones. The resolver solves such a functor's type argument by reading the call's
   carried argument type (`List(Number)` yields `Number`) — a projection, not a
   search. This keeps the higher-order restriction intact: type arguments come

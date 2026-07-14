@@ -19,7 +19,7 @@ not cached alongside them.
 
 The recursion's *correctness* is also unspecified: which AST forms introduce a binder
 is spread across per-builtin extractors (`binder_name` in `let_binding.rs`,
-`val_decl.rs`, `functor_def.rs`, `sig_def.rs`, `module_def.rs`, `union.rs`,
+`val_decl.rs`, `sig_def.rs`, `module_def.rs`, `union.rs`,
 `recursive_types.rs`, …) with no single statement of "what introduces a binder" and no
 exhaustive test that the recursion installs every nested binder form.
 
@@ -42,13 +42,13 @@ type.
 **Acceptance criteria.**
 
 - The set of binder-introducing AST forms is specified in one place and covered by a
-  test asserting the recursion installs every nested binder (LET, VAL, FN, FUNCTOR,
+  test asserting the recursion installs every nested binder (LET, VAL, FN,
   MODULE, SIG, UNION, NEWTYPE, RECURSIVE TYPES) at submission.
 - The parse-static portion of binder discovery — the eager-slot mask and the binder
   name/bucket read out of the AST's structure — is computed once at parse time and
   cached on `KExpression` beside `DispatchShape`, not recomputed per submission.
 - Submission reads the cached binder plan; the only work left at submission is the
-  genuinely scope-dependent residue (resolving which user FN/FUNCTOR overloads in
+  genuinely scope-dependent residue (resolving which user FN overloads in
   scope are binder-shaped), if any remains.
 - Binder installs flow through one mutually-exclusive `BinderKey`-typed channel from
   extraction to install — submission and `Resolved` share it, and no struct carries the
@@ -66,7 +66,7 @@ type.
   nested-binder install test first, so the move is demonstrably behavior-preserving.
 - *Scope-static vs scope-dependent split — open.* Builtins are unshadowable and the
   keyword→binder-shape mapping is static, so a builtin-led binder is fully
-  parse-determinable; a user FN/FUNCTOR binder overload depends on scope. Decide
+  parse-determinable; a user FN binder overload depends on scope. Decide
   whether the cache carries a full plan for the builtin case plus a scope-resolved
   residue, or only the structural eager-slot mask. Recommended: cache the structural
   eager-slot mask and the extracted binder name/bucket on `KExpression`; keep the

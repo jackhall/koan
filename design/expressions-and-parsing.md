@@ -104,17 +104,16 @@ pass-through lane (`BareIdentifier`, `BareTypeLeaf`, `SigiledTypeExpr`,
 one of the **head-position call shapes**, each routing to its own calling
 convention:
 
-- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`, `MyFunctor {T = int_ord}`).
-  The name resolves synchronously to a type identity and branches into
-  construction or functor application.
+- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`). The name resolves
+  synchronously to a type identity and constructs.
 - `FunctionValueCall` — a lowercase `Identifier` head (`f {x = 7}`). The head
-  resolves to a function, functor, or constructible-type value.
+  resolves to a function or a constructible-type value.
 - `HeadDeferred` — a nested `Expression` head (`(pick) {x = 1}`). The head is
-  evaluated first, and the resulting value's kind — function, functor, or
+  evaluated first, and the resulting value's kind — function or
   constructible type — selects the convention.
 - `TypeHeadDeferred` — a `:(...)` `SigiledTypeExpr` head. The sigil guarantees a
-  type result, so it prunes the plain-function arm; a non-type result surfaces a
-  type-shaped diagnostic.
+  type result, so it prunes the function arm and admits only a constructible
+  type; anything else surfaces a type-shaped diagnostic.
 - `NonCallableHead` — a literal, list, dict, or record head in a multi-part
   expression. Heads are always eager and must resolve to something callable, so
   this shape raises a `DispatchFailed` at the dispatch entry.
@@ -169,8 +168,8 @@ The four call-shape lanes that resolve a head to a callable —
 one shared apply-a-callable tail in
 [`dispatch/apply_callable.rs`](../src/machine/execute/dispatch/apply_callable.rs)
 with two execution arms: *construct* from a type schema, or *call* a `KFunction`
-by name. A functor is a `KFunction` whose result is a module, so functor
-application is the call arm — see
+by name. A functor — a module-returning function — is a `KFunction` like any
+other, so it takes the call arm — see
 [typing/functors.md](typing/functors.md).
 
 ## Type-expression sigil
@@ -179,7 +178,7 @@ The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../src/machine/model/ast.rs)
 — no inner-shape recognition runs at parse time. Shape decisions
-(keyworded `:(LIST OF Number)`, user-functor `:(MyFunctor {T = int_ord})`,
+(keyworded `:(LIST OF Number)`, nominal construction `:(MyStruct {x = 1})`,
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)

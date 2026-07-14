@@ -270,7 +270,7 @@ module reaches a slot, a return, or a `LET` type alias. Its `value` slot is
 is refused there with a diagnostic rather than falling through dispatch as a miss;
 an empty, unstamped container is refused too (no knowable element type). The result
 is built at the fold brand from the argument's own carrier, so the type it produces
-borrows exactly the region the value lives in — a module minted in a FUNCTOR's
+borrows exactly the region the value lives in — a module minted in a function's
 per-call region included.
 
 Three consequences:
@@ -281,8 +281,8 @@ Three consequences:
   **delivered carrier** of the resolved return type
   ([`home_delivered_return_type`](../../src/machine/core/kfunction/exec.rs)), whose
   reach names every region that type borrows. The argument module need not live in
-  the captured region: a FUNCTOR-produced module, minted in the functor's per-call
-  region, rides the return like a root-bound one (see
+  the captured region: a module minted in a functor's per-call
+  region rides the return like a root-bound one (see
   [per-call-region/lifecycle.md](../per-call-region/lifecycle.md)).
 - `m :(TYPE OF int_ord)` is a **structural** slot: it admits any module whose
   self-sig satisfies `int_ord`'s, not only `int_ord` itself. Admission runs the same

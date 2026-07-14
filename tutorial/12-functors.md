@@ -1,22 +1,24 @@
 # Functors
 
 A functor is a module parameterized by another module — a function from modules
-to modules. Functors are how you write a component once and specialize it to
-many implementations: anything that supplies the required signature can be
-plugged in.
+to modules. In koan a functor is not a separate construct: it is just an `FN`
+whose body builds and returns a module. Functors are how you write a component
+once and specialize it to many implementations: anything that supplies the
+required signature can be plugged in.
 
 ## Defining and applying
 
-`FUNCTOR (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` declares a
-functor. The parameter is a module constrained by a signature, and the body
-builds and returns a new module. You apply it by calling its keyword with a
-module that satisfies the parameter's signature:
+`FN (<keyword> <param> :<Signature>) -> <ReturnType> = (<body>)` — the ordinary
+function binder from [chapter 4](04-functions.md). The parameter is a module
+constrained by a signature, and the body builds and returns a new module. You
+apply it by calling its keyword with a module that satisfies the parameter's
+signature, exactly as you would call any other function:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
 LET int_order_view = (int_order :! Ordered)
-FUNCTOR (MAKESET elem :Ordered) -> Module =
+FN (MAKESET elem :Ordered) -> Module =
   MODULE built =
     LET sample = (elem.compare)
 LET number_set = (MAKESET int_order_view)
@@ -35,17 +37,42 @@ way to *narrow* what the argument exposes, never a prerequisite for passing it.
 Each application is *generative* — it produces a fresh module distinct from every
 other application.
 
-The return type must denote a module-like thing (a module, signature, or
-functor); a functor that claims to return an ordinary value is rejected at
-definition:
+There is no return-slot restriction: an `FN` may return anything, and a module is
+just one of the things it can return. "Functor" names how you are *reading* the
+function, not a kind the language tracks.
+
+## The function is an ordinary value
+
+Because a functor is an ordinary function, `LET` binds it like any other function
+value — under a snake_case (value-class) name — and the value-side call form works
+alongside the keyworded one:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-FUNCTOR (BADMAKE x :Ordered) -> Number = (5)
+MODULE int_order = (LET compare = 7)
+LET make_set = (FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = (elem.compare))))
+LET a = (MAKESET int_order)
+LET b = (make_set {elem = int_order})
+PRINT a.sample
+PRINT b.sample
 ```
 
 ```text
-error: shape error: FUNCTOR return-type slot must denote a module, signature, or functor; got `Number`
+7
+7
+```
+
+`(MAKESET int_order)` is the keyworded call; `(make_set {elem = int_order})` fills
+the parameters by name through the bound function value. Binding it under a
+Type-class (capitalized) name is an error — a function is a value, not a type:
+
+```koan
+SIG Ordered = (VAL compare :Number)
+LET MakeSet = (FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sample = 1)))
+```
+
+```text
+error: type-class binding `MakeSet` expects a type value, got `:(FN (elem :Ordered) -> Module)`
 ```
 
 ## Modules in type position: `TYPE OF`
@@ -61,7 +88,7 @@ say "returns a module with this argument's interface", resolved per call:
 ```koan
 SIG Ordered = (VAL compare :Number)
 MODULE int_order = (LET compare = 7)
-FUNCTOR (MAKESET elem :Ordered) -> Module =
+FN (MAKESET elem :Ordered) -> Module =
   MODULE built =
     LET compare = 3
 LET number_set = (MAKESET int_order)

@@ -174,7 +174,7 @@ statements as dispatch nodes:
   submits each statement through `enter_block`. The scheduler itself never
   inspects AST shape — `split_body_statements` is the single source of truth for
   the split.
-- FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via that same
+- FN, MATCH-arm, and TRY-arm bodies split via that same
   [`split_body_statements`](../../src/machine/core/kfunction/body.rs) helper
   (the all-`Expression` rule): the body's
   non-tail statements ride along as the `leading` field of an

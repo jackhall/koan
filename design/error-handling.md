@@ -120,8 +120,8 @@ errors carry the type discipline. `KErrorKind` itself is a closed set.
 `Result` is a builtin parameterized type — a two-variant tagged union over two
 type parameters, `Ok :T` and `Error :E`. It is the shared return-type shape for
 [`CATCH`](#catch) (`Result<T, KError>`) and for user functions with typed error
-returns (`Result<T, MyErr>`). It is *not* a module-system functor: functors
-produce modules, whereas `Result` is a type constructor producing a tagged-union
+returns (`Result<T, MyErr>`). It is *not* a functor — a module-returning
+function — whereas `Result` is a type constructor producing a tagged-union
 value.
 
 It is registered once in the root scope by

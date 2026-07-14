@@ -21,8 +21,9 @@ into it.
   and a run mixing distinct members of the family reduces under one mode.
 - The same `+` declared in two modules resolves to different bodies, picked by
   the scope walk at each use site.
-- A `FUNCTOR` producing a `GROUP` module, instantiated explicitly with a
-  concrete type or witness module, yields `+ - …` operating over that type.
+- A functor — a module-returning `FN` — producing a `GROUP` module, instantiated
+  explicitly with a concrete type or witness module, yields `+ - …` operating over
+  that type.
 
 **Directions.**
 
@@ -67,10 +68,11 @@ into it.
   a fold direction — so this item reshapes the record to carry both and teaches
   the reducer's combiner fold to invoke a function value.
 - *Generics via functor — decided.* A generic group is a
-  [`FUNCTOR`](../../design/typing/functors.md) producing the `GROUP` module,
+  [functor](../../design/typing/functors.md) — an `FN` producing the `GROUP`
+  module —
   taking either a bare `:Type` parameter (when the bodies need no operations on
   the type) or a signature-typed module parameter (dictionary passing, when they
-  do). Both are shipped functor mechanics. Implicit *selection* of a group by
+  do). Both are shipped FN mechanics. Implicit *selection* of a group by
   operand type rides modular implicits (stage 5), not this surface.
 - *Group validation — deferred.* Whether the combiner's `(r, r) -> r` shape,
   mode consistency, or algebraic laws (associativity, identity, inverse) are
@@ -81,7 +83,7 @@ into it.
 
 Soft prerequisites: the shipped module system and
 [functors](../../design/typing/functors.md) — `GROUP` skins `MODULE`, and generic
-groups ride `FUNCTOR`.
+groups ride an ordinary module-returning `FN`.
 
 **Requires:**
 

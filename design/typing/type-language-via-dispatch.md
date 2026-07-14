@@ -5,11 +5,8 @@ sigiled expression `:(...)` is a parse-context marker: the parser tags
 the inner expression as evaluating to a type rather than a value, but
 the inner expression itself routes through the same classifier,
 candidate-bucket lookup, and binder admission as any value-side call.
-Builtin parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) register as
+Builtin parameterized types (`LIST`, `MAP`, `FN`) register as
 keyworded overloads that produce a `&KType` in the value channel's `Type` arm.
-User-defined functors slot in identically — they're
-`KFunction` carriers bound to Type-shape names, dispatched through
-their declared keyword skeletons.
 
 ## Sigil surface
 
@@ -17,8 +14,6 @@ their declared keyword skeletons.
 :(LIST OF Number)
 :(MAP Str -> Number)
 :(FN (x :Number, y :Str) -> Bool)
-:(FUNCTOR (T :Ordered) -> Module)
-:(MyFunctor {T = int_ord})
 :{x :Number, y :Str}
 ```
 
@@ -43,12 +38,12 @@ to the value-side path.
 
 ## Fully-uppercase head keywords
 
-`LIST`, `MAP`, `FN`, `FUNCTOR` keep parameterized-type construction in
+`LIST`, `MAP`, `FN` keep parameterized-type construction in
 its own candidate bucket, distinct from any user-defined value-side
 overload on short connector words. Routing each parameterized type
 through its own uppercase head — `[Keyword("LIST"), Keyword("OF"),
 Slot]`, `[Keyword("MAP"), Slot, Keyword("->"), Slot]`, etc. — keeps the
-buckets narrow even when user-defined functors overload `OF` or `->`
+buckets narrow even when user-defined functions overload `OF` or `->`
 heavily.
 
 `MAP` is the surface keyword for the dict carrier. The underlying type
@@ -80,15 +75,13 @@ parameterized param types sub-Dispatch — `:(FN (xs :(LIST OF Number))
 -> Bool)` elaborates its element type rather than failing on the bare
 identifier.
 
-## Functor-type sigil
-
-Symmetric with the function-type rule:
-`:(FUNCTOR (T :Ordered) -> Module)`. Parameter names round-trip into
-`KType::KFunctor { params, ret }`'s parameter `Record<KType>` the same
-way, and render back through `KType::name()`. FUNCTOR's capitalized
-`Type`-token parameter names (`Ty` for a `:Type` slot) are admitted by the
-field-list parser's `FieldNameKind::IdentifierOrType` policy. A `UNION`
-schema's variant tags go one step further — they *must* be capitalized
+`:(FN …)` is the only function-type surface, and it covers a functor — a
+module-returning function — with no separate spelling:
+`:(FN (Ty :Signature) -> Module)`. Capitalized `Type`-token parameter names
+(`Ty` for a `:Type` or `:Signature` slot) are admitted by the field-list parser's
+`FieldNameKind::IdentifierOrType` policy, so they round-trip into the parameter
+`Record<KType>` alongside snake_case ones. A `UNION` schema's variant tags go one
+step further — they *must* be capitalized
 `Type` tokens (`FieldNameKind::Type`), since a variant is itself a nominal type
 (see [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes));
 record fields stay `Identifier`-only.
@@ -182,17 +175,6 @@ The field list arrives unevaluated through a `KExpression` slot (bare names only
 it re-tags a carrier to break an incomparable-arm dispatch tie without name-resolving
 the fields.
 
-## User-functor application
-
-`FUNCTOR MyFunctor (T :Ordered) = ...` binds `MyFunctor` to a
-`KFunction` carrier under both the value-side name and the keyword
-skeleton declared at `FUNCTOR` time. Applying the functor at any
-surface — value-side `(MyFunctor {T = int_ord})`, sigiled
-`:(MyFunctor {T = int_ord})` — passes one record literal whose fields
-inherit the parameter names from the declaration. Symmetric with the
-value-side function-value call shape, which admits one record-literal
-part holding the named arguments.
-
 ## Classifier
 
 `classify_dispatch_shape`
@@ -204,10 +186,11 @@ same classifier — there is no separate type-context table — so the
 inner expression's parts decide its shape:
 
 - `Keyworded` for the keyworded surface (`:(LIST OF Number)`,
-  `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`,
-  `:(FUNCTOR (T :S) -> M)`) served by the registered `LIST OF` /
-  `MAP _ -> _` / `FN` / `FUNCTOR` overloads in
+  `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`) served by the
+  registered `LIST OF` / `MAP _ -> _` / `FN` overloads in
   [`builtins/parameterized_types.rs`](../../src/builtins/parameterized_types.rs).
+  A head with no registered overload — `:(FUNCTOR …)`, say — is an ordinary
+  dispatch no-match.
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
   (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
   primary caller of `Scope::resolve_type_identifier` — see
@@ -215,16 +198,17 @@ inner expression's parts decide its shape:
   shared resolver bridge.
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
   newtype, union, or `Result` head through its construction primitive
-  (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) and a `KType::KFunctor { body: Some }` head
-  through functor application (`:(MyFunctor {T = int_ord})`), both via the
-  shared apply-a-callable tail.
+  (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) via the shared
+  apply-a-callable tail. A constructible `SetRef` identity is the only invocable
+  type; `bindings.types` holds no callable, so there is no function-application arm
+  here.
 
 A single-part `:(...)` sigil wrapping the whole construction is the
 `SigiledTypeExpr` lane that tail-replaces with a `Dispatch` of the inner
 expression; a `:(...)` head *followed by* a call body
-(`:(MyFunctor {base = int_ord})` as a head) is the `TypeHeadDeferred` lane,
+(`:(MyStruct {x = 1})` as a head) is the `TypeHeadDeferred` lane,
 which evaluates the head to a type-shaped value and admits only a
-constructible type or a functor.
+constructible type.
 
 The classifier also carries a `RecordType` variant for a single-part `:{…}`,
 separate from the `SigiledTypeExpr` lane. Its handler (`record_type` in
@@ -235,7 +219,7 @@ or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
 `NonCallableHead` (a record type is a value, not a callable).
 
 The sigil boundary — "the result must ride the value channel's `Type` arm
-(a `Signature`, `SetRef`, `KFunctor`, or any other `&KType`)" — is
+(a `Signature`, `SetRef`, or any other `&KType`)" — is
 enforced implicitly by the consuming slot's KType machinery rather
 than by a dedicated tail at the sigil. An `Object`-arm value (number,
 instance struct, plain function value, or a **module** — a module is a value)
@@ -266,7 +250,7 @@ deadlocking the scheduler.
 
 `LET`, `NEWTYPE`, `UNION`, `SIG`, and `MODULE` register a single name
 binding via a `binder_name` extractor and ride the name-keyed
-placeholder channel. `FN` and `FUNCTOR` register an *overload* in a
+placeholder channel. `FN` registers an *overload* in a
 function bucket via a `binder_bucket` extractor — and crucially,
 *not* a `binder_name`. The two channels are reflected at the
 submission walk as `BinderKey::Name(String)` and
@@ -288,4 +272,4 @@ consumer re-dispatches and either picks from the now-live
 placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)).
 A name-keyed install would collide on the second sibling — both
 `PICK` binders trying to claim `placeholders[PICK]` — which is why
-FN / FUNCTOR do not install on the name channel.
+FN does not install on the name channel.
