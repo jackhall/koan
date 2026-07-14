@@ -158,8 +158,8 @@ fn type_of_parameter_defers_a_return_type() {
 
 /// `LET SetType = (TYPE OF <module>)` binds the module's self-sig as an ordinary *type* alias, so
 /// the reach a later `:SetType` slot replays comes off the `types` entry — minted there from this
-/// carrier at the bind. The module lives in a FUNCTOR's per-call region, which nothing else pins, so
-/// a type-channel reach that dropped it would refuse the slot.
+/// carrier at the bind. The module lives in the per-call region of a module-returning FN, which
+/// nothing else pins, so a type-channel reach that dropped it would refuse the slot.
 #[test]
 fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     let region = run_root_storage();
@@ -167,7 +167,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     run(
         scope,
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         FUNCTOR (MAKESET er :Ordered) -> Module = \
+         FN (MAKESET er :Ordered) -> Module = \
            (MODULE generated = ((LET Elt = Number) (LET zero = 3)))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET int_set = (MAKESET int_ord)\n\

@@ -969,8 +969,8 @@ fn head_deferred_calls_returned_function() {
     );
 }
 
-/// `HeadDeferred` → functor returns a module. A head that evaluates to a functor
-/// value, applied with named args, yields a module — locking the
+/// `HeadDeferred` → a functor — a module-returning function — returns a module. A head that
+/// evaluates to such a function value, applied with named args, yields a module — locking the
 /// functor-application-as-function-call decision.
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
@@ -980,7 +980,7 @@ fn head_deferred_applies_returned_functor_to_module() {
     run(
         scope,
         "FN (GET_FUNCTOR) -> Any = \
-         (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
+         (FN (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
     );
     let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(

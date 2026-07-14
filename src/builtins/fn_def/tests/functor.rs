@@ -12,6 +12,8 @@
 //!   `Null`) as `:Type`-typed arguments.
 //! - [`module_head_in_type_position`] — a bare module name in type position lowers
 //!   to the module's principal signature.
+//! - [`value_side_binding`] — a module-returning FN binds value-side, applies by the
+//!   ordinary call convention, and types as `KType::KFunction`.
 
 mod bare_type_token;
 mod deferred_return;
@@ -19,3 +21,4 @@ mod elaboration;
 mod module_head_in_type_position;
 mod per_call_param_bind;
 mod sharing;
+mod value_side_binding;

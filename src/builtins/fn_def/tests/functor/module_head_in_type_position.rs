@@ -40,8 +40,9 @@ fn deferred_type_of_param_return_yields_the_module() {
 }
 
 /// The module a `-> :(TYPE OF er)` return names need not live in the captured scope's region: a
-/// FUNCTOR mints its module in its own per-call region, so `Signature { SelfOf(m) }` borrows a region
-/// that is neither the callee frame's nor the captured scope's. `TYPE OF` homes its result under the
+/// module-returning FN mints its module in its own per-call region, so `Signature { SelfOf(m) }`
+/// borrows a region that is neither the callee frame's nor the captured scope's. `TYPE OF` homes its
+/// result under the
 /// argument carrier's own stored reach — which pins that region — so the module rides the return, and
 /// the member read afterwards proves its child scope is still live.
 #[test]
@@ -52,7 +53,7 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
-         FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET compare = 3))\n\
+         FN (MAKESET er :Ordered) -> Module = (MODULE generated = (LET compare = 3))\n\
          LET int_set = (MAKESET int_ord)\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );

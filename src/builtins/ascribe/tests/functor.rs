@@ -89,6 +89,50 @@ fn functor_application_is_generative() {
     );
 }
 
+/// Generativity in its abstract-type form: a module-returning FN whose body opaquely ascribes
+/// (`:|`) mints a fresh abstract type per application, so two calls yield modules whose `Carrier`
+/// type members are distinct `KType::AbstractType` carriers. Compare
+/// [`functor_application_is_generative`], which pins the same property on bare `scope_id`s.
+#[test]
+fn functor_application_mints_distinct_abstract_types() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let src = "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
+               MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+               FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
+               LET set_one = (MAKESET int_ord)\n\
+               LET set_two = (MAKESET int_ord)";
+    let exprs = parse(src).expect("parse should succeed");
+    let mut runtime = KoanRuntime::new();
+    let mut ids = Vec::new();
+    for expr in exprs {
+        ids.push(runtime.dispatch_in_scope(expr, scope));
+    }
+    runtime.execute().expect("scheduler should succeed");
+    for (i, id) in ids.iter().enumerate() {
+        if let Err(e) = runtime.result_error(*id) {
+            panic!("expr {i} errored: {e}");
+        }
+    }
+
+    let one = lookup_module(scope, "set_one");
+    let two = lookup_module(scope, "set_two");
+    let one_carrier = one.type_members.borrow().get("Carrier").cloned();
+    let two_carrier = two.type_members.borrow().get("Carrier").cloned();
+    assert!(
+        matches!(&one_carrier, Some(KType::AbstractType { name, .. }) if name == "Carrier"),
+        "the first application must mint an abstract Carrier, got {one_carrier:?}",
+    );
+    assert!(
+        matches!(&two_carrier, Some(KType::AbstractType { name, .. }) if name == "Carrier"),
+        "the second application must mint an abstract Carrier, got {two_carrier:?}",
+    );
+    assert_ne!(
+        one_carrier, two_carrier,
+        "two applications of a module-returning FN must mint distinct abstract types",
+    );
+}
+
 /// An unascribed module is admitted by a constraint-role `Signature { sig, .. }` slot iff its
 /// self-sig structurally satisfies the signature — no ascription required. `int_ord = (LET
 /// compare = 7)` structurally satisfies `Ordered = (VAL compare :Number)`, so the call

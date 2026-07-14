@@ -1,5 +1,5 @@
 //! Bare type tokens (`Number`, `Str`, `Bool`, `Null`) as `:Type`-typed
-//! FUNCTOR arguments. Pins the widening at
+//! FN arguments. Pins the widening at
 //! [`KType::accepts_part`](crate::machine::model::types) and the
 //! deferred-return re-elaboration path's agnosticism to builtin-vs-nominal
 //! carriers.
@@ -35,7 +35,7 @@ fn functor_admits_bare_number_token_at_type_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
+        "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
     );
     let result = run_one(scope, parse_one("MAKETREE Number"));
     match result {
@@ -55,7 +55,7 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
+        "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
     );
     for token in ["Str", "Bool", "Null"] {
         let src = format!("MAKETREE {token}");
@@ -78,7 +78,7 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = \
+        "FN (MAKETREE Elt :Type) -> Module = \
          (MODULE generated = ((LET ElemType = Elt) (LET inner = 1)))",
     );
     let result = run_one(scope, parse_one("MAKETREE Number"));
@@ -105,7 +105,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
+        "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))",
     );
     let err = run_expecting_dispatch_error(scope, parse_one("MAKETREE 7"));
     match &err.kind {
@@ -125,7 +125,7 @@ fn functor_module_carrier_does_not_fill_type_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FUNCTOR (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
+        "FN (MAKETREE Elt :Type) -> Module = (MODULE generated = (LET inner = 1))\n\
          MODULE int_mod = (LET inner = 1)",
     );
     let _ = run_expecting_dispatch_error(scope, parse_one("MAKETREE int_mod"));
@@ -135,11 +135,11 @@ fn functor_module_carrier_does_not_fill_type_slot() {
 /// unifier seam is agnostic to whether `Elt` was bound from a builtin or a
 /// nominal carrier.
 #[test]
-fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
+fn deferred_return_resolves_against_builtin_keyed_bind() {
     use crate::machine::model::ReturnType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
+    run(scope, "FN (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -160,11 +160,11 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
 /// wording as the nominal-keyed path), pinning that builtin-keyed binds
 /// route through the same dep-finish slot check.
 #[test]
-fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
+fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
     use crate::machine::execute::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
+    run(scope, "FN (BUILD Elt :Type) -> :Elt = (42)");
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("BUILD Str"), scope);
     runtime
