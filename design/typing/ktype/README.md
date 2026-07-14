@@ -110,9 +110,10 @@
   these): **there is no module variant.** A module is a value — it rides the value
   channel's Object arm as `KObject::Module`, and its `ktype()` is its principal
   signature, so the type channel names a module only through
-  `Signature { sig: SelfOf(m), .. }`. A bare module head in type position
-  (`x :IntOrd`, `-> Er`) lowers to exactly that self-sig — see
-  [modules.md § Module heads in type position](../modules.md#module-heads-in-type-position).
+  `Signature { sig: SelfOf(m), .. }`. A module name is a value token and types
+  nothing on its own; `TYPE OF` is the door that surfaces that self-sig as a type
+  value (`m :(TYPE OF int_ord)`, `-> :(TYPE OF er)`) — see
+  [modules.md § Modules in type position](../modules.md#modules-in-type-position-type-of).
   `Signature { sig: SigSource<'a>, pinned_slots: Vec<(String, KType)> }`
   serves both signature roles in one variant — its `sig` names one of three
   module-lattice points ([`SigSource`](../../../src/machine/model/types/ktype.rs):
@@ -128,7 +129,7 @@
   scope's id for a member named at SIG-declaration time (a SIG-local `LET Type = ...`
   that would otherwise collapse to its underlying type binds this name-bearing tag
   instead), or the freshly-allocated ascription module's scope id for the per-call
-  mint `:|` opaque ascription produces (`Foo.Type`). Because each `:|` application
+  mint `:|` opaque ascription produces (`view.Type`). Because each `:|` application
   allocates a fresh child scope, the two never collide.
   Manual `PartialEq` keys `KType::AbstractType` on `(source, name)`, while
   `KType::Signature` compares by its stored content
@@ -149,7 +150,7 @@
   The single `Signature` variant is **disambiguated by position**: a
   `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
   arm) whose self-sig structurally
-  satisfies `sig` (the constraint role — what `Er :Ordered`
+  satisfies `sig` (the constraint role — what `er :Ordered`
   lowers to in a FUNCTOR parameter slot, so `:Ordered` means "module
   satisfying Ordered," never "the signature value itself"), while a
   signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only

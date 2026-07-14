@@ -18,7 +18,7 @@ MakeHead = (FUNCTOR (Ty :Type) -> ... = (
 
 Inside the functor body `Ty` is a bound parameter, so the inner FN is ordinary:
 `Ty` resolves through the functor's per-call scope, the same path body-position
-`Er.Type` references use ([functors.md](functors.md)). No free type-parameter
+`er.Type` references use ([functors.md](functors.md)). No free type-parameter
 name is introduced anywhere.
 
 At a call site `HEAD some_list`, modular-implicit resolution

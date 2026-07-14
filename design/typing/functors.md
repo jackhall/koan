@@ -6,13 +6,14 @@ that layers definition-time static guarantees over the same per-call dispatch
 machinery ordinary FNs use. A functor may also take a bare `:Type` parameter;
 generic functions are built this way — see [generics.md](generics.md).
 
-- *Surface semantics* — modules are part of the **type language**. A
-  signature-typed FUNCTOR parameter (`Er: Ordered`) is a type-language
-  binder, like an OCaml functor's parameter. `Er.Type` in a type-position
-  slot is type-language projection — extracting the module's abstract
-  type. Identifier-class names (`er`, `mo` — lowercase-first per
-  [tokens.md](tokens.md)) are value-language only and a hard error in any
-  type-position slot.
+- *Surface semantics* — a functor's module parameter is an ordinary **value**
+  parameter under a signature-typed slot (`er :Ordered`), so its name is
+  Identifier-class (`er`, `mo` — lowercase-first per [tokens.md](tokens.md)). The
+  parameter still reaches type position, through two projections: the dotted
+  `er.Type`, which extracts the module's abstract type member, and
+  `:(TYPE OF er)`, which names the argument module's own principal signature (see
+  [modules.md § Modules in type position](modules.md#modules-in-type-position-type-of)).
+  A bare `er` in a slot or a return is an error — a value token names no type.
 - *Machine semantics* — modules are **first-class values**.
   `KObject::Module(&Module)` flows through the
   scheduler in the value channel's `Object` arm like any other value (a signature,
@@ -34,20 +35,20 @@ generic functions are built this way — see [generics.md](generics.md).
   bare `FN` binder.
 
 ```
-LET MakeSet = (FUNCTOR (MAKESET Er :Ordered) -> Set = (
-  MODULE Result = (
+LET MakeSet = (FUNCTOR (MAKESET er :Ordered) -> Set = (
+  MODULE result = (
     (LET Type = ...)
-    (LET insert = (FN (INSERT s :Type x :Er.Type) -> Type = ...))
+    (LET insert = (FN (INSERT s :Type x :er.Type) -> Type = ...))
     ...
   )
 ))
 
-LET IntSet = (MAKESET IntOrd)
+LET int_set = (MAKESET int_ord)
 ```
 
-`MODULE Name = (...)` is itself an expression: it both binds `Name` in the
+`MODULE <name> = (...)` is itself an expression: it both binds the name in the
 enclosing per-call scope and evaluates to the module value, so the FUNCTOR
-body needs no separate "anonymous structure" form. The bound name (`Result`
+body needs no separate "anonymous structure" form. The bound name (`result`
 above) lives only inside the call frame.
 
 `FUNCTOR` and `FN` are surface-disjoint. An FN whose body happens to evaluate
@@ -73,10 +74,10 @@ machinery — `apply_callable`'s `Function` arm calls the carried `&KFunction` b
 name, the same arm a plain function call takes, and the result happens to be a
 module. Two application surfaces reach it:
 
-- `MyFunctor {T = IntOrd}` — a `Type`-head `TypeCall`. The leaf name resolves to
+- `MyFunctor {T = int_ord}` — a `Type`-head `TypeCall`. The leaf name resolves to
   the `KType::KFunctor { body: Some }` type-table entry, which classifies as a
   callable function.
-- `:(MyFunctor {T = IntOrd})` — a single-part `:(…)` sigil whose inner expression
+- `:(MyFunctor {T = int_ord})` — a single-part `:(…)` sigil whose inner expression
   tail-dispatches the same `Type`-head `TypeCall`. A `:(…)` head *followed by* a
   call body is instead the `TypeHeadDeferred` lane, which evaluates the head to a
   type-shaped value and admits only a constructible type or a functor.
@@ -93,7 +94,7 @@ FUNCTOR's return-type slot must denote a module, signature, or functor
 kind. The admissible carriers are `KType::OfKind(KKind::Signature)`,
 `KType::Signature { .. }` (the unified constraint-and-value variant, covering a bare
 `:Ordered`, a `(… WITH {…})` pin, the `:Module` surface keyword's empty signature,
-and a bare module head's `SelfOf` self-sig — a concrete module return lands here
+and a `:(TYPE OF er)` self-sig — a concrete module return lands here
 because a module value's `ktype()` *is* its self-sig), and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
 multi-module functors and any deeper nesting flow through one rule). Any
@@ -105,17 +106,16 @@ wording. FN imposes no such constraint.
 The same parameter-name scan that classifies an FN return type into
 `Resolved` / `Deferred` runs for FUNCTOR; the validation gates on the
 denotation of the resolved or deferred carrier. A return type like
-`:(Set WITH {Elt = Er})` that references a per-call parameter is
+`:(Set WITH {Elt = er.Type})` that references a per-call parameter is
 admissible because the outer carrier (`WITH`) is a signature constructor;
-the `Er` reference resolves through the per-call `bindings.types` write at
-dispatch.
+the `er` reference resolves through the per-call parameter bind at dispatch.
 
 ## Type identity and the one-way wall
 
 `KType::KFunctor { params, ret }` is a distinct structural variant.
 `params` is a name-keyed [parameter `Record<KType>`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) —
 the same substrate `KFunction` uses — so a functor's parameter names (including
-capitalized `Type`-token names like `Ty` / `Er`) are part of its identity and
+capitalized `Type`-token names like `Ty` for a `:Type` parameter) are part of its identity and
 round-trip through `KType::name()`. Identity is the record's order-blind
 equality: `:(FUNCTOR (T :Sig, U :Sig2) -> M)` equals the same two parameters
 declared in either order. The admissibility helper at
@@ -139,7 +139,7 @@ no: rebind it as a FUNCTOR if that's the intent.
 
 FUNCTOR application is **generative**: each call evaluates the body afresh,
 and any inner `:|` mints fresh `KType::AbstractType { source_module, name }`
-slots. `(MAKESET IntOrd)` applied twice yields two distinct `Set` types
+slots. `(MAKESET int_ord)` applied twice yields two distinct `Set` types
 that cannot be confused. Generativity is a consequence of `:|`-per-call;
 the mechanism is general (any FN that contains `:|` mints fresh slots on
 each call) and not FUNCTOR-specific.
@@ -158,34 +158,36 @@ Sharing constraints — pinning a functor's output abstract type to a
 specific concrete type — ride on the `WITH` builtin described in
 [Type expressions and constraints](#type-expressions-and-constraints). A
 FUNCTOR whose return type is `:(Set WITH {Elt = Number})` declares
-the constraint at the return slot; the body's `MODULE Result` must mirror
+the constraint at the return slot; the body's `MODULE result` must mirror
 `Elt = Number` for the return-type check to admit it. There is no separate
 `with type` keyword.
 
 Pin values that reference only the FUNCTOR's outer scope are elaborated at
 binder-construction time. Concrete builtins (`Number`, `Str`) and
-outer-scope-bound type values (`Mo.Type` where `Mo` is
+outer-scope-bound type values (`mo.Type` where `mo` is
 bound outside the FUNCTOR) both work as pin values resolved eagerly.
 
 ## Parameters
 
-A FUNCTOR parameter binds per-call in whichever channel its argument travels.
-A **module** argument — what a `:Ordered` slot admits — arrives on the value
-channel's `Object` arm and binds into the child scope's `bindings.data` through the
-ordinary copied-mode value door, like any other object value: a module is a value,
-so there is no type-side parameter bind for it. A genuinely **type-denoting**
-argument — a `:Type` slot, a bare type-name slot, `:Signature` — arrives on the
-`Type` arm and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs) writes it
-into `bindings.types` via `register_type`; the argument arrives already resolved, so
-the write is direct, with no per-call transient identity elaboration at the bind
-site.
+A FUNCTOR parameter binds per-call into the universe **its own name** picks — not whichever
+channel its argument happens to travel
+([tokens.md § Token class is a binding rule](tokens.md#token-class-is-a-binding-rule-not-just-a-lexical-one)).
+A **module**-valued parameter is named snake_case (`er :Ordered`); its argument arrives on the
+value channel's `Object` arm and binds into the child scope's `bindings.data` through the
+ordinary copied-mode value door, like any other object value: a module is a value, so there is
+no type-side parameter bind for it. A **type-denoting** parameter — a `:Type` slot, a bare
+type-name slot, `:Signature` — is named with a Type token (`Ty`, `Er`); its argument arrives on
+the `Type` arm and [`run_user_fn`](../../src/machine/core/kfunction/exec.rs) writes it into
+`bindings.types` via `register_type`; the argument arrives already resolved, so the write is
+direct, with no per-call transient identity elaboration at the bind site. Mixing the two —
+handing a module to a Type-token parameter, or a type to a snake_case one — is refused by the
+binding maps' partition guard at the bind.
 
-Body-position references to a module parameter (`Er.compare`, `Er.Carrier`) resolve
+Body-position references to a module parameter (`er.compare`, `er.Carrier`) resolve
 through the value channel: [`attr.rs`](../../src/builtins/attr.rs)'s
 `body_identifier` finds the module in `data` and `body_module` projects the member
-off the module value. A bare `Er` in type position (`-> Er`) lowers to the argument
-module's self-sig — see
-[modules.md § Module heads in type position](modules.md#module-heads-in-type-position).
+off the module value. The argument module's own signature is named `:(TYPE OF er)` —
+see [modules.md § Modules in type position](modules.md#modules-in-type-position-type-of).
 
 FUNCTOR parameters are otherwise **unrestricted ordinary FN parameters**.
 Because koan unifies the value and module languages — a module is a
@@ -226,7 +228,7 @@ above the value language.
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call FUNCTOR parameter
-(`-> Er`, `-> Er.Type`, `-> :(Set WITH {Elt = Er})`)
+(`-> :(TYPE OF er)`, `-> er.Type`, `-> :(Set WITH {Elt = er.Type})`)
 ride a *deferred* return-type carrier through the per-call scope.
 [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
@@ -295,17 +297,17 @@ just nested FUNCTORs whose outer return type is the inner functor's type,
 written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
-LET MakeMap = (FUNCTOR (MAKEMAP Er :Ordered)
-                -> :(FUNCTOR (Vo :Monoid) -> :(Map WITH {Key = Er.Type})) = (
-  FUNCTOR (Vo :Monoid) -> :(Map WITH {Key = Er.Type}) = (
-    MODULE Result = ( ... )
+LET MakeMap = (FUNCTOR (MAKEMAP er :Ordered)
+                -> :(FUNCTOR (vo :Monoid) -> :(Map WITH {Key = er.Type})) = (
+  FUNCTOR (vo :Monoid) -> :(Map WITH {Key = er.Type}) = (
+    MODULE result = ( ... )
   )
 ))
 ```
 
 The outer return type is admitted by the recursive `KFunctor` arm in
 [Definition-time validation](#definition-time-validation); the inner functor
-inherits the outer's per-call scope, so `Er.Type` in its return slot resolves
+inherits the outer's per-call scope, so `er.Type` in its return slot resolves
 through the same per-call type-side bind path body-position references use.
 
 ## Higher-kinded type slots
@@ -386,16 +388,16 @@ slot semantics are positional, `WITH {…}` for slot-named constraints.
 - **`WITH`.** Infix signature specialization — `<sig> WITH {Slot = Type, …}`
   pins abstract type slots of a signature to specific concrete types.
   `(Ordered WITH {Type = Number})` is `Ordered` with its `Type` slot
-  pinned to `Number`; `(Set WITH {Elt = Number, Ord = IntOrd})` pins multiple
+  pinned to `Number`; `(Set WITH {Elt = Number, Ord = :(TYPE OF int_ord)})` pins multiple
   slots in one call. The bindings are a record literal keyed by slot name
   (capitalized Type-token field names); each `Slot = Type` field is one pin.
 - **Type-valued slot values.** `WITH` slot values accept any
   expression that evaluates to a `KType`, not only bare type-name
-  tokens. `(Pinnable WITH {Elt = Mo.Type})`
-  works because the dotted `Mo.Type` access returns the abstract type of
-  module `Mo`. The slot's declared kind decides what the engine expects.
+  tokens. `(Pinnable WITH {Elt = mo.Type})`
+  works because the dotted `mo.Type` access returns the abstract type of
+  module `mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
-  modules. `(Set WITH {Elt = Number, Ord = IntOrd})` works because
+  modules. `(Set WITH {Elt = Number, Ord = :(TYPE OF int_ord)})` works because
   `Set`'s `Ord` slot is declared `Ordered`-kind. Distinct module
   values bound to the same slot give distinct concrete types — the
   mechanism behind witness types in

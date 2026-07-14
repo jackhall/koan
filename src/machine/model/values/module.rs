@@ -24,8 +24,8 @@ use super::super::types::{
     SigSchema, SigSource,
 };
 
-/// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
-/// `"Outer.Inner"`). The module value rides the value channel as `KObject::Module(self)` and is
+/// First-class module value. `path` is the lexical-source label (`"int_ord"`,
+/// `"outer.inner"`). The module value rides the value channel as `KObject::Module(self)` and is
 /// typed by its principal signature (`KType::Signature { sig: SelfOf(self), .. }`);
 /// opaque-ascription members mint `KType::AbstractType { source: self.scope_id(), name }`.
 pub struct Module<'a> {

@@ -246,7 +246,7 @@ pub enum KType<'a> {
     RecursiveRef(String),
     /// Bind-time transient for a bare-leaf type name that couldn't be lowered to a concrete
     /// `KType` at the synchronous [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
-    /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`, `MyList`).
+    /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `Wrapped`, `MyList`).
     /// Sibling to [`RecursiveRef`](KType::RecursiveRef): it rides the value channel's `Type`
     /// arm, never reaches the dispatch predicates, and is consumed + replaced by the
     /// park-capable [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).

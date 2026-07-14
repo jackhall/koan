@@ -72,10 +72,8 @@ ascription's per-call mints.
 
 ## Dependencies
 
-**Requires:**
-
-- [Module naming flip](module-naming-flip.md) — a functor's result is a module bound under a
-  Type-token name today, and can become an ordinary FN call only once module results bind
-  value-side.
+**Requires:** none — module names bind value-side and a module reaches type position only through
+`TYPE OF`, so FUNCTOR's type-side home and Type-head application surface are the last of the
+module-as-a-type substrate left standing.
 
 **Unblocks:** none tracked yet.

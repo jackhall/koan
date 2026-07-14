@@ -374,7 +374,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new()),
+            ScopeBindings::Owned(Bindings::new_slot_table()),
             ScopeKind::Sig { name },
             None,
         )
@@ -821,8 +821,8 @@ impl<'a> Scope<'a> {
     /// module value under that evidence, and bind it into [`Bindings::data`]. Returns the resident
     /// `&KObject` paired with the token so the caller seals its terminal from the same evidence
     /// ([`Self::resident_value_carrier`]). The home-borrow bit is derived by the mint, never
-    /// hand-asserted. A module name is a Type token, so a collision with a builtin type is a
-    /// `Rebind` — builtins are immutable and unshadowable, in either channel.
+    /// hand-asserted. A module name is an Identifier and every builtin type name is a Type token, so
+    /// no builtin-type shadow is reachable here; [`Self::bind_value`] raises the ordinary `Rebind`.
     pub(crate) fn bind_module(
         &self,
         name: String,
@@ -830,9 +830,6 @@ impl<'a> Scope<'a> {
         child: &Scope<'a>,
         index: BindingIndex,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        if self.shadows_builtin_type(&name) {
-            return Err(KError::new(KErrorKind::Rebind { name }));
-        }
         let stored = self.child_module_reach(child);
         let obj = self.alloc_object_reaching(KObject::Module(module), &stored)?;
         self.bind_value(name, obj, index, stored)?;

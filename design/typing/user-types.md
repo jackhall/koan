@@ -208,7 +208,7 @@ in the resolver ladder (see
 SIG installs the same way, through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs): a single
 `KType::Signature { sig, pinned_slots }` identity in `bindings.types` serves
-*both* roles. As a slot annotation (`Er :Ordered`) it is the constraint form —
+*both* roles. As a slot annotation (`er :Ordered`) it is the constraint form —
 "any module satisfying Ordered"; as a value
 (`KType::Signature { .. }` in the `Type` arm) it is the identity-bearing signature
 carrier, carrying the live `decl_scope` via `sig`. The roles are disambiguated by
@@ -217,7 +217,7 @@ position, not by separate variants, so no value-side carrier is written;
 type-namespace write.
 
 `LET <Type-class> = <module/sig/struct-value>` (e.g.
-`LET IntOrdA = (IntOrd :| Ordered)`) installs the *original* type's identity
+`LET Pt2 = Point`) installs the *original* type's identity
 under the alias name rather than minting a fresh set — aliasing is
 type-equivalent, so a slot typed by the alias dispatches to the same overload as
 a slot typed by the original. Struct / union / module / Result / signature aliases

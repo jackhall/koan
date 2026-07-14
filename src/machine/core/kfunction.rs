@@ -49,7 +49,7 @@ pub struct KFunction<'a> {
     /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
     /// `FUNCTOR`). Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
     /// dispatch driver installs an entry in `bindings.pending_overloads` and a
-    /// sibling bare-arg call form like `(MAKESET IntOrd)` parks on the binder slot
+    /// sibling bare-arg call form like `(MAKESET int_ord)` parks on the binder slot
     /// instead of surfacing `DispatchFailed` before finalize.
     pub binder_bucket: Option<BinderBucketFn>,
     /// Flipped on by the `FUNCTOR` binder. Distinguishes the same underlying

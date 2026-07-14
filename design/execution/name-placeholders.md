@@ -88,16 +88,17 @@ The six binder builtins (`LET`, `FN`, `NEWTYPE`, `SIG`, `UNION`,
 [`register_builtin_with_binder`](../../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
 
-A placeholder is keyed by `BindKind` (value or type), and `MODULE` straddles the
-two: a module name is a Type token, so the binder parks in-flight forward
-references through the *type* ladder (`BindKind::Type`), while the module itself
-binds value-side into `data` ([modules.md § First-class
-modules](../typing/modules.md#first-class-modules)). The value write therefore
-clears the Type-kind placeholder as well as the value-kind one
-([`Bindings::try_apply`](../../src/machine/core/bindings.rs)); without that, a
-forward reference like `x :View` would park forever on a producer that has already
-run. The [naming flip](../../roadmap/type_memos/module-naming-flip.md) retires
-Type-token module names and this cross-kind clear with them.
+A placeholder is keyed by `BindKind` (value or type), and each binder's kind is
+fixed by the name part its binder-name extractor reads: `type_part_binder_name`
+(SIG / UNION / NEWTYPE / RECURSIVE TYPES) reads a `Type` part and tags
+`BindKind::Type`; `identifier_part_binder_name` (`LET <name> = …`, `MODULE`) reads
+an `Identifier` part and tags `BindKind::Value`. `MODULE` binds a value under a
+value token, so its placeholder and its write sit on the same ladder — no binder
+straddles the two kinds, and no write clears a placeholder of the other kind
+([`Bindings::try_apply`](../../src/machine/core/bindings.rs)). An overload whose
+name part is of the other class simply misses its extractor, so the submit-time
+binder pick selects the correctly-classified overload
+([modules.md § First-class modules](../typing/modules.md#first-class-modules)).
 
 Production reads thread the three-layer
 [lookup → admit protocol](../typing/lookup-protocol.md): `Scope::resolve_*_with_chain`

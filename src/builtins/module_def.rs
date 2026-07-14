@@ -91,7 +91,7 @@ pub fn body<'a>(
     )
 }
 
-/// The Type-token-named overload (`MODULE int_ord = …`): a module is a value, so its name belongs in
+/// The Type-token-named overload (`MODULE IntOrd = …`): a module is a value, so its name belongs in
 /// the value namespace. Registered with no binder hook — it always errors, so it installs nothing.
 fn body_type_named<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,

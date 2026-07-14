@@ -86,9 +86,9 @@ fn type_binding_round_trips_stored_reach() {
     let reach_set = FrameSet::singleton(foreign.clone());
     let reach = StoredReach::for_test(Some(&reach_set), false);
     bindings
-        .try_register_type("T", kt, BindingIndex::BUILTIN, reach)
+        .try_register_type("Ty", kt, BindingIndex::BUILTIN, reach)
         .expect("type register should succeed");
-    match bindings.lookup_type_carrier("T", None) {
+    match bindings.lookup_type_carrier("Ty", None) {
         Some(NameLookup::Bound(hit)) => {
             assert!(std::ptr::eq(hit.kt, kt));
             assert!(
@@ -231,11 +231,16 @@ fn try_register_type_does_not_touch_data_or_functions() {
 // site. The reverse — a bare `FN`, which binds neither `data` nor `types` — is
 // exempt; that is covered Scope-side in `core::tests::register`.
 
+/// Cross-kind collision. The token-class partition keeps a Type token out of `data` and a value
+/// token out of `types`, so a name in both maps is unconstructible in an ordinary scope — but a
+/// signature's slot table keys value slots by their value names, and there the two maps can reach
+/// for the same name. The collision check is what keeps them from doing so, so these fixtures
+/// exercise it where it is live.
 #[test]
 fn value_bind_then_type_register_is_rebind() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings<'_> = Bindings::new_slot_table();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
@@ -265,7 +270,7 @@ fn value_bind_then_type_register_is_rebind() {
 fn value_bind_then_type_upsert_is_rebind() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings<'_> = Bindings::new_slot_table();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
@@ -293,19 +298,19 @@ fn value_bind_then_type_upsert_is_rebind() {
 fn type_register_then_value_bind_is_rebind() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings<'_> = Bindings::new_slot_table();
     let kt: &KType = region.alloc_ktype(KType::Number);
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     bindings
         .try_register_type(
-            "T",
+            "x",
             kt,
             BindingIndex::BUILTIN,
             StoredReach::for_test(None, false),
         )
         .expect("type register should succeed on fresh bindings");
     let err = match bindings.try_bind_value(
-        "T",
+        "x",
         val,
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
@@ -313,28 +318,28 @@ fn type_register_then_value_bind_is_rebind() {
         Err(e) => e,
         Ok(_) => panic!("binding a value over a committed type must be rejected"),
     };
-    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "T"));
-    assert!(bindings.data().get("T").is_none());
-    assert!(bindings.types().get("T").is_some());
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "x"));
+    assert!(bindings.data().get("x").is_none());
+    assert!(bindings.types().get("x").is_some());
 }
 
 #[test]
 fn type_upsert_then_value_bind_is_rebind() {
     let storage = run_root_storage();
     let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
+    let bindings: Bindings<'_> = Bindings::new_slot_table();
     let kt: &KType = region.alloc_ktype(KType::Number);
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     bindings
         .try_register_type_upsert(
-            "T",
+            "x",
             kt,
             BindingIndex::BUILTIN,
             StoredReach::for_test(None, false),
         )
         .expect("type upsert should succeed");
     let err = match bindings.try_bind_value(
-        "T",
+        "x",
         val,
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
@@ -342,30 +347,31 @@ fn type_upsert_then_value_bind_is_rebind() {
         Err(e) => e,
         Ok(_) => panic!("binding a value over an upserted type must be rejected"),
     };
-    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "T"));
-    assert!(bindings.data().get("T").is_none());
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "x"));
+    assert!(bindings.data().get("x").is_none());
 }
 
 #[test]
 fn bulk_install_rejects_value_colliding_with_committed_type() {
     let storage = run_root_storage();
     let region = storage.brand();
-    // `dst` already holds `Foo` as a type; replaying a source whose `data` binds
-    // `Foo` as a value must be rejected — `try_bulk_install_from` routes through
-    // `try_apply` (`write_data == true`), so the cross-kind check fires.
-    let dst: Bindings<'_> = Bindings::new();
+    // `dst` already holds `x` as a type — a slot table, the one map that keys a type by a value
+    // name; replaying a source whose `data` binds `x` as a value must be rejected.
+    // `try_bulk_install_from` routes through `try_apply` (`write_data == true`), so the cross-kind
+    // check fires.
+    let dst: Bindings<'_> = Bindings::new_slot_table();
     let kt: &KType = region.alloc_ktype(KType::Number);
     dst.try_register_type(
-        "Foo",
+        "x",
         kt,
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
     )
     .expect("type register should succeed");
-    let src: Bindings<'_> = Bindings::new();
+    let src: Bindings<'_> = Bindings::new_slot_table();
     let val: &KObject = region.alloc_object(KObject::Number(7.0));
     src.try_bind_value(
-        "Foo",
+        "x",
         val,
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
@@ -374,8 +380,8 @@ fn bulk_install_rejects_value_colliding_with_committed_type() {
     let err = dst
         .try_bulk_install_from(&src)
         .expect_err("bulk-installing a value over a committed type must be rejected");
-    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    assert!(dst.data().get("Foo").is_none());
+    assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "x"));
+    assert!(dst.data().get("x").is_none());
 }
 
 #[test]
@@ -421,4 +427,52 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
     bindings.pending_remove("Foo");
     drop(guard);
     assert!(!bindings.pending_types().contains_key("Foo"));
+}
+
+/// The token-class partition: `types` and `data` are different universes, and a name's token class
+/// decides which one it belongs to. A value token may not name a type…
+#[test]
+fn value_token_may_not_bind_type_side() {
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let kt: &KType = region.alloc_ktype(KType::Number);
+    let error = match bindings.try_register_type(
+        "int_ord",
+        kt,
+        BindingIndex::BUILTIN,
+        StoredReach::for_test(None, false),
+    ) {
+        Err(e) => e,
+        Ok(_) => panic!("a value token names a value, not a type"),
+    };
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("is a value token")),
+        "expected the token-class partition error, got {error}",
+    );
+    assert!(bindings.types().get("int_ord").is_none());
+}
+
+/// …and a Type token may not name a value. Together these commit every name to exactly one
+/// universe, which is what makes a cross-kind collision unconstructible outside a slot table.
+#[test]
+fn type_token_may_not_bind_value_side() {
+    let storage = run_root_storage();
+    let region = storage.brand();
+    let bindings: Bindings<'_> = Bindings::new();
+    let val: &KObject = region.alloc_object(KObject::Number(7.0));
+    let error = match bindings.try_bind_value(
+        "IntOrd",
+        val,
+        BindingIndex::BUILTIN,
+        StoredReach::for_test(None, false),
+    ) {
+        Err(e) => e,
+        Ok(_) => panic!("a Type token names a type, not a value"),
+    };
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("is a Type token")),
+        "expected the token-class partition error, got {error}",
+    );
+    assert!(bindings.data().get("IntOrd").is_none());
 }

@@ -33,16 +33,17 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         .brand()
         .alloc_module(Module::new("M".to_string(), child));
     foreign_scope.register_type(
-        "T".to_string(),
+        "Ty".to_string(),
         KType::signature(SigSource::SelfOf(module), Vec::new()),
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
     );
-    let foreign_hit =
-        match foreign_scope.resolve_type_identifier(&TypeIdentifier::leaf("T".to_string()), None) {
-            TypeResolution::Done(hit) => hit,
-            _ => panic!("expected TypeResolution::Done for a registered type"),
-        };
+    let foreign_hit = match foreign_scope
+        .resolve_type_identifier(&TypeIdentifier::leaf("Ty".to_string()), None)
+    {
+        TypeResolution::Done(hit) => hit,
+        _ => panic!("expected TypeResolution::Done for a registered type"),
+    };
     let produced: Sealed<CarriedFamily, CarrierWitness> =
         Sealed::seal(foreign_scope.resident_type_carrier(foreign_hit.kt, foreign_hit.stored));
 
@@ -59,10 +60,10 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     // point (its `Rc::clone(&foreign)`) would mask the later `drop(foreign)` check below —
     // `scope`'s minted arena set, not this envelope, must be what keeps `foreign` alive from here.
     drop(cell);
-    scope.register_type("T".to_string(), kt, BindingIndex::BUILTIN, stored);
+    scope.register_type("Ty".to_string(), kt, BindingIndex::BUILTIN, stored);
 
     // Drive the exact surface the fixed splice arm uses.
-    let hit = match scope.resolve_type_identifier(&TypeIdentifier::leaf("T".to_string()), None) {
+    let hit = match scope.resolve_type_identifier(&TypeIdentifier::leaf("Ty".to_string()), None) {
         TypeResolution::Done(hit) => hit,
         _ => panic!("expected TypeResolution::Done for a registered type"),
     };

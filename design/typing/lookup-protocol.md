@@ -73,9 +73,18 @@ maps — `data` (values), `types` (type-name → `&KType`), `functions`
 [`BindKind`](../../src/machine/core/bindings.rs) — `Value` or `Type` —
 recording which language the forward reference resolves in),
 `pending_overloads` (in-flight bucket-keyed binders). The `data`/`types`
-split is **structural, not conventional**: every value write path rejects a
+split is **structural, not conventional**, and it is enforced twice over. First by
+**token class**: `Bindings::partition_guard` refuses a value token entering `types` and a
+Type token entering `data`, so a name is committed to one universe by its spelling alone,
+before any binding reaches it (see
+[tokens.md § Token class is a binding rule](tokens.md#token-class-is-a-binding-rule-not-just-a-lexical-one)
+and [elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)). Second by
+**cross-kind exclusion**: every value write path rejects a
 name already committed to `types`, and every type write path rejects one
-already in `data` (a `Rebind` either way), so one name can never hold both a
+already in `data` (a `Rebind` either way). The token-class gate makes the second
+unreachable in an ordinary scope — a name that cannot cross cannot collide — so the collision
+check earns its keep in the one map that legitimately mixes classes, a SIG body's slot table.
+One name can never hold both a
 value and a type, and a lookup can never return the wrong kind. `bind_value`
 and `register_function` remove their own *matching-kind* placeholder before
 inserting — a value write clears only a `BindKind::Value` placeholder, a type
@@ -207,9 +216,8 @@ a `Rebind` at any scope depth — never a shadow, never a merge:
   rejected — [`register_type_upsert`](../../src/machine/core/scope.rs) and
   [`register_user_type_delivered`](../../src/machine/core/scope.rs) consult
   [`Bindings::has_builtin_type`](../../src/machine/core/bindings.rs) on the root.
-  A `MODULE` binds value-side but its name is Type-classed, so
-  [`Scope::bind_module`](../../src/machine/core/scope.rs) runs the same consult and
-  raises the same `Rebind` — builtins are unshadowable in *either* channel.
+  Builtins are unshadowable in *either* channel: a value bind colliding with a
+  committed type name is a `Rebind` too, through the same cross-kind exclusion.
 - A user *FN / FUNCTOR* overload whose untyped signature key collides with a builtin
   dispatch bucket is rejected rather than joining it —
   [`Scope::register_function`](../../src/machine/core/scope.rs) consults

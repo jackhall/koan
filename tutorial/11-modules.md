@@ -6,12 +6,13 @@ how it supports generic, reusable components.
 
 ## Declaring and reading a module
 
-`MODULE <Name> = (<body>)` declares a module. The body is a sequence of `LET`
-bindings; read a member back with the `.` operator:
+`MODULE <name> = (<body>)` declares a module. A module is a *value*, so its name
+is a plain lowercase identifier — `geometry`, not `Geometry`. The body is a
+sequence of `LET` bindings; read a member back with the `.` operator:
 
 ```koan
-MODULE Geometry = (LET pi = 3.14159)
-PRINT Geometry.pi
+MODULE geometry = (LET pi = 3.14159)
+PRINT geometry.pi
 ```
 
 ```text
@@ -24,12 +25,12 @@ members as separate statements — without them, the indented lines would flatte
 into a single expression:
 
 ```koan
-MODULE Origin = (
+MODULE origin = (
   LET x = 0
   LET y = 0
 )
-PRINT Origin.x
-PRINT Origin.y
+PRINT origin.x
+PRINT origin.y
 ```
 
 ```text
@@ -40,10 +41,10 @@ PRINT Origin.y
 Modules nest, and `.` chains through them:
 
 ```koan
-MODULE Outer =
-  MODULE Inner =
+MODULE outer =
+  MODULE inner =
     LET value = 7
-PRINT Outer.Inner.value
+PRINT outer.inner.value
 ```
 
 ```text
@@ -53,12 +54,23 @@ PRINT Outer.Inner.value
 Reading a member that doesn't exist is an error:
 
 ```koan
-MODULE Geometry = (LET pi = 3.14159)
-Geometry.tau
+MODULE geometry = (LET pi = 3.14159)
+geometry.tau
 ```
 
 ```text
-error: shape error: module `Geometry` has no member `tau`
+error: shape error: module `geometry` has no member `tau`
+```
+
+Naming a module with a capitalized token is an error: capitalized names are
+reserved for *types*, and a module is a value.
+
+```koan
+MODULE Geometry = (LET pi = 3.14159)
+```
+
+```text
+error: shape error: module `Geometry` is named with a Type token, but a module is a value — the Type-token namespace names what can type a field. Name it snake_case, e.g. `geometry`
 ```
 
 ## Signatures
@@ -82,9 +94,9 @@ are two forms, written with the `:!` and `:|` operators:
 
 ```koan
 SIG HasLabel = (VAL label :Str)
-MODULE Widget = (LET label = "button")
-LET Named = (Widget :! HasLabel)
-PRINT Named.label
+MODULE widget = (LET label = "button")
+LET named = (widget :! HasLabel)
+PRINT named.label
 ```
 
 ```text
@@ -103,26 +115,27 @@ If the module is missing a required member, ascription fails:
 
 ```koan
 SIG HasLabel = (VAL label :Str)
-MODULE Plain = (LET other = 1)
-Plain :! HasLabel
+MODULE plain = (LET other = 1)
+plain :! HasLabel
 ```
 
 ```text
 error: shape error: module does not satisfy signature `HasLabel`: missing member `label`
 ```
 
-The result of an ascription is itself a module, bound to a type name (`Named`
-above) — capitalized with a lowercase letter, like every type.
+The result of an ascription is itself a module, so it binds under a lowercase
+name (`named` above) like every other module. A *signature* name, by contrast, is
+capitalized (`HasLabel`) — a signature is a type.
 
 ## Opening a module with `USING`
 
-`USING <Module> SCOPE (<body>)` runs the body with the module's members brought
-directly into scope, so you can name them without the `Module.` prefix:
+`USING <module> SCOPE (<body>)` runs the body with the module's members brought
+directly into scope, so you can name them without the `<module>.` prefix:
 
 ```koan
-MODULE Greetings = (LET hello = "hi there")
+MODULE greetings = (LET hello = "hi there")
 PRINT
-  USING Greetings SCOPE (hello)
+  USING greetings SCOPE (hello)
 ```
 
 ```text
@@ -133,11 +146,11 @@ Functions defined in the module come into scope too, so their shapes dispatch
 inside the block:
 
 ```koan
-MODULE Doubling =
+MODULE doubling =
   LET dbl =
     FN (DOUBLE x :Number) -> Number = (x)
 PRINT
-  USING Doubling SCOPE (DOUBLE 21)
+  USING doubling SCOPE (DOUBLE 21)
 ```
 
 ```text

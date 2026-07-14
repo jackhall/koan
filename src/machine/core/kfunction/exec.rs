@@ -90,9 +90,9 @@ pub enum PerCallReturn<'step> {
 /// what lets a return type name a module living outside the captured region — the audit still
 /// refuses a borrow no evidence member, ambient coverage, or the destination itself covers.
 ///
-/// A bare module-valued parameter in return position (`-> er`) elaborates to the module's principal
-/// signature (`Signature { SelfOf }`), which homes here like any other region-borrowing type: slots
-/// and returns name signatures, so the contract is "a module satisfying `er`'s interface".
+/// A return naming a module's signature (`-> :(TYPE OF er)`) takes the delivered-carrier door below;
+/// this one serves a return that names a *type binding* (`-> er.Carrier`, `-> Er` for a
+/// signature-valued parameter), whose reach is the binding's own.
 pub(crate) fn home_resolved_return_type<'captured: 'a, 'a>(
     hit: &TypeHit<'_>,
     captured: &Scope<'captured>,

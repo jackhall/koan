@@ -39,7 +39,7 @@ boilerplate by hand for every step.
   mapping and qualification-after-import choices there shape what a
   natural stdlib layout looks like.
 - *Naming conventions for ordering / equality / hashing modules — open.*
-  `IntOrd`, `StringOrd`, `IntEq` — the canonical implicit modules users
+  `int_ord`, `string_ord`, `int_eq` — the canonical implicit modules users
   pass to functor applications. The shapes are constrained by the
   signature names in the stdlib's collection functors; the surface form
   needs a deliberate convention.
@@ -55,7 +55,7 @@ boilerplate by hand for every step.
   a parallel surface.
 - *Applicative functor semantics — deferred to predicate typing.* Stage
   5's implicit resolution makes independent `(MakeSet)` call sites
-  resolve to the same `IntOrd` without users seeing it; under the
+  resolve to the same `int_ord` without users seeing it; under the
   generative-only semantics spec'd in
   [design/typing/functors.md](../../design/typing/functors.md), two
   such applications mint distinct Set types and the resulting sets

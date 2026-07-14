@@ -178,6 +178,27 @@ fn module_param_in_return_position_errors() {
     );
 }
 
+/// A parameter's name picks its universe, not its argument: a Type-token parameter names a type, so
+/// handing it a module — a value — is refused by the binding maps' token-class partition. The
+/// module-valued parameter spells snake_case.
+#[test]
+fn type_token_param_cannot_take_a_module() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG Ordered = (VAL compare :Number)\n\
+         MODULE int_ord = (LET compare = 7)\n\
+         FN (USE_ORD Er :Ordered) -> Number = (1)",
+    );
+    let error = run_one_err(scope, parse_one("USE_ORD int_ord"));
+    assert!(
+        matches!(&error.kind, KErrorKind::ShapeError(msg)
+            if msg.contains("`Er` is a Type token")),
+        "a module may not bind to a Type-token parameter, got {error}",
+    );
+}
+
 /// Type-language dispatch (`:(LIST OF int_ord)`) refuses the module value the same way a slot does:
 /// the `OF` type slot takes a type, and a module head resolves to a value.
 #[test]

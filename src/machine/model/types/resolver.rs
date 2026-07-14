@@ -119,27 +119,14 @@ pub fn elaborate_type_identifier<'a>(
         Some(NameLookup::Parked(id)) => return TypeResolution::Park(vec![id]),
         None => {}
     }
-    // Not a type binding. Consult the value side: a value-language hit only sharpens the miss
-    // message (an unknown name gets the unknown-name failure). The builtin-table fallback via
-    // `from_type_identifier` is tried first in each arm so fixture scopes that skip builtin
-    // registration still resolve builtin names. Slots and returns name *types*, so no value —
-    // module included — lowers to a type here: a module reaches type position only through
-    // `TYPE OF`, which yields its principal signature as an ordinary type value.
-    match el.scope.resolve_with_chain(name, el.chain.as_deref()) {
-        Some(NameLookup::Bound(_)) | Some(NameLookup::Parked(_)) => {
-            match KType::<'a>::from_type_identifier(t) {
-                Ok(kt) => TypeResolution::Done(kt),
-                Err(_) => TypeResolution::Unbound(format!(
-                    "`{name}` is value-language only — a type slot needs a type-language \
-                     binder (a builtin type, a `LET {name} = <type>` alias, or a signature). \
-                     For the type of a value, write `:(TYPE OF {name})`"
-                )),
-            }
-        }
-        None => match KType::<'a>::from_type_identifier(t) {
-            Ok(kt) => TypeResolution::Done(kt),
-            Err(msg) => TypeResolution::Unbound(msg),
-        },
+    // Not a type binding, and there is no value side to consult: the token-class partition
+    // ([`Bindings::partition_guard`](crate::machine::core::Bindings)) commits a Type token to the
+    // type universe, so a name reaching here can hold no value to layer a sharper miss over. What
+    // remains is the builtin table — tried last so a fixture scope that skips builtin registration
+    // still resolves builtin names — and then an unknown-name failure.
+    match KType::<'a>::from_type_identifier(t) {
+        Ok(kt) => TypeResolution::Done(kt),
+        Err(msg) => TypeResolution::Unbound(msg),
     }
 }
 

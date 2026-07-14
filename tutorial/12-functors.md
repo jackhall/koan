@@ -14,13 +14,13 @@ module that satisfies the parameter's signature:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-MODULE IntOrder = (LET compare = 7)
-LET IntOrderV = (IntOrder :! Ordered)
+MODULE int_order = (LET compare = 7)
+LET int_order_view = (int_order :! Ordered)
 FUNCTOR (MAKESET elem :Ordered) -> Module =
-  MODULE Built =
+  MODULE built =
     LET sample = (elem.compare)
-LET NumberSet = (MAKESET IntOrderV)
-PRINT NumberSet.sample
+LET number_set = (MAKESET int_order_view)
+PRINT number_set.sample
 ```
 
 ```text
@@ -30,7 +30,7 @@ PRINT NumberSet.sample
 `MAKESET` takes any module satisfying `Ordered` and builds a module around it,
 reading the argument's members with `.` just like any module. A signature slot is
 **structural**: any module whose own members satisfy `Ordered` is admitted, so
-`(MAKESET IntOrder)` on the raw module works too — ascription (`:!` / `:|`) is a
+`(MAKESET int_order)` on the raw module works too — ascription (`:!` / `:|`) is a
 way to *narrow* what the argument exposes, never a prerequisite for passing it.
 Each application is *generative* — it produces a fresh module distinct from every
 other application.
@@ -48,41 +48,53 @@ FUNCTOR (BADMAKE x :Ordered) -> Number = (5)
 error: shape error: FUNCTOR return-type slot must denote a module, signature, or functor; got `Number`
 ```
 
-## Modules in type position
+## Modules in type position: `TYPE OF`
 
-A module name is an ordinary value, and it may also head a *type*. Name a module
-parameter as the return type — `-> Elem` — and the contract reads "returns a
-module with `Elem`'s interface", resolved per call. Name a module as a slot type —
-`x :IntOrder` — and the slot accepts any module whose members satisfy
-`IntOrder`'s, the same structural test a signature slot runs. (A parameter you
-mean to name in type position needs a type-token name — `Elem`, not `elem` — the
-spelling module names take today.)
+A module is a value, so a module name never names a type on its own — `x :int_order`
+is not even valid syntax. To reach a module's *type*, ask for it: `TYPE OF <value>`
+yields the type a value reports for itself, and a module reports its **signature** —
+the interface its members add up to.
 
-Both forms work on a module a functor just built, not only on one declared up
-front:
+Write it in a slot to admit any module with that interface, or in a return type to
+say "returns a module with this argument's interface", resolved per call:
 
 ```koan
 SIG Ordered = (VAL compare :Number)
-MODULE IntOrder = (LET compare = 7)
-FUNCTOR (MAKESET Elem :Ordered) -> Module =
-  MODULE Built =
+MODULE int_order = (LET compare = 7)
+FUNCTOR (MAKESET elem :Ordered) -> Module =
+  MODULE built =
     LET compare = 3
-LET NumberSet = (MAKESET IntOrder)
-FN (ECHO Elem :Ordered) -> Elem = (Elem)
-LET Same = (ECHO NumberSet)
-PRINT Same.compare
-PRINT (ECHO IntOrder)
+LET number_set = (MAKESET int_order)
+FN (ECHO elem :Ordered) -> :(TYPE OF elem) = (elem)
+LET same = (ECHO number_set)
+PRINT same.compare
+PRINT (ECHO int_order)
 ```
 
 ```text
 3
-IntOrder
+int_order
 ```
 
 `ECHO` returns whichever module it was handed, and the returned module stays live
-after the call — `Same.compare` reads `3` out of the module `MAKESET` built. A
-dotted head projects instead of naming the whole interface: `-> Elem.Carrier` as a
-return type resolves to the argument module's `Carrier` type member.
+after the call — `same.compare` reads `3` out of the module `MAKESET` built. The
+slot is **structural**: `m :(TYPE OF int_order)` admits any module whose members
+satisfy `int_order`'s, the same test a signature slot runs. A dotted head projects
+a single member instead of naming the whole interface: `-> elem.Carrier` as a return
+type resolves to the argument module's `Carrier` type member.
+
+`TYPE OF` is not module-specific — it reads any value's type, so `TYPE OF 5` is
+`Number`. Naming a value directly where a type belongs is an error, and the message
+points at the spelling above:
+
+```koan
+SIG Ordered = (VAL compare :Number)
+FN (ECHO elem :Ordered) -> elem = (elem)
+```
+
+```text
+error: shape error: FN return-type slot names a type, but `elem` is a value. For the type of a value — a module-valued parameter, say — write `-> :(TYPE OF elem)`
+```
 
 ## Specializing signatures with `WITH`
 
@@ -96,12 +108,12 @@ SIG Ordered = (
   VAL compare :Carrier
 )
 LET IntOrdered = (Ordered WITH {Carrier = Number})
-MODULE Ints = (
+MODULE ints = (
   LET Carrier = Number
   LET compare = 5
 )
-LET View = (Ints :! IntOrdered)
-PRINT View.compare
+LET view = (ints :! IntOrdered)
+PRINT view.compare
 ```
 
 ```text

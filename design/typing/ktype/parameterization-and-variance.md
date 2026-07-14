@@ -19,7 +19,7 @@ parse time. (The one structurally-recognized sigil is `:{…}`, which emits a
 first-class `ExpressionPart::RecordType` instead — see
 [type-language-via-dispatch.md § Record-type sigil](../type-language-via-dispatch.md#record-type-sigil).)
 Shape decisions (keyworded `:(LIST OF Number)`, user-functor
-`:(MyFunctor {T = IntOrd})`, etc.) are the dispatcher's responsibility — the
+`:(MyFunctor {T = int_ord})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../../src/parse/frame.rs) (`Frame::TypeExpr`);
@@ -74,7 +74,7 @@ is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 **Return admission splits on whether the value's return is resolved or
 deferred.** A `Resolved` value return admits covariantly as above — `sig_ret ==
 ret || sig_ret ≺ ret`. A *deferred* value return (a per-call-elaborated functor
-return like `-> Er`) carries no resolved `KType`, so `function_compat` admits it
+return like `-> :(TYPE OF er)`) carries no resolved `KType`, so `function_compat` admits it
 by **syntactic equality of its surface shadow**: an `Any` slot admits any
 deferred return; a slot whose `ret` is a `KType::DeferredReturn` carrier admits
 iff its `DeferredReturnSurface` shadow equals the candidate's; any resolved slot

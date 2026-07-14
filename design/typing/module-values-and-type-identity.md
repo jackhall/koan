@@ -1,11 +1,10 @@
 # Module values and type identity
 
-The end-state design of koan's module representation and type identity, in five facets that
-form one picture: modules are values typed by signatures; satisfaction is structural
-subtyping against a creation-time principal signature; `:Module` is the empty signature;
-type identity is a content-hash digest; subtype outcomes are memoized on that digest.
-[Open work](#open-work) lists the implementing roadmap items; until they ship,
-[modules.md](modules.md) and [ktype/README.md](ktype/README.md) describe current behavior.
+Koan's module representation and type identity, in five facets that form one picture:
+modules are values typed by signatures; satisfaction is structural subtyping against a
+creation-time principal signature; `:Module` is the empty signature; type identity is a
+content-hash digest; subtype outcomes are memoized on that digest. [modules.md](modules.md)
+and [ktype/README.md](ktype/README.md) carry the mechanism each facet rests on.
 
 ## Modules are values
 
@@ -17,7 +16,9 @@ the Type-token namespace exactly the set of things that type fields. Member acce
 over the value. A type expression whose head names a module — e.g. a return type `er.Type`,
 where `er` is a module-valued parameter — resolves by reading the named type member off the
 module value. A concrete module's identity is never a
-slot or return type — slots and returns name signatures.
+slot or return type — slots and returns name signatures, and a module's own signature is
+named `:(TYPE OF int_ord)` (see
+[modules.md § Modules in type position](modules.md#modules-in-type-position-type-of)).
 
 ## Signatures are the types of modules
 
@@ -70,7 +71,3 @@ verdicts never invalidate; LRU eviction or a cold thread costs a re-walk, never 
 answer, and no verdict is observable to a koan program. The mechanism, capacity, and the
 insert guard for pre-seal pointer transients live in
 [type-identity.md § The memo registry](type-identity.md#the-memo-registry).
-
-## Open work
-
-- [Module naming flip](../../roadmap/type_memos/module-naming-flip.md)

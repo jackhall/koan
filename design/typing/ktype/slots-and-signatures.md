@@ -21,7 +21,7 @@ than at the slot kind.
 A type-position value whose surface `TypeName` doesn't resolve at
 `ExpressionPart::resolve_for` time — a bare-leaf name outside
 [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)'s
-builtin table (`Point`, `IntOrd`, `MyList`, or an unknown name like
+builtin table (`Point`, `Ordered`, `MyList`, or an unknown name like
 `SomeWeirdName`) — rides through bind as the
 [`KType::Unresolved(TypeName)`](../../../src/machine/model/types/ktype.rs)
 transient in the `Type` arm rather than a resolved `&KType`. See

@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The builtins wired into the default scope include `LET`, `PRINT`, and `FN`; the nominal-type declarators `UNION`, `NEWTYPE`, and `RECURSIVE TYPES`; the control forms `MATCH <value> -> :<Type> WITH (<branches>)`, `TRY (<expr>) -> :<Type> WITH (<branches>)`, and `CATCH`; the module forms `MODULE`, `SIG`, `FUNCTOR`, `USING`, the `:!` / `:|` ascription operators, and `TYPE OF <value>` (a value's own type — a module's is its signature); the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [expressions and parsing](design/expressions-and-parsing.md)); and the `#` / `$` quote and eval sigils — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN (args) -> Out)`, `Type`, `Module`, `Signature`, `KExpression`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -66,7 +66,7 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 1. [quotes.rs](src/parse/quotes.rs) — replace string-literal contents with placeholders so later passes don't re-tokenize them.
 2. [whitespace.rs](src/parse/whitespace.rs) — turn indentation-based block structure into parenthesized form.
 3. [expression_tree.rs](src/parse/expression_tree.rs) — walk the paren-delimited string into a nested expression tree.
-4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `IntOrd`), identifier, or compound (member access, indexing, prefix/suffix operators).
+4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `Ordered`), identifier, or compound (member access, indexing, prefix/suffix operators).
 5. [operators.rs](src/parse/operators.rs) — table of compound-token operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
 The output is one [`KExpression`](src/machine/model/ast.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
@@ -157,8 +157,9 @@ src/
 │   ├── branch_walk.rs        MATCH's by-type arm walker + TRY's by-tag walker + shared arm-tail machinery
 │   ├── result.rs             Result tagged-union builtin
 │   ├── parameterized_types.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           WITH — infix signature specialization
+│   ├── type_ops.rs           WITH — infix signature specialization; TYPE OF — value → type
 │   ├── type_ops/with.rs               WITH — abstract-slot pinning + manifest fixity
+│   ├── type_ops/type_of.rs            TYPE OF — a value's own type (a module's is its signature)
 │   ├── union.rs              UNION — sum-type declaration (dissolves to one newtype per variant, joined by an anonymous union)
 │   ├── type_union.rs         `|` — the `:(A | B)` anonymous-union type constructor
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields

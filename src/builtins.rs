@@ -76,7 +76,7 @@ pub(crate) fn type_part_binder_name(
 }
 
 /// Shared [`BinderNameFn`] for value-binder builtins (`LET <name> = …`, `MODULE <name> = …`): the
-/// binder name is `parts[1]`'s `Identifier` token. The `Type`-part twin of
+/// binder name is `parts[1]`'s `Identifier` token. The Identifier-part twin of
 /// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
 /// and the submit-time placeholder is tagged `Value` xor `Type` to match where the bind lands.
 pub(crate) fn identifier_part_binder_name(

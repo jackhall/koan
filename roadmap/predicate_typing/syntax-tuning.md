@@ -28,7 +28,7 @@ breaks no existing programs.
 - *Surveyed sugar candidates — deferred.* Block-scoped binding (apply a
   chosen implicit to many calls in a region), module-level priority (one
   module declared canonical, others warn), selective imports (`use
-  mylib::sort except IntOrdReverse`). Selection deliberately deferred
+  mylib::sort except int_ord_reverse`). Selection deliberately deferred
   until stage 5's placeholder syntax has seen real use — pick from
   observed patterns, not from imagination.
 - *Explicit-application syntax — deferred.* Stage 5 ships a placeholder;
@@ -38,7 +38,7 @@ breaks no existing programs.
 - *Witness type encoding — decided per [design/typing/functors.md § Type expressions and constraints](../../design/typing/functors.md#type-expressions-and-constraints).*
   The type constructor declares a module-kind slot whose value carries
   through type identity — a `Set` with `Elt` pinned to `Number` becomes
-  `(Set WITH {Elt = Number, Ord = IntOrd})` when `IntOrd` is the
+  `(Set WITH {Elt = Number, Ord = :(TYPE OF int_ord)})` when `int_ord` is the
   implicit used. Distinct module values means distinct types means
   cannot mix. Type inference must elide the module-kind slot in source
   so users only write it when they want.

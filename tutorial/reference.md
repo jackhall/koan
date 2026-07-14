@@ -54,15 +54,16 @@ the link in each section to the relevant chapter.
 
 | Form                                             | Meaning                            |
 |--------------------------------------------------|------------------------------------|
-| `MODULE <Name> = (<bindings>)`                   | Group bindings under a name.       |
-| `<Module>.<member>`                              | Read a module member.              |
-| `SIG <Name> = (VAL <name> :<Type> ...)`          | Declare a signature (a module's type). |
+| `MODULE <name> = (<bindings>)`                   | Group bindings under a name (snake_case — a module is a value). |
+| `<module>.<member>`                              | Read a module member.              |
+| `SIG <Name> = (VAL <name> :<Type> ...)`          | Declare a signature (a module's type; Type-token name). |
 | `VAL <name> :<Type>`                             | A required value member, inside a `SIG`. |
-| `<Module> :! <Sig>`                              | Transparent ascription.            |
-| `<Module> :\| <Sig>`                             | Opaque ascription.                 |
-| `USING <Module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
+| `<module> :! <Sig>`                              | Transparent ascription.            |
+| `<module> :\| <Sig>`                             | Opaque ascription.                 |
+| `USING <module> SCOPE (<body>)`                  | Run a body with a module's members in scope. |
 | `FUNCTOR (<KW> <p> :<Sig>) -> <Type> = (<body>)` | A module parameterized by a module. |
 | `<Sig> WITH {<Slot> = <Type>}`                   | Specialize a signature by pinning a type slot. |
+| `TYPE OF <value>`                                | The type a value reports for itself; a module's is its signature. |
 
 ## Type expressions — see [2](02-values-and-types.md)
 

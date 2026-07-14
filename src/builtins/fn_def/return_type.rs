@@ -158,7 +158,8 @@ fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdi
     }
 }
 
-/// Bare-leaf `er` matching a parameter name admits iff that parameter's declared
+/// Bare-leaf `Er` (a Type token — the only part kind a bare return leaf can be) matching a
+/// parameter name admits iff that parameter's declared
 /// `KType` is type-denoting (e.g. `:Ordered`, `:Module`). A `Functor`-headed
 /// parameterized form admits via the type-position sigil; other shapes are rejected
 /// so the diagnostic surfaces at the FUNCTOR site.

@@ -21,7 +21,7 @@ system.
    compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>` — or
    alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`),
    type name (uppercase-leading with at least one lowercase — `Number`,
-   `KFunction`, `IntOrd`), identifier, or compound (member access, indexing,
+   `KFunction`, `Ordered`), identifier, or compound (member access, indexing,
    prefix/suffix operators). Tagging arbitrary symbol tokens as keywords is what
    lets a post-parse detector recognize chainable operators (see the
    `OperatorChain` shape below); the builtin triggers `.`/`?`/`!` keep their
@@ -104,7 +104,7 @@ pass-through lane (`BareIdentifier`, `BareTypeLeaf`, `SigiledTypeExpr`,
 one of the **head-position call shapes**, each routing to its own calling
 convention:
 
-- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`).
+- `TypeCall` — a leaf `Type` head (`MyStruct {x = 1}`, `MyFunctor {T = int_ord}`).
   The name resolves synchronously to a type identity and branches into
   construction or functor application.
 - `FunctionValueCall` — a lowercase `Identifier` head (`f {x = 7}`). The head
@@ -179,7 +179,7 @@ The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../src/machine/model/ast.rs)
 — no inner-shape recognition runs at parse time. Shape decisions
-(keyworded `:(LIST OF Number)`, user-functor `:(MyFunctor {T = IntOrd})`,
+(keyworded `:(LIST OF Number)`, user-functor `:(MyFunctor {T = int_ord})`,
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)

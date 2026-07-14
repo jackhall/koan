@@ -9,27 +9,32 @@ fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())
 }
 
-/// A Type-class leaf bound only in the value language reports the layering
-/// vocabulary, not an unknown-name miss
-/// (see [design/typing/functors.md](../../../../../design/typing/functors.md)).
+/// A Type token cannot name a value — the binding maps enforce the token-class partition — so a
+/// Type-class leaf that names no type is an ordinary unknown-name miss, with no value side to
+/// consult. The bind that would set up the old "value-language only" layering is itself rejected.
 #[test]
-fn value_language_leaf_names_layering() {
+fn type_token_cannot_bind_value_side() {
     use crate::machine::model::values::KObject;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    scope
+    let error = scope
         .bind_value(
             "Gee".into(),
             region.brand().alloc_object(KObject::Number(7.0)),
             BindingIndex::BUILTIN,
             StoredReach::for_test(None, false),
         )
-        .expect("bind_value");
+        .expect_err("a Type token names a type; it may not bind a value");
+    assert!(
+        matches!(&error.kind, crate::machine::KErrorKind::ShapeError(msg)
+            if msg.contains("`Gee` is a Type token")),
+        "expected the token-class partition error, got {error}",
+    );
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("Gee")) {
         TypeResolution::Unbound(msg) => assert!(
-            msg.contains("value-language only") && msg.contains("Gee"),
-            "expected a value-language layering message naming `Gee`, got: {msg}",
+            msg.contains("Gee"),
+            "expected an unknown-name miss naming `Gee`, got: {msg}",
         ),
         other => panic!("expected Unbound, got {:?}", other),
     }

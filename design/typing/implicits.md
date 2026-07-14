@@ -21,10 +21,10 @@ module language itself.
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs :(LIST OF Mo.Type) {Mo: Ordered}) -> :(LIST OF Mo.Type) = (...))
+LET sort = (FN (SORT xs :(LIST OF mo.Type) {mo: Ordered}) -> :(LIST OF mo.Type) = (...))
 ```
 
-At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
+At a call site `(SORT [3, 1, 2])`, the compiler infers `mo.Type = Number`,
 searches in scope for a module satisfying
 `(Ordered WITH {Type = Number})`, and inserts it. Searching is
 **lexical**: the candidate set is the implicit modules defined in the current
@@ -107,9 +107,9 @@ sidecar generator registry.
 
 **Generators compose through functor application.** A functor body that
 constructs the result module's `gen` from the parameter's `gen` —
-`MakeSet(Er)`'s `gen` builds set samples by drawing from `Er.gen` — gives
+`MakeSet(er)`'s `gen` builds set samples by drawing from `er.gen` — gives
 the composed module its generator mechanically. Composition is a
-module-language property; the engine just calls `Mo.gen` like any other
+module-language property; the engine just calls `mo.gen` like any other
 operation.
 
 The **property-testing engine** is a Rust-side subsystem of the compiler,
@@ -146,8 +146,8 @@ counterexample-bearing error:
 
 ```
 error: ambiguous implicit ORDERED with type t = Number — and the candidates disagree
-  IntOrd.compare(5, 3) = -1
-  IntOrdReverse.compare(5, 3) = +1
+  int_ord.compare(5, 3) = -1
+  int_ord_reverse.compare(5, 3) = +1
   these modules are not behaviorally equivalent; pick one explicitly
 ```
 
@@ -170,7 +170,7 @@ end
 
 When stronger guarantees are required, **witness types** (an opt-in feature
 in the syntax-tuning stage) reflect the implicit's identity in the abstract
-type itself — `Set<Number, IntOrd>` and `Set<Number, IntOrdReverse>` become
+type itself — `Set<Number, int_ord>` and `Set<Number, int_ord_reverse>` become
 distinct types that cannot mix. Ergonomic but verbose; a tool for the cases
 where probabilistic coherence isn't enough.
 

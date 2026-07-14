@@ -22,7 +22,7 @@ A **structure** (declared with `MODULE`) bundles type definitions, values,
 and functions:
 
 ```
-MODULE IntOrd = ((LET Type = Number) (LET compare = (FN ...)))
+MODULE int_ord = ((LET Type = Number) (LET compare = (FN ...)))
 ```
 
 A **signature** (declared with `SIG`) is a module type — an interface
@@ -32,14 +32,26 @@ specifying what a structure must contain:
 SIG Ordered = ((TYPE Type) (VAL compare :(FN (x :Type, y :Type) -> Number)))
 ```
 
-Module and signature names use the **Type-token** spelling: first character
-ASCII-uppercase plus at least one lowercase character (`IntOrd`, `Ordered`,
-`MakeSet`). Abstract types declared inside a signature use the same shape —
-the convention is `Type` for the principal abstract type, with additional
-abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed.
-The token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no
-lowercase) from `IntOrd` (Type token: uppercase-leading with at least one
-lowercase) is described in [tokens.md](tokens.md).
+A module is a value, so a module name is an **Identifier** token: snake_case,
+lowercase-leading (`int_ord`, `int_set`). A signature *is* a type, so a signature
+name is a **Type** token — uppercase-leading plus at least one lowercase character,
+with no suffix (`Ordered`, `Set`). The Type-token namespace is therefore exactly
+the set of names that can type a field. `MODULE int_ord = …` under a Type-token
+name is an error carrying the snake_case respelling
+([`module_def.rs`](../../src/builtins/module_def.rs)), as is a `LET` of a module RHS
+under one — and beneath both, the binding maps refuse the crossing outright
+([tokens.md § Token class is a binding rule](tokens.md#token-class-is-a-binding-rule-not-just-a-lexical-one)).
+The rule reaches **parameters** too: a parameter's name picks its universe, not the
+argument it is handed, so a module-valued parameter spells snake_case (`er`) exactly as a
+module does, and handing a module to a Type-token parameter is a bind-time error. The
+counterexample worth keeping in view is `Er :Signature` — a *signature*-valued parameter
+carries a type-language value, so it keeps the Type-token spelling.
+Abstract types declared inside a signature take the Type-token spelling
+too — the convention is `Type` for the principal abstract type, with additional
+abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed. The
+token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no lowercase)
+from `Ordered` (Type token) and `int_ord` (Identifier) is described in
+[tokens.md](tokens.md).
 
 SIG bodies accept three declarators, split by what a satisfying module must
 supply:
@@ -57,6 +69,16 @@ supply:
   naming an operation the signature requires, with the slot's declared type
   recorded explicitly rather than inferred from an example value.
 
+A SIG body's declarators all write **one table**: the decl scope's `types` map records each
+`TYPE <Name>` abstract member under its Type-token name *and* each `VAL <name> :<Type>` slot's
+declared type under the slot's **value** name.
+[`SigSchema`](../../src/machine/model/types/sig_schema.rs) splits it back apart — by
+representation for abstract-vs-manifest, by token class for type members vs value slots. This
+**slot table** is a schema, not a binding universe, and it is the sole exemption from the
+token-class partition that otherwise keeps value tokens out of the type map
+([elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)): a SIG body's
+`Bindings` is built by `Bindings::new_slot_table()`.
+
 `VAL` and `TYPE` are meaningful only inside a SIG body; outside it the
 declarator is unbound. The lowercase-name `(LET name = <value>)` form is
 rejected inside SIG bodies with a diagnostic directing to `VAL`. The implementation lives at
@@ -72,16 +94,17 @@ only by a whitespace gap in the visual rendering, expressing "you can see
 through this":
 
 ```
-LET IntOrdView     = (IntOrd :! Ordered)   -- transparent
-LET IntOrdAbstract = (IntOrd :| Ordered)   -- opaque
+LET int_ord_view     = (int_ord :! Ordered)   -- transparent
+LET int_ord_abstract = (int_ord :| Ordered)   -- opaque
 ```
 
-*Transparent ascription* (`:!`) checks that the structure satisfies the
-signature but leaves type definitions visible: `IntOrdView.Type` resolves to
-`Number` just as `IntOrd.Type` does. *Opaque ascription* (`:|`) additionally
-hides the representation: outside the ascription, `IntOrdAbstract.Type` is
+An ascription yields a module, so its `LET` name is snake_case like any other
+module binding. *Transparent ascription* (`:!`) checks that the structure satisfies
+the signature but leaves type definitions visible: `int_ord_view.Type` resolves to
+`Number` just as `int_ord.Type` does. *Opaque ascription* (`:|`) additionally
+hides the representation: outside the ascription, `int_ord_abstract.Type` is
 **not** the same type as `Number`, even though that's its underlying
-definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
+definition. Type checking forbids passing an `int_ord_abstract.Type` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
@@ -161,9 +184,9 @@ ATTR's `access_module_member`
 `slot_type_tags` entry, re-tags the read into a
 [`KObject::Wrapped`](../../src/machine/model/values/kobject.rs) carrier whose
 `type_id` is the per-call abstract identity — the same `Wrapped` variant NEWTYPE
-uses, distinguished by its `type_id`'s KType. So `(IntOrdView.zero)` reads as the
+uses, distinguished by its `type_id`'s KType. So `(int_ord_view.zero)` reads as the
 abstract `Type` (opaque), not the underlying `Number`, and a functor body
-`(FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero))` whose return
+`(FN (GET_ZERO er :WithZero) -> er.Type = (er.zero))` whose return
 type is the per-call abstract member admits the slot read. The carrier and its
 `type_id` are allocated in the *module's* region (declaration-stable), so the
 `type_id` outlives any lift or deep-clone of the read value into a per-call functor
@@ -193,21 +216,22 @@ carrier to reach `module.access_module_member(field)`. Member access is
 module's own `data` then `types` and returns the value-or-type in a single pass
 (the `data`/`types` cross-kind exclusion makes the result unambiguous), so a name
 that isn't a declared member is a missing member — it does **not** fall through to
-a builtin type or a lexically enclosing binding. `IntOrd.Type` therefore resolves
-only when `IntOrd` declares a `Type` member (the `LET Type = …` convention),
+a builtin type or a lexically enclosing binding. `int_ord.Type` therefore resolves
+only when `int_ord` declares a `Type` member (the `LET Type = …` convention),
 never to the builtin `Type` meta-type. Signature member access
 (`access_type_member` over `KType::Signature`) reads its decl scope the same way.
 
-`MODULE` binds **value-side**: finalize allocates the Object-arm module value and
+`MODULE` binds **value-side**: it takes an `Identifier` name part, installs a
+`BindKind::Value` placeholder, and finalize allocates the Object-arm module value and
 binds it into `bindings.data` through
 [`Scope::bind_module`](../../src/machine/core/scope.rs) — a fused door that derives
 the module's stored reach off its child scope directly (never by walking the built
-value) and allocates the value under that same evidence. `LET View = (IntOrd :|
+value) and allocates the value under that same evidence. `LET view = (int_ord :|
 Ordered)` binds a module RHS the same way: a module is a value, so it lands in
-`data` even under a Type-token name, and the `data` / `types` cross-kind exclusion
-keeps it out of `types`. A module-typed FN parameter binds value-side too, through
-the ordinary Object-arm parameter door. **No binding door installs a module into
-`bindings.types`**, and `KType` carries no module variant.
+`data`, and the `data` / `types` cross-kind exclusion keeps it out of `types`. A
+module-typed FN parameter binds value-side too, through the ordinary Object-arm
+parameter door. **No binding door installs a module into `bindings.types`**, and
+`KType` carries no module variant.
 
 `SIG` declarations still bind **type-side**: finalize installs
 `KType::Signature { sig, pinned_slots }` into `bindings.types` via
@@ -216,47 +240,63 @@ Ordered` signature alias routes through `register_type` against that entry. A
 signature identity rides the `Type` arm, surfaced from the type entry on demand by
 [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs).
 
-Module names spell as Type tokens ([tokens.md](tokens.md)), so the resolver ladder
-consults the **value** channel for them: a Type-token part whose value-side hit is a
-module resolves to the Object arm rather than the type channel —
-[`resolve_name_part`](../../src/machine/execute/dispatch.rs) for the overload-picker
-probe and the built argument cell, and
-[`bare_type_leaf`](../../src/machine/execute/dispatch/single_poll.rs) for a bare
-Type-token expression. These are explicitly-marked bridge arms; [module naming
-flip](../../roadmap/type_memos/module-naming-flip.md) retires Type-token module names
-and deletes them. ATTR's `body_module` reads its module receiver off the Object arm,
-so `IntOrd.Type` and `Er.Carrier` alike project off the module *value*; there is no
+A module name is an Identifier token, so the resolver ladder reads it on the
+**value** channel like any other value name: no ladder arm is keyed to "a Type token
+that turns out to name a module", and a module's value write clears no Type-kind
+placeholder. ATTR's `body_module` reads its module receiver off the Object arm, so
+`int_ord.Type` and `er.Carrier` alike project off the module *value*; there is no
 type-side module projection anywhere.
 
-### Module heads in type position
+### Modules in type position: `TYPE OF`
 
-A type expression whose head names a module resolves through the value channel. A
-*dotted* head projects the named type member off the module value (`IntOrd.Type` as
-an annotation head, `Er.Carrier` in a deferred return). A *bare* head lowers to the
-module's **principal signature** — `KType::Signature { sig: SigSource::SelfOf(m),
-pinned_slots: [] }`
-([`elaborate_type_identifier`](../../src/machine/model/types/resolver.rs)) — because
-slots and returns name signatures, and a module's self-sig is its type. Two
-consequences:
+A module name names no type. It is a value token, so a slot annotation `:int_ord`
+does not even lex — `:` takes a Type token, and the parse error names the
+replacement spelling. The one door from a module to type position is the `TYPE OF`
+builtin ([`type_ops/type_of.rs`](../../src/builtins/type_ops/type_of.rs)):
 
-- `-> Er`, where `Er` is a module-valued parameter, is a legal deferred return
-  meaning "returns a module satisfying `Er`'s interface". The per-call contract is
-  the argument module's self-sig, re-homed into the captured-scope region by
-  [`home_return_type`](../../src/machine/core/kfunction/exec.rs). The argument
-  module need not live in that region: the self-sig borrows the module's own
-  region, so the home is audited against the **stored reach of the parameter's
-  binding** — the delivered argument carrier's reach, which pins whatever region
-  minted the module. A FUNCTOR-produced module, minted in the functor's per-call
-  region, therefore rides a `-> Er` return like a root-bound one (see
+```
+FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)
+FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)
+LET SetType = (TYPE OF int_set)
+```
+
+`TYPE OF <value>` yields the type the value reports for itself (`KObject::ktype()`)
+as an ordinary type value — `TYPE OF 5` is `Number`, `TYPE OF xs` is
+`LIST OF Number` — so it is general over the value channel, not a module-specific
+form. Applied to a module it yields that module's **principal signature**
+(`KType::Signature { sig: SigSource::SelfOf(m), pinned_slots: [] }`), which is how a
+module reaches a slot, a return, or a `LET` type alias. Its `value` slot is
+`KType::Any`, which admits both channels, so a *type* argument reaches the body and
+is refused there with a diagnostic rather than falling through dispatch as a miss;
+an empty, unstamped container is refused too (no knowable element type). The result
+is built at the fold brand from the argument's own carrier, so the type it produces
+borrows exactly the region the value lives in — a module minted in a FUNCTOR's
+per-call region included.
+
+Three consequences:
+
+- `-> :(TYPE OF er)`, where `er` is a module-valued parameter, is a deferred return
+  meaning "returns a module satisfying `er`'s interface". The per-call contract is
+  the argument module's self-sig, homed into the captured-scope region against the
+  **delivered carrier** of the resolved return type
+  ([`home_delivered_return_type`](../../src/machine/core/kfunction/exec.rs)), whose
+  reach names every region that type borrows. The argument module need not live in
+  the captured region: a FUNCTOR-produced module, minted in the functor's per-call
+  region, rides the return like a root-bound one (see
   [per-call-region/lifecycle.md](../per-call-region/lifecycle.md)).
-- `x :IntOrd` is a **structural** slot: it admits any module whose self-sig
-  satisfies `IntOrd`'s, not only `IntOrd` itself. Admission runs the same
+- `m :(TYPE OF int_ord)` is a **structural** slot: it admits any module whose
+  self-sig satisfies `int_ord`'s, not only `int_ord` itself. Admission runs the same
   `sig_subtype` walk every signature slot runs, so ascription is never required.
+- `LET SetType = (TYPE OF int_set)` binds the self-sig as an ordinary type alias, on
+  the `types` entry, carrying the module's reach — so a later `:SetType` slot replays
+  a reach that still pins the module's region.
 
-The lowering is scoped to `TypeIdentifier` elaboration alone. In *type-language
-dispatch* (`:(LIST OF IntOrd)`) the head resolves to the module **value**, which a
-type slot refuses — a deliberate asymmetry, pinned by
-[`module_head_in_type_position`](../../src/builtins/fn_def/tests/functor/module_head_in_type_position.rs).
+A return slot naming a value directly (`-> er`) is an error rather than a silent
+widening: FN carries a value-named-return overload whose only job is to name the
+`:(TYPE OF er)` respelling, and a return-type elaboration miss is surfaced instead of
+falling back to `Any`. All of this is pinned by
+[`module_head_in_type_position`](../../src/builtins/fn_def/tests/functor/module_head_in_type_position.rs)
+and [`type_of/tests.rs`](../../src/builtins/type_ops/type_of/tests.rs).
 
 Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
@@ -307,12 +347,12 @@ implements this, memoizing each direction under the `SigSatisfies` relation.
 Module-typed bindings reuse the existing ascription operators:
 
 ```
-LET m = (IntOrd :! Ordered)   -- transparent: m.Type ≡ Number
-LET m = (IntOrd :| Ordered)   -- opaque:      m.Type is fresh
+LET m = (int_ord :! Ordered)   -- transparent: m.Type ≡ Number
+LET m = (int_ord :| Ordered)   -- opaque:      m.Type is fresh
 ```
 
 `:!` and `:|` are the typing primitives. There is no third
-`LET m: Ordered = IntOrd` form — it would express only the transparent
+`LET m: Ordered = int_ord` form — it would express only the transparent
 case and would be strictly less expressive than the operators that already
 exist.
 
@@ -330,12 +370,12 @@ elision layer that drops the manual argument is described in
 
 ## Block-scoped opening (`USING … SCOPE`)
 
-`(USING Module SCOPE (exprs))` evaluates the block with `Module`'s members in
-scope as bare names and returns the value of the last expression. `Module` is
+`(USING <module> SCOPE (exprs))` evaluates the block with the module's members in
+scope as bare names and returns the value of the last expression. The receiver is
 any module-valued expression, including a functor result opened inline. This is
 a value-level namespace open in expression position — distinct from a file-level
 import — so a region working against one instantiation writes `insert x s`
-instead of `IntOrd.insert x s`, stating the qualifier once.
+instead of `int_ord.insert x s`, stating the qualifier once.
 
 The block runs in a single *transparent* scope
 ([`Scope::child_transparent`](../../src/machine/core/scope.rs)) whose `outer` is

@@ -18,7 +18,7 @@ their declared keyword skeletons.
 :(MAP Str -> Number)
 :(FN (x :Number, y :Str) -> Bool)
 :(FUNCTOR (T :Ordered) -> Module)
-:(MyFunctor {T = IntOrd})
+:(MyFunctor {T = int_ord})
 :{x :Number, y :Str}
 ```
 
@@ -86,7 +86,7 @@ Symmetric with the function-type rule:
 `:(FUNCTOR (T :Ordered) -> Module)`. Parameter names round-trip into
 `KType::KFunctor { params, ret }`'s parameter `Record<KType>` the same
 way, and render back through `KType::name()`. FUNCTOR's capitalized
-`Type`-token parameter names (`Ty`, `Er`) are admitted by the
+`Type`-token parameter names (`Ty` for a `:Type` slot) are admitted by the
 field-list parser's `FieldNameKind::IdentifierOrType` policy. A `UNION`
 schema's variant tags go one step further — they *must* be capitalized
 `Type` tokens (`FieldNameKind::Type`), since a variant is itself a nominal type
@@ -187,8 +187,8 @@ the fields.
 `FUNCTOR MyFunctor (T :Ordered) = ...` binds `MyFunctor` to a
 `KFunction` carrier under both the value-side name and the keyword
 skeleton declared at `FUNCTOR` time. Applying the functor at any
-surface — value-side `(MyFunctor {T = IntOrd})`, sigiled
-`:(MyFunctor {T = IntOrd})` — passes one record literal whose fields
+surface — value-side `(MyFunctor {T = int_ord})`, sigiled
+`:(MyFunctor {T = int_ord})` — passes one record literal whose fields
 inherit the parameter names from the declaration. Symmetric with the
 value-side function-value call shape, which admits one record-literal
 part holding the named arguments.
@@ -216,13 +216,13 @@ inner expression's parts decide its shape:
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
   newtype, union, or `Result` head through its construction primitive
   (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) and a `KType::KFunctor { body: Some }` head
-  through functor application (`:(MyFunctor {T = IntOrd})`), both via the
+  through functor application (`:(MyFunctor {T = int_ord})`), both via the
   shared apply-a-callable tail.
 
 A single-part `:(...)` sigil wrapping the whole construction is the
 `SigiledTypeExpr` lane that tail-replaces with a `Dispatch` of the inner
 expression; a `:(...)` head *followed by* a call body
-(`:(MyFunctor {base = IntOrd})` as a head) is the `TypeHeadDeferred` lane,
+(`:(MyFunctor {base = int_ord})` as a head) is the `TypeHeadDeferred` lane,
 which evaluates the head to a type-shaped value and admits only a
 constructible type or a functor.
 
@@ -242,9 +242,9 @@ instance struct, plain function value, or a **module** — a module is a value)
 flowing out of `:(...)`
 reaches an `OfKind(Proper)` / `OfKind(Any)` / `OfKind(Signature)` slot
 and surfaces a standard `TypeMismatch`. That is why type-language dispatch
-(`:(LIST OF IntOrd)`) refuses a module head: only `TypeIdentifier` elaboration
-lowers a bare module head to its self-sig (see
-[modules.md § Module heads in type position](modules.md#module-heads-in-type-position)).
+(`:(LIST OF int_ord)`) refuses a module head: a module is a value and names no
+type, so it reaches type position only through `TYPE OF` (see
+[modules.md § Modules in type position](modules.md#modules-in-type-position-type-of)).
 The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 

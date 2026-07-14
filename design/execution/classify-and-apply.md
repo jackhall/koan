@@ -121,7 +121,7 @@ The rails the dispatch driver feeds:
     of that producer (see [Bare-name forward splice](scheduler.md#bare-name-forward-splice)),
     `UnboundName` falls through to the keyworded path so `value_lookup`'s body
     produces the structured error.
-  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `bare_type_leaf`
+  - `BareTypeLeaf` (`(Number)`, `(Ordered)`) — `bare_type_leaf`
     routes through the memoized,
     park-capable `Scope::resolve_type_identifier` bridge: a leaf naming an
     earlier still-finalizing binder parks on its producer and re-resolves
@@ -130,7 +130,7 @@ The rails the dispatch driver feeds:
     type. See
     [typing/elaboration.md § Layers](../typing/elaboration.md#layers)
     § Layer 4 for the shared resolver seam.
-  - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = IntOrd}`) —
+  - `TypeCall` (`MyStruct {x = 1}`, `MyFunctor {T = int_ord}`) —
     [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A
     `SetRef` identity is a `ResolvedCallable::Constructor`; a
@@ -173,7 +173,7 @@ The rails the dispatch driver feeds:
     the `Err` arm of a node result with the same structured wording the keyworded
     path produces.
   - `HeadDeferred` (`(pick) {x = 1}`) and `TypeHeadDeferred`
-    (`:(MyFunctor {base = IntOrd})`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
+    (`:(MyFunctor {base = int_ord})`) — [`HeadDeferredState`](../../src/machine/execute/dispatch/head_deferred.rs)
     sub-dispatches the head first (an Owned edge; the park/resume pair mirrors
     `CtorState`'s), then branches the resumed value's kind into a
     `ResolvedCallable`. `HeadDeferred` admits a function, functor, bound functor,
@@ -300,7 +300,7 @@ The rails the dispatch driver feeds:
   `Outcome::Continue` (via `dispatch::exec::invoke_continue`) whose frame
   placement installs the per-call cart and whose `work` re-decides via
   `dispatch::exec::invoke` on the next pop
-  (a wrap-slot-only call like `MAKESET IntOrd` resolves bare names in Step 4,
+  (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 4,
   leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
   the decide returns a `ParkThenContinue` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the

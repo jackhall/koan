@@ -127,8 +127,8 @@ system](typing/modules.md). Modular implicits
 ([stage 5](../roadmap/predicate_typing/modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
-each call site. `sort {Mo : ORDERED} (xs :(LIST OF Mo.t))` is an ordinary `FN`
-in the value language whose `Mo` is resolved by lexical implicit search rather
+each call site. `sort {mo : ORDERED} (xs :(LIST OF mo.t))` is an ordinary `FN`
+in the value language whose `mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
 ([typing/functors.md](typing/functors.md)) give the *module*
 language the analog of the higher-order story this doc covers — a module

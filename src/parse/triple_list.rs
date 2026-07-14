@@ -11,8 +11,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 /// Which token shapes are accepted as a field/parameter *name* by [`parse_pair_list`].
 ///
 /// STRUCT / record fields are lowercase user identifiers, so they require `Identifier`.
-/// FN / FUNCTOR parameters may be conventionally capitalized (`Ty`, `er`), which lexes
-/// as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
+/// FN / FUNCTOR parameters may be capitalized (`Ty`, `Er`) when they name a type or a
+/// signature value, which lexes as a `Type` token, so they opt into `IdentifierOrType`. UNION variant tags *are*
 /// types (`Some`, `Ok`) and so require `Type` — a lowercase tag is rejected. In every
 /// type-token case the name string is read via `TypeIdentifier::render()`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -45,7 +45,7 @@ pub fn parse_pair_list<'a, T>(
                 ExpressionPart::Identifier(s),
                 FieldNameKind::Identifier | FieldNameKind::IdentifierOrType,
             ) => s.clone(),
-            // Capitalized names (`Ty`, `er` params; `Some`, `Ok` variant tags) lex as
+            // Capitalized names (`Ty`, `Er` params; `Some`, `Ok` variant tags) lex as
             // `Type` tokens; admitted under `IdentifierOrType` (FN / FUNCTOR) and `Type`
             // (UNION tags), never for STRUCT / record fields.
             (ExpressionPart::Type(t), FieldNameKind::IdentifierOrType | FieldNameKind::Type) => {

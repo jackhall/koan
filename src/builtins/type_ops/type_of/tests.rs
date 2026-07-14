@@ -167,7 +167,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     run(
         scope,
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         FUNCTOR (MAKESET Er :Ordered) -> Module = \
+         FUNCTOR (MAKESET er :Ordered) -> Module = \
            (MODULE generated = ((LET Elt = Number) (LET zero = 3)))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET int_set = (MAKESET int_ord)\n\

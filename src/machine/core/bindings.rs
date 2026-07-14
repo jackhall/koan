@@ -241,6 +241,13 @@ impl BindingIndex {
 /// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
+    /// Whether this scope's `types` map is a **signature slot table** rather than a type-binding
+    /// universe. A SIG body records each `VAL <name> :Type` slot's declared type into `types` keyed
+    /// by the slot's *value* name, alongside its `TYPE <Name>` abstract members — one table that
+    /// [`SigSchema`](crate::machine::model::types::SigSchema) splits back apart by token class. That
+    /// is a schema, not a binding, so it is the one place a value token legitimately appears on the
+    /// type side, and the token-class partition ([`Self::partition_guard`]) stands down for it.
+    slot_table: bool,
     /// Each type entry stores its bound type, its lexical [`BindingIndex`], and its **reach** — the
     /// home-omitted foreign [`FrameSet`] the type borrows into. Empty for owned data (`Number`, a
     /// struct `SetRef`, an `AbstractType`); non-empty for a type borrowing a foreign region (a
@@ -292,7 +299,18 @@ type TypeMemoEntry<'a> = (&'a KType<'a>, StoredReach<'a>);
 
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
+        Self::with_role(false)
+    }
+
+    /// A SIG body's bindings: its `types` map is the signature's slot table (see
+    /// [`Self::slot_table`]).
+    pub fn new_slot_table() -> Self {
+        Self::with_role(true)
+    }
+
+    fn with_role(slot_table: bool) -> Self {
         Self {
+            slot_table,
             types: RefCell::new(HashMap::new()),
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
@@ -768,6 +786,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         reach: StoredReach<'a>,
     ) -> Result<ApplyOutcome, KError> {
+        self.partition_guard(name, BindKind::Type)?;
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
             Err(_) => return Ok(ApplyOutcome::Conflict),
@@ -890,6 +909,32 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
+    /// The token-class partition: `types` holds Type-token names, `data` holds value-token names, and a
+    /// name may not cross. The two maps are different universes — a Type token names something that can
+    /// type a field, a value token names something a field can hold — so a write whose name classifies
+    /// against the map it is entering is a hard error, not a convention. This is the single enforcement
+    /// point: every binder reaches its map through [`Bindings::try_apply`] /
+    /// [`Bindings::try_apply_type`], so no caller can bind across the line, and none needs its own check.
+    /// A keyword-class name (all-uppercase, no lowercase) is not a Type token, so a builtin's dispatch
+    /// registration passes the value-side gate. See [design/typing/tokens.md](../../../design/typing/tokens.md).
+    fn partition_guard(&self, name: &str, into: BindKind) -> Result<(), KError> {
+        let is_type_token = crate::parse::is_type_name(name);
+        match into {
+            // A signature's slot table keys its value slots by their value names; it is a schema,
+            // not a binding universe.
+            BindKind::Type if !is_type_token && self.slot_table => Ok(()),
+            BindKind::Type if !is_type_token => Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{name}` is a value token, so it names a value — a type binds under a Type token \
+                 (uppercase-leading with at least one lowercase letter)"
+            )))),
+            BindKind::Value if is_type_token => Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{name}` is a Type token, so it names a type — a value binds under a value token \
+                 (snake_case)"
+            )))),
+            _ => Ok(()),
+        }
+    }
+
     /// Shared write path for type-only bindings.
     /// `Conflict` is borrow contention; `Err(Rebind)` is semantic rejection.
     fn try_apply_type(
@@ -899,6 +944,7 @@ impl<'a> Bindings<'a> {
         index: BindingIndex,
         reach: StoredReach<'a>,
     ) -> Result<ApplyOutcome, KError> {
+        self.partition_guard(name, BindKind::Type)?;
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
             Err(_) => return Ok(ApplyOutcome::Conflict),
@@ -950,8 +996,9 @@ impl<'a> Bindings<'a> {
         // Cross-kind exclusion: a value name may not collide with a committed type — the
         // `data`/`types` partition is structural, not convention. Probe `types` first (borrow
         // order `types → functions → data`); a bare-`FN` registration (`write_data == false`)
-        // binds no value, so it is exempt.
+        // binds no value, so it is exempt from both this and the token-class gate.
         if write_data {
+            self.partition_guard(name, BindKind::Value)?;
             match self.types.try_borrow() {
                 Ok(types) => {
                     if types.contains_key(name) {

@@ -5,7 +5,7 @@ modules are first-class values
 ([`KObject::Module`](../../src/machine/model/values/kobject.rs)), signatures are
 first-class values ([`KType::Signature`](../../src/machine/model/types/ktype.rs)),
 and dispatch on `:(Signature Foo)` slots picks behavior by signature
-satisfaction. A user can write `(SORT IntOrd xs)` today — the witness
+satisfaction. A user can write `(SORT int_ord xs)` today — the witness
 module flows through `LET`, ATTR, and function calls like any other value.
 What stays verbose is the **witness argument itself**: every generic call
 site carries an extra module argument that's redundant given the other
