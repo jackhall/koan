@@ -9,8 +9,8 @@
 use crate::machine::execute::StepCarried;
 use crate::machine::model::types::SigSource;
 use crate::machine::model::types::{
-    abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members,
-    AbstractSource, KKind, NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
+    abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members, KKind,
+    NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
 };
 use crate::machine::model::values::{KObject, Module};
 use crate::machine::model::KType;
@@ -92,7 +92,7 @@ pub fn body_opaque<'a>(
                     }
                 }
                 _ => KType::AbstractType {
-                    source: AbstractSource::Module(new_module),
+                    source: new_module.scope_id(),
                     name: name.clone(),
                 },
             };
@@ -120,11 +120,7 @@ pub fn body_opaque<'a>(
             if crate::parse::is_type_name(&slot_name) {
                 continue;
             }
-            if let KType::AbstractType {
-                source: AbstractSource::Sig(_),
-                name: member,
-            } = kt
-            {
+            if let KType::AbstractType { name: member, .. } = kt {
                 if let Some(per_call) = tm.get(member) {
                     tags.push((slot_name, per_call.clone()));
                 }

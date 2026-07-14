@@ -241,8 +241,8 @@ impl BindingIndex {
 pub struct Bindings<'a> {
     /// Each type entry stores its bound type, its lexical [`BindingIndex`], and its **reach** — the
     /// home-omitted foreign [`FrameSet`] the type borrows into. Empty for owned data (`Number`, a
-    /// struct `SetRef`, an abstract member); non-empty for a type borrowing a foreign region (a
-    /// module-sourced `AbstractType`, a `Signature`). A carrier-oriented read
+    /// struct `SetRef`, an `AbstractType`); non-empty for a type borrowing a foreign region (a
+    /// `Signature`). A carrier-oriented read
     /// ([`Self::lookup_type_carrier`]) hands the reach back so the read witnesses the existing
     /// `&'a KType` in place from its stored reach, never re-deriving it by walking the value.
     /// Foreign-only (home-omitted) for the same cycle-safety rule as [`Self::data`].

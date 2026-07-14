@@ -3,7 +3,7 @@ use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{
-    AbstractSource, KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet, SigSource,
+    KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet, SigSource,
 };
 use crate::machine::model::KObject;
 use crate::machine::{BindingIndex, ScopeId};
@@ -29,7 +29,7 @@ fn member_type<'a>(
         .unwrap_or_else(|| panic!("member `{member}` must live in {sig_name}'s type table"))
 }
 
-/// `TYPE Elt` binds `AbstractType { source: Sig(decl_scope), name: "Elt" }`.
+/// `TYPE Elt` binds `AbstractType { source: <decl_scope id>, name: "Elt" }`.
 #[test]
 fn bare_type_binds_abstract_member() {
     let region = run_root_storage();
@@ -43,14 +43,13 @@ fn bare_type_binds_abstract_member() {
         other => panic!("Container must bind a Signature, got {other:?}"),
     };
     match member_type(scope, "Container", "Elt") {
-        KType::AbstractType {
-            source: AbstractSource::Sig(id),
-            name,
-        } => {
+        KType::AbstractType { source, name } => {
             assert_eq!(name, "Elt");
-            assert_eq!(id, sig.decl_scope().id);
+            assert_eq!(source, sig.decl_scope().id);
         }
-        other => panic!("Elt must be an abstract Sig-sourced member, got {other:?}"),
+        other => {
+            panic!("Elt must be an abstract member sourced at the SIG decl scope, got {other:?}")
+        }
     }
 }
 
@@ -110,16 +109,17 @@ fn val_slot_after_type_records_abstract_member() {
     let scope = run_root_silent(&region);
     run(scope, "SIG Container = ((TYPE Elt) (VAL item :Elt))");
     match member_type(scope, "Container", "item") {
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            name,
-        } => assert_eq!(name, "Elt"),
+        KType::AbstractType { source, name } => {
+            assert_eq!(name, "Elt");
+            assert_eq!(source, sig_decl_scope_id(scope, "Container"));
+        }
         other => panic!("item's declared type must be the abstract Elt, got {other:?}"),
     }
 }
 
 /// End-to-end: a module ascribed to a SIG with a `TYPE Elt` member mints a per-call
-/// `AbstractType { source: Module(view) }` for `Elt` in the view's `type_members`.
+/// `AbstractType` keyed on the view module's own `ScopeId` for `Elt` in its `type_members` — a
+/// distinct identity from the SIG-decl-time member it was threaded from.
 #[test]
 fn opaque_ascription_mints_module_abstract_for_type_member() {
     let region = run_root_storage();
@@ -133,11 +133,23 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
     let view = lookup_module(scope, "View");
     let elt = view.type_members.borrow().get("Elt").cloned();
     match elt {
-        Some(KType::AbstractType {
-            source: AbstractSource::Module(_),
-            name,
-        }) => assert_eq!(name, "Elt"),
-        other => panic!("Elt must mint a Module-sourced abstract type, got {other:?}"),
+        Some(KType::AbstractType { source, name }) => {
+            assert_eq!(name, "Elt");
+            assert_eq!(source, view.scope_id());
+            assert_ne!(source, sig_decl_scope_id(scope, "Container"));
+        }
+        other => panic!("Elt must mint an abstract type keyed on the view module, got {other:?}"),
+    }
+}
+
+/// The `ScopeId` a SIG's decl-time abstract members are sourced at.
+fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> ScopeId {
+    match scope.resolve_type(sig_name) {
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => sig.decl_scope().id,
+        other => panic!("{sig_name} must bind a Signature, got {other:?}"),
     }
 }
 

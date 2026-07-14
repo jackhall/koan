@@ -6,9 +6,9 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
-//! Lifetime parameter `'a`: the module/signature variants (`Signature`, `AbstractType`) hold
-//! `&'a Module<'a>` / `&'a ModuleSignature<'a>` region pointers; every other variant is owned
-//! data and ignores the parameter.
+//! Lifetime parameter `'a`: the `Signature` variant holds `&'a Module<'a>` /
+//! `&'a ModuleSignature<'a>` region pointers; every other variant is owned data and ignores the
+//! parameter.
 
 use super::kkind::KKind;
 use super::record::Record;
@@ -23,25 +23,6 @@ use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::values::{Module, ModuleSignature};
 use std::rc::Rc;
-
-/// Root of a [`KType::AbstractType`] identity. `Sig` carries the SIG decl_scope's id for a
-/// member named at SIG-declaration time (no `&Module` to project members off); `Module`
-/// carries the per-call opaque-ascription module so `Foo.Type` can project further members.
-/// `scope_id()` is the identity key both variants contribute to `AbstractType` equality.
-#[derive(Clone, Copy)]
-pub enum AbstractSource<'a> {
-    Sig(ScopeId),
-    Module(&'a Module<'a>),
-}
-
-impl<'a> AbstractSource<'a> {
-    pub fn scope_id(&self) -> ScopeId {
-        match self {
-            AbstractSource::Sig(id) => *id,
-            AbstractSource::Module(m) => m.scope_id(),
-        }
-    }
-}
 
 /// The source a [`KType::Signature`] draws its module-interface identity from — the three
 /// points of the module lattice. `Declared(s)` is a `SIG`-declared interface; `SelfOf(m)` is
@@ -239,15 +220,15 @@ pub enum KType<'a> {
         pinned_slots: Vec<(String, KType<'a>)>,
         digest: TypeDigest,
     },
-    /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
-    /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a
-    /// SIG-local `LET Carrier = ...` would otherwise collapse to the underlying type), `Module`
-    /// is the per-call mint `:|` produces (`Foo.Carrier`). Identity keys on
-    /// `(source.scope_id(), name)`, so two opaque ascriptions of the same source module with
-    /// the same abstract name compare equal, and a per-call module mint stays distinct from
-    /// the SIG-decl-time member it was threaded from.
+    /// Abstract type member named by a SIG slot or minted by opaque ascription. `source` is the
+    /// root scope the member is named against: a SIG decl_scope's id for the decl-time member
+    /// (bound when a SIG-local `LET Carrier = ...` would otherwise collapse to the underlying
+    /// type), or the per-call ascription module's id for the mint `:|` produces (`Foo.Carrier`).
+    /// Owned data — the variant holds no region pointer. Identity keys on `(source, name)`, so two
+    /// opaque ascriptions of the same source module with the same abstract name compare equal, and
+    /// a per-call module mint stays distinct from the SIG-decl-time member it was threaded from.
     AbstractType {
-        source: AbstractSource<'a>,
+        source: ScopeId,
         name: String,
     },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
@@ -435,8 +416,7 @@ impl<'a> KType<'a> {
 
     /// Variant-wise rebuild at `'static`. `Some` exactly when the rebuild is
     /// possible without a region borrow and without re-minting a shared set:
-    /// - `Signature` / `AbstractType { source: Module(_) }` / `KFunctor { body: Some(_) }`
-    ///   hold region pointers -> `None`.
+    /// - `Signature` / `KFunctor { body: Some(_) }` hold region pointers -> `None`.
     /// - `SetRef` / `RecursiveGroup` own their set by `Rc` (its content transport); `to_static`
     ///   declines rather than re-mint that shared allocation -> `None`, so such values take the
     ///   runtime-checked resident path instead. (Identity itself is the content digest, which a
@@ -500,17 +480,10 @@ impl<'a> KType<'a> {
             } if pinned_slots.is_empty() => Some(KType::empty_signature()),
             // Region pointers: a `Declared`/`SelfOf` source, or any non-empty pin set.
             KType::Signature { .. } => None,
-            KType::AbstractType {
-                source: AbstractSource::Sig(id),
-                name,
-            } => Some(KType::AbstractType {
-                source: AbstractSource::Sig(*id),
+            KType::AbstractType { source, name } => Some(KType::AbstractType {
+                source: *source,
                 name: name.clone(),
             }),
-            KType::AbstractType {
-                source: AbstractSource::Module(_),
-                ..
-            } => None,
             KType::ConstructorApply { ctor, args, .. } => {
                 let ctor = Box::new(ctor.to_static()?);
                 let mut static_args = Vec::with_capacity(args.len());
@@ -614,14 +587,8 @@ impl<'a> KType<'a> {
                         .iter()
                         .all(|(_, kt)| kt.resident_in_visiting(residence, visited))
             }
-            KType::AbstractType {
-                source: AbstractSource::Sig(_),
-                ..
-            } => true,
-            KType::AbstractType {
-                source: AbstractSource::Module(m),
-                ..
-            } => residence.owns_module(m),
+            // Owned data (a `ScopeId` plus a name) — no region pointer to audit.
+            KType::AbstractType { .. } => true,
             KType::ConstructorApply { ctor, args, .. } => {
                 ctor.resident_in_visiting(residence, visited)
                     && args
@@ -725,9 +692,8 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
 /// [`TypeDigest`] — one `u128` compare, no structural descent and no fallback: the
 /// digest is the truth. A member reference (`SetRef` / `RecursiveGroup`) goes through
 /// [`same_nominal`] (set-pointer fast path, else content digest + index). `AbstractType`, the
-/// remaining id-keyed variant, compares by its source's stable `scope_id()` plus its name, so
-/// two `AbstractType` values minted from the same source-and-name compare equal even when their
-/// `&Module` pointers differ.
+/// remaining id-keyed variant, compares by its source [`ScopeId`] plus its name, so two
+/// `AbstractType` values minted from the same source-and-name compare equal.
 impl<'a> PartialEq for KType<'a> {
     fn eq(&self, other: &Self) -> bool {
         use KType::*;
@@ -769,7 +735,7 @@ impl<'a> PartialEq for KType<'a> {
                     source: s2,
                     name: n2,
                 },
-            ) => s1.scope_id() == s2.scope_id() && n1 == n2,
+            ) => s1 == s2 && n1 == n2,
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             (Unresolved(a), Unresolved(b)) => a == b,
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
@@ -781,7 +747,7 @@ impl<'a> Eq for KType<'a> {}
 
 /// Manual `Hash`, kept consistent with the hand-written `PartialEq` above
 /// (`a == b` ⟹ `hash(a) == hash(b)`). The eight composite variants hash their stored content
-/// digest (one `u128`); `AbstractType` hashes its stable id (`source.scope_id()`) plus its
+/// digest (one `u128`); `AbstractType` hashes its stable source [`ScopeId`] plus its
 /// name. A member reference hashes its set's sealed digest (+ index), matching
 /// [`same_nominal`]'s digest path — falling back to `Rc::as_ptr` only in the pre-seal window,
 /// where the pointer path is also what settles equality. A set's hash therefore changes at
@@ -809,7 +775,7 @@ impl<'a> std::hash::Hash for KType<'a> {
             RecursiveGroup(set) => hash_set_identity(set, state),
             SetLocal(i) => i.hash(state),
             AbstractType { source, name } => {
-                source.scope_id().hash(state);
+                source.hash(state);
                 name.hash(state);
             }
             RecursiveRef(n) => n.hash(state),

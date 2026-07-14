@@ -5,7 +5,7 @@
 //! Two overloads share the keyword `TYPE`:
 //!
 //! - the bare form `TYPE Elt` binds a first-order abstract member as
-//!   [`KType::AbstractType`] `{ source: Sig(decl_scope), name }` — no witness, open for a
+//!   [`KType::AbstractType`] `{ source: <decl_scope id>, name }` — no witness, open for a
 //!   client to share via a `WITH` constraint;
 //! - the higher-kinded form `TYPE (Type AS Wrap)` binds an abstract type *constructor*,
 //!   mirroring the application surface `:(Number AS Wrap)` with the concrete argument replaced
@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::machine::execute::StepCarried;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{AbstractSource, KKind, NominalSchema, RecursiveSet};
+use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 
@@ -57,7 +57,7 @@ fn not_in_sig_body() -> KError {
 }
 
 /// Bind `kt` under `name` through the fused mint + alloc + register path, returning the bound
-/// type's resident carrier. `kt` is region-pure (a `Sig`-sourced `AbstractType`) or an owned
+/// type's resident carrier. `kt` is region-pure (an `AbstractType`) or an owned
 /// sentinel `SetRef`, so no delivered carrier folds in — the fused door picks the tier the
 /// type's own shape needs.
 fn bind_abstract_member<'a>(
@@ -78,7 +78,7 @@ fn bind_abstract_member<'a>(
     Action::Done(Ok(StepCarried::born(carrier)))
 }
 
-/// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { Sig(id), name }`.
+/// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { decl scope id, name }`.
 pub fn body_bare<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -92,7 +92,7 @@ pub fn body_bare<'a>(
         Err(e) => return Action::Done(Err(e)),
     };
     let kt = KType::AbstractType {
-        source: AbstractSource::Sig(ctx.scope.id),
+        source: ctx.scope.id,
         name: name.clone(),
     };
     bind_abstract_member(ctx, name, kt)

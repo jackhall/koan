@@ -401,9 +401,9 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             match kt.to_static() {
                 // Region-free record: the compile-enforced `'static` tier.
                 Some(owned) => Outcome::Done(Ok(view.step_ctx().alloc_type(owned))),
-                // A field type that cannot rebuild at `'static` (a `SetRef` alias, a module-sourced
-                // abstract type): discard the ambient pairs and re-walk at the fold brand, where the
-                // scope reads are declared operands.
+                // A field type that cannot rebuild at `'static` (a `SetRef` alias, a `Signature`):
+                // discard the ambient pairs and re-walk at the fold brand, where the scope reads are
+                // declared operands.
                 None => Outcome::Done(fold_field_list_sync(
                     &view.step_ctx(),
                     view.current_scope(),

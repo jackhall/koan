@@ -78,8 +78,8 @@ pub enum PerCallReturn<'step> {
 /// at the frame brand, so `kt`'s lifetime is the short brand; the re-anchor lifts the clone to `'a`.
 ///
 /// The cap is load-bearing: callers pass the **contract** lifetime (`'step`), not the captured
-/// region's full lifetime. A non-module return type can embed a caller-region scope borrow (a
-/// [`KType::Signature`]'s `decl_scope_ref`, a [`KType::AbstractType`]'s `Module` source), so the
+/// region's full lifetime. A return type can embed a caller-region scope borrow (a
+/// [`KType::Signature`]'s `decl_scope_ref` or `SelfOf` module), so the
 /// clone's reach borrows into the caller region — valid for `'step` (the caller awaits the callee and
 /// the reach-set fold pins the argument), but it must not lengthen to the captured region's lifetime,
 /// which can outlive the caller.
@@ -92,8 +92,8 @@ pub(crate) fn home_return_type<'a>(
     region: RegionBrand<'a>,
 ) -> Result<&'a KType<'a>, KError> {
     // A region-free return type takes the compile-enforced `'static` tier. One embedding a scope
-    // borrow (a `Signature`'s `decl_scope_ref` or `SelfOf` module, an `AbstractType`'s `Module`
-    // source) cannot rebuild at `'static`; it re-anchors to `region` at the caller's contract
+    // borrow (a `Signature`'s `decl_scope_ref` or `SelfOf` module) cannot rebuild at `'static`; it
+    // re-anchors to `region` at the caller's contract
     // lifetime `'a` through the checked tier, which passes because this fn's caller-region invariant
     // already homes it in `region`'s own region.
     match kt.to_static() {

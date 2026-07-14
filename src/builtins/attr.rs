@@ -14,7 +14,6 @@
 
 use crate::machine::core::StepAllocator;
 use crate::machine::execute::StepCarried;
-use crate::machine::model::types::AbstractSource;
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::SigSource;
 use crate::machine::model::types::TypeResolution;
@@ -63,8 +62,8 @@ fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
 /// Value-then-type lookup of the `s` identifier against `ctx.scope`, returning the projected
 /// member as `Action::Done`. A module-valued parameter binds value-side, so a lowercase
 /// (Identifier-classed) parameter member access like `elem.compare` inside a functor body reaches
-/// the module through the value arm; the type-side probe serves a type-channel lhs (an
-/// opaque-ascription abstract type naming its source module).
+/// the module through the value arm. The type-side probe serves a name bound to an abstract
+/// identity (a SIG value slot's `VAL zero :Carrier` type), which names no receiver to project off.
 pub fn body_identifier<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -93,22 +92,18 @@ pub fn body_identifier<'a>(
             .expect("a data-bound name always resolves to a delivered value carrier");
         return route(access_field(&ctx.ctx, target, &field_name, &lhs));
     }
-    if let Some(KType::AbstractType {
-        source: AbstractSource::Module(m),
-        ..
-    }) = ctx.scope.resolve_type(&s_name)
-    {
-        return route(access_module_member(m, &field_name));
+    if let Some(KType::AbstractType { name, .. }) = ctx.scope.resolve_type(&s_name) {
+        return Action::Done(Err(abstract_type_has_no_members(name)));
     }
     Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
-/// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs: a first-class signature value
-/// or an opaque-ascription abstract type (see [token classes](../../design/typing/tokens.md) for
-/// why these lhs tokens are Type-classed). The Type-Type overload shares this body so a chained
-/// access whose field is itself a Type token (`Foo.Carrier`) reaches the same projection. Projects
-/// a member off the Type-classed `s`, resolving an `Unresolved` leaf through the memoized bridge
-/// first. A module lhs rides the value channel and picks [`body_module`] instead.
+/// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs, e.g. a first-class signature
+/// value (see [token classes](../../design/typing/tokens.md) for why such an lhs token is
+/// Type-classed). The Type-Type overload shares this body so a chained access whose field is itself
+/// a Type token reaches the same projection. Projects a member off the Type-classed `s`, resolving
+/// an `Unresolved` leaf through the memoized bridge first. A module lhs rides the value channel and
+/// picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -202,10 +197,11 @@ pub fn body_module<'a>(
     route(access_module_member(m, &field_name))
 }
 
-/// Project `field` off a Type-channel lhs: a signature or opaque-abstract identity. A module
-/// rides the value channel, so a module lhs lands in [`body_module`] instead. A `SetRef`
-/// (struct / union name) and every other type has no members and falls through to the same
-/// TypeMismatch a static struct field access produces.
+/// Project `field` off a Type-channel lhs. A `Declared` signature reverse-looks-up its decl scope;
+/// an abstract identity carries no receiver and errors. A module rides the value channel, so a
+/// module lhs lands in [`body_module`] instead. A `SetRef` (struct / union name) and every other
+/// type has no members and falls through to the same TypeMismatch a static struct field access
+/// produces.
 fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     match kt {
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
@@ -230,18 +226,22 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
                 )))),
             }
         }
-        // ATTR over an opaque-ascription abstract type — project against the source module.
-        // A `Sig`-rooted abstract type has no module to project off, so it falls through.
-        KType::AbstractType {
-            source: AbstractSource::Module(m),
-            ..
-        } => access_module_member(m, field),
+        KType::AbstractType { name, .. } => Err(abstract_type_has_no_members(name)),
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),
             got: other.name(),
         })),
     }
+}
+
+/// A [`KType::AbstractType`] is an identity — a `(source scope, name)` pair — not a receiver. The
+/// module it names rides the value channel, and further members project off *that* value, so a
+/// member access whose lhs is a bare abstract identity has nowhere to look.
+fn abstract_type_has_no_members(name: &str) -> KError {
+    KError::new(KErrorKind::ShapeError(format!(
+        "abstract type `{name}` has no projectable members here — project off the module value"
+    )))
 }
 
 /// Walk nested `Wrapped` layers to the record member named `field`, returning its held cell.
@@ -377,13 +377,13 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
                 // is a pre-existing reference into the module region, sealed resident with the
                 // member's own `reach`; `tag` allocates once into the module region via
-                // `alloc_ktype_checked` (an `:|`-minted `SetRef` or module-sourced abstract type,
-                // never `'static`, borrowing at most the module's own region so the audit passes)
-                // and is sealed resident — the same region as the built `Wrapped`'s
+                // `seal_fresh_ktype`'s runtime-checked audit (an `:|`-minted `SetRef` or an owned
+                // abstract identity, either way borrowing at most the module's own region, so the
+                // audit passes) and is sealed resident — the same region as the built `Wrapped`'s
                 // placement (the `StepContext` targets the module's frame), so the built value is
                 // unchanged. Both carriers union into the wrapped result's witness via
                 // `alloc_carried_with`. The tag's home-borrow bit is derived from the checked alloc's
-                // own walk (it borrows at most the module's own region).
+                // own walk.
                 let obj_carrier = module_scope
                     .seal_resident_delivered(module_scope.resident_value_carrier(obj, stored));
                 let tag_carrier =

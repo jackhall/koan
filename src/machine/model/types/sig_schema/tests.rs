@@ -28,7 +28,7 @@ fn ctor<'a>(name: &str, arity: usize, scope_id: ScopeId) -> KType<'a> {
 
 fn sig_abstract<'a>(id: ScopeId, name: &str) -> KType<'a> {
     KType::AbstractType {
-        source: AbstractSource::Sig(id),
+        source: id,
         name: name.into(),
     }
 }

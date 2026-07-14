@@ -139,7 +139,7 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     SigSource::Empty => {}
                 },
                 KType::AbstractType { source, name } => {
-                    return Some((source.scope_id(), name.as_str()));
+                    return Some((*source, name.as_str()));
                 }
                 KType::List { element, .. } => self.stack.push(element),
                 KType::Dict { key, value, .. } => {

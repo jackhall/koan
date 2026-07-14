@@ -744,9 +744,8 @@ pub(crate) trait KoanRegionExt {
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_module` on this region — the residence audit's
-    /// check for any payload that borrows a `&Module`: a `KObject::Module` value, a
-    /// `KType::Signature { sig: SelfOf(_), .. }`, or an
-    /// `AbstractType { source: AbstractSource::Module(_), .. }`.
+    /// check for any payload that borrows a `&Module`: a `KObject::Module` value or a
+    /// `KType::Signature { sig: SelfOf(_), .. }`.
     fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_signature` on this region — the residence

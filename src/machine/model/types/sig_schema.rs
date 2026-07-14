@@ -15,23 +15,23 @@ use std::collections::HashMap;
 use crate::machine::core::ScopeId;
 
 use super::kkind::KKind;
-use super::ktype::{AbstractSource, KType};
+use super::ktype::KType;
 use super::recursive_set::{ProjectedSchema, RecursiveSet};
 use crate::machine::model::values::{Module, ModuleSignature};
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
 /// Members are split by *representation*, not by surface syntax: an abstract member carries no
-/// concrete witness (a `Sig`-sourced [`KType::AbstractType`] or a sentinel type-constructor
+/// concrete witness (a [`KType::AbstractType`] or a sentinel type-constructor
 /// `SetRef`), a manifest member fixes a concrete type. A module self-sig never has abstract
 /// members — `TYPE` is a SIG-body-only construct.
 pub struct SigSchema<'a> {
     /// `Some(sig_id)` when derived from a SIG declaration — `Sig`-sourced abstract refs in
     /// value-slot types substitute against this id. `None` for a module self-sig (whose slot
-    /// types carry no `Sig`-sourced refs).
+    /// types name no SIG-decl-sourced refs).
     pub sig_id: Option<ScopeId>,
     /// Abstract type members: name → (the bound representation as found in the decl scope —
-    /// the `AbstractType{Sig..}` or the sentinel constructor `SetRef` — and the constructor
+    /// the `AbstractType` or the sentinel constructor `SetRef` — and the constructor
     /// arity: `None` = first-order, `Some(n)` = higher-kinded taking `n` parameters).
     pub abstract_members: HashMap<String, (KType<'a>, Option<usize>)>,
     /// Manifest type members: name → the fixed type.
@@ -131,7 +131,7 @@ pub(crate) fn constructor_arity(kt: &KType<'_>) -> Option<usize> {
 /// Rewrite `kt`, replacing references to `sig_id`'s abstract members with the caller's bindings
 /// for them. Returns a plain value used only for comparison — never region-allocated.
 ///
-/// Two reference shapes substitute: a first-order `AbstractType { source: Sig(sig_id), name }`
+/// Two reference shapes substitute: a first-order `AbstractType { source: sig_id, name }`
 /// slot type, and a sentinel type-constructor `SetRef` naming a higher-kinded member (e.g. the
 /// ctor position of a `ConstructorApply`). Compound types recurse; every other variant is a
 /// clone.
@@ -141,10 +141,9 @@ pub fn substitute_sig_members<'a>(
     members: &HashMap<String, KType<'a>>,
 ) -> KType<'a> {
     match kt {
-        KType::AbstractType {
-            source: AbstractSource::Sig(id),
-            name,
-        } if *id == sig_id => members.get(name).cloned().unwrap_or_else(|| kt.clone()),
+        KType::AbstractType { source, name } if *source == sig_id => {
+            members.get(name).cloned().unwrap_or_else(|| kt.clone())
+        }
         KType::SetRef { set, index }
             if set.member(*index).kind == KKind::TypeConstructor
                 && set.member(*index).scope_id == ScopeId::SENTINEL
@@ -359,17 +358,14 @@ pub fn sig_subtype<'a>(
 }
 
 /// Classify a SIG type-table entry by its *representation*: an abstract member carries no
-/// concrete witness. Two abstract shapes — a `Sig`-sourced [`KType::AbstractType`] (the
-/// first-order `TYPE Elt` slot) and a sentinel [`KKind::TypeConstructor`] `SetRef` (the
+/// concrete witness. Two abstract shapes — a [`KType::AbstractType`] (the first-order `TYPE Elt`
+/// slot, sourced at the SIG decl scope) and a sentinel [`KKind::TypeConstructor`] `SetRef` (the
 /// higher-kinded `TYPE (Type AS Wrap)` slot, `ScopeId::SENTINEL` marking it "awaiting per-call
 /// mint"). Everything else — a manifest `LET Tag = Number` binding a concrete type, a real
 /// minted constructor — is manifest.
 pub(crate) fn is_abstract_sig_member(kt: &KType<'_>) -> bool {
     match kt {
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            ..
-        } => true,
+        KType::AbstractType { .. } => true,
         KType::SetRef { set, index } => {
             let member = set.member(*index);
             member.kind == KKind::TypeConstructor && member.scope_id == ScopeId::SENTINEL

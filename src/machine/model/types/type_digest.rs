@@ -174,7 +174,7 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             h.finish()
         }
         KType::AbstractType { source, name } => DigestHasher::new(TAG_ABSTRACT_TYPE)
-            .scope_id(source.scope_id())
+            .scope_id(*source)
             .string(name)
             .finish(),
     }

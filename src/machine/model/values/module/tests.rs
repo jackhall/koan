@@ -5,7 +5,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::types::{AbstractSource, KType};
+use crate::machine::model::types::KType;
 use std::io::sink;
 use std::ptr;
 #[test]
@@ -59,7 +59,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
         tm.insert(
             "Type".into(),
             KType::AbstractType {
-                source: AbstractSource::Module(module),
+                source: module.scope_id(),
                 name: "Type".into(),
             },
         );
@@ -68,7 +68,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
     assert!(matches!(
         &bound,
         Some(KType::AbstractType { source, name })
-            if source.scope_id() == scope_id && name == "Type"
+            if *source == scope_id && name == "Type"
     ));
 }
 
@@ -87,7 +87,7 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
         tags.insert(
             "zero".into(),
             KType::AbstractType {
-                source: AbstractSource::Module(module),
+                source: module.scope_id(),
                 name: "Type".into(),
             },
         );
@@ -96,7 +96,7 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
     assert!(matches!(
         &bound,
         Some(KType::AbstractType { source, name })
-            if source.scope_id() == scope_id && name == "Type"
+            if *source == scope_id && name == "Type"
     ));
 }
 

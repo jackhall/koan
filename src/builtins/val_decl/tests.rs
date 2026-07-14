@@ -24,11 +24,10 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 
 /// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
 /// on TYPE's placeholder and resumes via dep-finish, picking the SIG-local shadow over
-/// the meta-type builtin. The shadow binds a `Sig`-rooted `AbstractType` (so the
-/// slot records that it *names* the abstract member `Carrier`).
+/// the meta-type builtin. The shadow binds an `AbstractType` sourced at the SIG decl scope (so
+/// the slot records that it *names* the abstract member `Carrier`).
 #[test]
 fn val_resolves_sig_local_type_shadow() {
-    use crate::machine::model::types::AbstractSource;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
@@ -41,13 +40,13 @@ fn val_resolves_sig_local_type_shadow() {
     };
     let zero = s.decl_scope().bindings().expect_type("zero");
     match zero {
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            name,
-        } => assert_eq!(
-            name, "Carrier",
-            "VAL slot must record that it names the SIG-local abstract `Carrier`",
-        ),
+        KType::AbstractType { source, name } => {
+            assert_eq!(
+                name, "Carrier",
+                "VAL slot must record that it names the SIG-local abstract `Carrier`",
+            );
+            assert_eq!(*source, s.decl_scope().id);
+        }
         other => panic!("expected AbstractType(Carrier), got {other:?}"),
     }
 }
@@ -158,12 +157,11 @@ fn val_slot_satisfied_by_module_let_member() {
 
 /// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL
 /// slot whose declared type references it. `Carrier` lives in `bindings.types`,
-/// `zero` in `bindings.data`; both carry the `Sig`-rooted `AbstractType` identity
-/// (so opacity threads to the per-call module's `slot_type_tags`), not the
+/// `zero` in `bindings.data`; both carry the same `AbstractType` identity, sourced at the SIG
+/// decl scope (so opacity threads to the per-call module's `slot_type_tags`), not the
 /// collapsed underlying `Number`.
 #[test]
 fn val_with_abstract_type_member_declaration() {
-    use crate::machine::model::types::AbstractSource;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
@@ -174,20 +172,16 @@ fn val_with_abstract_type_member_declaration() {
         }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
+    let decl_id = s.decl_scope().id;
     let type_kt = s.decl_scope().bindings().expect_type("Carrier");
     assert!(matches!(
         type_kt,
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            name,
-        } if name == "Carrier"
+        KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
     ));
     let zero = s.decl_scope().bindings().expect_type("zero");
     assert!(matches!(
         zero,
-        KType::AbstractType {
-            source: AbstractSource::Sig(_),
-            name,
-        } if name == "Carrier"
+        KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
     ));
+    assert_eq!(type_kt, zero, "both name the same abstract identity");
 }

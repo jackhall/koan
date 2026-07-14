@@ -481,20 +481,18 @@ fn to_static_rebuilds_owned_leaves() {
     }
 }
 
-/// `AbstractType { source: Sig(_), .. }` is owned (no `&Module`), so it rebuilds too.
+/// `AbstractType` is owned data — a `ScopeId` plus a name — so it rebuilds at `'static`.
 #[test]
-fn to_static_rebuilds_abstract_type_sig_source() {
+fn to_static_rebuilds_abstract_type() {
     let t = KType::AbstractType {
-        source: AbstractSource::Sig(ScopeId::from_raw(0, 42)),
+        source: ScopeId::from_raw(0, 42),
         name: "Carrier".into(),
     };
-    let rebuilt = t
-        .to_static()
-        .expect("Sig-sourced AbstractType holds no region pointer");
+    let rebuilt = t.to_static().expect("AbstractType holds no region pointer");
     assert_eq!(
         rebuilt,
         KType::AbstractType {
-            source: AbstractSource::Sig(ScopeId::from_raw(0, 42)),
+            source: ScopeId::from_raw(0, 42),
             name: "Carrier".into(),
         }
     );
@@ -599,20 +597,56 @@ fn to_static_none_for_signature_borrow() {
     assert!(t.to_static().is_none());
 }
 
-/// `AbstractType { source: Module(_), .. }` holds a live `&'a Module` -> `None`, unlike
-/// the `Sig(_)`-sourced case above.
+/// An `AbstractType` minted against an opaque-ascription module keys on the module's `ScopeId`,
+/// not a `&Module`, so it survives `to_static` — and the rebuilt identity still compares equal to
+/// the region-lifetime one it came from.
 #[test]
-fn to_static_none_for_abstract_type_module_source() {
+fn to_static_rebuilds_module_minted_abstract_type() {
     let storage = run_root_storage();
     let scope = default_scope(&storage, Box::new(std::io::sink()));
     let module = storage
         .brand()
         .alloc_module(Module::new("Test".into(), scope));
     let t = KType::AbstractType {
-        source: AbstractSource::Module(module),
+        source: module.scope_id(),
         name: "Carrier".into(),
     };
-    assert!(t.to_static().is_none());
+    let rebuilt = t
+        .to_static()
+        .expect("a module-minted AbstractType holds no region pointer");
+    assert_eq!(rebuilt, t);
+}
+
+/// `AbstractType` identity is `(source, name)`: two mints naming the same module and the same
+/// abstract member compare (and hash) equal, while a mint against another module — what a second
+/// `:|` application of the same SIG produces, since each ascription allocates a fresh child scope —
+/// stays distinct. Renaming the member also separates them.
+#[test]
+fn abstract_type_identity_keys_on_source_and_name() {
+    let storage = run_root_storage();
+    // Each `:|` allocates its own child scope, so the two views carry distinct `ScopeId`s.
+    let first = storage.brand().alloc_module(Module::new(
+        "View".into(),
+        default_scope(&storage, Box::new(std::io::sink())),
+    ));
+    let second = storage.brand().alloc_module(Module::new(
+        "View".into(),
+        default_scope(&storage, Box::new(std::io::sink())),
+    ));
+    assert_ne!(first.scope_id(), second.scope_id());
+
+    let mint = |m: &Module<'_>, name: &str| KType::AbstractType {
+        source: m.scope_id(),
+        name: name.into(),
+    };
+
+    assert_eq!(mint(first, "Carrier"), mint(first, "Carrier"));
+    assert_eq!(
+        hash_of(&mint(first, "Carrier")),
+        hash_of(&mint(first, "Carrier"))
+    );
+    assert_ne!(mint(first, "Carrier"), mint(second, "Carrier"));
+    assert_ne!(mint(first, "Carrier"), mint(first, "Elem"));
 }
 
 /// A bound functor value's `body: Some(&'a KFunction)` is a live region pointer -> `None`,
