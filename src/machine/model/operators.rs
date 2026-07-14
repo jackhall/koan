@@ -42,9 +42,12 @@ pub enum Combiner {
     /// A keyword token (the builtin comparison group's `AND`): the reducer synthesizes a
     /// keyworded call `left <kw> right`.
     Keyword(String),
-    /// A value binding naming a two-argument function: the reducer synthesizes an
-    /// Identifier-head call, resolved through the `FunctionValueCall` lane in the scope the
-    /// chain is written in.
+    /// A value binding naming a two-argument function: the reducer synthesizes a call-by-name
+    /// `<name> {left = …, right = …}`, resolved through the `FunctionValueCall` lane in the scope
+    /// the chain is written in. The two arguments carry the names an `OP` body binds, so one
+    /// naming rule covers the operator bodies and the combiner folding their results; a combiner
+    /// that is missing, non-callable, or declares other parameters is an ordinary error at the
+    /// chain's use site.
     Name(String),
 }
 

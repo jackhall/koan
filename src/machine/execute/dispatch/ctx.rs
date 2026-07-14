@@ -16,6 +16,7 @@ use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::operators::{Combiner, FoldDirection};
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
@@ -282,19 +283,21 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// `operands`/`operators` are the chain's own parts in source order
     /// (`operators.len() == operands.len() - 1`); `is_operator_chain_shape` guarantees at least
     /// 5 parts, so there are always at least 3 operands / 2 operators / 2 pairs — the
-    /// combiner-fold loop below always runs at least once. `combiner` is the group's declared
-    /// fold keyword; `chain_span` labels the synthesized combiner-keyword parts, which have no
-    /// single source token of their own.
+    /// combiner-fold loop below always runs at least once. `combiner` and `direction` are the
+    /// group's declared fold (see [`combine`](super::operator_chain::combine) for the two
+    /// combiner shapes); `chain_span` labels the synthesized combiner parts, which have no single
+    /// source token of their own.
     pub(super) fn install_pairwise_fold(
         &self,
         operands: Vec<Spanned<ExpressionPart<'step>>>,
         operators: Vec<Spanned<ExpressionPart<'step>>>,
-        combiner: String,
+        combiner: Combiner,
+        direction: FoldDirection,
         chain_span: Option<Span>,
         dep_error_frame: Option<crate::machine::TraceFrame>,
     ) -> Outcome<'step> {
         use super::super::TerminalDepFinish;
-        use super::operator_chain::wrap_as_operand;
+        use super::operator_chain::combine;
 
         let operand_spans: Vec<Option<Span>> =
             operands.iter().map(|operand| operand.span).collect();
@@ -326,23 +329,26 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                 };
                 pairs.push(KExpression::new(vec![left, operator, right]));
             }
-            // Fold the pairs left through the combiner keyword, nesting exactly like
-            // `reduce_fold_left`'s accumulator loop.
-            let mut pairs = pairs.into_iter();
-            let mut acc = pairs
-                .next()
-                .expect("pairwise always has ≥2 pairs (chain shape guarantees ≥2 operators)");
-            for pair in pairs {
-                let combiner_kw = Spanned {
-                    value: ExpressionPart::Keyword(combiner.clone()),
-                    span: chain_span,
-                };
-                acc = KExpression::new(vec![
-                    wrap_as_operand(acc),
-                    combiner_kw,
-                    wrap_as_operand(pair),
-                ]);
-            }
+            // Fold the pairs through the combiner in the declared direction, nesting exactly like
+            // `reduce_fold_left` / `reduce_fold_right`'s accumulator loops.
+            let acc = match direction {
+                FoldDirection::Left => {
+                    let mut pairs = pairs.into_iter();
+                    let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
+                    for pair in pairs {
+                        acc = combine(&combiner, acc, pair, chain_span);
+                    }
+                    acc
+                }
+                FoldDirection::Right => {
+                    let mut pairs = pairs.into_iter().rev();
+                    let mut acc = pairs.next().expect(PAIRWISE_HAS_TWO_PAIRS);
+                    for pair in pairs {
+                        acc = combine(&combiner, pair, acc, chain_span);
+                    }
+                    acc
+                }
+            };
             super::become_dispatch(ctx, acc)
         });
         Await::on(Deps::from_owned(deps))
@@ -350,6 +356,11 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             .finish_terminal(finish)
     }
 }
+
+/// A pairwise run has one pair per operator and the chain shape guarantees ≥2 operators, so the
+/// pair list the combiner fold consumes is never empty.
+const PAIRWISE_HAS_TWO_PAIRS: &str =
+    "pairwise always has ≥2 pairs (chain shape guarantees ≥2 operators)";
 
 /// Route a fully-spliced eager-subs `working_expr` to its continuation. `Some(f)` folds the
 /// committed call into a frame-installing `Continue` via

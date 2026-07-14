@@ -635,6 +635,7 @@ digraph {
     "koan::machine::execute::dispatch" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::source" [label="uses", style="dashed"];
@@ -683,6 +684,7 @@ digraph {
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::obligation" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::ctx" -> "koan::machine::model::operators" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::exec" -> "koan::machine" [label="uses", style="dashed"];

@@ -14,16 +14,17 @@
 //! [`reduce_fold_right`]), [`ReductionMode::Unary`] rewrites it into one keyword-first call over
 //! a list literal (see [`reduce_unary`]), and [`ReductionMode::Pairwise`] stages every operand as
 //! its own dispatch and, once they all resolve, splices each result into the up-to-two adjacent
-//! pairs it feeds before folding the pairs left through the group's combiner keyword (see
-//! [`reduce_pairwise`]) — the one mode that actually runs sub-dispatches itself rather than
-//! purely rewriting syntax, since a shared middle operand must evaluate exactly once.
+//! pairs it feeds before folding the pairs through the group's combiner in its declared direction
+//! (see [`reduce_pairwise`] and [`combine`]) — the one mode that actually runs sub-dispatches
+//! itself rather than purely rewriting syntax, since a shared middle operand must evaluate exactly
+//! once.
 
 use crate::machine::core::Scope;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::operators::{Combiner, FoldDirection, ReductionMode};
 use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind};
-use crate::source::Spanned;
+use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
 use super::{become_dispatch, Outcome};
@@ -62,18 +63,9 @@ pub(in crate::machine::execute) fn run<'step, 'b>(
                 ReductionMode::FoldRight => reduce_fold_right(ctx, expr),
                 ReductionMode::Unary => reduce_unary(ctx, expr),
                 ReductionMode::Pairwise {
-                    combiner: Combiner::Keyword(keyword),
-                    direction: FoldDirection::Left,
-                } => reduce_pairwise(ctx, expr, keyword.clone()),
-                // The named-combiner and fold-right pairwise lanes are the reducer work the
-                // `OP` / `GROUP` declaration surface depends on (roadmap item
-                // `user-defined-operator-modules`); no group the builtins seed reaches here.
-                ReductionMode::Pairwise { .. } => {
-                    Outcome::Done(Err(KError::new(KErrorKind::DispatchFailed {
-                        expr: expr.summarize(),
-                        reason: unsupported_pairwise_reason(probe),
-                    })))
-                }
+                    combiner,
+                    direction,
+                } => reduce_pairwise(ctx, expr, combiner.clone(), *direction),
             }
         }
     }
@@ -112,9 +104,8 @@ fn split_chain_parts<'step>(
 }
 
 /// Wraps a built-up accumulator as the next level's leading operand, carrying its own span
-/// forward rather than inventing a fresh one. `pub(super)` — `SchedulerView::install_pairwise_fold`
-/// (`ctx.rs`) reuses it to nest its combiner-fold accumulator the same way.
-pub(super) fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
+/// forward rather than inventing a fresh one.
+fn wrap_as_operand<'step>(acc: KExpression<'step>) -> Spanned<ExpressionPart<'step>> {
     let span = acc.span;
     Spanned {
         value: ExpressionPart::Expression(Box::new(acc)),
@@ -234,14 +225,15 @@ fn reduce_unary<'step>(
 /// (whatever its part kind — a bare identifier, a literal, or a parenthesized sub-expression all
 /// dispatch through their normal lane via the one-part wrapper `install_pairwise_fold` builds);
 /// once every operand resolves, the finish splices each resolved cell into the up-to-two pair
-/// expressions it feeds (a `.duplicate()` per embed site) and folds the pairs left through the
-/// group's combiner keyword. See [`SchedulerView::install_pairwise_fold`] for the staging +
-/// finish mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices into a fresh
-/// pair-tree rather than back into the original expression's own slots).
+/// expressions it feeds (a `.duplicate()` per embed site) and folds the pairs through the group's
+/// combiner in the declared direction. See [`SchedulerView::install_pairwise_fold`] for the
+/// staging + finish mechanics (mirrors the shared eager-subs pattern in `ctx.rs`, but splices
+/// into a fresh pair-tree rather than back into the original expression's own slots).
 fn reduce_pairwise<'step>(
     ctx: &SchedulerView<'step, '_>,
     expr: &KExpression<'step>,
-    combiner: String,
+    combiner: Combiner,
+    direction: FoldDirection,
 ) -> Outcome<'step> {
     let (operands, operators) = split_chain_parts(expr);
     debug_assert!(
@@ -252,20 +244,77 @@ fn reduce_pairwise<'step>(
         "<operator-chain>",
         expr,
     ));
-    ctx.install_pairwise_fold(operands, operators, combiner, expr.span, dep_error_frame)
+    ctx.install_pairwise_fold(
+        operands,
+        operators,
+        combiner,
+        direction,
+        expr.span,
+        dep_error_frame,
+    )
+}
+
+/// The argument names a [`Combiner::Name`] call binds its two inputs to — the same pair an `OP`
+/// body binds, so one naming rule covers the operator bodies and the combiner that folds their
+/// results. A combiner function declaring other parameter names is an ordinary use-site error
+/// (a missing argument), like any other call-by-name mismatch.
+const COMBINER_LEFT: &str = "left";
+const COMBINER_RIGHT: &str = "right";
+
+/// One combiner application over two already-built sub-expressions — the fold step
+/// [`SchedulerView::install_pairwise_fold`] repeats over a pairwise run's pair results. Both
+/// combiner kinds produce the same *shape* one dispatch lane apart:
+///
+/// - [`Combiner::Keyword`] builds the 3-part keyworded expression `[left, <kw>, right]`, which
+///   re-enters ordinary keyworded dispatch (the builtin comparison group's `AND`).
+/// - [`Combiner::Name`] builds the 2-part call-by-name expression
+///   `[Identifier(<name>), {left = …, right = …}]` — the `FunctionValueCall` lane, which resolves
+///   `<name>` through the ordinary scope walk at the chain's *use site* (a group's `USING` window
+///   surfaces the combiner alongside the operator bodies). A missing, non-callable, or
+///   wrong-arity combiner therefore surfaces as an ordinary error there.
+///
+/// `span` labels the synthesized head parts, which have no source token of their own.
+pub(super) fn combine<'step>(
+    combiner: &Combiner,
+    left: KExpression<'step>,
+    right: KExpression<'step>,
+    span: Option<Span>,
+) -> KExpression<'step> {
+    match combiner {
+        Combiner::Keyword(keyword) => KExpression::new(vec![
+            wrap_as_operand(left),
+            Spanned {
+                value: ExpressionPart::Keyword(keyword.clone()),
+                span,
+            },
+            wrap_as_operand(right),
+        ]),
+        Combiner::Name(name) => KExpression::new(vec![
+            Spanned {
+                value: ExpressionPart::Identifier(name.clone()),
+                span,
+            },
+            Spanned {
+                value: ExpressionPart::RecordLiteral(vec![
+                    (
+                        COMBINER_LEFT.to_string(),
+                        ExpressionPart::Expression(Box::new(left)),
+                    ),
+                    (
+                        COMBINER_RIGHT.to_string(),
+                        ExpressionPart::Expression(Box::new(right)),
+                    ),
+                ]),
+                span,
+            },
+        ]),
+    }
 }
 
 fn undeclared_operator_reason(probe: &str) -> String {
     format!(
         "no operator group declares all of `{probe}`; chainable operators must be \
          declared together in one module"
-    )
-}
-
-fn unsupported_pairwise_reason(probe: &str) -> String {
-    format!(
-        "the operator group declaring `{probe}` folds its pairs through a combiner shape the \
-         chain reducer does not fold"
     )
 }
 
