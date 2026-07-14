@@ -1297,6 +1297,28 @@ impl<'step> StepAllocator<'step> {
         })
     }
 
+    /// Seal the type a delivered *object* terminal reports for itself ([`KObject::ktype`]) as this
+    /// step's own carrier — the door `TYPE OF` takes. The value channel's twin of
+    /// [`Self::alloc_type_of`]: the type is read off the dep's view at the fold brand, so a type that
+    /// borrows the value's region (a module's self-sig borrows the module) is homed under the dep's
+    /// own stored reach rather than audited against the consuming scope. Scalar gate: a value whose
+    /// type is a region-free scalar references no region, so it routes to the no-fold path and seals
+    /// with an empty reach.
+    pub(crate) fn alloc_type_of_value(&self, dep: &DeliveredCarried) -> StepCarried<'step> {
+        if let Some(owned) = dep.open(|c| match c {
+            Carried::Object(o) => o.ktype().to_static(),
+            Carried::Type(_) => None,
+        }) {
+            return self.alloc_type(owned);
+        }
+        self.alloc_carried_with(&[dep], |b, views| match views[0] {
+            Carried::Object(o) => Carried::Type(b.alloc_ktype_folded(o.ktype())),
+            Carried::Type(_) => {
+                unreachable!("alloc_type_of_value precondition: the dep terminal is an object")
+            }
+        })
+    }
+
     /// The correlated multi-operand type build: `operands` lists **every** type the composite
     /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
     /// at the same position — so the composite is built at the brand from declared operands only.

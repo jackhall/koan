@@ -32,6 +32,7 @@ digraph {
     "koan::builtins::try_with" [label="koan::builtins::try_with"];
     "koan::builtins::type_decl" [label="koan::builtins::type_decl"];
     "koan::builtins::type_ops" [label="koan::builtins::type_ops"];
+    "koan::builtins::type_ops::type_of" [label="koan::builtins::type_ops::type_of"];
     "koan::builtins::type_ops::with" [label="koan::builtins::type_ops::with"];
     "koan::builtins::type_union" [label="koan::builtins::type_union"];
     "koan::builtins::union" [label="koan::builtins::union"];
@@ -160,6 +161,7 @@ digraph {
     "koan::builtins::fn_def" -> "koan::builtins::fn_def::return_type" [label="owns", style="solid"];
     "koan::builtins::fn_def" -> "koan::builtins::fn_def::signature" [label="owns", style="solid"];
     "koan::builtins::parameterized_types" -> "koan::builtins::parameterized_types::action_bodies" [label="owns", style="solid"];
+    "koan::builtins::type_ops" -> "koan::builtins::type_ops::type_of" [label="owns", style="solid"];
     "koan::builtins::type_ops" -> "koan::builtins::type_ops::with" [label="owns", style="solid"];
     "koan::machine" -> "koan::machine::core" [label="owns", style="solid"];
     "koan::machine" -> "koan::machine::execute" [label="owns", style="solid"];
@@ -466,6 +468,13 @@ digraph {
     "koan::builtins::type_ops" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::type_ops" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::builtins::type_ops::type_of" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine::core" [label="uses", style="dashed"];
