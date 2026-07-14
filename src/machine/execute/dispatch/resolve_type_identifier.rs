@@ -138,9 +138,6 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     SigSource::SelfOf(m) => return Some((m.scope_id(), m.path.as_str())),
                     SigSource::Empty => {}
                 },
-                KType::Module { module, .. } => {
-                    return Some((module.scope_id(), module.path.as_str()));
-                }
                 KType::AbstractType { source, name } => {
                     return Some((source.scope_id(), name.as_str()));
                 }

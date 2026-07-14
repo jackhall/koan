@@ -180,7 +180,7 @@ pub fn body_transparent<'a>(
     // to this frame — so its token folds that source's region and reach and derives its home-borrow
     // bit from the mint, sealed onto the terminal. Minted *before* the module alloc below: both the
     // module's own placement (its child scope is this foreign region, not `region`'s own) and the
-    // wrapping `KType::Module` need this one token. Reusing the foreign source's child scope, the view
+    // Object-arm carrier that surfaces it need this one token. Reusing the foreign source's child scope, the view
     // borrows nothing into this home frame (its interior points at the source region), so the derived
     // bit stays unset — a downstream copied-mode mint materializes no home-frame member, and the dying
     // home frame frees once its retention hold releases.

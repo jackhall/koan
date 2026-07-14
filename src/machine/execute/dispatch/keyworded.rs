@@ -361,7 +361,7 @@ fn part_walk<'step>(
                                 TypeResolution::Done(hit) => {
                                     let scope = ctx.current_scope();
                                     scope.seal_resident_delivered(
-                                        scope.surface_type_hit(hit.kt, hit.stored),
+                                        scope.resident_type_carrier(hit.kt, hit.stored),
                                     )
                                 }
                                 _ => {

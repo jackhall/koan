@@ -128,7 +128,6 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
         | KType::Any
         | KType::SetRef { .. }
         | KType::Signature { .. }
-        | KType::Module { .. }
         | KType::AbstractType { .. } => Ok(t.name()),
         KType::List { .. }
         | KType::Dict { .. }
@@ -170,8 +169,8 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 
 /// Read-only-ish context a builtin body receives. `scope` is **interior-mutable**: the builtin
 /// binds / registers / allocs on it directly before returning a `Action`. `frame` is a *reference to
-/// the cart `Rc`* (so MODULE can `Rc::clone` it into `KType::Module`), `None` for def-time builtins.
-/// `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args` is the
+/// the cart `Rc`* (so a body that seals a type operand can `Rc::clone` it), `None` for def-time
+/// builtins. `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args` is the
 /// builtin's arguments as a `KObject::Record`; unevaluated args ride as `KObject::KExpression`
 /// cells.
 pub struct BodyCtx<'a, 'c> {

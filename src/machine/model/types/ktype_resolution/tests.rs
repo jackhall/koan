@@ -151,8 +151,8 @@ fn join_same_shape_functions_yields_shared_function() {
 /// `List<Any>`.
 #[test]
 fn join_same_shape_functors_yields_shared_functor() {
-    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
-    let g2 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
+    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
+    let g2 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
     let joined = KType::join(&g1, &g2);
     assert_eq!(joined, g1.clone());
     // The element type a `[g1, g2]` list literal memoizes is the shared functor, not `Any`.
@@ -166,8 +166,8 @@ fn join_same_shape_functors_yields_shared_functor() {
 /// coarsens to `Any` — same fall-through as functions.
 #[test]
 fn join_different_shape_functors_yields_any() {
-    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Module));
-    let g2 = functor(vec![("y", KType::Number)], KType::OfKind(KKind::Module));
+    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
+    let g2 = functor(vec![("y", KType::Number)], KType::OfKind(KKind::Signature));
     assert_eq!(KType::join(&g1, &g2), KType::Any);
     assert_eq!(KType::join_iter(vec![g1, g2]), KType::Any);
 }

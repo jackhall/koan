@@ -18,7 +18,9 @@ use crate::machine::core::{
 };
 use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::types::{
+    ExpressionSignature, KType, ReturnType, SigSource, SignatureElement,
+};
 use crate::machine::model::values::Module;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
@@ -262,8 +264,8 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     }
 }
 
-/// `Scope::adopt_sealed` on a delivered type: a `KType` whose interior (here a `KType::Module`'s
-/// `&'a Scope`) points into a **foreign** frame is the dangerous case — adoption's mint must pin
+/// `Scope::adopt_sealed` on a delivered type: a `KType` whose interior (here a module self-sig's
+/// `&'a Module`) points into a **foreign** frame is the dangerous case — adoption's mint must pin
 /// both the foreign reach and the producer residence into the consumer's arena, so the module's
 /// child scope reads back cleanly after every other handle on the foreign frame drops.
 #[test]
@@ -285,7 +287,10 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
     let carrier = producer.with_scope(|child| {
         let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), false);
         let kt_ref = child
-            .alloc_ktype_reaching(KType::Module { module }, &evidence)
+            .alloc_ktype_reaching(
+                KType::signature(SigSource::SelfOf(module), Vec::new()),
+                &evidence,
+            )
             .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, evidence)
     });
@@ -311,14 +316,17 @@ fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
     drop(foreign_storage);
 
     match adopted {
-        Carried::Type(KType::Module { module }) => {
+        Carried::Type(KType::Signature {
+            sig: SigSource::SelfOf(module),
+            ..
+        }) => {
             assert_eq!(
                 module.path, "M",
                 "the re-homed module survives the foreign frame's drop"
             )
         }
-        Carried::Type(other) => panic!("expected the severed Module type, got {}", other.name()),
-        Carried::Object(_) => panic!("expected the severed Module type, got an Object"),
+        Carried::Type(other) => panic!("expected the severed self-sig type, got {}", other.name()),
+        Carried::Object(_) => panic!("expected the severed self-sig type, got an Object"),
     }
     assert!(
         foreign_weak.upgrade().is_some(),
@@ -408,7 +416,10 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
     let carrier = producer.with_scope(|child| {
         let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), true);
         let kt_ref = child
-            .alloc_ktype_reaching(KType::Module { module }, &evidence)
+            .alloc_ktype_reaching(
+                KType::signature(SigSource::SelfOf(module), Vec::new()),
+                &evidence,
+            )
             .expect("module is covered by foreign_reach");
         child.resident_type_carrier(kt_ref, evidence)
     });

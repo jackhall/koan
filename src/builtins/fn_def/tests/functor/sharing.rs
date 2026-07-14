@@ -7,18 +7,19 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::SigSource;
 use crate::machine::model::Carried;
 
-/// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Type = Number}` admits a
+/// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Elem = Number}` admits a
 /// module iff its self-sig satisfies the signature *and* every pin names a manifest member
 /// fixed equal. The signature's decl scope is empty, so every module bare-satisfies it and pin
-/// agreement alone decides: `Type = Number` admitted, `Type = Str` rejected (pin disagrees),
-/// no `Type` rejected (pin absent). Admission is structural, so ascription is never required.
+/// agreement alone decides: `Elem = Number` admitted, `Elem = Str` rejected (pin disagrees),
+/// no `Elem` rejected (pin absent). Admission is structural, so ascription is never required.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
-    use crate::machine::model::values::{Module, ModuleSignature};
+    use crate::machine::model::values::ModuleSignature;
     use crate::machine::model::KType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    // An empty signature: every module bare-satisfies it, so the pins alone gate.
+    // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
+    // directly rather than through `SIG`, which has no empty-body surface form.
     let sig_scope = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_sig(
@@ -29,88 +30,34 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), sig_scope));
 
-    let child_a = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "NumPinned".into(),
-        ));
-    let m_num: &Module<'_> = region
-        .brand()
-        .alloc_module(Module::new("NumPinned".into(), child_a));
-    m_num
-        .type_members
-        .borrow_mut()
-        .insert("Type".into(), KType::Number);
-    let m_num_obj = region
-        .brand()
-        .alloc_ktype_checked(KType::Module { module: m_num })
-        .expect("m_num was just allocated into region's own region");
-
-    let child_b = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "StrPinned".into(),
-        ));
-    let m_str: &Module<'_> = region
-        .brand()
-        .alloc_module(Module::new("StrPinned".into(), child_b));
-    m_str
-        .type_members
-        .borrow_mut()
-        .insert("Type".into(), KType::Str);
-    let m_str_obj = region
-        .brand()
-        .alloc_ktype_checked(KType::Module { module: m_str })
-        .expect("m_str was just allocated into region's own region");
-
-    let child_c = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "NoTypePin".into(),
-        ));
-    let m_none: &Module<'_> = region
-        .brand()
-        .alloc_module(Module::new("NoTypePin".into(), child_c));
-    let m_none_obj = region
-        .brand()
-        .alloc_ktype_checked(KType::Module { module: m_none })
-        .expect("m_none was just allocated into region's own region");
+    // `NoElemPin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
+    // with. `NumBare` is a second `Elem = Number` module, ascribed to nothing: admission is
+    // structural, so it is behaviorally identical to `NumPinned`.
+    run(
+        scope,
+        "MODULE NumPinned = ((LET Elem = Number) (LET compare = 0))\n\
+         MODULE StrPinned = ((LET Elem = Str) (LET compare = 0))\n\
+         MODULE NoElemPin = (LET compare = 0)\n\
+         MODULE NumBare = ((LET Elem = Number) (LET compare = 0))",
+    );
 
     let slot = KType::signature(
         SigSource::Declared(sig),
-        vec![("Type".into(), KType::Number)],
+        vec![("Elem".into(), KType::Number)],
     );
 
-    // A module reaches an overload probe on the type channel (`Carried::Type(Module)`), so its
-    // satisfaction of a `Signature` slot goes through the `accepts_part(Carried::Type(Module))`
-    // path; the built argument cell instead carries the module on the Object channel.
-    assert!(slot.accepts_part(&spliced_part(Carried::Type(m_num_obj))));
-    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_str_obj))));
-    assert!(!slot.accepts_part(&spliced_part(Carried::Type(m_none_obj))));
-
-    // A second `Type = Number` module never ascribed to anything: admission is structural, so
-    // it is behaviorally identical to `m_num` — pin agreement alone decides, no ascription.
-    let child_d = region
-        .brand()
-        .alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "NumBare".into(),
-        ));
-    let m_num_bare: &Module<'_> = region
-        .brand()
-        .alloc_module(Module::new("NumBare".into(), child_d));
-    m_num_bare
-        .type_members
-        .borrow_mut()
-        .insert("Type".into(), KType::Number);
-    let m_num_bare_obj = region
-        .brand()
-        .alloc_ktype_checked(KType::Module { module: m_num_bare })
-        .expect("m_num_bare was just allocated into region's own region");
-    assert!(slot.accepts_part(&spliced_part(Carried::Type(m_num_bare_obj))));
+    // A module binds value-side, so both the overload probe and the built argument cell carry it
+    // on the Object channel — its satisfaction of a `Signature` slot goes through
+    // `accepts_carried`'s `Carried::Object(KObject::Module)` arm.
+    let module_part = |name: &str| {
+        spliced_part(Carried::Object(scope.lookup(name).unwrap_or_else(|| {
+            panic!("{name} must bind a module value-side");
+        })))
+    };
+    assert!(slot.accepts_part(&module_part("NumPinned")));
+    assert!(!slot.accepts_part(&module_part("StrPinned")));
+    assert!(!slot.accepts_part(&module_part("NoElemPin")));
+    assert!(slot.accepts_part(&module_part("NumBare")));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at

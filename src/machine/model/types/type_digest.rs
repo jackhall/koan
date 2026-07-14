@@ -119,11 +119,10 @@ impl DigestHasher {
 fn kkind_tag(k: KKind) -> u8 {
     match k {
         KKind::ProperType => 0,
-        KKind::Module => 1,
-        KKind::Signature => 2,
-        KKind::AnyType => 3,
-        KKind::NewType => 4,
-        KKind::TypeConstructor => 5,
+        KKind::Signature => 1,
+        KKind::AnyType => 2,
+        KKind::NewType => 3,
+        KKind::TypeConstructor => 4,
     }
 }
 
@@ -174,7 +173,6 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             feed_set_identity(&mut h, set);
             h.finish()
         }
-        KType::Module { module } => module_digest(module.scope_id()),
         KType::AbstractType { source, name } => DigestHasher::new(TAG_ABSTRACT_TYPE)
             .scope_id(source.scope_id())
             .string(name)
@@ -256,9 +254,10 @@ pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)])
     h.finish()
 }
 
-/// A module value's identity digest — `KType::Module`'s digest, and the subject/candidate key
-/// the [`type_memos`](super::type_memos) `SigSatisfies` relation uses for a module's self-sig
-/// side. Shared with [`digest_of`]'s `Module` arm so the two can never diverge.
+/// A module value's identity digest, keyed on its scope id — what
+/// [`SigSource::SelfOf`](super::ktype::SigSource::SelfOf) feeds the enclosing signature's digest,
+/// and the subject/candidate key the [`type_memos`](super::type_memos) `SigSatisfies` relation
+/// uses for a module's self-sig side.
 pub(crate) fn module_digest(id: ScopeId) -> TypeDigest {
     DigestHasher::new(TAG_MODULE).scope_id(id).finish()
 }

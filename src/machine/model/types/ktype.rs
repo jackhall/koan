@@ -6,9 +6,9 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
-//! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
-//! `AbstractType`) hold `&'a Module<'a>` / `&'a ModuleSignature<'a>` region pointers; every other
-//! variant is owned data and ignores the parameter.
+//! Lifetime parameter `'a`: the module/signature variants (`Signature`, `AbstractType`) hold
+//! `&'a Module<'a>` / `&'a ModuleSignature<'a>` region pointers; every other variant is owned
+//! data and ignores the parameter.
 
 use super::kkind::KKind;
 use super::record::Record;
@@ -189,9 +189,10 @@ pub enum KType<'a> {
     /// overload when both admit.
     RecordType,
     /// Type-accepting argument slot, carrying the shallow [`KKind`] it admits — and the
-    /// `ktype()` a non-module / non-signature type value reports (`OfKind(Proper)`). A module
-    /// or signature *value* reports its exact `Module { .. }` / `Signature { .. }` identity
-    /// instead; `kind_of` classifies a type into its `KKind`, matched against the slot's kind.
+    /// `ktype()` a non-signature type value reports (`OfKind(Proper)`). A signature *value* —
+    /// and a module value, whose `ktype()` is its self-sig — reports its exact
+    /// `Signature { .. }` identity instead; `kind_of` classifies a type into its `KKind`,
+    /// matched against the slot's kind.
     OfKind(KKind),
     /// External reference to a member of a [`RecursiveSet`]. The `(set ptr, index)` pair
     /// is the dispatch identity; the member's `kind` (read via `set.member(index).kind`) is
@@ -237,15 +238,6 @@ pub enum KType<'a> {
         sig: SigSource<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
         digest: TypeDigest,
-    },
-    /// First-class module value's type. A bare borrow into the region the functor call minted the
-    /// module in; that region is pinned by the value carrier's witness set when the module flows down
-    /// a dep edge (see [`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)). A
-    /// *concrete* module is rejected as a function's resolved return type (a module value's identity
-    /// is not a return type — return a signature or the `:Module` kind), so it never rides the
-    /// contract channel.
-    Module {
-        module: &'a Module<'a>,
     },
     /// Abstract type member named by a SIG slot or minted by opaque ascription. `source`
     /// distinguishes the two roots: `Sig(scope_id)` is the SIG-decl-time member (bound when a
@@ -425,7 +417,6 @@ impl<'a> KType<'a> {
                     format!("({} WITH {{{}}})", sig.path(), inner.join(", "))
                 }
             }
-            KType::Module { module, .. } => module.path.clone(),
             KType::AbstractType { name, .. } => name.clone(),
             KType::RecursiveRef(name) => name.clone(),
             KType::Unresolved(t) => t.render(),
@@ -444,8 +435,8 @@ impl<'a> KType<'a> {
 
     /// Variant-wise rebuild at `'static`. `Some` exactly when the rebuild is
     /// possible without a region borrow and without re-minting a shared set:
-    /// - `Module` / `Signature` / `AbstractType { source: Module(_) }` /
-    ///   `KFunctor { body: Some(_) }` hold region pointers -> `None`.
+    /// - `Signature` / `AbstractType { source: Module(_) }` / `KFunctor { body: Some(_) }`
+    ///   hold region pointers -> `None`.
     /// - `SetRef` / `RecursiveGroup` own their set by `Rc` (its content transport); `to_static`
     ///   declines rather than re-mint that shared allocation -> `None`, so such values take the
     ///   runtime-checked resident path instead. (Identity itself is the content digest, which a
@@ -509,7 +500,6 @@ impl<'a> KType<'a> {
             } if pinned_slots.is_empty() => Some(KType::empty_signature()),
             // Region pointers: a `Declared`/`SelfOf` source, or any non-empty pin set.
             KType::Signature { .. } => None,
-            KType::Module { .. } => None,
             KType::AbstractType {
                 source: AbstractSource::Sig(id),
                 name,
@@ -624,7 +614,6 @@ impl<'a> KType<'a> {
                         .iter()
                         .all(|(_, kt)| kt.resident_in_visiting(residence, visited))
             }
-            KType::Module { module } => residence.owns_module(module),
             KType::AbstractType {
                 source: AbstractSource::Sig(_),
                 ..
@@ -643,14 +632,13 @@ impl<'a> KType<'a> {
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
-    /// `OfKind`. A module is `Module`, a signature is `Signature`, a user-declared nominal is
-    /// its family (`Tagged` / `NewType` / `TypeConstructor`, read off the set member it
-    /// references), and every other type is `Proper`. Never returns `KKind::AnyType` (a slot-only
-    /// expectation). Applied to the type a type value carries — or a runtime value's
-    /// `ktype()` — to match it against an `OfKind` slot.
+    /// `OfKind`. A signature is `Signature`, a user-declared nominal is its family (`Tagged` /
+    /// `NewType` / `TypeConstructor`, read off the set member it references), and every other
+    /// type is `Proper`. Never returns `KKind::AnyType` (a slot-only expectation). Applied to
+    /// the type a type value carries — or a runtime value's `ktype()` — to match it against an
+    /// `OfKind` slot.
     pub fn kind_of(&self) -> KKind {
         match self {
-            KType::Module { .. } => KKind::Module,
             KType::Signature { .. } => KKind::Signature,
             // A nominal carries its family on the set member; a `ConstructorApply` defers to
             // its `ctor` (a `TypeConstructor`-kind `SetRef`).
@@ -736,12 +724,10 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
 /// Manual `PartialEq`. The eight composite variants compare by their stored content
 /// [`TypeDigest`] — one `u128` compare, no structural descent and no fallback: the
 /// digest is the truth. A member reference (`SetRef` / `RecursiveGroup`) goes through
-/// [`same_nominal`] (set-pointer fast path, else content digest + index). The remaining
-/// id-keyed variants compare by their pointee's stable id: `Module` / `AbstractType` on
-/// `scope_id()`, so two opaque ascriptions of the same source module (each a fresh child
-/// scope) do NOT compare equal under `KType::Module`, while two `KType::AbstractType` values
-/// minted from the same source-and-name DO compare equal even when their `&Module` pointers
-/// differ.
+/// [`same_nominal`] (set-pointer fast path, else content digest + index). `AbstractType`, the
+/// remaining id-keyed variant, compares by its source's stable `scope_id()` plus its name, so
+/// two `AbstractType` values minted from the same source-and-name compare equal even when their
+/// `&Module` pointers differ.
 impl<'a> PartialEq for KType<'a> {
     fn eq(&self, other: &Self) -> bool {
         use KType::*;
@@ -774,9 +760,6 @@ impl<'a> PartialEq for KType<'a> {
             // Whole-set handle: same-set identity, index-free.
             (RecursiveGroup(a), RecursiveGroup(b)) => same_nominal(a, 0, b, 0),
             (SetLocal(a), SetLocal(b)) => a == b,
-            (Module { module: m1, .. }, Module { module: m2, .. }) => {
-                m1.scope_id() == m2.scope_id()
-            }
             (
                 AbstractType {
                     source: s1,
@@ -798,8 +781,8 @@ impl<'a> Eq for KType<'a> {}
 
 /// Manual `Hash`, kept consistent with the hand-written `PartialEq` above
 /// (`a == b` ⟹ `hash(a) == hash(b)`). The eight composite variants hash their stored content
-/// digest (one `u128`); the id-keyed variants hash their stable id (`scope_id()` /
-/// `source.scope_id()`). A member reference hashes its set's sealed digest (+ index), matching
+/// digest (one `u128`); `AbstractType` hashes its stable id (`source.scope_id()`) plus its
+/// name. A member reference hashes its set's sealed digest (+ index), matching
 /// [`same_nominal`]'s digest path — falling back to `Rc::as_ptr` only in the pre-seal window,
 /// where the pointer path is also what settles equality. A set's hash therefore changes at
 /// seal, which is sound because no `KType`-keyed map exists in the crate.
@@ -825,7 +808,6 @@ impl<'a> std::hash::Hash for KType<'a> {
             }
             RecursiveGroup(set) => hash_set_identity(set, state),
             SetLocal(i) => i.hash(state),
-            Module { module, .. } => module.scope_id().hash(state),
             AbstractType { source, name } => {
                 source.scope_id().hash(state);
                 name.hash(state);

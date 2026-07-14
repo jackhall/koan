@@ -53,9 +53,9 @@ impl<'a> KType<'a> {
     /// the seam to the narrower set.
     pub fn is_admissible_functor_return(&self) -> bool {
         match self {
-            KType::OfKind(KKind::Signature) | KType::Signature { .. } | KType::Module { .. } => {
-                true
-            }
+            // A module value's `ktype()` is its self-sig, so a concrete module return lands on
+            // the `Signature` arm alongside a declared-signature return.
+            KType::OfKind(KKind::Signature) | KType::Signature { .. } => true,
             KType::KFunctor { ret, .. } => ret.is_admissible_functor_return(),
             _ => false,
         }
@@ -413,23 +413,24 @@ impl<'a> KType<'a> {
     /// True iff a first-class type `t` (flowing in the type channel) satisfies this declared
     /// slot — the type-channel analog of [`matches_value`]. An `OfKind` slot is satisfied when its
     /// kind subsumes `t.kind_of()` (so `OfKind(Proper)` admits any proper type, including a
-    /// `Tagged`/`NewType`-classified nominal, while the module/sig wall keeps `Proper` from
-    /// admitting a module); `Any` by anything; a module/signature *value* slot by structural
-    /// identity. A `Signature` slot admits no first-class type here — a module surfaces on the
-    /// Object channel and is matched by [`matches_value`]. Other concrete slots compare against the
-    /// `OfKind(Proper)` dispatch identity a non-module/sig type carrier reports, so they admit no
-    /// bare type value.
+    /// `Tagged`/`NewType`-classified nominal, while the signature wall keeps `Proper` from
+    /// admitting a signature); `Any` by anything; a signature *value* slot by structural identity.
+    /// A `Signature` slot admits no first-class type here — it is a constraint on a module, and a
+    /// module surfaces on the Object channel, matched by [`matches_value`]. Other concrete slots
+    /// compare against the `OfKind(Proper)` dispatch identity a non-signature type carrier reports,
+    /// so they admit no bare type value.
     pub fn matches_type(&self, t: &KType<'a>) -> bool {
-        // The shallow dispatch identity a concrete slot compares against: a module / signature
-        // carries its identity directly; every other type fills the `OfKind(Proper)` marker.
+        // The shallow dispatch identity a concrete slot compares against: a signature carries its
+        // identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
-            KType::Module { .. } | KType::Signature { .. } => t.clone(),
+            KType::Signature { .. } => t.clone(),
             _ => KType::OfKind(KKind::ProperType),
         };
         match self {
             KType::Any => true,
-            // A module surfaces on the Object channel (matched by `matches_value`); a signature
-            // *value* is admitted by the `OfKind(Signature)` wildcard, never here.
+            // A `Signature` slot is a constraint on a module, and a module surfaces on the Object
+            // channel (matched by `matches_value`); a signature *value* is admitted by the
+            // `OfKind(Signature)` wildcard, never here.
             KType::Signature { .. } => false,
             KType::OfKind(k) => k.admits(t.kind_of()),
             // A union slot is satisfied by any type its members are satisfied by.
@@ -498,9 +499,9 @@ impl<'a> KType<'a> {
             }
             // Type-accepting slot, type-channel-only, by shallow kind via `kind_of` subsumption: a
             // first-class type value is admitted iff the slot kind subsumes the value's `kind_of`, so
-            // `Proper` / `Any` take any non-module / non-signature type, `Module` / `Signature` take
-            // only their own carriers, and a nominal-kind slot only its own family. An object value
-            // reports a non-type `kind_of` and is refused.
+            // `Proper` / `Any` take any non-signature type, `Signature` takes only its own carrier,
+            // and a nominal-kind slot only its own family. An object value reports a non-type
+            // `kind_of` and is refused.
             KType::OfKind(k) => match c {
                 Carried::Type(ty) => k.admits(ty.kind_of()),
                 _ => false,
@@ -513,7 +514,6 @@ impl<'a> KType<'a> {
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
             KType::Union { members, .. } => members.iter().any(|m| m.accepts_carried(c)),
-            KType::Module { .. } => c.ktype() == *self,
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
@@ -524,10 +524,6 @@ impl<'a> KType<'a> {
                 sig, pinned_slots, ..
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
-                    sig.satisfied_by_module(m)
-                        && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
-                }
-                Carried::Type(KType::Module { module: m, .. }) => {
                     sig.satisfied_by_module(m)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
@@ -615,13 +611,12 @@ impl<'a> KType<'a> {
                 ExpressionPart::Type(_) => matches!(k, KKind::ProperType | KKind::AnyType),
                 _ => false,
             },
-            // The nominal / module / signature / constructor slots classify only resolved values
+            // The nominal / signature / constructor slots classify only resolved values
             // (via `accepts_carried`); no parser part shape satisfies them. A union delegates to
             // its members, and a member admits a part only for a shape it classifies — a literal
             // for `Number` / `Str` / `Bool` / `Null`.
             KType::Union { members, .. } => members.iter().any(|m| m.accepts_part(part)),
             KType::SetRef { .. }
-            | KType::Module { .. }
             | KType::AbstractType { .. }
             | KType::Signature { .. }
             | KType::ConstructorApply { .. } => false,

@@ -167,9 +167,11 @@ fn nominal_of_kind_name_renders_family_keyword() {
     );
 }
 
+/// `:Module` lowers to the empty signature, which renders back as the `Module` surface keyword;
+/// `:Signature` is the `OfKind` wildcard and renders as its own keyword.
 #[test]
 fn any_module_and_any_signature_render_surface_keywords() {
-    let am: KType<'_> = KType::OfKind(KKind::Module);
+    let am: KType<'_> = KType::empty_signature();
     let asg: KType<'_> = KType::OfKind(KKind::Signature);
     assert_eq!(am.name(), "Module");
     assert_eq!(asg.name(), "Signature");
@@ -251,7 +253,6 @@ fn hash_agrees_with_eq_for_region_free_variants() {
         ),
         (KType::OfKind(KKind::AnyType), KType::OfKind(KKind::AnyType)),
         (KType::Any, KType::Any),
-        (KType::OfKind(KKind::Module), KType::OfKind(KKind::Module)),
         (
             KType::OfKind(KKind::Signature),
             KType::OfKind(KKind::Signature),
@@ -569,19 +570,19 @@ fn to_static_rebuilds_constructor_apply() {
     );
 }
 
-/// `Module { module }` holds a live `&'a Module` region pointer -> `None`. `Module` /
-/// `ModuleSignature` / `KFunction` are region-pinned (`Scope<'a>`'s fields make them
-/// self-referential), so — matching every other fixture in this crate that needs one
+/// A module's self-sig (`Signature { sig: SelfOf(m) }`) holds a live `&'a Module` region pointer
+/// -> `None`. `Module` / `ModuleSignature` / `KFunction` are region-pinned (`Scope<'a>`'s fields
+/// make them self-referential), so — matching every other fixture in this crate that needs one
 /// (e.g. `ktype_predicates/tests.rs`, `kfunction/tests.rs`) — they are built through the
 /// region brand rather than as bare stack locals.
 #[test]
-fn to_static_none_for_module_borrow() {
+fn to_static_none_for_self_sig_module_borrow() {
     let storage = run_root_storage();
     let scope = default_scope(&storage, Box::new(std::io::sink()));
     let module = storage
         .brand()
         .alloc_module(Module::new("Test".into(), scope));
-    let t = KType::Module { module };
+    let t = KType::signature(SigSource::SelfOf(module), Vec::new());
     assert!(t.to_static().is_none());
 }
 
@@ -648,7 +649,7 @@ fn to_static_none_for_set_ref_rc_shared() {
 
 // --- KType::resident_in / resident_in_reach --------------------------------------
 
-/// A `Module` allocated into `dest`'s own region is dest-resident.
+/// A self-sig over a `Module` allocated into `dest`'s own region is dest-resident.
 #[test]
 fn resident_in_true_for_same_region_module() {
     let storage = run_root_storage();
@@ -656,11 +657,12 @@ fn resident_in_true_for_same_region_module() {
     let module = storage
         .brand()
         .alloc_module(Module::new("Test".into(), scope));
-    let t = KType::Module { module };
+    let t = KType::signature(SigSource::SelfOf(module), Vec::new());
     assert!(t.resident_in(storage.region()));
 }
 
-/// A `Module` allocated into a foreign region is not resident in an unrelated `dest`.
+/// A self-sig over a `Module` allocated into a foreign region is not resident in an unrelated
+/// `dest`.
 #[test]
 fn resident_in_false_for_foreign_region_module() {
     let foreign = run_root_storage();
@@ -668,7 +670,7 @@ fn resident_in_false_for_foreign_region_module() {
     let module = foreign
         .brand()
         .alloc_module(Module::new("Test".into(), foreign_scope));
-    let t = KType::Module { module };
+    let t = KType::signature(SigSource::SelfOf(module), Vec::new());
 
     let dest = run_root_storage();
     assert!(!t.resident_in(dest.region()));
@@ -709,8 +711,8 @@ fn resident_in_false_for_set_with_foreign_signature_member() {
     assert!(!t.resident_in(dest.region()));
 }
 
-/// [`KType::resident_in_reach`] widens the dest-only check: a `Module` foreign to `dest` but
-/// named by `reach`'s evidence is resident.
+/// [`KType::resident_in_reach`] widens the dest-only check: a self-sig over a `Module` foreign to
+/// `dest` but named by `reach`'s evidence is resident.
 #[test]
 fn resident_in_reach_true_when_evidence_covers_foreign_module() {
     use crate::machine::core::FrameSet;
@@ -720,7 +722,7 @@ fn resident_in_reach_true_when_evidence_covers_foreign_module() {
     let module = foreign
         .brand()
         .alloc_module(Module::new("Test".into(), foreign_scope));
-    let t = KType::Module { module };
+    let t = KType::signature(SigSource::SelfOf(module), Vec::new());
 
     let dest = run_root_storage();
     assert!(

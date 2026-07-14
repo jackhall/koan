@@ -4,7 +4,7 @@ use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::{run_root_storage, FrameStorageExt, Scope, StoredReach};
 use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::types::{KType, TypeResolution};
+use crate::machine::model::types::{KType, SigSource, TypeResolution};
 use crate::machine::model::values::{Carried, CarriedFamily, Module};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
@@ -12,17 +12,17 @@ use crate::witnessed::{Delivered, Sealed};
 
 /// A first-class type spliced inline via `part_walk`'s wrap-slot arm arrives with its binding's
 /// stored reach, and adopting the cell pins the type's producer region: `T`'s registered `KType`
-/// reaches into a foreign frame's `Module` (the only variants that hold a real `&'a` region
-/// pointer, per `KType`'s doc comment). The consumer lives in its own independent frame and every
-/// other direct handle (the binding scope's own frame, the type's original producer frame) drops
-/// before the read — an empty-reach witness (the old `Witnessed::resident` fallback) would leave
-/// this dangling.
+/// is a `Signature { sig: SelfOf(_) }` reaching into a foreign frame's `Module` (one of the few
+/// variants that hold a real `&'a` region pointer, per `KType`'s doc comment). The consumer lives
+/// in its own independent frame and every other direct handle (the binding scope's own frame, the
+/// type's original producer frame) drops before the read — an empty-reach witness would leave this
+/// dangling.
 #[test]
 fn spliced_type_carrier_pins_the_producer_region_after_drop() {
     let storage = run_root_storage();
     let scope = default_scope(&storage, Box::new(std::io::sink()));
 
-    // Build and seal a `Module`-carrying type entirely within a foreign frame's own scope — the
+    // Build and seal a module-borrowing type entirely within a foreign frame's own scope — the
     // erasure at `resident_type_carrier` decouples the sealed cell from `foreign`'s borrow.
     let foreign = run_root_storage();
     let foreign_scope = run_root_bare(&foreign);
@@ -34,7 +34,7 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
         .alloc_module(Module::new("M".to_string(), child));
     foreign_scope.register_type(
         "T".to_string(),
-        KType::Module { module },
+        KType::signature(SigSource::SelfOf(module), Vec::new()),
         BindingIndex::BUILTIN,
         StoredReach::for_test(None, false),
     );
@@ -90,7 +90,10 @@ fn spliced_type_carrier_pins_the_producer_region_after_drop() {
 
     // Read through the adopted type — Miri confirms no use-after-free.
     match adopted {
-        Carried::Type(KType::Module { module }) => assert_eq!(module.path, "M"),
-        _ => panic!("expected the adopted Module type"),
+        Carried::Type(KType::Signature {
+            sig: SigSource::SelfOf(module),
+            ..
+        }) => assert_eq!(module.path, "M"),
+        _ => panic!("expected the adopted self-sig type"),
     }
 }

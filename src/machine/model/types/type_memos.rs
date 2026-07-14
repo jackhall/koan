@@ -150,7 +150,6 @@ pub(crate) fn memo_safe(kt: &KType<'_>) -> bool {
         | KType::SetLocal(_)
         | KType::RecursiveRef(_)
         | KType::Unresolved(_)
-        | KType::Module { .. }
         | KType::AbstractType { .. } => true,
     }
 }

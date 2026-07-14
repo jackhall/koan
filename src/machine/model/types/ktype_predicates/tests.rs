@@ -273,8 +273,8 @@ fn record_value_admission_and_matches() {
 }
 
 /// Admission table for `KType::accepts_part`: bare builtin type tokens
-/// and newtype / union `Carried::Type(SetRef)` identities admit; module and signature
-/// carriers reject so the `:Type` vs `:Module` / `:Signature` overload distinction
+/// and newtype / union `Carried::Type(SetRef)` identities admit; the module value and the
+/// signature carrier reject so the `:Type` vs `:Module` / `:Signature` overload distinction
 /// stays intact; non-type-denoting carriers reject.
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
@@ -317,11 +317,12 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let module = region
         .brand()
         .alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KType<'_> = region
+    // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
+    let module_value = region
         .brand()
-        .alloc_ktype_checked(KType::Module { module })
+        .alloc_object_checked(KObject::Module(module))
         .expect("module was just allocated into region's own region");
-    assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_module))));
+    assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value))));
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("OrderedSig".into(), scope));

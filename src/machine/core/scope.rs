@@ -1175,40 +1175,13 @@ impl<'a> Scope<'a> {
             .seal_resident(Carried::Type(kt), self.resident_witness(stored))
     }
 
-    /// Surface a resolved type hit into the value channel: a [`KType::Module`] hit becomes the
-    /// Object-arm module value (allocated into this scope's region under the hit's stored reach — the
-    /// module child scope's token names its region), so a module named in expression position reads
-    /// back as its principal-signature-typed value. Every other type rides the type channel unchanged
-    /// via [`Self::resident_type_carrier`]. Returns the same carrier type
-    /// [`Self::resident_type_carrier`] does, so a read boundary swaps one call for the other. The
-    /// module alloc is covered by the same `stored` reach that made the `KType::Module` hit resident,
-    /// so the audit cannot decline (mirroring [`Self::alloc_module_reaching`]'s invariant).
-    pub(crate) fn surface_type_hit<'r>(
-        &self,
-        kt: &'a KType<'a>,
-        stored: StoredReach<'r>,
-    ) -> Witnessed<CarriedFamily, CarrierWitness> {
-        match kt {
-            KType::Module { module } => {
-                let obj = self
-                    .alloc_object_reaching(KObject::Module(module), &stored)
-                    .expect(
-                        "surface_type_hit: a module identity's child-scope region is covered by \
-                         the stored reach that made its KType::Module hit resident",
-                    );
-                self.resident_value_carrier(obj, stored)
-            }
-            _ => self.resident_type_carrier(kt, stored),
-        }
-    }
-
     /// The full stored token for a module minted in **this** scope from its `child` scope — the
     /// derivation door that folds the child's home-omitted foreign reach together with the
     /// home-borrow bit the mint derives (`true` iff a child entry set or the child's own region
     /// owner reaches this scope's region before home-omission). The foreign half is the seal-time
     /// union over the child's own **binding-entry** hosted sets (each already home-omitted in the
     /// child's arena), plus the child's own region owner (materialized, foreign to this parent
-    /// scope); never recovered by walking a built `KType::Module`. A co-located module (`MODULE`,
+    /// scope); never recovered by walking the built module value. A co-located module (`MODULE`,
     /// opaque `:|`) folds nothing extra; a transparent `:!` view of a source module pins that
     /// source's (foreign) region and reach. Returning the whole [`StoredReach`], a MODULE finish /
     /// `:|` view seals its terminal from a token nothing outside the derivation can forge. The omit

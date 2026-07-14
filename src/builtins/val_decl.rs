@@ -30,7 +30,6 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
         | KType::Null
         | KType::OfKind(KKind::AnyType)
         | KType::OfKind(KKind::Signature)
-        | KType::OfKind(KKind::Module)
         // `:Module` lowers to the empty signature; its `name()` is "Module", so it re-resolves
         // against decl_scope through the same leaf path as the other builtin type names.
         | KType::Signature { sig: SigSource::Empty, .. }

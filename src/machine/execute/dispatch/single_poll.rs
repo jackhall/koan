@@ -102,7 +102,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
         // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
         // re-home, no `child_scope()` walk.
         TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
-            s.surface_type_hit(resolved.kt, resolved.stored),
+            s.resident_type_carrier(resolved.kt, resolved.stored),
         ))),
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS

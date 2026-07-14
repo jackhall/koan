@@ -93,28 +93,22 @@ pub fn body_identifier<'a>(
             .expect("a data-bound name always resolves to a delivered value carrier");
         return route(access_field(&ctx.ctx, target, &field_name, &lhs));
     }
-    if let Some(kt) = ctx.scope.resolve_type(&s_name) {
-        match kt {
-            KType::Module { module: m, .. } => return route(access_module_member(m, &field_name)),
-            KType::AbstractType {
-                source: AbstractSource::Module(m),
-                ..
-            } => {
-                return route(access_module_member(m, &field_name));
-            }
-            KType::AbstractType { .. } => {}
-            _ => {}
-        }
+    if let Some(KType::AbstractType {
+        source: AbstractSource::Module(m),
+        ..
+    }) = ctx.scope.resolve_type(&s_name)
+    {
+        return route(access_module_member(m, &field_name));
     }
     Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
 
-/// `ATTR <s:ProperType> <field:_>` — entry for a Type-classed lhs. Module names are Type-classed
-/// tokens (see [token classes](../../design/typing/tokens.md)), so `Foo.x` parses as
-/// `[ATTR Type(Foo) Identifier(x)]` instead of the `Identifier`-lhs the struct path uses. The
-/// Type-Type overload shares this body so chained module access (`Outer.Inner.x`) works regardless
-/// of whether each step's field is a module name or a regular member. Projects a member off the
-/// Type-classed `s`, resolving an `Unresolved` leaf through the memoized bridge first.
+/// `ATTR <s:ProperType> <field:_>` — entry for a type-channel lhs: a first-class signature value
+/// or an opaque-ascription abstract type (see [token classes](../../design/typing/tokens.md) for
+/// why these lhs tokens are Type-classed). The Type-Type overload shares this body so a chained
+/// access whose field is itself a Type token (`Foo.Carrier`) reaches the same projection. Projects
+/// a member off the Type-classed `s`, resolving an `Unresolved` leaf through the memoized bridge
+/// first. A module lhs rides the value channel and picks [`body_module`] instead.
 pub fn body_type_lhs<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
@@ -208,12 +202,12 @@ pub fn body_module<'a>(
     route(access_module_member(m, &field_name))
 }
 
-/// Project `field` off a Type-channel lhs: a module / signature / opaque-abstract identity.
-/// A `SetRef` (struct / union name) and every other type has no members and falls through to
-/// the same TypeMismatch a static struct field access produces.
+/// Project `field` off a Type-channel lhs: a signature or opaque-abstract identity. A module
+/// rides the value channel, so a module lhs lands in [`body_module`] instead. A `SetRef`
+/// (struct / union name) and every other type has no members and falls through to the same
+/// TypeMismatch a static struct field access produces.
 fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     match kt {
-        KType::Module { module: m, .. } => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
         // member lives in that decl region, so it seals under the decl scope's home frame. Only a
         // `Declared` signature carries a decl scope; the `SelfOf`/`Empty` sources reach here from
@@ -228,7 +222,7 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
                     Ok(StepCarried::born(decl.resident_value_carrier(obj, stored)))
                 }
                 Some(MemberResolution::Type { kt, stored }) => {
-                    Ok(StepCarried::born(decl.surface_type_hit(kt, stored)))
+                    Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
                 }
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
@@ -363,7 +357,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
         // minted identity embeds a pointer into the module region).
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type_carrier(field, None) {
-                Some(NameLookup::Bound(hit)) => module_scope.surface_type_hit(hit.kt, hit.stored),
+                Some(NameLookup::Bound(hit)) => {
+                    module_scope.resident_type_carrier(hit.kt, hit.stored)
+                }
                 _ => module_scope.seal_fresh_ktype(minted)?,
             },
         ));
@@ -410,9 +406,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 module_scope.resident_value_carrier(obj, stored),
             ))
         }
-        Some(MemberResolution::Type { kt, stored }) => {
-            Ok(StepCarried::born(module_scope.surface_type_hit(kt, stored)))
-        }
+        Some(MemberResolution::Type { kt, stored }) => Ok(StepCarried::born(
+            module_scope.resident_type_carrier(kt, stored),
+        )),
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field
