@@ -1,7 +1,7 @@
 //! End-to-end tests for the type-language-via-dispatch sigil surface.
 //!
-//! Covers the four new keyworded type-constructor overloads (`LIST OF`,
-//! `MAP _ -> _`, `FN`, `FUNCTOR`) registered by
+//! Covers the keyworded type-constructor overloads (`LIST OF`,
+//! `MAP _ -> _`, `FN`) registered by
 //! [`koan::builtins::type_constructors`], plus the legacy `:(List Number)`
 //! positional fallback served by the dispatcher's `TypeCall` arm.
 //!
@@ -172,26 +172,41 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     }
 }
 
-// --- FUNCTOR ---
-
-/// `:(FUNCTOR (Ty :Signature) -> Module)` lowers to a `KType::KFunctor` whose `params`
-/// record keys the parameter type by its (capitalized) declared name `Ty`.
+/// A functor — a module-returning function — types as an ordinary `:(FN …)`: the capitalized
+/// `Type`-token parameter name `Ty` keys the params record, and `-> Module` lowers to the
+/// empty signature.
 #[test]
-fn sigil_functor_lowers_to_kfunctor() {
+fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG Holder = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
+        "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
     );
     let mk = lookup_sig_value_kt(scope, "Holder", "mk");
     match mk {
-        KType::KFunctor { params, ret, .. } => {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params.get("Ty"), Some(&KType::OfKind(KKind::Signature)));
             assert_eq!(*ret, KType::empty_signature());
         }
-        other => panic!("mk must be KType::KFunctor, got {other:?}"),
+        other => panic!("mk must be KType::KFunction, got {other:?}"),
     }
+}
+
+/// `:(FN …)` is koan's only function-type surface: `FUNCTOR` registers no overload, so a
+/// `:(FUNCTOR …)` sigil is an ordinary dispatch no-match.
+#[test]
+fn sigil_functor_is_unbound() {
+    let region = run_root_storage();
+    let err = run_expect_err(
+        &region,
+        "SIG Holder = ((VAL mk :(FUNCTOR (Ty :Signature) -> Module)))",
+    );
+    assert!(
+        err.contains("FUNCTOR"),
+        "the unbound `:(FUNCTOR …)` sigil should surface a dispatch no-match naming FUNCTOR, \
+         got: {err}",
+    );
 }
 
 // `sigil_legacy_list_number_falls_through_typecall` deleted: the legacy
@@ -265,30 +280,30 @@ fn union_field_accepts_keyworded_map_sigil() {
 
 // --- Forward type reference inside sigil body ---
 
-/// A sigiled FUNCTOR type expression whose inner parameter type references a
+/// A sigiled FN type expression whose inner parameter type references a
 /// forward-declared sibling SIG defers through a dep-finish: at body-run time the
 /// SIG is still parked on its own elaboration, so `extract_param_types`
 /// returns `Park(producers)`; the body schedules a dep-finish over the producers
 /// and re-runs the walk at finish against the now-final SIG. Pins the
-/// [`defer`] path in `body_fn` / `body_functor`.
+/// [`defer`] path in `body_fn`.
 ///
 /// Index gating means a SIG-internal VAL whose annotation references a
 /// later-sibling top-level SIG can't see the forward sibling at submission
 /// time, so the type-language sigil's resolver parks. Submission order:
 /// top-level SIG `Outer` (which contains the VAL), then top-level SIG
-/// `Ordered`. The VAL's sigiled FUNCTOR type annotation parks on
+/// `Ordered`. The VAL's sigiled FN type annotation parks on
 /// `Ordered`'s producer and resumes via dep-finish.
 #[test]
-fn sigil_functor_forward_reference_defers_via_combine() {
+fn sigil_fn_forward_reference_defers_via_combine() {
     let region = run_root_storage();
     let scope = run(
         &region,
-        "SIG Outer = ((VAL mk :(FUNCTOR (Ty :Ordered) -> Module)))\n\
+        "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
          SIG Ordered = (VAL compare :Number)",
     );
     let mk = lookup_sig_value_kt(scope, "Outer", "mk");
     match mk {
-        KType::KFunctor { params, ret, .. } => {
+        KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 1);
             // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
             // The carrier type's name (`Ordered`) is enough to confirm the
@@ -300,7 +315,7 @@ fn sigil_functor_forward_reference_defers_via_combine() {
             );
             assert_eq!(*ret, KType::empty_signature());
         }
-        other => panic!("mk must be KType::KFunctor, got {other:?}"),
+        other => panic!("mk must be KType::KFunction, got {other:?}"),
     }
 }
 // --- User-functor application ---

@@ -12,11 +12,9 @@
 //! - `Constructor(&KType)` — build a value from a type schema (struct / tagged /
 //!   newtype / `TypeConstructor` identity). Reuses the `constructors` module
 //!   (`CtorKind` + `launch`).
-//! - `Function(&KFunction)` — call a `KFunction` by name. A functor is a
-//!   `KFunction` whose result is a module, so functor application *is* this arm;
-//!   the functor/function distinction survives only at classification (for
-//!   `KType::KFunctor` typing and the `TypeHeadDeferred` diagnostic gate), never
-//!   here at execution.
+//! - `Function(&KFunction)` — call a `KFunction` by name. Every function rides this
+//!   arm, whatever it returns: a functor — a module-returning function — is an
+//!   ordinary `KFunction`, so its application is this arm too.
 
 use std::rc::Rc;
 

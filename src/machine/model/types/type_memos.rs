@@ -126,7 +126,7 @@ pub(crate) fn memo_safe(kt: &KType<'_>) -> bool {
         KType::List { element, .. } => memo_safe(element),
         KType::Dict { key, value, .. } => memo_safe(key) && memo_safe(value),
         KType::Record { fields, .. } => fields.iter().all(|(_, field)| memo_safe(field)),
-        KType::KFunction { params, ret, .. } | KType::KFunctor { params, ret, .. } => {
+        KType::KFunction { params, ret, .. } => {
             params.iter().all(|(_, p)| memo_safe(p)) && memo_safe(ret)
         }
         KType::Union { members, .. } => members.iter().all(memo_safe),

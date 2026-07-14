@@ -731,31 +731,29 @@ fn deferred_return_more_specific_than_any() {
     assert!(!any.is_more_specific_than(&deferred));
 }
 
-/// Two functors differing only in their deferred-return shadow are distinct: not equal,
+/// Two function types differing only in their deferred-return shadow are distinct: not equal,
 /// neither more specific than the other, and they hash apart.
 #[test]
-fn two_functors_differ_only_in_deferred_return_are_distinct() {
+fn two_functions_differ_only_in_deferred_return_are_distinct() {
     use std::hash::{Hash, Hasher};
-    let er = KType::functor_type(
+    let er = KType::function_type(
         Record::new(),
         Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
             TypeIdentifier::leaf("er".into()),
         ))),
-        None,
     );
-    let ar = KType::functor_type(
+    let ar = KType::function_type(
         Record::new(),
         Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
             TypeIdentifier::leaf("Ar".into()),
         ))),
-        None,
     );
     assert_ne!(er, ar);
     assert!(!er.is_more_specific_than(&ar));
     assert!(!ar.is_more_specific_than(&er));
     // `KType` carries interior mutability, so it can't key a `HashSet` (clippy
     // `mutable_key_type`). Hash each directly: the deferred-return shadow participates
-    // in `KType`'s hash, so the two functors hash apart.
+    // in `KType`'s hash, so the two function types hash apart.
     let hash = |k: &KType<'_>| {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         k.hash(&mut h);

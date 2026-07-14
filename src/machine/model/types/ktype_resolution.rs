@@ -89,7 +89,6 @@ impl<'a> KType<'a> {
                     key: yk, value: yv, ..
                 },
             ) => KType::dict(Box::new(KType::join(xk, yk)), Box::new(KType::join(xv, yv))),
-            // `KFunction` and `KFunctor` stay tag-matched: one never joins to the other family.
             (
                 KType::KFunction {
                     params: xa,
@@ -103,22 +102,6 @@ impl<'a> KType<'a> {
                 },
             ) => match join_param_record(xa, ya) {
                 Some(params) => KType::function_type(params, Box::new(KType::join(xr, yr))),
-                None => KType::Any,
-            },
-            (
-                KType::KFunctor {
-                    params: xa,
-                    ret: xr,
-                    ..
-                },
-                KType::KFunctor {
-                    params: ya,
-                    ret: yr,
-                    ..
-                },
-            ) => match join_param_record(xa, ya) {
-                // Anonymous result: no callable body survives a join.
-                Some(params) => KType::functor_type(params, Box::new(KType::join(xr, yr)), None),
                 None => KType::Any,
             },
             _ => KType::Any,

@@ -153,7 +153,6 @@ fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String
         | KType::Dict { .. }
         | KType::Record { .. }
         | KType::KFunction { .. }
-        | KType::KFunctor { .. }
         | KType::DeferredReturn(_)
         | KType::SetLocal(_)
         | KType::Union { .. }

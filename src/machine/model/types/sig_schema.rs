@@ -165,13 +165,6 @@ pub fn substitute_sig_members<'a>(
             params.map(|v| substitute_sig_members(v, sig_id, members)),
             Box::new(substitute_sig_members(ret, sig_id, members)),
         ),
-        KType::KFunctor {
-            params, ret, body, ..
-        } => KType::functor_type(
-            params.map(|v| substitute_sig_members(v, sig_id, members)),
-            Box::new(substitute_sig_members(ret, sig_id, members)),
-            *body,
-        ),
         KType::Union { members: us, .. } => KType::union_of(
             us.iter()
                 .map(|m| substitute_sig_members(m, sig_id, members))

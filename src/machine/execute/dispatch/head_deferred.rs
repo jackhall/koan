@@ -5,12 +5,11 @@
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
 //!
-//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value, a body-bearing
-//!   `KType::KFunctor`, or a `SetRef` constructor.
-//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only
-//!   type-shaped heads — a `SetRef` constructor or a body-bearing `KType::KFunctor`.
-//!   A function value or a body-less type annotation surfaces a type-shaped
-//!   `TypeMismatch`.
+//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or a `SetRef`
+//!   constructor.
+//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only a
+//!   constructible type — a `SetRef` constructor. A function value or any other type
+//!   surfaces a type-shaped `TypeMismatch`.
 //!
 //! The park/resume pair mirrors `park_on_literal` + the `type_call`
 //! head-placeholder resume, no new scheduler primitive.
@@ -108,16 +107,9 @@ fn classify_head<'step>(
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },
-        // A type-bound functor (`body: Some`) yields a module, so it is admitted in both modes; a
-        // bare functor annotation (`body: None`) is type-shaped but not invocable; a `SetRef` is a
-        // constructor.
+        // A `SetRef` is a constructor — the only invocable type identity. Every other type is
+        // type-shaped but not invocable.
         Carried::Type(kt) => match kt {
-            KType::KFunctor { body: Some(f), .. } => Ok(ResolvedCallable::Function(f)),
-            KType::KFunctor { body: None, .. } => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "constructible Type or bound functor".to_string(),
-                got: kt.name(),
-            })),
             KType::SetRef { .. } => Ok(ResolvedCallable::Constructor {
                 identity: kt,
                 reach,

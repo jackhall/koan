@@ -1023,7 +1023,7 @@ fn head_deferred_non_callable_value_errors() {
 }
 
 /// `TypeHeadDeferred` → type error. A `:(...)` head whose value is not a
-/// constructible type or functor (here `Number`) surfaces a type-shaped
+/// constructible type (here `Number`) surfaces a type-shaped
 /// `TypeMismatch` — distinct from the `HeadDeferred` non-callable message.
 #[test]
 fn type_head_deferred_non_type_value_type_mismatches() {
@@ -1053,26 +1053,6 @@ fn type_head_deferred_constructs_from_sigil_type() {
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
     assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
-}
-
-/// `TypeCall` → bare functor annotation. A `LET`-bound `:(FUNCTOR …)` *annotation*
-/// (`body: None`) is type-shaped but not invocable — applying it surfaces a
-/// `TypeMismatch`, distinct from a missing name (`UnboundName`).
-#[test]
-fn type_call_on_functor_annotation_type_mismatches() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
-    use crate::machine::KErrorKind;
-    let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET FShape = :(FUNCTOR (x :Number) -> Module)");
-    let err = run_one_err(scope, parse_one("FShape {x = 5}"));
-    match &err.kind {
-        KErrorKind::TypeMismatch { expected, .. } => assert!(
-            expected.contains("bound functor"),
-            "expected the not-invocable-annotation diagnostic, got {err}",
-        ),
-        _ => panic!("expected TypeMismatch, got {err}"),
-    }
 }
 
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not

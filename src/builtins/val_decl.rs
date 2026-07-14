@@ -139,7 +139,7 @@ pub fn body<'a>(
 /// enumerates. Uses the same infallible `register_type` path as a SIG-local `TYPE <Name>`
 /// abstract member.
 ///
-/// `declared_kt` can embed a borrow into `carrier`'s producer region (a bound `KFunctor`, a
+/// `declared_kt` can embed a borrow into `carrier`'s producer region (a declared `Signature`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
 /// dep terminal. When `carrier` is `Some`, the stored binding's reach and the sealed result's
 /// witness fold it in. When `carrier` is `None`, the seal picks the tier `declared_kt`'s own shape
@@ -171,7 +171,7 @@ fn finalize_val<'a>(
         // the view and the ambient `declared_kt` are the same delivered type.
         Some(c) => fctx.ctx.alloc_type_of(c),
         // A region-free declared type takes the compile-enforced `'static` tier; one embedding a
-        // region borrow (a bound `KFunctor`, a nominal `SetRef`) takes the runtime-checked seal.
+        // region borrow (a declared `Signature`, a nominal `SetRef`) takes the runtime-checked seal.
         None => {
             let sealed = match declared_kt.to_static() {
                 Some(owned) => Ok(fctx.ctx.alloc_type(owned)),

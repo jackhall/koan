@@ -231,16 +231,12 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 }
 
 /// Bare-`Type`-head call. A single `resolve_type_with_chain` (a `types[name]` read)
-/// classifies the identity, and the branched outcomes route through the shared
-/// apply-a-callable tail:
-/// - a constructible `SetRef` identity (a sealed nominal type) → the `Constructor` arm;
-/// - a `KType::KFunctor { body: Some(f) }` (a bound functor) → the `Function` arm — its
-///   result is a module;
-/// - a `KType::KFunctor { body: None }` (a bare `:(FUNCTOR …)` annotation) is not invocable
-///   → `TypeMismatch`.
+/// classifies the identity, which routes through the shared apply-a-callable tail's
+/// `Constructor` arm — a constructible `SetRef` identity (a sealed nominal type) is the
+/// invocable case.
 ///
 /// A `Parked` head (a still-finalizing `LET <Type-class> = …` binding, including a
-/// recursive/forward functor) parks on its producer and re-runs `type_call` on wake. A name
+/// recursive/forward type) parks on its producer and re-runs `type_call` on wake. A name
 /// with no producer and no binding is `UnboundName`.
 pub(super) fn type_call<'step>(
     ctx: &SchedulerView<'step, '_>,
@@ -284,31 +280,15 @@ pub(super) fn type_call<'step>(
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }
     };
-    match identity {
-        // A bound functor's result is a module — the `Function` arm calls it.
-        KType::KFunctor { body: Some(f), .. } => {
-            apply_callable(ctx, ResolvedCallable::Function(f), &expr)
-        }
-        // A bare `:(FUNCTOR …)` type annotation has no callable to invoke.
-        KType::KFunctor { body: None, .. } => {
-            Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "constructible Type or bound functor".to_string(),
-                got: identity.name(),
-            })))
-        }
-        _ => {
-            // The identity's stored per-binding type token (home-omitted foreign reach + home-borrow
-            // bit), resolved through the same lexical chain as the identity: threaded to the
-            // construction finish so its operand names the identity's own region rather than relying
-            // on the dest frame's storage `outer` chain, which omits lexical ancestors under TCO.
-            // Empty while `RecursiveSet` is heap-`Rc`'d.
-            let reach = scope.type_reach(head_t.as_str(), chain);
-            apply_callable(
-                ctx,
-                ResolvedCallable::Constructor { identity, reach },
-                &expr,
-            )
-        }
-    }
+    // The identity's stored per-binding type token (home-omitted foreign reach + home-borrow
+    // bit), resolved through the same lexical chain as the identity: threaded to the
+    // construction finish so its operand names the identity's own region rather than relying
+    // on the dest frame's storage `outer` chain, which omits lexical ancestors under TCO.
+    // Empty while `RecursiveSet` is heap-`Rc`'d.
+    let reach = scope.type_reach(head_t.as_str(), chain);
+    apply_callable(
+        ctx,
+        ResolvedCallable::Constructor { identity, reach },
+        &expr,
+    )
 }

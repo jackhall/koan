@@ -290,13 +290,6 @@ fn seal_refs_inner<'a>(
             params.map(|t| seal_refs_inner(set, binder, t, missing)),
             Box::new(recurse(ret)),
         ),
-        KType::KFunctor {
-            params, ret, body, ..
-        } => KType::functor_type(
-            params.map(|t| seal_refs_inner(set, binder, t, missing)),
-            Box::new(recurse(ret)),
-            *body,
-        ),
         KType::ConstructorApply { ctor, args, .. } => {
             KType::constructor_apply(Box::new(recurse(ctor)), args.iter().map(recurse).collect())
         }
@@ -330,13 +323,6 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
         KType::KFunction { params, ret, .. } => KType::function_type(
             params.map(|t| resolve_set_locals(set, t)),
             Box::new(resolve_set_locals(set, ret)),
-        ),
-        KType::KFunctor {
-            params, ret, body, ..
-        } => KType::functor_type(
-            params.map(|t| resolve_set_locals(set, t)),
-            Box::new(resolve_set_locals(set, ret)),
-            *body,
         ),
         KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
             Box::new(resolve_set_locals(set, ctor)),

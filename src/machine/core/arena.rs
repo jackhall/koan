@@ -765,7 +765,7 @@ pub(crate) trait KoanRegionExt {
     fn owns_signature<'a>(&self, ptr: *const ModuleSignature<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_function` on this region — the residence
-    /// audit's check for a `KType::KFunctor { body: Some(_), .. }` payload.
+    /// audit's check for a `KObject::KFunction` payload.
     fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool;
 }
 

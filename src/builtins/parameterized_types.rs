@@ -4,12 +4,10 @@
 //! - `LIST OF :Type` → `Carried::Type(KType::List { .. })`
 //! - `MAP :Type -> :Type` → `Carried::Type(KType::Dict { .. })`
 //! - `FN <sig> -> :Type` → `Carried::Type(KType::KFunction { .. })`
-//! - `FUNCTOR <sig> -> :Type` → `Carried::Type(KType::KFunctor { .. })`
 //!
 //! Fully-uppercase head keywords keep parameterized-type construction in
-//! narrow candidate buckets so user-defined functors overloading short
-//! connector words like `OF` don't pay a bucket-walk cost on every dispatched
-//! parameterized type.
+//! narrow candidate buckets so user-defined overloads of short connector words
+//! like `OF` don't pay a bucket-walk cost on every dispatched parameterized type.
 
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::{
@@ -24,55 +22,25 @@ use crate::machine::execute::{
     defer_field_list_action_composed, fold_field_list_sync, BrandCompose,
 };
 
-/// Which carrier the shared field-list path builds. All three ride the same parser and
-/// dep-finish/defer machinery; they differ only in the `KType` they fold their fields into,
-/// the diagnostic context string, and the field-name policy (both admit capitalized `Type`
-/// param names like `Ty`). The record type `:{…}` is structural — a first-class
-/// `ExpressionPart::RecordType` the dispatcher folds to `KType::Record` directly — so it is
-/// not a carrier kind here.
-#[derive(Clone, Copy)]
-enum CarrierKind {
-    Function,
-    Functor,
-}
+/// Diagnostic context string for the shared field-list parser when it walks an `:(FN …)`
+/// parameter list.
+const FN_PARAMS_CONTEXT: &str = "FN parameters";
 
-impl CarrierKind {
-    fn context(self) -> &'static str {
-        match self {
-            CarrierKind::Function => "FN parameters",
-            CarrierKind::Functor => "FUNCTOR parameters",
-        }
-    }
-
-    fn field_name_kind(self) -> FieldNameKind {
-        match self {
-            CarrierKind::Function | CarrierKind::Functor => FieldNameKind::IdentifierOrType,
-        }
-    }
-}
+/// Field-name policy for an `:(FN …)` parameter list: capitalized `Type` param names like
+/// `Ty` are admitted alongside ordinary identifiers.
+const FN_PARAM_NAME_KIND: FieldNameKind = FieldNameKind::IdentifierOrType;
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and wrap the
-/// `KFunction` / `KFunctor` identity in a `Carried::Type`. Shared by the synchronous and
-/// dep-finish paths.
-fn finalize_carrier<'a>(
-    fields: Vec<(String, KType<'a>)>,
-    ret: KType<'a>,
-    kind: CarrierKind,
-) -> KType<'a> {
-    let record = Record::from_pairs(fields);
-    match kind {
-        // A `:(FUNCTOR …)` type-position annotation is a shape, not a bound
-        // callable, so it carries no body.
-        CarrierKind::Functor => KType::functor_type(record, Box::new(ret), None),
-        CarrierKind::Function => KType::function_type(record, Box::new(ret)),
-    }
+/// `KFunction` identity. Shared by the synchronous and dep-finish paths.
+fn finalize_carrier<'a>(fields: Vec<(String, KType<'a>)>, ret: KType<'a>) -> KType<'a> {
+    KType::function_type(Record::from_pairs(fields), Box::new(ret))
 }
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
-/// directly (`Done`); FN/FUNCTOR route the parameter list through [`build_carrier`], which
+/// directly (`Done`); FN routes the parameter list through [`build_carrier`], which
 /// either folds synchronously or defers via [`defer_field_list_action`].
 mod action_bodies {
-    use super::{build_carrier, CarrierKind};
+    use super::build_carrier;
     use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
     use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
 
@@ -149,23 +117,18 @@ mod action_bodies {
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        build_carrier(ctx, "sig", "ret", CarrierKind::Function)
-    }
-
-    pub(super) fn body_functor<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        build_carrier(ctx, "sig", "ret", CarrierKind::Functor)
+        build_carrier(ctx, "sig", "ret")
     }
 }
 
 /// The return-type operand crossing shared by [`build_carrier`]'s sync and deferred arms: the ret
 /// crosses the fold as a carrier view when it has one, rebuilds at the brand from its `'static`
 /// value when region-free, and errors loudly when it reaches a region carrier-less. The composed
-/// carrier folds its params and the crossed return type into a `KFunction` / `KFunctor` at the brand.
+/// carrier folds its params and the crossed return type into a `KFunction` at the brand.
 fn ret_extras_and_compose<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     ret_slot: &str,
     ret: KType<'a>,
-    kind: CarrierKind,
 ) -> Result<(Vec<DeliveredCarried>, BrandCompose<'a>), KError> {
     // A ret that arrived as a resolved value carries a reach carrier (duplicated so the producer
     // keeps its terminal); a region-free token like `Bool` has none and rebuilds from its `'static`
@@ -175,7 +138,7 @@ fn ret_extras_and_compose<'a>(
     let ret_static: Option<KType<'static>> = ret.to_static();
     if ret_carrier.is_none() && ret_static.is_none() {
         return Err(KError::new(KErrorKind::ShapeError(
-            "FN/FUNCTOR return type reaches a region but arrived without a carrier".into(),
+            "FN return type reaches a region but arrived without a carrier".into(),
         )));
     }
     let extras: Vec<DeliveredCarried> = ret_carrier.into_iter().collect();
@@ -186,7 +149,7 @@ fn ret_extras_and_compose<'a>(
             Some(Carried::Type(kt)) => kt.clone(),
             Some(other @ Carried::Object(_)) => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN/FUNCTOR return slot resolved to non-type value `{}`",
+                    "FN return slot resolved to non-type value `{}`",
                     other.summarize(),
                 ))))
             }
@@ -195,20 +158,19 @@ fn ret_extras_and_compose<'a>(
             // lifetime.
             None => brand.alloc_ktype(ret_static.expect("gated above")).clone(),
         };
-        Ok(finalize_carrier(fields, ret, kind))
+        Ok(finalize_carrier(fields, ret))
     });
     Ok((extras, compose))
 }
 
 /// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
 /// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
-/// FUNCTOR param names like `Ty` are accepted. Folds synchronously or defers via
+/// param names like `Ty` are accepted. Folds synchronously or defers via
 /// [`defer_field_list_action`] (no self-reference binder, no pending guard).
 fn build_carrier<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     sig_slot: &str,
     ret_slot: &str,
-    kind: CarrierKind,
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
@@ -216,13 +178,13 @@ fn build_carrier<'a>(
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
         &sig_expr,
-        kind.context(),
-        kind.field_name_kind(),
+        FN_PARAMS_CONTEXT,
+        FN_PARAM_NAME_KIND,
         &mut elaborator,
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            let kt = finalize_carrier(fields, ret.clone(), kind);
+            let kt = finalize_carrier(fields, ret.clone());
             match kt.to_static() {
                 // Region-free carrier: the compile-enforced `'static` tier.
                 Some(owned) => Action::Done(Ok(ctx.ctx.alloc_type(owned))),
@@ -231,14 +193,14 @@ fn build_carrier<'a>(
                 // return type crosses as an extras operand.
                 None => {
                     let (extras, compose) =
-                        crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret, kind));
+                        crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret));
                     let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
                     Action::Done(fold_field_list_sync(
                         &ctx.ctx,
                         ctx.scope,
                         sig_expr,
-                        kind.context(),
-                        kind.field_name_kind(),
+                        FN_PARAMS_CONTEXT,
+                        FN_PARAM_NAME_KIND,
                         Vec::new(),
                         None,
                         None,
@@ -253,14 +215,13 @@ fn build_carrier<'a>(
             park_producers,
             sub_dispatches,
         } => {
-            let (extras, compose) =
-                crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret, kind));
+            let (extras, compose) = crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret));
             defer_field_list_action_composed(
                 sig_expr,
                 park_producers,
                 sub_dispatches,
-                kind.context(),
-                kind.field_name_kind(),
+                FN_PARAMS_CONTEXT,
+                FN_PARAM_NAME_KIND,
                 Vec::new(),
                 None,
                 None,
@@ -331,22 +292,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         action_bodies::body_fn,
-    );
-    register_builtin(
-        scope,
-        "FUNCTOR",
-        sig(
-            KType::OfKind(KKind::AnyType),
-            vec![
-                kw("FUNCTOR"),
-                arg("sig", KType::KExpression),
-                kw("->"),
-                // See the `FN` `ret` note: `Any` admits a signature / module return type that the
-                // `OfKind(AnyType)` `:Type` wall would refuse.
-                arg("ret", KType::Any),
-            ],
-        ),
-        action_bodies::body_functor,
     );
 }
 
@@ -442,18 +387,18 @@ mod tests {
         );
     }
 
+    /// A functor — a module-returning function — types as an ordinary `KFunction`.
     // Param name `Ty` uses two letters because koan rejects single-uppercase-letter tokens.
     #[test]
-    fn functor_lowers_to_kfunctor() {
+    fn fn_with_type_param_and_module_return_lowers_to_kfunction() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(FUNCTOR (Ty :Signature) -> Module)"));
+        let result = run_one_type(scope, parse_one(":(FN (Ty :Signature) -> Module)"));
         assert_eq!(
             *result,
-            KType::functor_type(
+            KType::function_type(
                 Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
                 Box::new(KType::empty_signature()),
-                None,
             )
         );
     }
@@ -592,16 +537,15 @@ mod tests {
     }
 
     #[test]
-    fn functor_capitalized_param_round_trips_and_preserves_name() {
+    fn fn_capitalized_param_round_trips_and_preserves_name() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let expected = KType::functor_type(
+        let expected = KType::function_type(
             Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
             Box::new(KType::empty_signature()),
-            None,
         );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
-        assert!(matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),);
+        assert!(matches!(&expected, KType::KFunction { params, .. } if params.get("Ty").is_some()),);
         assert_round_trips(scope, expected);
     }
 

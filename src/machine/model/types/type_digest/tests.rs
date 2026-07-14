@@ -78,33 +78,6 @@ fn leaves_and_composites_digest_distinctly_by_shape() {
 }
 
 #[test]
-fn functor_digest_matches_by_shape_and_stays_apart_from_function() {
-    let functor = |ret| {
-        KType::functor_type(
-            Record::from_pairs(vec![("x".to_string(), KType::Number)]),
-            Box::new(ret),
-            None,
-        )
-    };
-    assert_eq!(
-        digest_of(&functor(KType::Str)),
-        digest_of(&functor(KType::Str))
-    );
-
-    let function = KType::function_type(
-        Record::from_pairs(vec![("x".to_string(), KType::Number)]),
-        Box::new(KType::Str),
-    );
-    assert_ne!(
-        digest_of(&functor(KType::Str)),
-        digest_of(&function),
-        "functor and function of the same shape stay distinct by variant tag"
-    );
-    // `body` exclusion is enforced structurally (`digest_of` never reads it) and pinned by
-    // the Eq/Hash body-exclusion test in `machine::core::kfunction::tests`.
-}
-
-#[test]
 fn independently_built_sets_unify_and_exclude_scope_id() {
     // Same name + schema, different scope ids: the digest excludes `scope_id`, so they unify.
     let s1 = newtype_singleton("Foo", ScopeId::from_raw(7, 1), KType::Number);

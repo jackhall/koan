@@ -130,53 +130,10 @@ fn function(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'
     )
 }
 
-fn functor(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'static> {
-    KType::functor_type(
-        Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
-        Box::new(ret),
-        None,
-    )
-}
-
 /// Two same-shape functions join to the shared `KFunction` (the established arm).
 #[test]
 fn join_same_shape_functions_yields_shared_function() {
     let f1 = function(vec![("x", KType::Number)], KType::Bool);
     let f2 = function(vec![("x", KType::Number)], KType::Bool);
     assert_eq!(KType::join(&f1, &f2), f1.clone());
-}
-
-/// Two same-shape functors join to the shared `KFunctor` — the parity the new functor
-/// join arm restores, so `[f1, f2]` memoizes `List<:(FUNCTOR …)>` rather than
-/// `List<Any>`.
-#[test]
-fn join_same_shape_functors_yields_shared_functor() {
-    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
-    let g2 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
-    let joined = KType::join(&g1, &g2);
-    assert_eq!(joined, g1.clone());
-    // The element type a `[g1, g2]` list literal memoizes is the shared functor, not `Any`.
-    assert_eq!(
-        KType::list(Box::new(KType::join_iter(vec![g1.clone(), g2.clone()]))),
-        KType::list(Box::new(g1)),
-    );
-}
-
-/// Different-shape functors (mismatched key set) are incomparable, so the list join
-/// coarsens to `Any` — same fall-through as functions.
-#[test]
-fn join_different_shape_functors_yields_any() {
-    let g1 = functor(vec![("x", KType::Number)], KType::OfKind(KKind::Signature));
-    let g2 = functor(vec![("y", KType::Number)], KType::OfKind(KKind::Signature));
-    assert_eq!(KType::join(&g1, &g2), KType::Any);
-    assert_eq!(KType::join_iter(vec![g1, g2]), KType::Any);
-}
-
-/// A function and a functor of identical shape never join to either family — the
-/// variant-tag wall holds through join, falling through to `Any`.
-#[test]
-fn join_function_and_functor_yields_any() {
-    let f = function(vec![("x", KType::Number)], KType::Bool);
-    let g = functor(vec![("x", KType::Number)], KType::Bool);
-    assert_eq!(KType::join(&f, &g), KType::Any);
 }

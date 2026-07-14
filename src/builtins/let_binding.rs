@@ -53,7 +53,6 @@ pub fn body<'a>(
                 KType::List { .. }
                 | KType::Dict { .. }
                 | KType::KFunction { .. }
-                | KType::KFunctor { .. }
                 | KType::SetLocal(_)
                 | KType::RecursiveRef(_) => {
                     return done_err(KError::new(KErrorKind::ShapeError(format!(

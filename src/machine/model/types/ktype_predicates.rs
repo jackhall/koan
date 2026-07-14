@@ -24,7 +24,7 @@ impl<'a> KType<'a> {
     /// instance).
     /// Whether this type is a **region-free scalar leaf** — a primitive (`Number`, `Str`, `Bool`,
     /// `Null`, `Identifier`) that embeds neither a `&'a` region pointer (the `Module` / `Signature` /
-    /// `AbstractType` / `KFunctor { body }` variants do) nor a nested `KType` box (`List` / `Dict` /
+    /// `AbstractType` variants do) nor a nested `KType` box (`List` / `Dict` /
     /// `Record` / `KFunction` might carry one transitively). Such a type references no dep the
     /// construction fold was handed, so [`alloc_type_of`](crate::machine::core::StepAllocator::alloc_type_of)
     /// routes it to the no-fold path and it seals with an empty reach. Conservative by design: a
@@ -82,7 +82,6 @@ impl<'a> KType<'a> {
                 | KType::Dict { .. }
                 | KType::Record { .. }
                 | KType::KFunction { .. }
-                | KType::KFunctor { .. }
                 | KType::Union { .. }
                 | KType::Signature { .. }
                 | KType::ConstructorApply { .. }
@@ -121,8 +120,7 @@ impl<'a> KType<'a> {
                 record_value_more_specific(a, b)
             }
             // Function subtyping: contravariant params (width-subset), covariant return —
-            // see `param_record_more_specific`. KFunction and KFunctor never compare against
-            // each other; the shared `params`/`ret` shape lets both arms use one helper.
+            // see `param_record_more_specific`.
             (
                 KFunction {
                     params: pa,
@@ -130,18 +128,6 @@ impl<'a> KType<'a> {
                     ..
                 },
                 KFunction {
-                    params: pb,
-                    ret: rb,
-                    ..
-                },
-            ) => param_record_more_specific(pa, ra, pb, rb),
-            (
-                KFunctor {
-                    params: pa,
-                    ret: ra,
-                    ..
-                },
-                KFunctor {
                     params: pb,
                     ret: rb,
                     ..
@@ -315,10 +301,6 @@ impl<'a> KType<'a> {
                 KObject::KFunction(f) => function_compat(&f.signature, params, ret),
                 _ => false,
             },
-            KType::KFunctor { params, ret, .. } => match obj {
-                KObject::KFunction(f) => function_compat(&f.signature, params, ret),
-                _ => false,
-            },
             // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
             // Object channel, via [`SigSource::satisfied_by_module`] plus pinned-slot agreement.
             KType::Signature {
@@ -455,12 +437,6 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::KFunctor { params, ret, .. } => match c {
-                Carried::Object(KObject::KFunction(f)) => {
-                    function_compat(&f.signature, params, ret)
-                }
-                _ => false,
-            },
             // Part-shape-only slots (identifier / expression / type-expr / record-type) admit a
             // parser part shape, never a resolved value.
             KType::Identifier | KType::KExpression | KType::SigiledTypeExpr | KType::RecordType => {
@@ -561,9 +537,9 @@ impl<'a> KType<'a> {
             KType::List { .. } => matches!(part, ExpressionPart::ListLiteral(_)),
             KType::Dict { .. } => matches!(part, ExpressionPart::DictLiteral(_)),
             KType::Record { .. } => matches!(part, ExpressionPart::RecordLiteral(_)),
-            // Function / functor slots admit no parser part shape — only a resolved value, handled
+            // A function slot admits no parser part shape — only a resolved value, handled
             // above by `accepts_carried`.
-            KType::KFunction { .. } | KType::KFunctor { .. } => false,
+            KType::KFunction { .. } => false,
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             // A `:KExpression` slot captures a parenthesized expression raw; it also captures a
             // bare list literal raw — the shape a `Unary`-mode operator run reduces to
@@ -646,8 +622,8 @@ fn declared_sig_more_specific<'a>(
     forward && !reverse
 }
 
-/// Shared name-keyed specificity for the structurally-identical `KFunction` /
-/// `KFunctor` arms of [`KType::is_more_specific_than`]. Function subtyping is
+/// Name-keyed specificity for the `KFunction` arm of
+/// [`KType::is_more_specific_than`]. Function subtyping is
 /// contravariant in parameters (with width-subset) and covariant in the return,
 /// matching the value-into-slot gate in [`function_compat`] so most-specific-wins
 /// stays consistent. `self` (the `a` side) is strictly more specific than `other`

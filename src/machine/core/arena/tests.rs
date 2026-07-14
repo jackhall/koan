@@ -964,57 +964,53 @@ fn multi_region_record_of_closures_survives_frame_free() {
     );
 }
 
-/// A `KFunction` plus a `KType::KFunctor { body: Some(&f), .. }` wrapping it, both resident in
-/// `home`'s own region — the stand-in for a dep terminal's `t.value`/`t.carrier` pair (a bound
-/// functor whose `body` names the callable). Mirrors [`alloc_home_closure`]'s construction, but
-/// returns the *type*, since it is the functor type's `body` borrow the fold closes a hole around.
-fn alloc_home_functor_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
-    use crate::machine::core::kfunction::action::Action;
-    use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
-    use crate::machine::{Body, KFunction};
+/// A `ModuleSignature` plus a `KType::Signature { sig: SigSource::Declared(&s), .. }` wrapping it,
+/// both resident in `home`'s own region — the stand-in for a dep terminal's `t.value`/`t.carrier`
+/// pair (a region-borrowing sealed carrier). Mirrors [`alloc_home_closure`]'s construction, but
+/// returns the *type*, since it is the signature type's `decl_scope_ref` borrow the fold closes a
+/// hole around.
+fn alloc_home_signature_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
+    use crate::machine::model::values::ModuleSignature;
     home.with_scope(|child| {
-        let kf = KFunction::new(
-            ExpressionSignature {
-                return_type: ReturnType::Resolved(KType::Null),
-                elements: vec![SignatureElement::Keyword("__INNER__".into())],
-            },
-            Body::Builtin(|ctx| {
-                Action::done_resident(Carried::Object(
-                    ctx.scope.brand().alloc_object(KObject::Null),
-                ))
-            }),
-            child,
-            None,
-            None,
-        );
-        let kf_ref: &KFunction = home.brand().alloc_function(kf);
-        let kt = KType::functor_type(Record::new(), Box::new(KType::Null), Some(kf_ref));
+        let sig_ref: &ModuleSignature = home
+            .brand()
+            .alloc_signature(ModuleSignature::new("Held".into(), child));
+        let kt = KType::signature(SigSource::Declared(sig_ref), Vec::new());
         home.brand()
             .alloc_ktype_checked(kt)
-            .expect("kf_ref was just allocated into home's own region")
+            .expect("sig_ref was just allocated into home's own region")
     })
 }
 
+/// The decl-scope id a [`alloc_home_signature_type`] carrier borrows — the read-back identity the
+/// reach-fold tests compare across a producer-frame free.
+fn declared_sig_id(kt: &KType<'_>) -> ScopeId {
+    match kt {
+        KType::Signature {
+            sig: SigSource::Declared(s),
+            ..
+        } => s.sig_id(),
+        other => panic!("expected a declared Signature type, got {}", other.name()),
+    }
+}
+
 /// **`alloc_type_of`'s reach fold, exercised through the actual finish-surface helper.** A dep
-/// terminal's `KType::KFunctor { body: Some(&f) }` — the stand-in for `t.value`/`t.carrier` — is
-/// sealed as the step's own carrier via `alloc_type_of`, rebuilt at the fold brand from the dep's
-/// view in a *different* frame's region. The fold unions the producer's reach into the result's
-/// witness; every producer-frame handle then drops, and reading the sealed functor body must not
-/// dangle. Fails on UB, not values — the closing case for the reach hole `alloc_type` (no fold)
-/// leaves open.
+/// terminal's `KType::Signature { sig: SigSource::Declared(&s) }` — the stand-in for
+/// `t.value`/`t.carrier` — is sealed as the step's own carrier via `alloc_type_of`, rebuilt at the
+/// fold brand from the dep's view in a *different* frame's region. The fold unions the producer's
+/// reach into the result's witness; every producer-frame handle then drops, and reading the sealed
+/// signature's decl scope must not dangle. Fails on UB, not values — the closing case for the reach
+/// hole `alloc_type` (no fold) leaves open.
 #[test]
-fn functor_field_reach_fold_survives_producer_frame_free() {
+fn signature_field_reach_fold_survives_producer_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
-    // Producer: a KFunctor type (wrapping a KFunction) resident in its own frame's region — the
+    // Producer: a region-borrowing Signature type resident in its own frame's region — the
     // stand-in for a dep terminal delivered to the finish.
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_functor_type(&producer_frame);
-    let expected_id = match kt {
-        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
-        other => panic!("expected a KFunctor with a body, got {}", other.name()),
-    };
+    let kt: &KType = alloc_home_signature_type(&producer_frame);
+    let expected_id = declared_sig_id(kt);
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1034,15 +1030,14 @@ fn functor_field_reach_fold_survives_producer_frame_free() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    // Read back through the sealed carrier into the functor's captured scope.
+    // Read back through the sealed carrier into the signature's decl scope.
     let read_id = sealed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::KFunctor { body: Some(f), .. }) => f.captured_scope().id,
-        Carried::Type(other) => panic!("expected a KFunctor with a body, got {}", other.name()),
-        other => panic!("expected a KFunctor type, got {}", other.summarize()),
+        Carried::Type(kt) => declared_sig_id(kt),
+        other => panic!("expected a Signature type, got {}", other.summarize()),
     });
     assert_eq!(
         read_id, expected_id,
-        "functor type read back after producer frame freed"
+        "signature type read back after producer frame freed"
     );
 }
 
@@ -1081,7 +1076,7 @@ fn alloc_type_of_scalar_gate_seals_empty_reach() {
 /// **`alloc_type_composed`'s correlation, exercised through the actual door.** A mixed operand
 /// list — a region-free `Pure` value at position 0, a region-reaching `Reaching` carrier at
 /// position 1 — composes into a `Dict` whose `k`/`v` land at the same positions as the operands,
-/// and the `v` side (the dep's functor type) survives dropping the dep envelope and the producer
+/// and the `v` side (the dep's signature type) survives dropping the dep envelope and the producer
 /// frame: the fold, not ambient capture, is what keeps it alive. This is the pin the builtin-level
 /// tests can't provide — an ambient capture would reproduce the same read-back surface without the
 /// reach-fold, so only this door-level test distinguishes the two.
@@ -1091,11 +1086,8 @@ fn alloc_type_composed_correlates_mixed_operands() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_functor_type(&producer_frame);
-    let expected_id = match kt {
-        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
-        other => panic!("expected a KFunctor with a body, got {}", other.name()),
-    };
+    let kt: &KType = alloc_home_signature_type(&producer_frame);
+    let expected_id = declared_sig_id(kt);
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1121,14 +1113,7 @@ fn alloc_type_composed_correlates_mixed_operands() {
             key: k, value: v, ..
         }) => {
             let k_is_number = matches!(k.as_ref(), KType::Number);
-            let id = match v.as_ref() {
-                KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
-                other => panic!(
-                    "expected v to be a KFunctor with a body, got {}",
-                    other.name()
-                ),
-            };
-            (k_is_number, id)
+            (k_is_number, declared_sig_id(v.as_ref()))
         }
         other => panic!("expected a Dict type, got {}", other.summarize()),
     });
@@ -1148,11 +1133,8 @@ fn alloc_type_composed_operand_order_is_positional() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_functor_type(&producer_frame);
-    let expected_id = match kt {
-        KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
-        other => panic!("expected a KFunctor with a body, got {}", other.name()),
-    };
+    let kt: &KType = alloc_home_signature_type(&producer_frame);
+    let expected_id = declared_sig_id(kt);
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1177,15 +1159,8 @@ fn alloc_type_composed_operand_order_is_positional() {
         Carried::Type(KType::Dict {
             key: k, value: v, ..
         }) => {
-            let id = match k.as_ref() {
-                KType::KFunctor { body: Some(f), .. } => f.captured_scope().id,
-                other => panic!(
-                    "expected k to be a KFunctor with a body, got {}",
-                    other.name()
-                ),
-            };
             let v_is_number = matches!(v.as_ref(), KType::Number);
-            (id, v_is_number)
+            (declared_sig_id(k.as_ref()), v_is_number)
         }
         other => panic!("expected a Dict type, got {}", other.summarize()),
     });

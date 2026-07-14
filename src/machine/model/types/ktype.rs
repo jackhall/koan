@@ -17,7 +17,6 @@ use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, module_digest, TypeDigest};
 use super::type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
-use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::ScopeId;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::TypeIdentifier;
@@ -116,37 +115,18 @@ pub enum KType<'a> {
     /// `params` is the parameter record `(name → type)` — order preserved for rendering,
     /// equality order-blind by `(name, type)`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke the function it
-    /// receives. Field name matches `KFunctor::params` so the two arms share join /
-    /// specificity logic; the variant tag still keeps the two families admissibly disjoint.
+    /// receives.
     KFunction {
         params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
         digest: TypeDigest,
     },
-    /// Structural functor type — mirrors `KFunction` storage and rendering, but
-    /// carries no admissibility against `KFunction` (the cross-arms in
-    /// `function_compat` refuse both directions).
-    ///
-    /// `body` distinguishes a *bound functor value* from a *type annotation*. A
-    /// `LET F = (FUNCTOR …)` name-binding registers the functor type-side carrying
-    /// `body: Some(f)` — the callable `&KFunction` so a later `:(F {…})` / `F {…}`
-    /// application can invoke it. The `:(FUNCTOR …)` type-position annotation
-    /// carries `body: None` (no callable, just a shape). `body` is identity-inert:
-    /// it is excluded from `PartialEq`, `Hash`, admissibility, join, and rendering,
-    /// so two structurally-identical functor types compare and hash equal
-    /// regardless of body.
-    KFunctor {
-        params: Record<KType<'a>>,
-        ret: Box<KType<'a>>,
-        body: Option<&'a KFunction<'a>>,
-        digest: TypeDigest,
-    },
-    /// Confined carrier for a synthesized FN/FUNCTOR `ret` slot whose source return is a
+    /// Confined carrier for a synthesized FN `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> er` or
     /// `-> er.Type`. Holds only the hashable surface shadow
     /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
     /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
-    /// `KFunction`/`KFunctor` `ret` box that `function_value_ktype` builds; no runtime
+    /// `KFunction` `ret` box that `function_value_ktype` builds; no runtime
     /// value's `ktype()` returns it, and it admits nothing on its own
     /// (`accepts_part` is `false`). Admission against a precise slot is syntactic
     /// equality of the surface shadow — see
@@ -303,22 +283,6 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// A functor type `(params) -> ret`; `body` is identity-inert, so it never reaches the
-    /// digest.
-    pub fn functor_type(
-        params: Record<KType<'a>>,
-        ret: Box<KType<'a>>,
-        body: Option<&'a KFunction<'a>>,
-    ) -> KType<'a> {
-        let digest = type_digest::functor_digest(&params, ret.digest());
-        KType::KFunctor {
-            params,
-            ret,
-            body,
-            digest,
-        }
-    }
-
     /// Application of a higher-kinded type constructor `ctor` to `args`.
     pub fn constructor_apply(ctor: Box<KType<'a>>, args: Vec<KType<'a>>) -> KType<'a> {
         let digest = type_digest::constructor_apply_digest(ctor.digest(), &args);
@@ -353,13 +317,6 @@ impl<'a> KType<'a> {
             KType::Record { fields, .. } => format!(":{{{}}}", render_param_record(fields)),
             KType::KFunction { params, ret, .. } => {
                 format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
-            }
-            KType::KFunctor { params, ret, .. } => {
-                format!(
-                    ":(FUNCTOR ({}) -> {})",
-                    render_param_record(params),
-                    ret.name()
-                )
             }
             KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
@@ -416,7 +373,7 @@ impl<'a> KType<'a> {
 
     /// Variant-wise rebuild at `'static`. `Some` exactly when the rebuild is
     /// possible without a region borrow and without re-minting a shared set:
-    /// - `Signature` / `KFunctor { body: Some(_) }` hold region pointers -> `None`.
+    /// - `Signature` holds a region pointer -> `None`.
     /// - `SetRef` / `RecursiveGroup` own their set by `Rc` (its content transport); `to_static`
     ///   declines rather than re-mint that shared allocation -> `None`, so such values take the
     ///   runtime-checked resident path instead. (Identity itself is the content digest, which a
@@ -439,18 +396,6 @@ impl<'a> KType<'a> {
             KType::KFunction { params, ret, .. } => Some(KType::function_type(
                 record_to_static(params)?,
                 Box::new(ret.to_static()?),
-            )),
-            // A bound functor value's `body` is a live region pointer.
-            KType::KFunctor { body: Some(_), .. } => None,
-            KType::KFunctor {
-                params,
-                ret,
-                body: None,
-                ..
-            } => Some(KType::functor_type(
-                record_to_static(params)?,
-                Box::new(ret.to_static()?),
-                None,
             )),
             KType::DeferredReturn(s) => Some(KType::DeferredReturn(s.clone())),
             KType::Identifier => Some(KType::Identifier),
@@ -555,17 +500,6 @@ impl<'a> KType<'a> {
             KType::Record { fields, .. } => record_resident_in(fields, residence, visited),
             KType::KFunction { params, ret, .. } => {
                 record_resident_in(params, residence, visited)
-                    && ret.resident_in_visiting(residence, visited)
-            }
-            KType::KFunctor {
-                params, ret, body, ..
-            } => {
-                let body_ok = match body {
-                    Some(f) => residence.owns_function(f),
-                    None => true,
-                };
-                body_ok
-                    && record_resident_in(params, residence, visited)
                     && ret.resident_in_visiting(residence, visited)
             }
             KType::SetRef { set, .. } | KType::RecursiveGroup(set) => {
@@ -708,13 +642,12 @@ impl<'a> PartialEq for KType<'a> {
             | (RecordType, RecordType)
             | (Any, Any) => true,
             (OfKind(a), OfKind(b)) => a == b,
-            // The eight composite variants store their content digest — one `u128` compare is
+            // The seven composite variants store their content digest — one `u128` compare is
             // the whole test. The digest is the truth: no structural fallback exists.
             (List { digest: a, .. }, List { digest: b, .. })
             | (Dict { digest: a, .. }, Dict { digest: b, .. })
             | (Record { digest: a, .. }, Record { digest: b, .. })
             | (KFunction { digest: a, .. }, KFunction { digest: b, .. })
-            | (KFunctor { digest: a, .. }, KFunctor { digest: b, .. })
             | (Union { digest: a, .. }, Union { digest: b, .. })
             | (Signature { digest: a, .. }, Signature { digest: b, .. })
             | (ConstructorApply { digest: a, .. }, ConstructorApply { digest: b, .. }) => a == b,
@@ -764,7 +697,6 @@ impl<'a> std::hash::Hash for KType<'a> {
             | Dict { digest, .. }
             | Record { digest, .. }
             | KFunction { digest, .. }
-            | KFunctor { digest, .. }
             | Union { digest, .. }
             | Signature { digest, .. }
             | ConstructorApply { digest, .. } => digest.hash(state),

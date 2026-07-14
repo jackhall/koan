@@ -52,7 +52,7 @@ const TAG_LIST: u8 = 0x0B;
 const TAG_DICT: u8 = 0x0C;
 const TAG_RECORD: u8 = 0x0D;
 const TAG_KFUNCTION: u8 = 0x0E;
-const TAG_KFUNCTOR: u8 = 0x0F;
+// 0x0F is retired — never reuse it.
 const TAG_DEFERRED_RETURN: u8 = 0x10;
 const TAG_SET_LOCAL: u8 = 0x11;
 const TAG_RECURSIVE_REF: u8 = 0x12;
@@ -141,7 +141,6 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
         | KType::Dict { digest, .. }
         | KType::Record { digest, .. }
         | KType::KFunction { digest, .. }
-        | KType::KFunctor { digest, .. }
         | KType::Union { digest, .. }
         | KType::Signature { digest, .. }
         | KType::ConstructorApply { digest, .. } => *digest,
@@ -213,13 +212,6 @@ pub(crate) fn function_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDi
     h.digest(ret).finish()
 }
 
-/// A functor type `(params) -> ret` — `body` is identity-inert and never reaches the digest.
-pub(crate) fn functor_digest(params: &Record<KType>, ret: TypeDigest) -> TypeDigest {
-    let mut h = DigestHasher::new(TAG_KFUNCTOR);
-    feed_record(&mut h, params);
-    h.digest(ret).finish()
-}
-
 /// A union — order-blind, matching the set-based `PartialEq`: sort the member digests.
 pub(crate) fn union_digest(members: &[KType]) -> TypeDigest {
     let mut member_digests: Vec<TypeDigest> = members.iter().map(KType::digest).collect();
@@ -285,7 +277,7 @@ fn feed_set_identity(h: &mut DigestHasher, set: &Rc<RecursiveSet>) {
 
 /// Order-blind record digest: `(name, field digest)` pairs sorted by name, each
 /// length-prefixed. Matches `Record`'s `IndexMap` (order-blind) equality. Shared by
-/// `Record`, `KFunction` params, and `KFunctor` params.
+/// `Record` and `KFunction` params.
 fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
     let mut pairs: Vec<(&str, TypeDigest)> = record
         .iter()

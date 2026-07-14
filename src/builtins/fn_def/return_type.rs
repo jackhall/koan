@@ -132,7 +132,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::ReturnTypeExpr { owned_pos } => {
             let (kt, carrier) = expect_type_terminal(&results, owned_pos, "FN return-type slot")?;
             // The resolved return type can embed a borrow into the sub-dispatch's producer region (a
-            // bound `KFunctor`, a nominal `SetRef`, ...); it is folded straight into the `KFunction`
+            // declared `Signature`, a nominal `SetRef`, ...); it is folded straight into the `KFunction`
             // `finalize_fn_with_kind` builds (via `user_sig`), whose own terminal carrier seals with an
             // empty foreign reach — sound only because the captured scope's reach-set transitively pins
             // everything its bindings reach. The parameter-type slots already fold this way via

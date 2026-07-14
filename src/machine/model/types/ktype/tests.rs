@@ -1,10 +1,7 @@
 use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::core::kfunction::Body;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{ExpressionSignature, ReturnType};
 
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
@@ -46,66 +43,6 @@ fn name_renders_function_with_sigiled_param() {
         Box::new(KType::Bool),
     );
     assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
-}
-
-#[test]
-fn name_renders_functor() {
-    let t = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
-}
-
-#[test]
-fn functor_structural_eq_same_shape() {
-    let a = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    let b = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    assert_eq!(a, b);
-}
-
-#[test]
-fn functor_structural_neq_when_params_or_ret_differ() {
-    let base = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    let diff_params = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Str)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    let diff_ret = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Null),
-        None,
-    );
-    assert_ne!(base, diff_params);
-    assert_ne!(base, diff_ret);
-}
-
-#[test]
-fn functor_and_function_are_disjoint_types() {
-    let f = KType::function_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-    );
-    let g = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    assert_ne!(f, g);
 }
 
 #[test]
@@ -275,18 +212,6 @@ fn hash_agrees_with_eq_for_region_free_variants() {
                 Box::new(KType::Bool),
             ),
         ),
-        (
-            KType::functor_type(
-                Record::from_pairs(vec![("x".into(), KType::Number)]),
-                Box::new(KType::Bool),
-                None,
-            ),
-            KType::functor_type(
-                Record::from_pairs(vec![("x".into(), KType::Number)]),
-                Box::new(KType::Bool),
-                None,
-            ),
-        ),
         (KType::OfKind(KKind::NewType), KType::OfKind(KKind::NewType)),
         (
             KType::RecursiveRef("Tree".into()),
@@ -426,24 +351,6 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
     assert_eq!(hash_of(&sealed_a0), hash_of(&twin0));
 }
 
-/// Distinct variants must not collide structurally — the leading discriminant
-/// keeps e.g. `KFunction` and `KFunctor` of the same shape apart in both `Eq`
-/// and `Hash`.
-#[test]
-fn hash_distinguishes_function_from_functor() {
-    let f = KType::function_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-    );
-    let g = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    assert_ne!(f, g);
-    assert_ne!(hash_of(&f), hash_of(&g));
-}
-
 #[test]
 fn set_ref_name_renders_member_name() {
     // Renders the member's declared `name`, not the kind keyword: a `Point` struct
@@ -527,9 +434,9 @@ fn to_static_rebuilds_nested_containers() {
     );
 }
 
-/// `KFunction` (always owned) and a bodyless `KFunctor` both recurse `params`/`ret`.
+/// `KFunction` (always owned) recurses `params`/`ret`.
 #[test]
-fn to_static_rebuilds_function_and_bodyless_functor() {
+fn to_static_rebuilds_function() {
     let f = KType::function_type(
         Record::from_pairs(vec![("x".into(), KType::Number)]),
         Box::new(KType::Bool),
@@ -539,20 +446,6 @@ fn to_static_rebuilds_function_and_bodyless_functor() {
         KType::function_type(
             Record::from_pairs(vec![("x".into(), KType::Number)]),
             Box::new(KType::Bool),
-        )
-    );
-
-    let g = KType::functor_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-        None,
-    );
-    assert_eq!(
-        g.to_static().expect("bodyless KFunctor is owned"),
-        KType::functor_type(
-            Record::from_pairs(vec![("x".into(), KType::Number)]),
-            Box::new(KType::Bool),
-            None,
         )
     );
 }
@@ -647,27 +540,6 @@ fn abstract_type_identity_keys_on_source_and_name() {
     );
     assert_ne!(mint(first, "Carrier"), mint(second, "Carrier"));
     assert_ne!(mint(first, "Carrier"), mint(first, "Elem"));
-}
-
-/// A bound functor value's `body: Some(&'a KFunction)` is a live region pointer -> `None`,
-/// even though `body` is identity-inert for `Eq`/`Hash`.
-#[test]
-fn to_static_none_for_functor_with_body() {
-    let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
-        elements: Vec::new(),
-    };
-    let func = storage.brand().alloc_function(KFunction::new(
-        sig,
-        Body::UserDefined(KExpression::new(Vec::new())),
-        scope,
-        None,
-        None,
-    ));
-    let t = KType::functor_type(Record::new(), Box::new(KType::Number), Some(func));
-    assert!(t.to_static().is_none());
 }
 
 /// `SetRef` shares its schema by `Rc`, compared by `Rc::ptr_eq` — rebuilding it would

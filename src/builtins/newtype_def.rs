@@ -40,7 +40,7 @@ use crate::machine::DeliveredCarried;
 ///
 /// `repr` embeds `carrier`'s reach when `carrier` is `Some` — a bind-time `repr` argument (a
 /// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
-/// both carry a borrow into a foreign region (a bound `KFunctor`, a nominal `SetRef`, ...).
+/// both carry a borrow into a foreign region (a declared `Signature`, a nominal `SetRef`, ...).
 /// `carrier` is `None` for a bare-leaf name resolved against scope bindings; the sealed identity
 /// there is a fresh `SetRef` over its own set (never `'static`), so it takes
 /// [`StepAllocator::alloc_type_checked`]'s runtime-audited seal, which passes because the identity
