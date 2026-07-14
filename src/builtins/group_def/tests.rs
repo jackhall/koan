@@ -1,5 +1,9 @@
 //! `GROUP` surface tests: what a group registers, how a mixed-member run reduces (inside the body
 //! and through a `USING` window), the pairwise combiner fold, and the errors the surface rejects.
+//!
+//! - [`functor`] — a `GROUP` in the body of a module-returning `FN`, instantiated explicitly.
+
+mod functor;
 
 use crate::builtins::test_support::{
     binds_module, parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
