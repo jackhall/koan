@@ -13,7 +13,9 @@ use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
 use super::ctx::SchedulerView;
-use super::{bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub};
+use super::{
+    bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub, Resolved,
+};
 use crate::scheduler::{ProducerDisposition, ResolvedDeps};
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
@@ -26,12 +28,8 @@ pub(super) fn initial<'step>(
     idx: usize,
 ) -> Outcome<'step> {
     let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
-    // A bare-name arg whose producer already errored can never resolve.
-    for outcome in bare_outcomes.iter().flatten() {
-        if let NameOutcome::ProducerErrored(e) = outcome {
-            let frame = TraceFrame::from_expr("<wrap-resolve>", &expr);
-            return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
-        }
+    if let Some(e) = producer_error(&bare_outcomes, &expr) {
+        return Outcome::Done(Err(e));
     }
     let chain = ctx.chain_deref();
     // Resolve dispatch against the cart scope at `'step`: the `Resolved` carries the picked function
@@ -85,14 +83,38 @@ pub(super) fn initial<'step>(
             return Outcome::Done(Err(e));
         }
     }
-    let walk = match part_walk(
+    walk_and_invoke(
         ctx,
+        resolved,
         expr.parts,
-        &pre_subs,
+        pre_subs,
         &bare_outcomes,
-        &resolved.slots,
         idx,
-    ) {
+        install_bare_name_park,
+    )
+}
+
+/// Shared [`DispatchOutcome::Resolved`] tail for [`initial`] and [`finish`]: run [`part_walk`]
+/// over the pick's classified slots, then route the result. A walk that leaned on a
+/// still-finalizing bare-name producer parks through `park` — each caller resumes *itself*
+/// against the partly-spliced expression, taking back the `pre_subs` the walk did not consume —
+/// and drops any staged subs on the floor (park precedence: the wake re-runs the caller's
+/// resolve, which re-stages them). A walk that staged eager subs installs them, discarding the
+/// speculative pick — the post-subs re-resolve ([`finish`]) picks again against the spliced
+/// expression. Otherwise this is the synchronous call, the common path for builtins and simple
+/// calls: `resolved.function` is already at the cart `'step` (resolved against the cart scope),
+/// so it rides straight into the invoke, which reads each inline-resolved arg's reach off its
+/// spliced cell.
+fn walk_and_invoke<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    resolved: Resolved<'step>,
+    parts: Vec<crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>>,
+    pre_subs: Vec<(usize, NodeId)>,
+    bare_outcomes: &[Option<NameOutcome<'step>>],
+    idx: usize,
+    park: impl FnOnce(Vec<NodeId>, KExpression<'step>, Vec<(usize, NodeId)>) -> Outcome<'step>,
+) -> Outcome<'step> {
+    let walk = match part_walk(ctx, parts, &pre_subs, bare_outcomes, &resolved.slots, idx) {
         Ok(w) => w,
         Err(e) => return Outcome::Done(Err(e)),
     };
@@ -103,72 +125,65 @@ pub(super) fn initial<'step>(
     } = walk;
     let new_expr = KExpression::new(new_parts);
     if !producers_to_wait.is_empty() {
-        // Park-precedence guard: drop staged_subs on the floor; re-Dispatch on wake re-runs the walk
-        // and re-stages them.
         let _ = staged_subs;
-        return install_bare_name_park(producers_to_wait, new_expr, pre_subs);
+        return park(producers_to_wait, new_expr, pre_subs);
     }
     if staged_subs.is_empty() {
-        // The synchronous (no-eager-subs) call — the common path for builtins and simple calls.
-        // `resolved.function` is already at the cart `'step` (resolved against the cart scope), so it
-        // rides straight into the invoke. Each inline-resolved bound-name arg is already a spliced
-        // cell on `new_expr`, so the invoke reads its reach off the cell.
         return super::exec::invoke_continue(ctx, resolved.function, new_expr);
     }
     let _ = resolved; // discard the speculative pick.
-    install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs)
+    install_eager_subs_track(ctx, new_expr, staged_subs)
+}
+
+/// The short-circuit both resolves lead with: a bare-name arg whose producer already errored can
+/// never resolve, so the propagated error surfaces before dispatch is consulted.
+fn producer_error<'step>(
+    bare_outcomes: &[Option<NameOutcome<'step>>],
+    expr: &KExpression<'step>,
+) -> Option<KError> {
+    bare_outcomes
+        .iter()
+        .flatten()
+        .find_map(|outcome| match outcome {
+            NameOutcome::ProducerErrored(e) => Some(propagate_dep_error(
+                e,
+                Some(TraceFrame::from_expr("<wrap-resolve>", expr)),
+            )),
+            _ => None,
+        })
 }
 
 /// Re-resolve dispatch against `working_expr` once its eager subs have spliced back in.
 ///
-/// The re-resolve runs the same `bare_outcomes` cache + splice walk [`initial`] does, because the
-/// arm that lands here — [`install_eager_only`], the `Deferred` outcome — commits to **no** pick,
-/// and so has no wrap-slot mask to splice a bare-name argument by. A bare name sharing an
-/// expression with an eager part (`(a ⊕ b) ⊕ c`, which is what a fold-left run of three named
-/// operands reduces to) therefore reaches this point unresolved; the pick made here against the
-/// spliced expression is what classifies it, and the walk splices it before the invoke.
+/// The re-resolve runs the same `bare_outcomes` cache + [`walk_and_invoke`] tail [`initial`]
+/// does, because the arm that lands here — [`install_eager_only`], the `Deferred` outcome —
+/// commits to **no** pick, and so has no wrap-slot mask to splice a bare-name argument by. A bare
+/// name sharing an expression with an eager part (`(a ⊕ b) ⊕ c`, which is what a fold-left run of
+/// three named operands reduces to) therefore reaches this point unresolved; the pick made here
+/// against the spliced expression is what classifies it, and the walk splices it before the
+/// invoke. Where [`initial`] parks back into itself, this re-resolve parks back into itself
+/// ([`park_finish`]) — and a `Deferred` outcome is an error here, not another eager-subs round,
+/// so the two resolves cannot ping-pong.
 pub(super) fn finish<'step>(
     ctx: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
     let bare_outcomes = ctx.build_bare_outcomes(&working_expr.parts);
-    for outcome in bare_outcomes.iter().flatten() {
-        if let NameOutcome::ProducerErrored(e) = outcome {
-            let frame = TraceFrame::from_expr("<wrap-resolve>", &working_expr);
-            return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));
-        }
+    if let Some(e) = producer_error(&bare_outcomes, &working_expr) {
+        return Outcome::Done(Err(e));
     }
     let scope = ctx.current_scope();
     match scope.resolve_dispatch(&working_expr, ctx.chain_deref(), &bare_outcomes) {
-        // The post-eager-subs re-dispatch lands resolved calls here — splice the pick's bare-name
-        // slots, then fold the resolved call into the `Continue` that installs its frame and runs
-        // `invoke`, which reads each arg's reach off the spliced cells.
-        DispatchOutcome::Resolved(r) => {
-            let walk = match part_walk(ctx, working_expr.parts, &[], &bare_outcomes, &r.slots, idx)
-            {
-                Ok(w) => w,
-                Err(e) => return Outcome::Done(Err(e)),
-            };
-            let PartWalkResult {
-                new_parts,
-                producers_to_wait,
-                staged_subs,
-            } = walk;
-            let new_expr = KExpression::new(new_parts);
-            if !producers_to_wait.is_empty() {
-                // Park-precedence guard, as in `initial`: the wake re-runs this re-resolve, which
-                // re-stages anything dropped here.
-                let _ = staged_subs;
-                return park_finish(producers_to_wait, new_expr);
-            }
-            if !staged_subs.is_empty() {
-                // Defensive: the `Deferred` arm stages every eager part before this runs, so a
-                // freshly staged sub here would mean the pick admitted a part that arm passed over.
-                return install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new());
-            }
-            super::exec::invoke_continue(ctx, r.function, new_expr)
-        }
+        DispatchOutcome::Resolved(r) => walk_and_invoke(
+            ctx,
+            r,
+            working_expr.parts,
+            Vec::new(),
+            &bare_outcomes,
+            idx,
+            |producers, new_expr, _pre_subs| park_finish(producers, new_expr),
+        ),
         // Slot-terminal (TRY-catchable), uniform with `initial` — a post-eager-subs
         // re-resolve failure is a runtime error TRY can intercept, not a fatal abort.
         DispatchOutcome::Ambiguous(n) => {
@@ -286,7 +301,7 @@ fn install_eager_only<'step>(
     );
     let new_expr = KExpression::new(new_parts);
     // The Deferred arm has no pre-pick, so no inline-resolved wrap slots.
-    install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new())
+    install_eager_subs_track(ctx, new_expr, staged_subs)
 }
 
 /// Park on bare-name forward-reference producers. `working_expr` is partly spliced — Resolved wrap
@@ -309,13 +324,11 @@ fn install_eager_subs_track<'step>(
     ctx: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
     staged_subs: Vec<(usize, PendingSub<'step>)>,
-    pre_subs: Vec<(usize, NodeId)>,
 ) -> Outcome<'step> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
-    // never re-entered (a re-Dispatch never lands here — the combine finish runs instead),
-    // so `pre_subs` is unused on this path. The wrap slots that resolved in place are already
-    // spliced cells on `working_expr`, read back by the invoke.
-    let _ = pre_subs;
+    // never re-entered (a re-Dispatch never lands here — the combine finish runs instead).
+    // The wrap slots that resolved in place are already spliced cells on `working_expr`,
+    // read back by the invoke.
     ctx.install_eager_subs(working_expr, staged_subs, None)
 }
 
