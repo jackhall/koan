@@ -42,4 +42,7 @@ parked on the type ladder still wakes.
 
 **Requires:** none — value-side module binding and value-head type paths have shipped.
 
-**Unblocks:** none tracked yet.
+**Unblocks:**
+
+- [Functor collapse](functor-collapse.md) — FUNCTOR's type-side home and Type-head application
+  surface exist only because a module was a type; both retire once module results bind value-side.
