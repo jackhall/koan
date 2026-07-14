@@ -130,6 +130,20 @@ pub fn body<'a>(
     build_fn_like(ctx, "FN", FnKind::Function)
 }
 
+/// `-> <identifier>` — a return slot naming a value. Always errors: the slot names a type, and the
+/// value it most often names is a module-valued parameter, whose type is `:(TYPE OF er)`.
+pub fn body_value_named_return<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{require_identifier_name, Action};
+
+    let name = crate::try_action!(require_identifier_name(ctx.args, "return_type", "FN"));
+    Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+        "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
+         module-valued parameter, say — write `-> :(TYPE OF {name})`"
+    )))))
+}
+
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
 ///
 /// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
@@ -209,7 +223,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> Er.Type`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
+    // (`-> er.Type`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
     // admits only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -224,7 +238,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // The final `false` is the nominal-binder flag: FN is value-side gated, so
     // `LET f = (FN ...)` does not register a sibling-visible nominal identity.
-    // `:ProperType`-return keyworded overload (`-> Number` / `-> Er`).
+    // `:ProperType`-return keyworded overload (`-> Number` / `-> er`).
     let typeexpr_sig = || {
         sig(
             KType::Any,
@@ -238,7 +252,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> Er.Type`, `-> :(LIST OF T)`) is a
+    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> er.Type`, `-> :(LIST OF T)`) is a
     // `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
     // `:ProperType`, so it wins) and `extract_return_type_raw` defers a param-referencing one
     // per-call instead of eager-sub-dispatching it to an unbound parameter.
@@ -250,6 +264,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("signature", KType::KExpression),
                 kw("->"),
                 arg("return_type", KType::SigiledTypeExpr),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        )
+    };
+    // Value-named return (`-> er`): a return slot names a *type*, and an Identifier names a value.
+    // The overload exists only to diagnose — without it the shape falls through every FN overload
+    // and reports "no matching function", which says nothing about the actual mistake. It is the
+    // most common one post-flip: a module-valued parameter is a value token now, so the type it
+    // used to stand for is spelled `:(TYPE OF er)`.
+    let value_named_return_sig = || {
+        sig(
+            KType::Any,
+            vec![
+                kw("FN"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::Identifier),
                 kw("="),
                 arg("body", KType::KExpression),
             ],
@@ -287,6 +319,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "FN",
         sigil_sig(),
         body,
+        None,
+        Some(binder_bucket),
+        false,
+    );
+    register_builtin_full(
+        scope,
+        "FN",
+        value_named_return_sig(),
+        body_value_named_return,
         None,
         Some(binder_bucket),
         false,

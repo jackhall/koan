@@ -70,7 +70,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     let mut first_err: Option<String> = None;
     let mut i = 0;
     while i < parts.len() {
-        // A bare-leaf `Type` part (e.g. `Er` in `FN (LIFT Er: Ordered) -> ...`) in
+        // A bare-leaf `Type` part (e.g. `er` in `FN (LIFT er: Ordered) -> ...`) in
         // parameter-name position denotes a binder, not a type reference.
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),

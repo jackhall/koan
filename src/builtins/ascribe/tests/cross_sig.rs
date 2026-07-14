@@ -24,17 +24,20 @@ fn strict_cross_sig_subtype_wins_dispatch() {
     );
     run(
         scope,
-        "FN (PICK m :Wide) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (PICK m :Base) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))",
     );
-    run(scope, "MODULE Impl = ((LET x = 1) (LET y = \"s\"))");
-    run(scope, "LET Arg = Impl");
-    run(scope, "LET Picked = (PICK Arg)");
+    run(
+        scope,
+        "MODULE implementation = ((LET x = 1) (LET y = \"s\"))",
+    );
+    run(scope, "LET arg = implementation");
+    run(scope, "LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "Picked");
+    let m = lookup_module(scope, "picked");
     let tag = m
         .child_scope()
         .bindings()
@@ -62,17 +65,20 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     );
     run(
         scope,
-        "FN (PICK m :Base) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))",
     );
     run(
         scope,
-        "FN (PICK m :Wide) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))",
     );
-    run(scope, "MODULE Impl = ((LET x = 1) (LET y = \"s\"))");
-    run(scope, "LET Arg = Impl");
-    run(scope, "LET Picked = (PICK Arg)");
+    run(
+        scope,
+        "MODULE implementation = ((LET x = 1) (LET y = \"s\"))",
+    );
+    run(scope, "LET arg = implementation");
+    run(scope, "LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "Picked");
+    let m = lookup_module(scope, "picked");
     let tag = m
         .child_scope()
         .bindings()
@@ -103,17 +109,17 @@ fn mutually_satisfying_distinct_sigs_are_ambiguous() {
     );
     run(
         scope,
-        "FN (CHOOSE m :Alpha) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (CHOOSE m :Alpha) -> Module = (MODULE generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (CHOOSE m :Beta) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))",
     );
-    run(scope, "MODULE Impl = ((LET x = 1))");
-    run(scope, "LET Arg = Impl");
+    run(scope, "MODULE implementation = ((LET x = 1))");
+    run(scope, "LET arg = implementation");
 
     let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("CHOOSE Arg"), scope);
+    let root = runtime.dispatch_in_scope(parse_one("CHOOSE arg"), scope);
     runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
@@ -141,20 +147,20 @@ fn cross_sig_specificity_with_pinned_abstract_member() {
     );
     run(
         scope,
-        "FN (PICKPIN m :(Wide WITH {Elt = Number})) -> Module = (MODULE Generated = (LET tag = 1))",
+        "FN (PICKPIN m :(Wide WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 1))",
     );
     run(
         scope,
-        "FN (PICKPIN m :(Base WITH {Elt = Number})) -> Module = (MODULE Generated = (LET tag = 2))",
+        "FN (PICKPIN m :(Base WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 2))",
     );
     run(
         scope,
-        "MODULE Impl = ((LET Elt = Number) (LET x = 1) (LET y = \"s\"))",
+        "MODULE implementation = ((LET Elt = Number) (LET x = 1) (LET y = \"s\"))",
     );
-    run(scope, "LET Arg = Impl");
-    run(scope, "LET Picked = (PICKPIN Arg)");
+    run(scope, "LET arg = implementation");
+    run(scope, "LET picked = (PICKPIN arg)");
 
-    let m = lookup_module(scope, "Picked");
+    let m = lookup_module(scope, "picked");
     let tag = m
         .child_scope()
         .bindings()

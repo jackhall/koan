@@ -1,5 +1,6 @@
-//! `MODULE <name:ProperType> = <body:KExpression>` — declare a structure (a bundle of
-//! type definitions, values, and functions). See
+//! `MODULE <name:Identifier> = <body:KExpression>` — declare a structure (a bundle of
+//! type definitions, values, and functions). A module is a value, so it binds value-side under a
+//! snake_case name; a second overload takes the Type-token name and reports the respelling. See
 //! [design/typing/modules.md](../../design/typing/modules.md) for the surface design.
 //!
 //! Body statements dispatch on the OUTER scheduler against a fresh child scope via
@@ -24,10 +25,10 @@ pub fn body<'a>(
 ) -> crate::machine::core::kfunction::action::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action,
+        require_identifier_name, require_kexpression, Action,
     };
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
+    let name = crate::try_action!(require_identifier_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let child_scope = ctx
         .scope
@@ -90,22 +91,52 @@ pub fn body<'a>(
     )
 }
 
+/// The Type-token-named overload (`MODULE int_ord = …`): a module is a value, so its name belongs in
+/// the value namespace. Registered with no binder hook — it always errors, so it installs nothing.
+fn body_type_named<'a>(
+    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+) -> crate::machine::core::kfunction::action::Action<'a> {
+    use crate::machine::core::kfunction::action::{require_bare_type_name, Action};
+    use crate::machine::{KError, KErrorKind};
+
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
+    Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+        "module `{name}` is named with a Type token, but a module is a value — the Type-token \
+         namespace names what can type a field. Name it snake_case, e.g. `{suggestion}`",
+        suggestion = super::let_binding::snake_case_identifier(&name),
+    )))))
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let signature = sig(
-        KType::empty_signature(),
-        vec![
-            kw("MODULE"),
-            arg("name", KType::OfKind(KKind::ProperType)),
-            kw("="),
-            arg("body", KType::KExpression),
-        ],
+    let module_sig = |name_kt: KType<'a>| {
+        sig(
+            KType::empty_signature(),
+            vec![
+                kw("MODULE"),
+                arg("name", name_kt),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        )
+    };
+    crate::builtins::register_builtin_full(
+        scope,
+        "MODULE",
+        module_sig(KType::Identifier),
+        body,
+        Some((
+            super::identifier_part_binder_name,
+            crate::machine::BindKind::Value,
+        )),
+        None,
+        false,
     );
     crate::builtins::register_builtin_full(
         scope,
         "MODULE",
-        signature,
-        body,
-        Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
+        module_sig(KType::OfKind(KKind::ProperType)),
+        body_type_named,
+        None,
         None,
         false,
     );
@@ -121,25 +152,46 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::{BindingIndex, KErrorKind};
 
+    /// The binder name comes off the `Identifier` name part — a module binds value-side, so the
+    /// submit-time placeholder is tagged `Value`.
     #[test]
     fn binder_name_extracts_module_name() {
-        let expr = parse_one("MODULE Foo = (LET x = 1)");
-        let name = expr.binder_name_from_type_part();
-        assert_eq!(name.as_deref(), Some("Foo"));
+        let expr = parse_one("MODULE foo = (LET x = 1)");
+        let name = crate::builtins::identifier_part_binder_name(&expr);
+        assert_eq!(name.as_deref(), Some("foo"));
+    }
+
+    /// A Type-token module name is refused by the second overload, whose only job is the
+    /// respelling diagnostic — a module is a value, and the Type-token namespace names what can
+    /// type a field.
+    #[test]
+    fn type_token_module_name_errors_with_the_snake_case_respelling() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(scope, parse_one("MODULE IntOrd = (LET x = 1)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("a module is a value") && msg.contains("`int_ord`")),
+            "expected the snake_case respelling diagnostic, got {err}",
+        );
+        assert!(
+            scope.bindings().data().get("IntOrd").is_none(),
+            "the erroring overload binds nothing",
+        );
     }
 
     #[test]
     fn module_binds_under_name_in_scope() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = (LET x = 1)");
+        run(scope, "MODULE foo = (LET x = 1)");
         assert!(
-            matches!(scope.bindings().data().get("Foo").map(|(o, _, _)| *o),
-                Some(KObject::Module(m)) if m.path == "Foo"),
+            matches!(scope.bindings().data().get("foo").map(|(o, _, _)| *o),
+                Some(KObject::Module(m)) if m.path == "foo"),
             "MODULE binds the module value on the value channel",
         );
         assert!(
-            scope.resolve_type("Foo").is_none(),
+            scope.resolve_type("foo").is_none(),
             "a module is a value — nothing lands in `types`",
         );
     }
@@ -148,20 +200,20 @@ mod tests {
     fn bare_module_name_surfaces_as_object_value() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = (LET x = 1)");
+        run(scope, "MODULE foo = (LET x = 1)");
         // A module named in expression position reads back on the value channel's Object arm.
-        match run_one(scope, parse_one("Foo")) {
-            KObject::Module(module) => assert_eq!(module.path, "Foo"),
+        match run_one(scope, parse_one("foo")) {
+            KObject::Module(module) => assert_eq!(module.path, "foo"),
             other => panic!(
                 "bare module name must read back as an Object-arm module value, got {}",
                 other.ktype().name()
             ),
         }
         // PRINT returns the rendered string — a bare module renders as its path.
-        match run_one(scope, parse_one("PRINT Foo")) {
-            KObject::KString(s) => assert_eq!(s, "Foo"),
+        match run_one(scope, parse_one("PRINT foo")) {
+            KObject::KString(s) => assert_eq!(s, "foo"),
             other => panic!(
-                "PRINT Foo returns the path string, got {}",
+                "PRINT foo returns the path string, got {}",
                 other.ktype().name()
             ),
         }
@@ -175,21 +227,21 @@ mod tests {
         run(
             scope,
             "SIG Ordered = (VAL compare :Number)\n\
-             MODULE IntOrd = (LET compare = 7)",
+             MODULE int_ord = (LET compare = 7)",
         );
         // A parenthesized module expression evaluates to the Object-arm module value, so the list
         // element is `Held::Object` memoized as the module's self-sig (`Signature{SelfOf}`, whose
         // name renders as the module path).
-        match run_one(scope, parse_one("[(IntOrd)]")) {
+        match run_one(scope, parse_one("[(int_ord)]")) {
             KObject::List(items, elem) => {
                 assert_eq!(
                     elem.name(),
-                    "IntOrd",
+                    "int_ord",
                     "element memoizes to the module self-sig"
                 );
                 assert_eq!(items.len(), 1);
                 assert!(
-                    matches!(&items[0], Held::Object(KObject::Module(m)) if m.path == "IntOrd"),
+                    matches!(&items[0], Held::Object(KObject::Module(m)) if m.path == "int_ord"),
                     "the list element is the Object-arm module value",
                 );
             }
@@ -201,8 +253,8 @@ mod tests {
     fn module_member_access_via_attr() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = (LET x = 1)");
-        let result = run_one(scope, parse_one("Foo.x"));
+        run(scope, "MODULE foo = (LET x = 1)");
+        let result = run_one(scope, parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
@@ -210,22 +262,22 @@ mod tests {
     fn module_with_multiple_statements_in_parens() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = ((LET x = 1) (LET y = 2))");
-        assert!(matches!(run_one(scope, parse_one("Foo.x")), KObject::Number(n) if *n == 1.0));
-        assert!(matches!(run_one(scope, parse_one("Foo.y")), KObject::Number(n) if *n == 2.0));
+        run(scope, "MODULE foo = ((LET x = 1) (LET y = 2))");
+        assert!(matches!(run_one(scope, parse_one("foo.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(run_one(scope, parse_one("foo.y")), KObject::Number(n) if *n == 2.0));
     }
 
     #[test]
     fn module_member_function_via_let_fn() {
         // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
-        // its signature key and isn't reachable as `Foo.<name>` via ATTR.
+        // its signature key and isn't reachable as `foo.<name>` via ATTR.
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(
             scope,
-            "MODULE Foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
+            "MODULE foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
         );
-        let foo = lookup_module(scope, "Foo");
+        let foo = lookup_module(scope, "foo");
         assert!(foo.child_scope().bindings().data().contains_key("double"));
     }
 
@@ -233,12 +285,12 @@ mod tests {
     fn module_unknown_member_errors() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = (LET x = 1)");
-        let err = run_one_err(scope, parse_one("Foo.bogus"));
+        run(scope, "MODULE foo = (LET x = 1)");
+        let err = run_one_err(scope, parse_one("foo.bogus"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg.contains("Foo") && msg.contains("`bogus`")),
-            "expected ShapeError naming Foo and bogus, got {err}",
+                if msg.contains("foo") && msg.contains("`bogus`")),
+            "expected ShapeError naming foo and bogus, got {err}",
         );
     }
 
@@ -246,8 +298,8 @@ mod tests {
     fn nested_module_accessible_via_chained_attr() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Outer =\n  MODULE Inner = (LET x = 7)");
-        let result = run_one(scope, parse_one("Outer.Inner.x"));
+        run(scope, "MODULE outer =\n  MODULE inner = (LET x = 7)");
+        let result = run_one(scope, parse_one("outer.inner.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
@@ -257,25 +309,25 @@ mod tests {
     fn module_body_parks_on_outer_placeholder() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "LET y = 7\nMODULE Foo = (LET x = y)");
-        let result = run_one(scope, parse_one("Foo.x"));
+        run(scope, "LET y = 7\nMODULE foo = (LET x = y)");
+        let result = run_one(scope, parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
-    /// A failing body statement must not bind `Foo` in the parent scope.
+    /// A failing body statement must not bind `foo` in the parent scope.
     #[test]
     fn module_body_error_short_circuits_finalize() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "MODULE Foo = (LET x = nonexistent_name)");
+        run(scope, "MODULE foo = (LET x = nonexistent_name)");
         assert!(
-            scope.bindings().data().get("Foo").is_none(),
-            "Foo must not bind when its body errors",
+            scope.bindings().data().get("foo").is_none(),
+            "foo must not bind when its body errors",
         );
     }
 
-    /// Pre-seed the `Foo` module value through the value-side door, then re-dispatch
-    /// `MODULE Foo = ...`. The finalize guard reads `data`, short-circuits on the existing
+    /// Pre-seed the `foo` module value through the value-side door, then re-dispatch
+    /// `MODULE foo = ...`. The finalize guard reads `data`, short-circuits on the existing
     /// binding, and leaves the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
@@ -285,16 +337,16 @@ mod tests {
             .brand()
             .alloc_scope(crate::machine::Scope::child_under_module(
                 scope,
-                "Foo".into(),
+                "foo".into(),
             ));
         let module: &Module<'_> = region
             .brand()
-            .alloc_module(Module::new("Foo".into(), child));
+            .alloc_module(Module::new("foo".into(), child));
         scope
-            .bind_module("Foo".into(), module, child, BindingIndex::value(0))
+            .bind_module("foo".into(), module, child, BindingIndex::value(0))
             .expect("pre-seed the module value binding");
-        run(scope, "MODULE Foo = (LET y = 2)");
-        let foo = lookup_module(scope, "Foo");
+        run(scope, "MODULE foo = (LET y = 2)");
+        let foo = lookup_module(scope, "foo");
         assert!(std::ptr::eq(foo, module));
     }
 
@@ -304,8 +356,8 @@ mod tests {
     fn module_body_dispatch_does_not_dangle() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
-        let foo = lookup_module(scope, "Foo");
+        run(scope, "LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
+        let foo = lookup_module(scope, "foo");
         let inner = foo.child_scope().bindings().data();
         assert!(
             matches!(inner.get("x").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)

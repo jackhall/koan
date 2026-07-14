@@ -271,7 +271,7 @@ fn let_type_class_with_functor_admits() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         LET MyF = (FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))",
+         LET MyF = (FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET inner = 1)))",
     );
     assert!(
         scope.lookup("MyF").is_none(),
@@ -302,7 +302,7 @@ fn let_value_class_with_functor_rejects() {
     run(scope, "SIG Ordered = (VAL compare :Number)");
     let err = run_one_err(
         scope,
-        parse_one("LET f = (FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))"),
+        parse_one("LET f = (FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET inner = 1)))"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
@@ -387,9 +387,10 @@ fn let_type_class_signature_alias_preserves_identity() {
 
 /// Partition guard regression site: a value-classified binder name with a
 /// module RHS rejects at the LET site. See design/typing/elaboration.md
-/// § Binding-map partition.
+/// § Binding-map partition. A module is a value, so a *Type*-classified binder is the wrong
+/// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
 #[test]
-fn let_value_class_lhs_with_module_rhs_rejects() {
+fn let_type_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::core::run_root_storage;
     use crate::machine::KErrorKind;
@@ -398,25 +399,25 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = ((LET compare = 7))",
+         MODULE int_ord = ((LET compare = 7))",
     );
-    let err = run_one_err(scope, parse_one("LET int_ord = (IntOrd :! Ordered)"));
+    let err = run_one_err(scope, parse_one("LET IntOrdView = (int_ord :! Ordered)"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
-                msg.contains("int_ord") && msg.contains("module"),
+                msg.contains("IntOrdView") && msg.contains("module"),
                 "expected diagnostic naming the binder and 'module', got: {msg}",
             );
             assert!(
-                msg.contains("Type-classified"),
-                "expected diagnostic to redirect to Type-classified identifier, got: {msg}",
+                msg.contains("int_ord_view"),
+                "expected diagnostic to suggest the snake_case respelling, got: {msg}",
             );
         }
         _ => panic!("expected ShapeError, got {err}"),
     }
 }
 
-/// Companion to `let_value_class_lhs_with_module_rhs_rejects` — pinned
+/// Companion to `let_type_class_lhs_with_module_rhs_rejects` — pinned
 /// independently because the cross-kind guard classifies a module value and a
 /// `KType::Signature` on separate arms.
 #[test]
@@ -439,11 +440,10 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     }
 }
 
-/// A module is a value, so a Type-classified LET of a module RHS routes to the **value** bind:
-/// `LET View = (m :| S)` lands in `data`, never `types`. The cross-kind exclusion means exactly
-/// one map holds the name.
+/// A module is a value, so a value-classified LET of a module RHS binds it into `data` like any
+/// other object value. The cross-kind exclusion means exactly one map holds the name.
 #[test]
-fn let_type_class_with_module_rhs_binds_value_side() {
+fn let_value_class_with_module_rhs_binds_value_side() {
     use crate::builtins::test_support::{binds_module, run, run_root_silent};
     use crate::machine::core::run_root_storage;
     let region = run_root_storage();
@@ -451,15 +451,15 @@ fn let_type_class_with_module_rhs_binds_value_side() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET View = (IntOrd :! Ordered)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET view = (int_ord :! Ordered)",
     );
     assert!(
-        binds_module(scope, "View"),
-        "a module RHS under a Type-classified name binds the module value",
+        binds_module(scope, "view"),
+        "a module RHS under a value-classified name binds the module value",
     );
     assert!(
-        scope.resolve_type("View").is_none(),
+        scope.resolve_type("view").is_none(),
         "the name is committed to `data` xor `types` — nothing lands in `types`",
     );
 }

@@ -247,16 +247,16 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
     for e in parse_all(
-        "LET AResult = (IntOrd :| Ordered)\n\
-         MODULE IntOrd = (LET compare = 0)\n\
+        "LET a_result = (int_ord :| Ordered)\n\
+         MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)",
     ) {
         runtime.dispatch_in_scope(e, scope);
     }
     runtime.execute().unwrap();
     assert!(
-        binds_module(scope, "AResult"),
-        "AResult should bind to the ascribed module value after replay-park on \
+        binds_module(scope, "a_result"),
+        "a_result should bind to the ascribed module value after replay-park on \
          forward-declared MODULE / SIG",
     );
 }

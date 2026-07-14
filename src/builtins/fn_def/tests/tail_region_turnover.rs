@@ -100,7 +100,7 @@ fn no_mint_categories_add_no_region_mints() {
 
     // Setup: a module to open a `USING` window on. Whatever this costs (module bodies are not
     // among the four categories under test) is folded into `baseline` below.
-    run(scope, "MODULE Mo = ((LET hidden = 99))");
+    run(scope, "MODULE mo = ((LET hidden = 99))");
     let baseline = region_metrics().minted_total;
 
     run(
@@ -108,7 +108,7 @@ fn no_mint_categories_add_no_region_mints() {
         // Top-level sequence: every statement here is itself the fourth no-mint category.
         "LET a = 42\n\
          LET b = ((a))\n\
-         LET visible = (USING Mo SCOPE (hidden))",
+         LET visible = (USING mo SCOPE (hidden))",
     );
     // Bare-name forward: a submission that is just a name, spliced onto its existing producer.
     let mut runtime = KoanRuntime::new();

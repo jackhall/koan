@@ -60,7 +60,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         FN (USE_ORD Er :Ordered) -> Er = (Er)",
+         FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
     let f = lookup_fn(scope, "USE_ORD");
     assert!(

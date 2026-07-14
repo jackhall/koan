@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
-use crate::machine::model::types::{KType, RecursiveSet, SigSource};
+use crate::machine::model::types::{KType, RecursiveSet};
 
 use super::arena::{FrameSet, FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
 use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup, StoredReach};
@@ -1315,28 +1315,6 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// The whole stored token the `data` binding `name` resolves to under `chain` — the
-    /// value-channel twin of [`Self::resolve_type_stored`], walking the same chain as
-    /// [`Self::resolve_value_carrier`] through the reach-carrying [`Bindings::lookup_value_carrier`].
-    /// A type-position path whose head names a module reads its reach here: the module is bound
-    /// value-side, so its child-scope token lives on the `data` entry. `None` when the name resolves
-    /// nowhere on the chain; a placeholder yields the empty token.
-    pub(in crate::machine::core) fn resolve_value_stored(
-        &self,
-        name: &str,
-        chain: Option<&LexicalFrame>,
-    ) -> Option<StoredReach<'a>> {
-        self.walk_chain(|scope| {
-            scope
-                .bindings()
-                .lookup_value_carrier(name, scope.binding_cutoff(chain))
-                .map(|hit| match hit {
-                    NameLookup::Bound(bound) => bound.stored,
-                    NameLookup::Parked(_) => StoredReach::empty(),
-                })
-        })
-    }
-
     /// The reach a type read under `name` replays onto its carrier: the `types` binding's stored
     /// token, or the empty token when the name names no binding on the chain (a builtin, a
     /// `from_name` / `RecursiveRef` fallback, a placeholder).
@@ -1348,30 +1326,6 @@ impl<'a> Scope<'a> {
     /// forgery the token's restricted constructor exists to prevent.
     pub(crate) fn type_reach(&self, name: &str, chain: Option<&LexicalFrame>) -> StoredReach<'a> {
         self.resolve_type_stored(name, chain)
-            .unwrap_or_else(StoredReach::empty)
-    }
-
-    /// The reach a *resolved* type identifier carries, picking the channel the type itself dictates:
-    /// a bare module head elaborates to `Signature { SelfOf }`, and a module is bound value-side, so
-    /// its child-scope token lives on the `data` entry rather than the `types` one. Any other type
-    /// reads the type channel. The name resolving nowhere yields the empty token.
-    ///
-    /// The channel choice lives here, behind the wall, so the resolver cannot pair a type with a
-    /// reach drawn from the wrong channel — or with one it minted itself.
-    pub(crate) fn reach_for_resolved_type(
-        &self,
-        name: &str,
-        chain: Option<&LexicalFrame>,
-        kt: &KType<'_>,
-    ) -> StoredReach<'a> {
-        self.resolve_type_stored(name, chain)
-            .or_else(|| match kt {
-                KType::Signature {
-                    sig: SigSource::SelfOf(_),
-                    ..
-                } => self.resolve_value_stored(name, chain),
-                _ => None,
-            })
             .unwrap_or_else(StoredReach::empty)
     }
 

@@ -23,7 +23,7 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::TypeResolution;
-use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::{Carried, Parseable};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
@@ -95,10 +95,8 @@ pub(super) fn resolve_name_part<'step>(
         Some(NameLookup::Parked(producer)) => {
             return disposition_for_producer(scheduler, name, producer, consumer);
         }
-        // A module is a value, so a value-side module hit resolves to the Object arm whatever the
-        // part's token class. Module names spell as Type tokens, so a Type part carries them too;
-        // module-naming-flip retires Type-token module names and this half of the guard with them.
-        Some(NameLookup::Bound(obj)) if is_type.is_none() || matches!(obj, KObject::Module(_)) => {
+        // An Identifier part reads the value channel; a Type part takes the type ladder below.
+        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
             return NameOutcome::Resolved(Carried::Object(obj));
         }
         Some(NameLookup::Bound(_)) | None => {}

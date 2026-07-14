@@ -1,14 +1,14 @@
 //! Integration coverage for the dispatch-time wrap-slot eager resolve. Pins the four
 //! shapes called out in the eager-wrap-resolve plan:
 //!
-//! - Bare leaf Type-token (`MAKESET IntOrd`) — wrap-slot value resolves directly via
+//! - Bare leaf Type-token (`MAKESET int_ord`) — wrap-slot value resolves directly via
 //!   `resolve_type_leaf_carrier`; the picked function binds without a sub-Dispatch detour.
 //! - Forward Identifier reference in a wrap-slot — the eager pass parks on the
 //!   producer's placeholder and re-dispatches on wake.
-//! - Chained Type access (`:(LIST OF Mo.Ty)`) — `Deferred` arm, not `wrap_indices`. Pinned
+//! - Chained Type access (`:(LIST OF mo.Ty)`) — `Deferred` arm, not `wrap_indices`. Pinned
 //!   here so the eager-path collapse doesn't accidentally route Deferred through the
 //!   wrap-resolve loop.
-//! - Parens-Expression wrap-slot (`MAKESET IntOrd :| Ordered`) — the wrap-slot part
+//! - Parens-Expression wrap-slot (`MAKESET int_ord :| Ordered`) — the wrap-slot part
 //!   is an `Expression`, not a bare token. The eager wrap-resolve no-ops; the lazy arm
 //!   still sub-Dispatches the Expression.
 
@@ -36,7 +36,7 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
     Ok(String::from_utf8(bytes).unwrap())
 }
 
-/// Bare leaf Type-token wrap-slot fast path. `MAKESET (IntOrd :! Ordered)` carries
+/// Bare leaf Type-token wrap-slot fast path. `MAKESET (int_ord :! Ordered)` carries
 /// the ascription in parens so the inner sub-Dispatch is well-typed by the time the
 /// MAKESET call dispatches; the fused splice/park/eager walk runs over an empty
 /// `wrap_indices` (Future-bearing slot, not bare-name) and binds the picked function
@@ -46,12 +46,12 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))\n\
-         LET MySet = (MAKESET (IntOrd :! Ordered))\n\
-         PRINT MySet.inner",
+         MODULE int_ord = (LET compare = 7)\n\
+         FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))\n\
+         LET my_set = (MAKESET (int_ord :! Ordered))\n\
+         PRINT my_set.inner",
     )
-    .expect("MAKESET on inline-ascribed IntOrd should succeed");
+    .expect("MAKESET on inline-ascribed int_ord should succeed");
     assert_eq!(out.trim(), "1", "expected printed `1`, got `{out}`");
 }
 
@@ -74,22 +74,22 @@ fn wrap_slot_backward_identifier_parks_and_resumes() {
     assert_eq!(out.trim(), "42", "expected printed `42`, got `{out}`");
 }
 
-/// Chained-Type wrap-slot — `:(LIST OF Mo.Ty)`-shape uses a parens-Expression, not a bare
+/// Chained-Type wrap-slot — `:(LIST OF mo.Ty)`-shape uses a parens-Expression, not a bare
 /// token, so it hits the `Deferred` resolve path (no overload picks the bare shape; the
-/// `Mo.Ty` sub-Expression resolves first and the typed result re-dispatches via
+/// `mo.Ty` sub-Expression resolves first and the typed result re-dispatches via
 /// `run_bind`). Pinned here to confirm the eager wrap-resolve collapse doesn't route
 /// Deferred shapes through the wrap loop by accident.
 #[test]
 fn chained_type_access_uses_deferred_path() {
-    // `Mo.ty_value` is a chained-name expression — ATTR's `m.field` shape has a
+    // `mo.ty_value` is a chained-name expression — ATTR's `m.field` shape has a
     // sub-Expression on the right, so the wrap-slot eager-resolve isn't engaged.
     // Pinned so the eager-path collapse doesn't accidentally route Deferred shapes
     // through the wrap loop.
     let out = run_capturing(
-        "MODULE Mo = (LET ty_value = 99)\n\
-         PRINT Mo.ty_value",
+        "MODULE mo = (LET ty_value = 99)\n\
+         PRINT mo.ty_value",
     )
-    .expect("Mo.ty_value access should complete via the Deferred path");
+    .expect("mo.ty_value access should complete via the Deferred path");
     assert_eq!(out.trim(), "99", "expected printed `99`, got `{out}`");
 }
 
@@ -102,10 +102,10 @@ fn chained_type_access_uses_deferred_path() {
 fn wrap_slot_parens_expression_still_sub_dispatches() {
     let out = run_capturing(
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 2))\n\
-         LET MySet = (MAKESET (IntOrd :| Ordered))\n\
-         PRINT MySet.inner",
+         MODULE int_ord = (LET compare = 7)\n\
+         FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 2))\n\
+         LET my_set = (MAKESET (int_ord :| Ordered))\n\
+         PRINT my_set.inner",
     )
     .expect("MAKESET with parens-Expression wrap-slot should sub-Dispatch");
     assert_eq!(out.trim(), "2", "expected printed `2`, got `{out}`");
@@ -151,9 +151,9 @@ fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
 #[test]
 fn using_lazy_arm_with_filter_routes_module_expr_through_filter() {
     let out = run_capturing(
-        "MODULE Provider = (LET answer = 41)\n\
-         LET IdentMod = Provider\n\
-         LET picked = (USING (IdentMod) SCOPE (answer))\n\
+        "MODULE provider = (LET answer = 41)\n\
+         LET ident_mod = provider\n\
+         LET picked = (USING (ident_mod) SCOPE (answer))\n\
          PRINT picked",
     )
     .expect("USING with parens-Expression module slot should sub-Dispatch via filter");

@@ -2,15 +2,15 @@
 //! shape from [design/typing/functors.md](../design/typing/functors.md).
 //!
 //! The test exercises the full shipped FUNCTOR pipeline:
-//! 1. **Define** — `FUNCTOR (MAKESET Er :Ordered) -> Set = (MODULE Generated
+//! 1. **Define** — `FUNCTOR (MAKESET er :Ordered) -> Set = (MODULE generated
 //!    = ...)` registers a KFunction with `is_functor: true`.
-//! 2. **Apply** — `LET IntSet = (MAKESET IntOrd)` invokes the functor with a
+//! 2. **Apply** — `LET int_set = (MAKESET int_ord)` invokes the functor with a
 //!    signature-typed module argument; per-call type-side install registers
-//!    `Er`'s type-language identity into the body's child scope.
-//! 3. **Produce** — the body's `MODULE Generated = (...)` returns a module value
-//!    that the LET RHS binds as `IntSet`. The Stage-5 allowlist routes the
+//!    `er`'s type-language identity into the body's child scope.
+//! 3. **Produce** — the body's `MODULE generated = (...)` returns a module value
+//!    that the LET RHS binds as `int_set`. The Stage-5 allowlist routes the
 //!    `KTypeValue(Module)` carrier to a single type-side `register_type` install,
-//!    so `IntSet` lands only in `bindings.types`.
+//!    so `int_set` lands only in `bindings.types`.
 //!
 //! Mirror of the dispatch/type-checking already covered by the smaller-scope
 //! tests in `src/builtins/fn_def/tests/functor/` and
@@ -75,36 +75,36 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 }
 
 /// End-to-end MakeSet smoke. The functor takes an `Ordered`-satisfying
-/// module (`IntOrd`), produces a module value carrying a value-side `tag`
-/// member, and the LET assigns the result to `IntSet`. The shape pulls
+/// module (`int_ord`), produces a module value carrying a value-side `tag`
+/// member, and the LET assigns the result to `int_set`. The shape pulls
 /// every Stage 0-6 piece of the FUNCTOR work into a single Scheduler run:
 ///
 /// - Stage 0/2: `KType::KFunctor` projection on the functor carrier.
 /// - Stage 3: FUNCTOR binder admits the `Ordered → Module` shape.
 /// - Stage 4: cross-arm wall is dormant here (no FN/FUNCTOR slot mix); the
 ///   test pins the happy-path so the wall isn't exercised.
-/// - Stage 5: LET allowlist admits both the Module-valued `IntOrd` ascription
-///   and the produced `IntSet` module.
+/// - Stage 5: LET allowlist admits both the Module-valued `int_ord` ascription
+///   and the produced `int_set` module.
 #[test]
 fn functor_binder_e2e_makeset_produces_module() {
     let region = run_root_storage();
-    // The natural FUNCTOR application form: `(MAKESET IntOrd)` works directly
-    // when `IntOrd`'s carrier carries the declared signature in its
+    // The natural FUNCTOR application form: `(MAKESET int_ord)` works directly
+    // when `int_ord`'s carrier carries the declared signature in its
     // `compatible_sigs` set. The LET partition guard
     // (design/typing/elaboration.md § Binding-map partition) forces the
     // ascription rebind to use a Type-classified identifier
-    // (`LET IntOrd = (IntOrdBase :! Ordered)`) so the module/signature
+    // (`LET int_ord = (int_ord_base :! Ordered)`) so the module/signature
     // carrier never rides a value-classified alias; the dispatch admission then
     // consults `compatible_sigs` at the signature-typed slot, so no parens-wrap
     // or ascription-view workaround is required at the call site.
     let scope = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! Ordered)\n\
-         FUNCTOR (MAKESET Er :Ordered) -> Module = \
-            (MODULE Generated = ((LET tag = 0)))\n\
-         LET IntSet = (MAKESET IntOrd)",
+         MODULE int_ord_base = ((LET compare = 7))\n\
+         LET int_ord = (int_ord_base :! Ordered)\n\
+         FUNCTOR (MAKESET er :Ordered) -> Module = \
+            (MODULE generated = ((LET tag = 0)))\n\
+         LET int_set = (MAKESET int_ord)",
     );
     // `MAKESET` registered as a FUNCTOR-flagged KFunction in the dispatch
     // table (FN / FUNCTOR write to `functions`, not `data`).
@@ -113,15 +113,15 @@ fn functor_binder_e2e_makeset_produces_module() {
         makeset.is_functor,
         "MAKESET must carry is_functor: true (Stage-2 / Stage-3 plumbing)",
     );
-    // `IntSet` landed as a module value: a module is a value, so LET binds it on the value
+    // `int_set` landed as a module value: a module is a value, so LET binds it on the value
     // channel (`bindings.data`) under its Type-token name and nothing lands in `types`.
     assert!(
-        scope.resolve_type("IntSet").is_none(),
+        scope.resolve_type("int_set").is_none(),
         "a module is a value — nothing lands in `types`",
     );
-    let m = match scope.lookup("IntSet") {
+    let m = match scope.lookup("int_set") {
         Some(KObject::Module(module)) => *module,
-        _ => panic!("IntSet should bind a module value in data"),
+        _ => panic!("int_set should bind a module value in data"),
     };
     // The functor body's `(LET tag = 0)` lifted into the result module's
     // child scope — verifies the per-call body actually ran and the
@@ -129,7 +129,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
-        "IntSet's `tag` member should be 0, got {:?}",
+        "int_set's `tag` member should be 0, got {:?}",
         tag.map(|o| o.ktype()),
     );
     // The module value's `ktype()` is its principal signature, whose name renders as the
@@ -149,8 +149,8 @@ fn functor_binder_e2e_makeset_produces_module() {
 /// in `bindings.data`). The single-part `:(ApplyIt {x = 5})` sigil routes through
 /// the `SigiledTypeExpr` fast lane → a `Type`-head `TypeCall` of `ApplyIt {x = 5}`.
 /// `resolve_type_with_chain(ApplyIt)` returns the body-bearing functor type, so the
-/// `Function` arm calls it and the body's `MODULE Inner = …` produces a module the
-/// outer `LET Got = …` binds.
+/// `Function` arm calls it and the body's `MODULE inner = …` produces a module the
+/// outer `LET got = …` binds.
 ///
 /// The named-arg surface keys on the functor's param name, which must be a bare
 /// lowercase identifier to fill a record-literal field — hence a `Number` param
@@ -162,8 +162,8 @@ fn let_bound_functor_applied_via_sigil_yields_module() {
     let scope = run(
         &region,
         "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = \
-            (MODULE Inner = ((LET tag = x))))\n\
-         LET Got = :(ApplyIt {x = 5})",
+            (MODULE inner = ((LET tag = x))))\n\
+         LET got = :(ApplyIt {x = 5})",
     );
     // `ApplyIt` is type-bound (a functor name lands in `bindings.types`), never in
     // `bindings.data`, and carries its callable body.
@@ -178,10 +178,10 @@ fn let_bound_functor_applied_via_sigil_yields_module() {
         ),
         "ApplyIt should resolve type-side to a body-bearing KFunctor",
     );
-    // Applying the functor produced a module that the outer LET bound as `Got`.
-    let m = match scope.lookup("Got") {
+    // Applying the functor produced a module that the outer LET bound as `got`.
+    let m = match scope.lookup("got") {
         Some(KObject::Module(module)) => *module,
-        _ => panic!("Got should be the module value produced by applying ApplyIt"),
+        _ => panic!("got should be the module value produced by applying ApplyIt"),
     };
     let tag = m.child_scope().lookup("tag");
     assert!(
@@ -210,28 +210,28 @@ fn run_expect_err(src: &str) -> String {
 /// functor param, filled by name with a *satisfying* module, applies through the
 /// named-argument sigil surface.
 ///
-/// `IntOrd` is a module whose `compatible_sigs` carries `Ordered` (installed by
-/// the `:! Ordered` ascription). The named-arg call `:(MakeSet {base = IntOrd})`
-/// reconstructs the positional call `[MKSET, IntOrd]`; the post-pick tail resolves
+/// `int_ord` is a module whose `compatible_sigs` carries `Ordered` (installed by
+/// the `:! Ordered` ascription). The named-arg call `:(MakeSet {base = int_ord})`
+/// reconstructs the positional call `[MKSET, int_ord]`; the post-pick tail resolves
 /// the bare-name `base` slot by sub-Dispatch to its module carrier, so `bind`'s
 /// `accepts_part` consults `compatible_sigs` — the same satisfaction check the
-/// keyword-led `(MAKESET IntOrd)` form uses — and admits it. The functor body's
-/// `(LET tag = 0)` then runs, producing the module bound as `Got`.
+/// keyword-led `(MAKESET int_ord)` form uses — and admits it. The functor body's
+/// `(LET tag = 0)` then runs, producing the module bound as `got`.
 #[test]
 fn functor_signature_param_satisfied_via_named_sigil() {
     let region = run_root_storage();
     let scope = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! Ordered)\n\
+         MODULE int_ord_base = ((LET compare = 7))\n\
+         LET int_ord = (int_ord_base :! Ordered)\n\
          LET MakeSet = (FUNCTOR (MKSET base :Ordered) -> Module = \
-            (MODULE Inner = ((LET tag = 0))))\n\
-         LET Got = :(MakeSet {base = IntOrd})",
+            (MODULE inner = ((LET tag = 0))))\n\
+         LET got = :(MakeSet {base = int_ord})",
     );
-    let m = match scope.lookup("Got") {
+    let m = match scope.lookup("got") {
         Some(KObject::Module(module)) => *module,
-        _ => panic!("Got should be the module value produced by applying MakeSet"),
+        _ => panic!("got should be the module value produced by applying MakeSet"),
     };
     let tag = m.child_scope().lookup("tag");
     assert!(
@@ -250,10 +250,10 @@ fn functor_signature_param_satisfied_via_named_sigil() {
 fn functor_signature_param_unsatisfied_via_named_sigil_errors() {
     let err = run_expect_err(
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE Plain = ((LET other = 1))\n\
+         MODULE plain = ((LET other = 1))\n\
          LET MakeSet = (FUNCTOR (MKSET base :Ordered) -> Module = \
-            (MODULE Inner = ((LET tag = 0))))\n\
-         LET Got = :(MakeSet {base = Plain})",
+            (MODULE inner = ((LET tag = 0))))\n\
+         LET got = :(MakeSet {base = plain})",
     );
     assert!(
         err.contains("type mismatch") && err.contains("Ordered"),
@@ -284,10 +284,10 @@ fn functor_binder_and_sigil_coexist() {
     let scope = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
-         FUNCTOR (MAKEINNER Er :Ordered) -> Module = \
-            (MODULE Res = ((LET inner = 1)))\n\
-         FUNCTOR (MAKEOUTER Er :Ordered) -> :(FUNCTOR (Ty :Signature) -> Module) = \
-            (FUNCTOR (INNER Fr :Ordered) -> Module = (MODULE Res = ((LET v = 2))))",
+         FUNCTOR (MAKEINNER er :Ordered) -> Module = \
+            (MODULE res = ((LET inner = 1)))\n\
+         FUNCTOR (MAKEOUTER er :Ordered) -> :(FUNCTOR (Ty :Signature) -> Module) = \
+            (FUNCTOR (INNER fr :Ordered) -> Module = (MODULE res = ((LET v = 2))))",
     );
     let outer = lookup_fn(scope, "MAKEOUTER");
     assert!(outer.is_functor, "outer FUNCTOR carries is_functor");

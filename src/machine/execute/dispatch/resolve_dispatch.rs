@@ -406,20 +406,21 @@ fn slot_admits_strict<'e>(
         (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
         (SignatureElement::Keyword(_), _) => false,
         (SignatureElement::Argument(arg), part_value) => {
-            // Binder declaration slot: the slot owns the name, so admission
-            // is shape-only. SigiledTypeExpr / RecordType still admit speculatively
-            // (they sub-dispatch to a type-side carrier — e.g. the FN record-schema
-            // overload's `ProperType` signature slot taking a `:{…}`).
-            if matches!(
-                arg.ktype,
-                KType::Identifier | KType::OfKind(KKind::ProperType)
-            ) {
+            // Binder declaration slot: the slot owns the name, so admission is shape-only. A
+            // `ProperType` slot still admits SigiledTypeExpr / RecordType speculatively (they
+            // sub-dispatch to a type-side carrier — the FN record-schema overload's `ProperType`
+            // signature slot taking a `:{…}`). An `Identifier` slot does not: it is part-kind-exact,
+            // so a `:{…}` return type is not mistaken for a value-named one.
+            if matches!(arg.ktype, KType::OfKind(KKind::ProperType)) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
                 ) {
                     return true;
                 }
+                return arg.matches(part_value);
+            }
+            if matches!(arg.ktype, KType::Identifier) {
                 return arg.matches(part_value);
             }
             // A sigil / record-type part in a slot that is neither `:KExpression` nor the

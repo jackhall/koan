@@ -980,7 +980,7 @@ fn head_deferred_applies_returned_functor_to_module() {
     run(
         scope,
         "FN (GET_FUNCTOR) -> Any = \
-         (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = (LET inner = x)))",
+         (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
     );
     let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(
@@ -1068,7 +1068,7 @@ fn type_call_applies_let_bound_functor() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE Inner = ((LET tag = x))))",
+        "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE inner = ((LET tag = x))))",
     );
     assert!(
         scope.lookup("ApplyIt").is_none(),

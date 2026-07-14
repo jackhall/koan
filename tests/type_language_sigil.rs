@@ -307,9 +307,9 @@ fn sigil_functor_forward_reference_defers_via_combine() {
 
 /// User-functor application through the sigil: a `FUNCTOR MyFunctor (...) =
 /// ...` binds a `KFunction` carrier under `MAKESET`, and the value-side
-/// call `(MAKESET IntOrd)` produces a Module value. The same `FunctionValueCall`
+/// call `(MAKESET int_ord)` produces a Module value. The same `FunctionValueCall`
 /// arm of the classifier serves both the value-side and sigiled surfaces, so
-/// `:(MyFunctor IntOrd)` routes through the same machinery — covered by
+/// `:(MyFunctor int_ord)` routes through the same machinery — covered by
 /// `tests/functor_binder_e2e.rs::functor_binder_and_sigil_coexist` for the
 /// sigiled surface; this test pins the value-side surface so both paths are
 /// exercised in CI.
@@ -319,16 +319,16 @@ fn sigil_user_functor_application_through_dispatch() {
     let scope = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrdBase = ((LET compare = 7))\n\
-         LET IntOrd = (IntOrdBase :! Ordered)\n\
-         FUNCTOR (MAKESET Er :Ordered) -> Module = \
-            (MODULE Generated = ((LET tag = 0)))\n\
-         LET MySet = (MAKESET IntOrd)",
+         MODULE int_ord_base = ((LET compare = 7))\n\
+         LET int_ord = (int_ord_base :! Ordered)\n\
+         FUNCTOR (MAKESET er :Ordered) -> Module = \
+            (MODULE generated = ((LET tag = 0)))\n\
+         LET my_set = (MAKESET int_ord)",
     );
-    // `MySet` is a module bound under a Type-classed name — a module is a value, so it binds
+    // `my_set` is a module bound under a Type-classed name — a module is a value, so it binds
     // on the value channel.
     assert!(
-        matches!(scope.lookup("MySet"), Some(KObject::Module(_))),
-        "MySet must bind the produced module value",
+        matches!(scope.lookup("my_set"), Some(KObject::Module(_))),
+        "my_set must bind the produced module value",
     );
 }

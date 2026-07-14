@@ -723,7 +723,7 @@ fn deferred_return_more_specific_than_any() {
     let deferred = KType::function_type(
         Record::new(),
         Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
-            TypeIdentifier::leaf("Er".into()),
+            TypeIdentifier::leaf("er".into()),
         ))),
     );
     let any = KType::function_type(Record::new(), Box::new(KType::Any));
@@ -739,7 +739,7 @@ fn two_functors_differ_only_in_deferred_return_are_distinct() {
     let er = KType::functor_type(
         Record::new(),
         Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
-            TypeIdentifier::leaf("Er".into()),
+            TypeIdentifier::leaf("er".into()),
         ))),
         None,
     );
@@ -771,14 +771,14 @@ fn two_functors_differ_only_in_deferred_return_are_distinct() {
 #[test]
 fn deferred_return_admission_via_function_compat() {
     let candidate = ExpressionSignature {
-        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Er".into()))),
+        return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
         elements: vec![],
     };
     let no_params = Record::new();
 
     // Matching shadow → admit.
     let slot_er = KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf(
-        "Er".into(),
+        "er".into(),
     )));
     assert!(function_compat(&candidate, &no_params, &slot_er, false));
 
@@ -811,8 +811,8 @@ fn deferred_return_surface_eq_and_hash() {
         s.hash(&mut hasher);
         hasher.finish()
     }
-    let a = DeferredReturnSurface::Expression("ATTR Er Type".into());
-    let b = DeferredReturnSurface::Expression("ATTR Er Type".into());
+    let a = DeferredReturnSurface::Expression("ATTR er Type".into());
+    let b = DeferredReturnSurface::Expression("ATTR er Type".into());
     let c = DeferredReturnSurface::Expression("ATTR Ar Type".into());
     assert_eq!(a, b);
     assert_eq!(h(&a), h(&b));

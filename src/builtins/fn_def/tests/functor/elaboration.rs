@@ -35,7 +35,7 @@ fn elaborator_lowers_ktype_value_binding() {
     }
 }
 
-/// A parameter typed `Er :Ordered` lowers via `elaborate_type_identifier` into
+/// A parameter typed `er :Ordered` lowers via `elaborate_type_identifier` into
 /// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
 /// declaring `ModuleSignature::sig_id()`. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.
@@ -47,7 +47,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         FN (USE_ORD Er :Ordered) -> Null = (PRINT \"ok\")",
+         FN (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
     let sig_id = match scope.resolve_type("Ordered") {
@@ -58,7 +58,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     match f.signature.elements.as_slice() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
             assert_eq!(kw, "USE_ORD");
-            assert_eq!(name, "Er");
+            assert_eq!(name, "er");
             match ktype {
                 KType::Signature {
                     sig, pinned_slots, ..

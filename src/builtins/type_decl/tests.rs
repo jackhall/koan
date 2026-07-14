@@ -126,11 +126,11 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE Impl = ((LET Elt = Number) (LET item = 0))\n\
+        "MODULE implementation = ((LET Elt = Number) (LET item = 0))\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
-         LET View = (Impl :| Container)",
+         LET view = (implementation :| Container)",
     );
-    let view = lookup_module(scope, "View");
+    let view = lookup_module(scope, "view");
     let elt = view.type_members.borrow().get("Elt").cloned();
     match elt {
         Some(KType::AbstractType { source, name }) => {
@@ -289,10 +289,10 @@ fn module_attr_access_returns_type_constructor() {
     run(
         scope,
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
-         MODULE IntList = ((LET Wrap = Wrapper))\n\
-         LET Mo = (IntList :| Monad)",
+         MODULE int_list = ((LET Wrap = Wrapper))\n\
+         LET mo = (int_list :| Monad)",
     );
-    let mo = lookup_module(scope, "Mo");
+    let mo = lookup_module(scope, "mo");
     let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
     match wrap_t {
         Some(kt) => {

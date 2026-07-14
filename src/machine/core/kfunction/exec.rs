@@ -50,7 +50,7 @@ pub enum ExecOutcome<'ast, 'step> {
         tail: &'ast KExpression<'ast>,
         ret: PerCallReturn<'step>,
     },
-    /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (`Er.Carrier`,
+    /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (`er.Carrier`,
     /// `sig WITH {…}`) as a single dep-finish dependency, run `leading` as sibling statements, then
     /// tail-replace into `tail` carrying the resolved per-call type. Subsequent calls skip resolution
     /// under keep-first, so the recursion stays TCO-flat.
@@ -90,9 +90,9 @@ pub enum PerCallReturn<'step> {
 /// what lets a return type name a module living outside the captured region — the audit still
 /// refuses a borrow no evidence member, ambient coverage, or the destination itself covers.
 ///
-/// A bare module-valued parameter in return position (`-> Er`) elaborates to the module's principal
+/// A bare module-valued parameter in return position (`-> er`) elaborates to the module's principal
 /// signature (`Signature { SelfOf }`), which homes here like any other region-borrowing type: slots
-/// and returns name signatures, so the contract is "a module satisfying `Er`'s interface".
+/// and returns name signatures, so the contract is "a module satisfying `er`'s interface".
 pub(crate) fn home_resolved_return_type<'captured: 'a, 'a>(
     hit: &TypeHit<'_>,
     captured: &Scope<'captured>,
@@ -246,7 +246,7 @@ where
                 };
             }
             match deferred {
-                // `Type` form (`-> Er`): elaborate inline against the per-call child scope at the
+                // `Type` form (`-> er`): elaborate inline against the per-call child scope at the
                 // frame brand, then re-home the resolved type into the captured-scope region so it is
                 // freed from the brand and rides the tail-replace as a `'step` reference.
                 DeferredReturn::Type(type_expr) => {
@@ -289,7 +289,7 @@ where
                         ret: PerCallReturn::Resolved(ret_ref),
                     }
                 }
-                // `Expression` form (`-> Er.Carrier`, `sig WITH {…}`): the type needs a sub-dispatch,
+                // `Expression` form (`-> er.Carrier`, `sig WITH {…}`): the type needs a sub-dispatch,
                 // so hand it back to resolve as a dep-finish dependency before tail-replacing.
                 DeferredReturn::Expression(return_expr) => {
                     let (leading, tail) = split_leading_tail(body_expr);

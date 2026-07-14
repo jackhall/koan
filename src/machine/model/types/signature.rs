@@ -6,7 +6,7 @@
 //! [`crate::machine::model::values::module::ModuleSignature`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so functor return types
-//! that reference a per-call parameter (`-> Er`, `-> Er.Type`) survive
+//! that reference a per-call parameter (`-> er`, `-> er.Type`) survive
 //! FN-definition without sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
@@ -56,7 +56,7 @@ pub struct ExpressionSignature<'a> {
 }
 
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
-/// in return-type position (`FN (LIFT Er: Ordered) -> Er = ...`); `Deferred` holds the
+/// in return-type position (`FN (LIFT er: Ordered) -> er = ...`); `Deferred` holds the
 /// captured surface form for per-call re-elaboration against the per-call scope where the
 /// parameter's type-language identity is registered. See
 /// [functors.md](../../../../design/typing/functors.md).
@@ -68,9 +68,9 @@ pub enum ReturnType<'a> {
 /// Surface form preserved for per-call re-elaboration. Two carriers mirror the two FN
 /// return-type slot kinds:
 ///
-/// - `Type` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
+/// - `Type` — parser-preserved structured form (`er`, `List<er>`). Re-elaborated per
 ///   call via `elaborate_type_identifier`. Owns its strings, so no region lifetime.
-/// - `Expression` — captured `:(…)` / dotted return expression (`Er.Type`,
+/// - `Expression` — captured `:(…)` / dotted return expression (`er.Type`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
 ///   `Carried::Type`'s inner `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {

@@ -332,7 +332,7 @@ fn access_field<'a>(
 /// Look `field` up inside a [`Module`]'s child scope: opaque-ascription `type_members`,
 /// then the classified `data`-then-`types` member lookup ([`Bindings::lookup_member`]).
 ///
-/// A nested `MODULE Sub = (...)` is a value member, so chained access `Outer.Inner.X` reads the
+/// A nested `MODULE sub = (...)` is a value member, so chained access `Outer.Inner.X` reads the
 /// inner module value from `data` and the next ATTR step recurses into its child scope.
 ///
 /// On a value-side hit, an opaque-ascription `slot_type_tags` entry re-tags the read: the
@@ -344,7 +344,7 @@ fn access_field<'a>(
 /// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s region, not the
 /// read-site `scope`'s: `Wrapped::deep_clone` is shallow (the NEWTYPE invariant that
 /// `type_id` is a declaration-stable `&'a KType`), so the `type_id` must outlive any
-/// lift/deep-clone of the read value — e.g. a functor body's `(Er.zero)` whose read-site
+/// lift/deep-clone of the read value — e.g. a functor body's `(er.zero)` whose read-site
 /// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
 /// so the module region is the right home; both `inner` (the slot value) and `type_id`
 /// (the abstract tag, which references the module) then live there together.
@@ -644,8 +644,8 @@ mod tests {
     }
 
     /// An opaque (`:|`) view re-tags a VAL-slot read with the per-call abstract identity:
-    /// `IntOrdView.zero` reads as the abstract `Carrier` (`ktype().name() == "Carrier"`), not the
-    /// underlying `Number`, so a deferred return `Er.Carrier` accepts the body.
+    /// `int_ord_view.zero` reads as the abstract `Carrier` (`ktype().name() == "Carrier"`), not the
+    /// underlying `Number`, so a deferred return `er.Carrier` accepts the body.
     #[test]
     fn opaque_view_slot_read_re_tags_with_abstract_type() {
         let region = run_root_storage();
@@ -653,10 +653,10 @@ mod tests {
         run(
             scope,
             "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
-             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
-             LET IntOrdView = (IntOrd :| WithZero)",
+             MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+             LET int_ord_view = (int_ord :| WithZero)",
         );
-        let result = run_one(scope, parse_one("IntOrdView.zero"));
+        let result = run_one(scope, parse_one("int_ord_view.zero"));
         assert_eq!(
             result.ktype().name(),
             "Carrier",
@@ -666,7 +666,7 @@ mod tests {
     }
 
     /// Transparent (`:!`) views leave `slot_type_tags` empty, so the slot read stays
-    /// concrete: `IntOrdView.zero` reads as the underlying `Number`, not the abstract `Type`.
+    /// concrete: `int_ord_view.zero` reads as the underlying `Number`, not the abstract `Type`.
     #[test]
     fn transparent_view_slot_read_stays_concrete() {
         let region = run_root_storage();
@@ -674,10 +674,10 @@ mod tests {
         run(
             scope,
             "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
-             MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
-             LET IntOrdView = (IntOrd :! WithZero)",
+             MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+             LET int_ord_view = (int_ord :! WithZero)",
         );
-        let result = run_one(scope, parse_one("IntOrdView.zero"));
+        let result = run_one(scope, parse_one("int_ord_view.zero"));
         assert!(
             matches!(result, KObject::Number(n) if *n == 0.0),
             "transparent-view slot read must stay the underlying Number, got {:?}",

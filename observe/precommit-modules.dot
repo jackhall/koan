@@ -353,7 +353,6 @@ digraph {
     "koan::builtins::let_binding" -> "koan::machine::core::kfunction::action" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::builtins::let_binding" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::builtins::let_binding" -> "koan::parse" [label="uses", style="dashed"];

@@ -18,22 +18,22 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)",
+         MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET IntOrdA = (IntOrd :! Ordered)");
+    run(scope, "LET int_ord_a = (int_ord :! Ordered)");
     run(
         scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
+        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
     );
-    run(scope, "LET HeldSet = (MAKESET (IntOrdA))");
+    run(scope, "LET held_set = (MAKESET (int_ord_a))");
 
     run(scope, "FN (NOOP) -> Number = (1)");
     for _ in 0..20 {
         run_one(scope, parse_one("NOOP"));
     }
-    run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
+    run(scope, "LET other_set = (MAKESET (int_ord_a))");
 
-    let m = lookup_module(scope, "HeldSet");
+    let m = lookup_module(scope, "held_set");
     let inner = m
         .child_scope()
         .bindings()
@@ -42,14 +42,14 @@ fn functor_body_module_dispatch_does_not_dangle() {
         .map(|(o, _, _)| *o);
     assert!(
         matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
-        "HeldSet.inner must still read 1.0 after subsequent churn"
+        "held_set.inner must still read 1.0 after subsequent churn"
     );
 }
 
 /// Functor body resolves a module-typed parameter via the per-call bind: without it the body's
-/// auto-wrapped `(Er)` would hit `UnboundName` against the FN's captured outer scope. Uses opaque
+/// auto-wrapped `(er)` would hit `UnboundName` against the FN's captured outer scope. Uses opaque
 /// ascription (`:|`) so the bound module carries an abstract `Carrier` member for the dotted
-/// `Er.Carrier` access to return.
+/// `er.Carrier` access to return.
 #[test]
 fn functor_body_dotted_type_member_via_per_call_bind() {
     let region = run_root_storage();
@@ -57,11 +57,11 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     run(
         scope,
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| Ordered)",
+         MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+         LET int_ord_view = (int_ord :| Ordered)",
     );
-    run(scope, "FN (USE_TYPE Er :Ordered) -> Any = (Er.Carrier)");
-    let result = run_one_type(scope, parse_one("USE_TYPE IntOrdView"));
+    run(scope, "FN (USE_TYPE er :Ordered) -> Any = (er.Carrier)");
+    let result = run_one_type(scope, parse_one("USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
     match result {
@@ -76,7 +76,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
 }
 
 /// The per-call parameter bind survives closure escape: an inner FN returned from an outer functor
-/// reads its captured `Er` from the outer's per-call `bindings.data` after the outer call has
+/// reads its captured `er` from the outer's per-call `bindings.data` after the outer call has
 /// returned. The `KFunction(&fn, Some(Rc<CallFrame>))` lift pins the region the binding lives in.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
@@ -85,15 +85,15 @@ fn functor_closure_escape_pins_type_class_bind() {
     run(
         scope,
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| Ordered)",
+         MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+         LET int_ord_view = (int_ord :| Ordered)",
     );
     run(
         scope,
-        "FN (MAKE_LOOKUP Er :Ordered) -> Any = \
-            (FN (LOOKUP) -> Any = (Er.Carrier))",
+        "FN (MAKE_LOOKUP er :Ordered) -> Any = \
+            (FN (LOOKUP) -> Any = (er.Carrier))",
     );
-    run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
+    run(scope, "LET _maker = (MAKE_LOOKUP int_ord_view)");
     // Churn the per-call region's drop discipline before invoking the inner FN.
     for _ in 0..5 {
         run_one(scope, parse_one("PRINT 1"));
@@ -109,8 +109,8 @@ fn functor_closure_escape_pins_type_class_bind() {
     }
 }
 
-/// `FN (MAKESET Er :Ordered) -> Ordered = (Er)` dispatches and the
-/// auto-wrapped `(Er)` body resolves `Er` through the per-call value-side binding,
+/// `FN (MAKESET er :Ordered) -> Ordered = (er)` dispatches and the
+/// auto-wrapped `(er)` body resolves `er` through the per-call value-side binding,
 /// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
@@ -119,18 +119,18 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET OrdView = (IntOrd :! Ordered)\n\
-         FN (MAKESET Er :Ordered) -> Ordered = (Er)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET ord_view = (int_ord :! Ordered)\n\
+         FN (MAKESET er :Ordered) -> Ordered = (er)",
     );
-    let result = run_one(scope, parse_one("MAKESET OrdView"));
+    let result = run_one(scope, parse_one("MAKESET ord_view"));
     match result {
         KObject::Module(module) => {
-            assert_eq!(module.path, "IntOrd :! Ordered");
+            assert_eq!(module.path, "int_ord :! Ordered");
         }
         other => {
             panic!(
-                "MAKESET OrdView must return the passed-through module carrier, got {}",
+                "MAKESET ord_view must return the passed-through module carrier, got {}",
                 other.summarize()
             )
         }

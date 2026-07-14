@@ -5,7 +5,7 @@
 //! signature identity unchanged), and an unequal one is a type error.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
-//! values are resolved `Held::Type`s — a dotted `Er.Type` value sub-dispatches in value
+//! values are resolved `Held::Type`s — a dotted `er.Type` value sub-dispatches in value
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 
@@ -236,7 +236,7 @@ mod tests {
         }
     }
 
-    /// A dotted `Elem.Carrier` pin value sub-dispatches in value context to the abstract
+    /// A dotted `elem.Carrier` pin value sub-dispatches in value context to the abstract
     /// `Carrier` and surfaces in `pinned_slots` — a dotted pin value the keyworded record-literal
     /// handler could not take (was `#[ignore]`d there).
     #[test]
@@ -245,12 +245,12 @@ mod tests {
         let scope = run_root_silent(&region);
         run(
             scope,
-            "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
+            "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
              SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
              SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
-             LET Elem = (IntOrd :| Ordered)",
+             LET elem = (int_ord :| Ordered)",
         );
-        let result = run_one_type(scope, parse_one("Set WITH {Elt = Elem.Carrier}"));
+        let result = run_one_type(scope, parse_one("Set WITH {Elt = elem.Carrier}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);

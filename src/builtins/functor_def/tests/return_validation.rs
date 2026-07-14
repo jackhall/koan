@@ -43,7 +43,7 @@ fn functor_return_slot_function_type_rejects() {
     }
 }
 
-/// the dotted `Er.Type` access references a parameter, so the return carrier routes
+/// the dotted `er.Type` access references a parameter, so the return carrier routes
 /// through `ReturnTypeState::Deferred`; the head inspector surfaces the
 /// diagnostic without waiting for per-call elaboration.
 #[test]
@@ -56,7 +56,7 @@ fn functor_return_slot_dotted_type_member_rejects() {
     );
     let err = run_one_err(
         scope,
-        parse_one("FUNCTOR (USE_TYPE Er :Ordered) -> Er.Type = (1)"),
+        parse_one("FUNCTOR (USE_TYPE er :Ordered) -> er.Type = (1)"),
     );
     match &err.kind {
         KErrorKind::ShapeError(msg) => assert!(

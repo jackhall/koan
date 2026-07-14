@@ -152,7 +152,7 @@ pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 
 /// Dispatch-time bucket-key extractor for a binder that registers a callable
 /// (`FN`, `FUNCTOR`). Returns the `UntypedKey` for a *call* to the to-be-registered
-/// overload (e.g. `(MAKESET Er :Ordered)` → `[Keyword("MAKESET"), Slot]`); the
+/// overload (e.g. `(MAKESET er :Ordered)` → `[Keyword("MAKESET"), Slot]`); the
 /// driver installs it in `bindings.pending_overloads` so a sibling call form parks
 /// on the producer instead of failing dispatch.
 ///

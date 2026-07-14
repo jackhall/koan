@@ -44,11 +44,11 @@ impl<'step> Scope<'step> {
                 // A bare `TypeIdentifier` resolves to at most one binding, so its token is that
                 // binding's stored token (empty for a builtin / owned type) — replayed whole with its
                 // home-borrow bit, and minted *before* the alloc below so `kt`'s own residence audit
-                // can see it. Cached alongside `kt` so a hit rebuilds the read carrier. A module head
-                // lowers to `Signature { SelfOf }`, which borrows the module; the module is bound
-                // value-side, so its child-scope reach comes off the `data` entry.
-                let stored =
-                    self.reach_for_resolved_type(te.as_str(), chain_for_reach.as_deref(), &kt);
+                // can see it. Cached alongside `kt` so a hit rebuilds the read carrier. A type
+                // identifier names a *type* binding, so the token always comes off the `types` entry:
+                // a type that borrows a module's region (`LET Ty = (TYPE OF int_ord)`) carries that
+                // reach on its own type entry, minted from the RHS carrier at the bind.
+                let stored = self.type_reach(te.as_str(), chain_for_reach.as_deref());
                 let kt_ref: &'step KType<'step> = self
                     .alloc_ktype_reaching(kt, &stored)
                     .expect("resolve_type_identifier: kt must be covered by its own stored reach");

@@ -30,15 +30,15 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         .brand()
         .alloc_signature(ModuleSignature::new("Ordered".into(), sig_scope));
 
-    // `NoElemPin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
-    // with. `NumBare` is a second `Elem = Number` module, ascribed to nothing: admission is
-    // structural, so it is behaviorally identical to `NumPinned`.
+    // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
+    // with. `num_bare` is a second `Elem = Number` module, ascribed to nothing: admission is
+    // structural, so it is behaviorally identical to `num_pinned`.
     run(
         scope,
-        "MODULE NumPinned = ((LET Elem = Number) (LET compare = 0))\n\
-         MODULE StrPinned = ((LET Elem = Str) (LET compare = 0))\n\
-         MODULE NoElemPin = (LET compare = 0)\n\
-         MODULE NumBare = ((LET Elem = Number) (LET compare = 0))",
+        "MODULE num_pinned = ((LET Elem = Number) (LET compare = 0))\n\
+         MODULE str_pinned = ((LET Elem = Str) (LET compare = 0))\n\
+         MODULE no_elem_pin = (LET compare = 0)\n\
+         MODULE num_bare = ((LET Elem = Number) (LET compare = 0))",
     );
 
     let slot = KType::signature(
@@ -54,10 +54,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             panic!("{name} must bind a module value-side");
         })))
     };
-    assert!(slot.accepts_part(&module_part("NumPinned")));
-    assert!(!slot.accepts_part(&module_part("StrPinned")));
-    assert!(!slot.accepts_part(&module_part("NoElemPin")));
-    assert!(slot.accepts_part(&module_part("NumBare")));
+    assert!(slot.accepts_part(&module_part("num_pinned")));
+    assert!(!slot.accepts_part(&module_part("str_pinned")));
+    assert!(!slot.accepts_part(&module_part("no_elem_pin")));
+    assert!(slot.accepts_part(&module_part("num_bare")));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -72,13 +72,13 @@ fn functor_with_two_pinned_slots_round_trips() {
         scope,
         "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
          SIG Ordered = (VAL compare :Number)\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! Ordered)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET int_ord_view = (int_ord :! Ordered)",
     );
     run(
         scope,
         "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
-         (MODULE Generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
+         (MODULE generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
@@ -111,13 +111,13 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
          SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! Ordered)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET int_ord_view = (int_ord :! Ordered)",
     );
     run(
         scope,
         "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
-         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
+         (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::ReturnType;
@@ -148,16 +148,16 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
          SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! Ordered)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET int_ord_view = (int_ord :! Ordered)",
     );
     run(
         scope,
         "FN (MAKEBAD p :Ordered) -> :(Set WITH {Elt = Number}) = \
-         (MODULE Generated = ((LET Elt = Str) (LET insert = 0)))",
+         (MODULE generated = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("MAKEBAD IntOrdView"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("MAKEBAD int_ord_view"), scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -182,16 +182,16 @@ fn functor_return_with_matching_sharing_constraint_passes() {
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
          SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
-         MODULE IntOrd = (LET compare = 7)\n\
-         LET IntOrdView = (IntOrd :! Ordered)",
+         MODULE int_ord = (LET compare = 7)\n\
+         LET int_ord_view = (int_ord :! Ordered)",
     );
     run(
         scope,
         "FN (MAKEGOOD p :Ordered) -> :(Set WITH {Elt = Number}) = \
-         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
+         (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("MAKEGOOD IntOrdView"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("MAKEGOOD int_ord_view"), scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -217,11 +217,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE NumMod = ((LET Elem = Number) (LET compare = 0))\n\
-         MODULE StrMod = ((LET Elem = Str) (LET compare = 0))\n\
+        "MODULE num_mod = ((LET Elem = Number) (LET compare = 0))\n\
+         MODULE str_mod = ((LET Elem = Str) (LET compare = 0))\n\
          SIG Ordered = ((TYPE Elem) (VAL compare :Number))\n\
-         LET NumView = (NumMod :! Ordered)\n\
-         LET StrView = (StrMod :! Ordered)",
+         LET num_view = (num_mod :! Ordered)\n\
+         LET str_view = (str_mod :! Ordered)",
     );
     let sig = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
@@ -235,8 +235,8 @@ fn transparent_view_pin_agreement_reads_source_types() {
         vec![("Elem".to_string(), KType::Number)],
     );
     // A view binds value-side, so its argument cell carries the module on the Object channel.
-    let num_view = scope.lookup("NumView").expect("NumView bound");
-    let str_view = scope.lookup("StrView").expect("StrView bound");
+    let num_view = scope.lookup("num_view").expect("num_view bound");
+    let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
         slot.accepts_part(&spliced_part(Carried::Object(num_view))),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
@@ -258,9 +258,9 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Carrier = Number) (LET compare = 0))\n\
+        "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
-         LET View = (IntOrd :| Ordered)",
+         LET view = (int_ord :| Ordered)",
     );
     let sig = match scope.resolve_type("Ordered") {
         Some(KType::Signature {
@@ -269,7 +269,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         }) => *sig,
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let view = lookup_module(scope, "View");
+    let view = lookup_module(scope, "view");
     let carrier_abstract = view
         .type_members
         .borrow()
@@ -281,7 +281,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         vec![("Carrier".to_string(), carrier_abstract)],
     );
     // A view binds value-side, so its argument cell carries the module on the Object channel.
-    let view_obj = scope.lookup("View").expect("View bound");
+    let view_obj = scope.lookup("view").expect("view bound");
     assert!(
         slot.accepts_part(&spliced_part(Carried::Object(view_obj))),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",

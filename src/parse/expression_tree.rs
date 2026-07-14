@@ -421,7 +421,8 @@ pub fn build_tree<'a>(
                             return Err(KError::parse(
                                 format!(
                                     "':' must be followed by a type name (uppercase-leading) or `(`; \
-                                     got `{next_char}`"
+                                     got `{next_char}`. A value token names no type — for the type \
+                                     of a value, write `:(TYPE OF <value>)`"
                                 ),
                                 None,
                             ));

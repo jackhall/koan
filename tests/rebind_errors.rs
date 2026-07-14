@@ -116,7 +116,7 @@ fn cross_scope_shadowing_succeeds() {
     let results = run_collecting_errors(
         scope,
         "LET x = 1\n\
-         MODULE Mod = (LET x = 99)",
+         MODULE some_module = (LET x = 99)",
     );
     assert!(results[0].is_ok(), "outer LET should succeed");
     assert!(
@@ -126,9 +126,9 @@ fn cross_scope_shadowing_succeeds() {
     // Outer x stays 1.
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99. A module is a value — its `&Module` rides the Object-arm value in `data`.
-    let m = match scope.lookup("Mod") {
+    let m = match scope.lookup("some_module") {
         Some(KObject::Module(m)) => *m,
-        _ => panic!("Mod should bind a module value"),
+        _ => panic!("some_module should bind a module value"),
     };
     let x = m.child_scope().lookup("x");
     assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));

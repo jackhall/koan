@@ -12,7 +12,7 @@ fn functor_binder_sets_is_functor_flag() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
+         FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
     );
     let f = lookup_fn(scope, "MAKESET");
     assert!(
@@ -29,7 +29,7 @@ fn functor_carrier_ktype_projects_to_kfunctor() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1))",
+         FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
     );
     let f = lookup_fn(scope, "MAKESET");
     let obj = KObject::KFunction(f);
@@ -48,7 +48,7 @@ fn let_type_class_admits_functor_rhs() {
     run(
         scope,
         "SIG Ordered = (VAL compare :Number)\n\
-         LET MyF = (FUNCTOR (MAKESET Er :Ordered) -> Module = (MODULE Generated = (LET inner = 1)))",
+         LET MyF = (FUNCTOR (MAKESET er :Ordered) -> Module = (MODULE generated = (LET inner = 1)))",
     );
     assert!(
         scope.lookup("MyF").is_none(),

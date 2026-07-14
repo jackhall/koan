@@ -28,7 +28,7 @@ pub fn body<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Two overloads: `ProperType` for a bare `-> Number`, `SigiledTypeExpr` for a
-    // `:(…)` / dotted carrier like `-> Er.Type`. `binder_bucket` lets a sibling
+    // `:(…)` / dotted carrier like `-> er.Type`. `binder_bucket` lets a sibling
     // bare-arg call park on a still-finalizing overload — siblings sharing a
     // bucket key all install for it and only the first finalize wins.
     let typeexpr_sig = || {
@@ -44,7 +44,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    // Lazy `:(...)` return carrier: a dotted `-> Er.Type` defers per-call rather
+    // Lazy `:(...)` return carrier: a dotted `-> er.Type` defers per-call rather
     // than eager-sub-dispatching to an unbound parameter.
     let sigil_sig = || {
         sig(

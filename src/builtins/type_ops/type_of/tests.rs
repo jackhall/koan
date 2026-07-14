@@ -33,9 +33,12 @@ fn type_of_bound_list_is_list_of_element_type() {
 fn type_of_module_is_its_self_sig() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))");
-    let module = lookup_module(scope, "IntOrd");
-    match run_one_type(scope, parse_one("TYPE OF IntOrd")) {
+    run(
+        scope,
+        "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))",
+    );
+    let module = lookup_module(scope, "int_ord");
+    match run_one_type(scope, parse_one("TYPE OF int_ord")) {
         KType::Signature {
             sig: SigSource::SelfOf(m),
             ..
@@ -56,12 +59,12 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     run(
         scope,
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         LET View = (IntOrd :| Ordered)",
+         MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
+         LET view = (int_ord :| Ordered)",
     );
-    let view = lookup_module(scope, "View");
-    let source = lookup_module(scope, "IntOrd");
-    match run_one_type(scope, parse_one("TYPE OF View")) {
+    let view = lookup_module(scope, "view");
+    let source = lookup_module(scope, "int_ord");
+    match run_one_type(scope, parse_one("TYPE OF view")) {
         KType::Signature {
             sig: SigSource::SelfOf(m),
             ..
@@ -96,10 +99,10 @@ fn type_of_transparent_view_reports_concrete_slots() {
     run(
         scope,
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         LET View = (IntOrd :! Ordered)",
+         MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
+         LET view = (int_ord :! Ordered)",
     );
-    match run_one_type(scope, parse_one("TYPE OF View")) {
+    match run_one_type(scope, parse_one("TYPE OF view")) {
         KType::Signature {
             sig: SigSource::SelfOf(m),
             ..
@@ -122,10 +125,10 @@ fn type_of_module_types_a_parameter_slot() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
-         FN (TAKE_ORD m :(TYPE OF IntOrd)) -> Number = (m.zero)",
+        "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
+         FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
     );
-    let result = run_one(scope, parse_one("TAKE_ORD IntOrd"));
+    let result = run_one(scope, parse_one("TAKE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
@@ -142,13 +145,39 @@ fn type_of_parameter_defers_a_return_type() {
     run(
         scope,
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
-         MODULE IntOrd = ((LET Elt = Number) (LET zero = 7))\n\
+         MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
-    let result = run_one(scope, parse_one("USE_ORD IntOrd"));
+    let result = run_one(scope, parse_one("USE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
+        result.summarize(),
+    );
+}
+
+/// `LET SetType = (TYPE OF <module>)` binds the module's self-sig as an ordinary *type* alias, so
+/// the reach a later `:SetType` slot replays comes off the `types` entry — minted there from this
+/// carrier at the bind. The module lives in a FUNCTOR's per-call region, which nothing else pins, so
+/// a type-channel reach that dropped it would refuse the slot.
+#[test]
+fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
+         FUNCTOR (MAKESET Er :Ordered) -> Module = \
+           (MODULE generated = ((LET Elt = Number) (LET zero = 3)))\n\
+         MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
+         LET int_set = (MAKESET int_ord)\n\
+         LET SetType = (TYPE OF int_set)\n\
+         FN (TAKE m :SetType) -> Number = (m.zero)",
+    );
+    let result = run_one(scope, parse_one("TAKE int_set"));
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 3.0),
+        "the alias must admit the functor-minted module, got {}",
         result.summarize(),
     );
 }

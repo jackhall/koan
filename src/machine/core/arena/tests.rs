@@ -1404,7 +1404,7 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
 /// The reaching tier is evidence-gated, not a rubber stamp: the same foreign-region `Signature`,
 /// sealed into region B's `alloc_ktype_reaching` under an **empty** `StoredReach`, is refused just
 /// like the dest-only tier refuses it — B's own region and its ambient coverage name nothing in A.
-/// This is the tier a deferred `-> Er` return homes through, so a return type borrowing a region
+/// This is the tier a deferred `-> er` return homes through, so a return type borrowing a region
 /// the parameter's binding does not pin still errors loudly.
 #[test]
 fn alloc_ktype_reaching_rejects_foreign_signature_with_no_evidence() {

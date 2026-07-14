@@ -71,7 +71,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();
-    let module_expr = parse_one("MODULE Foo = (LET x = 1)");
+    let module_expr = parse_one("MODULE foo = (LET x = 1)");
     let ids = runtime.enter_block(root.id, vec![module_expr], root);
     let top_id = ids[0];
     let top_chain = runtime.chain_of(top_id).expect("module statement chain");
@@ -82,7 +82,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     // Body slot has terminalized by now and dropped its chain; the body-chain
     // shape is exercised end-to-end by the recursive smoke tests below. A module is a value,
     // so the `&Module` rides the Object-arm value in `data`.
-    let module = lookup_module(root, "Foo");
+    let module = lookup_module(root, "foo");
     let _: &Module<'_> = module;
 }
 

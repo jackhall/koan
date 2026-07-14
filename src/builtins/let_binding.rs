@@ -1,5 +1,4 @@
 use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -24,17 +23,14 @@ pub fn body<'a>(
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     let mut type_for_types_map: Option<KType<'a>> = None;
-    // Whether the binder name is Type-classified (`LET <Name> = …`). A module RHS under such a name
-    // still binds value-side, so "type-classified name" and "lands in `types`" are distinct facts:
-    // the SIG-body VAL guard below keys on the former.
+    // Whether the binder name is Type-classified (`LET <Name> = …`) — the SIG-body VAL guard below
+    // keys on it, independent of which map the RHS lands in.
     let mut type_classified_name = false;
     let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
         (Some(KObject::KString(s)), _) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
-            // rides the Object arm (`KObject::Module`) but is still type-language, so it keys the
-            // same diagnostic as a `Held::Type` signature identity.
+            // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
-                Held::Object(KObject::Module(_)) => Some("module"),
                 Held::Type(KType::Signature { .. }) => Some("signature"),
                 Held::Type(_) => Some("type"),
                 Held::Object(_) => None,
@@ -70,10 +66,17 @@ pub fn body<'a>(
             type_classified_name = true;
             match rhs {
                 Held::Type(kt) => type_for_types_map = Some(kt.clone()),
-                // A module is a value: `LET View = (m :| S)` binds it into `data` like any other
-                // object value, under its Type-token name. The value/type partition commits the
-                // name to exactly one map, so nothing lands in `types` here.
-                Held::Object(KObject::Module(_)) => {}
+                // A module is a value, and the Type-token namespace names things that type a field.
+                // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
+                // produced it (an ascription view, a functor call) — respell it snake_case.
+                Held::Object(KObject::Module(_)) => {
+                    return done_err(KError::new(KErrorKind::ShapeError(format!(
+                        "LET binder `{resolved_name}` is Type-classified but the bound value is a \
+                         module (a value); rebind under a value-classified identifier instead \
+                         (snake_case, e.g. `{suggestion}`)",
+                        suggestion = snake_case_identifier(&resolved_name),
+                    ))));
+                }
                 Held::Object(o) if matches!(o, KObject::KFunction(f) if f.is_functor) => {
                     type_for_types_map = Some(o.ktype())
                 }
@@ -164,6 +167,24 @@ pub fn body<'a>(
     }
 }
 
+/// Suggest a value-classified rewrite of a Type-classified binder name for the module guard:
+/// `IntOrd` → `int_ord`. Each interior uppercase letter opens a new word (see
+/// design/typing/tokens.md for the two token classes).
+pub(crate) fn snake_case_identifier(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Suggest a Type-classified rewrite of a value-classified binder name for the
 /// partition-guard diagnostic. Falls back to a synthetic `M` prefix if the name
 /// starts with a non-alphabetic character where simple capitalization wouldn't
@@ -181,20 +202,14 @@ fn capitalize_identifier(name: &str) -> String {
     }
 }
 
-/// Dispatch-time placeholder extractor for the value-binding `LET <name> = …` overload:
-/// matches only an `Identifier` name part. The type-alias overload (`LET <Type> = …`) uses
-/// the shared [`type_part_binder_name`](crate::builtins::type_part_binder_name) instead, so
-/// each overload's extractor matches exactly its own name-part kind. This keeps the
+/// Dispatch-time placeholder extractor for the value-binding `LET <name> = …` overload: the shared
+/// [`identifier_part_binder_name`](crate::builtins::identifier_part_binder_name). The type-alias
+/// overload (`LET <Type> = …`) uses [`type_part_binder_name`](crate::builtins::type_part_binder_name)
+/// instead, so each overload's extractor matches exactly its own name-part kind. This keeps the
 /// submit-time binder pick ([`extract_binder_install`]) selecting the correctly-classified
 /// overload (the value extractor misses a `Type` part, and vice versa), so the placeholder is
-/// tagged `Value` xor `Type` to match where the bind lands. Returns `None` on shape mismatch
-/// (the body surfaces a structured error later).
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    match &expr.parts.get(1)?.value {
-        ExpressionPart::Identifier(s) => Some(s.clone()),
-        _ => None,
-    }
-}
+/// tagged `Value` xor `Type` to match where the bind lands.
+pub(crate) use crate::builtins::identifier_part_binder_name as binder_name;
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let identifier_sig = || {

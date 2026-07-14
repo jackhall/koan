@@ -65,15 +65,27 @@ pub(crate) fn sig<'a>(
     }
 }
 
-/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / MODULE / UNION /
-/// RECURSIVE TYPES / NEWTYPE): the binder name is `parts[1]`'s `Type(t)` token.
-/// A free function (not the `KExpression::binder_name_from_type_part` method
-/// reference) so the signature is higher-ranked over the expression lifetime, as
-/// `BinderNameFn` requires.
+/// Shared [`BinderNameFn`] for typed-binder builtins (SIG / UNION / RECURSIVE TYPES / NEWTYPE):
+/// the binder name is `parts[1]`'s `Type(t)` token. A free function (not the
+/// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
+/// over the expression lifetime, as `BinderNameFn` requires.
 pub(crate) fn type_part_binder_name(
     expr: &crate::machine::model::ast::KExpression<'_>,
 ) -> Option<String> {
     expr.binder_name_from_type_part()
+}
+
+/// Shared [`BinderNameFn`] for value-binder builtins (`LET <name> = …`, `MODULE <name> = …`): the
+/// binder name is `parts[1]`'s `Identifier` token. The `Type`-part twin of
+/// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
+/// and the submit-time placeholder is tagged `Value` xor `Type` to match where the bind lands.
+pub(crate) fn identifier_part_binder_name(
+    expr: &crate::machine::model::ast::KExpression<'_>,
+) -> Option<String> {
+    match &expr.parts.get(1)?.value {
+        crate::machine::model::ast::ExpressionPart::Identifier(s) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is

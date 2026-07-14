@@ -1029,14 +1029,6 @@ impl<'a> Bindings<'a> {
         drop(data);
         drop(functions_handle);
         self.clear_placeholder_best_effort(name, BindKind::Value);
-        // Module names spell as Type tokens, so a module binder (`MODULE`, `LET <Name> = <module
-        // expr>`) installs a `BindKind::Type` placeholder at submit while its value lands in `data`.
-        // Clear that placeholder here too, so the finalized name resolves through the value channel
-        // instead of parking on a producer that has already run. module-naming-flip retires
-        // Type-token module names and this clear with them.
-        if write_data && matches!(obj, KObject::Module(_)) {
-            self.clear_placeholder_best_effort(name, BindKind::Type);
-        }
         if let Some(bucket) = cleared_overload_bucket {
             // Remove only this binder's pending entry; siblings stay as wake sources.
             self.clear_pending_overload_best_effort(&bucket, index);

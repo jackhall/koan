@@ -74,7 +74,7 @@ fn val_outside_sig_errors() {
 fn val_inside_module_errors() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("MODULE Foo = ((VAL x :Number))"));
+    let err = run_one_err(scope, parse_one("MODULE foo = ((VAL x :Number))"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -124,9 +124,9 @@ fn val_slot_required_by_shape_check() {
     run(
         scope,
         "SIG WithCompare = ((VAL compare :Number))\n\
-         MODULE Empty = (LET unrelated = 0)",
+         MODULE empty = (LET unrelated = 0)",
     );
-    let err = run_one_err(scope, parse_one("Empty :| WithCompare"));
+    let err = run_one_err(scope, parse_one("empty :| WithCompare"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -148,11 +148,11 @@ fn val_slot_satisfied_by_module_let_member() {
     run(
         scope,
         "SIG WithCompare = ((VAL compare :Number))\n\
-         MODULE IntOrd = (LET compare = 0)\n\
-         LET Ord = (IntOrd :| WithCompare)",
+         MODULE int_ord = (LET compare = 0)\n\
+         LET ord = (int_ord :| WithCompare)",
     );
-    // The `:|`-ascribed view `Ord` is a module value, so it binds on the value channel.
-    assert!(binds_module(scope, "Ord"));
+    // The `:|`-ascribed view `ord` is a module value, so it binds on the value channel.
+    assert!(binds_module(scope, "ord"));
 }
 
 /// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL

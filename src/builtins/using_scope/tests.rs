@@ -1,6 +1,6 @@
 //! `USING … SCOPE` block-scoped module opening.
 //!
-//! Module names carry a lowercase letter (`Mod`, `Res`) because the token
+//! Module names carry a lowercase letter (`some_module`, `res`) because the token
 //! classifier reads all-uppercase names as keywords; dispatch keywords
 //! (`DBL`, `GETIT`, `GETV`, `NOOP`) stay all-uppercase.
 
@@ -18,8 +18,8 @@ use crate::machine::KErrorKind;
 fn using_surfaces_module_value_as_bare_name() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "MODULE Mod = (LET val = 42)");
-    let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
+    run(scope, "MODULE some_module = (LET val = 42)");
+    let result = run_one(scope, parse_one("USING some_module SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
@@ -29,9 +29,9 @@ fn using_surfaces_module_function_for_bare_dispatch() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE Mod = (LET dbl = (FN (DBL x :Number) -> Number = (x)))",
+        "MODULE some_module = (LET dbl = (FN (DBL x :Number) -> Number = (x)))",
     );
-    let result = run_one(scope, parse_one("USING Mod SCOPE (DBL 21)"));
+    let result = run_one(scope, parse_one("USING some_module SCOPE (DBL 21)"));
     assert!(matches!(result, KObject::Number(n) if *n == 21.0));
 }
 
@@ -39,8 +39,8 @@ fn using_surfaces_module_function_for_bare_dispatch() {
 fn using_block_bind_persists_at_call_site() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "MODULE Mod = (LET val = 1)");
-    run(scope, "USING Mod SCOPE (LET local = 5)");
+    run(scope, "MODULE some_module = (LET val = 1)");
+    run(scope, "USING some_module SCOPE (LET local = 5)");
     let result = run_one(scope, parse_one("local"));
     assert!(matches!(result, KObject::Number(n) if *n == 5.0));
 }
@@ -51,8 +51,8 @@ fn using_block_bind_persists_at_call_site() {
 fn using_block_bind_colliding_with_member_errors() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "MODULE Mod = (LET x = 1)");
-    let err = run_one_err(scope, parse_one("USING Mod SCOPE (LET x = 2)"));
+    run(scope, "MODULE some_module = (LET x = 1)");
+    let err = run_one_err(scope, parse_one("USING some_module SCOPE (LET x = 2)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("collides with a surfaced module member") && msg.contains("`x`")),
@@ -68,10 +68,10 @@ fn using_module_function_resolves_its_own_internals() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE Mod = ((LET secret = 99) \
+        "MODULE some_module = ((LET secret = 99) \
                        (LET getit = (FN (GETIT) -> Number = (secret))))",
     );
-    let result = run_one(scope, parse_one("USING Mod SCOPE (GETIT)"));
+    let result = run_one(scope, parse_one("USING some_module SCOPE (GETIT)"));
     assert!(matches!(result, KObject::Number(n) if *n == 99.0));
 }
 
@@ -82,10 +82,10 @@ fn using_module_function_resolves_its_own_internals() {
 fn using_multi_statement_body_sequences_and_returns_last() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "MODULE Mod = (LET base = 7)");
+    run(scope, "MODULE some_module = (LET base = 7)");
     let result = run_one(
         scope,
-        parse_one("USING Mod SCOPE ((LET local = base) (PRINT \"mid\") (local))"),
+        parse_one("USING some_module SCOPE ((LET local = base) (PRINT \"mid\") (local))"),
     );
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
@@ -101,8 +101,8 @@ fn using_window_shadows_call_site_binding() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "LET val = 1");
-    run(scope, "MODULE Mod = (LET val = 7)");
-    let result = run_one(scope, parse_one("USING Mod SCOPE (val)"));
+    run(scope, "MODULE some_module = (LET val = 7)");
+    let result = run_one(scope, parse_one("USING some_module SCOPE (val)"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
@@ -119,10 +119,10 @@ fn using_functor_result_closure_escapes_soundly() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "FN (MAKE) -> Module = (MODULE Res = (LET val = 7))\n\
-         LET Inst = (MAKE)",
+        "FN (MAKE) -> Module = (MODULE res = (LET val = 7))\n\
+         LET inst = (MAKE)",
     );
-    run(scope, "USING Inst SCOPE (FN (GETV) -> Number = (val))");
+    run(scope, "USING inst SCOPE (FN (GETV) -> Number = (val))");
     // Churn the run-root region so a dangling reference into the dropped
     // USING/functor regions would surface under Miri.
     run(scope, "FN (NOOP) -> Number = (1)");
@@ -146,7 +146,7 @@ fn using_functor_result_closure_escapes_soundly() {
 fn using_temporary_functor_result_is_sound() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(scope, "FN (MAKE) -> Module = (MODULE Res = (LET val = 9))");
+    run(scope, "FN (MAKE) -> Module = (MODULE res = (LET val = 9))");
     run(scope, "USING (MAKE) SCOPE (FN (GETW) -> Number = (val))");
     run(scope, "FN (NOOP) -> Number = (1)");
     for _ in 0..10 {

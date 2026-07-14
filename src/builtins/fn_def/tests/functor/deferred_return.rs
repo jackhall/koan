@@ -7,17 +7,17 @@ use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::witnessed::region_metrics;
 
-/// Bare parameter-name return type: `-> Er` resolves per-call to the carried type. The parameter is
+/// Bare parameter-name return type: `-> er` resolves per-call to the carried type. The parameter is
 /// `:Signature`-kind, so `Er` resolves to a *signature*. The body returns a module ascribed to that
-/// per-call signature (`IntOrd :| Er`), which the per-call return contract admits.
+/// per-call signature (`int_ord :| er`), which the per-call return contract admits.
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
     use crate::machine::model::ReturnType;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Ordered = (VAL compare :Number)");
-    run(scope, "MODULE IntOrd = (LET compare = 7)");
-    run(scope, "FN (USE_ID Er :Signature) -> Er = (IntOrd :| Er)");
+    run(scope, "MODULE int_ord = (LET compare = 7)");
+    run(scope, "FN (USE_ID Er :Signature) -> Er = (int_ord :| Er)");
     let f = lookup_fn(scope, "USE_ID");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -29,16 +29,16 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         KObject::Module(_) => {}
         other => {
             panic!(
-                "expected the IntOrd view satisfying the per-call signature, got {}",
+                "expected the int_ord view satisfying the per-call signature, got {}",
                 other.summarize()
             )
         }
     }
 }
 
-/// `Er.Type` dotted return type registers as
+/// `er.Type` dotted return type registers as
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
-/// `Er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
+/// `er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
 /// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
 #[test]
 fn functor_return_dotted_type_member_parameter_resolves_per_call() {
@@ -48,15 +48,15 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     run(
         scope,
         "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
-         LET IntOrdView = (IntOrd :| WithZero)",
+         MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+         LET int_ord_view = (int_ord :| WithZero)",
     );
     assert!(
-        binds_module(scope, "IntOrdView"),
-        "IntOrdView should be an opaquely-ascribed module value satisfying WithZero's \
+        binds_module(scope, "int_ord_view"),
+        "int_ord_view should be an opaquely-ascribed module value satisfying WithZero's \
          VAL zero slot",
     );
-    run(scope, "FN (GET_ZERO Er :WithZero) -> Er.Type = (Er.zero)");
+    run(scope, "FN (GET_ZERO er :WithZero) -> er.Type = (er.zero)");
     let f = lookup_fn(scope, "GET_ZERO");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -65,11 +65,11 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
     );
 }
 
-/// End-to-end functor-on-VAL-slot call: `(GET_ZERO IntOrdView)` succeeds where
-/// `IntOrdView` is an opaque (`:|`) view. The body `(Er.zero)` reads the VAL slot,
+/// End-to-end functor-on-VAL-slot call: `(GET_ZERO int_ord_view)` succeeds where
+/// `int_ord_view` is an opaque (`:|`) view. The body `(er.zero)` reads the VAL slot,
 /// which ATTR re-tags with the per-call abstract identity `:|` minted for
-/// `IntOrdView.Carrier`, so the body value satisfies the per-call return type
-/// `Er.Carrier`. The result carries the abstract `Carrier` identity
+/// `int_ord_view.Carrier`, so the body value satisfies the per-call return type
+/// `er.Carrier`. The result carries the abstract `Carrier` identity
 /// (`ktype().name()` is "Carrier", a `KType::AbstractType`); unwrapping the `Wrapped`
 /// carrier yields the underlying `Number(0)`.
 #[test]
@@ -79,14 +79,14 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     run(
         scope,
         "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET zero = 0))\n\
-         LET IntOrdView = (IntOrd :| WithZero)",
+         MODULE int_ord = ((LET Carrier = Number) (LET zero = 0))\n\
+         LET int_ord_view = (int_ord :| WithZero)",
     );
     run(
         scope,
-        "FN (GET_ZERO Er :WithZero) -> Er.Carrier = (Er.zero)",
+        "FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)",
     );
-    let result = run_one(scope, parse_one("GET_ZERO IntOrdView"));
+    let result = run_one(scope, parse_one("GET_ZERO int_ord_view"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -106,16 +106,16 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
             );
         }
         other => panic!(
-            "expected a re-tagged Wrapped carrier from (GET_ZERO IntOrdView), got {:?}",
+            "expected a re-tagged Wrapped carrier from (GET_ZERO int_ord_view), got {:?}",
             other.ktype(),
         ),
     }
 }
 
-/// `(Set WITH {Elt = Er.Type})` — the sharing-constraint
+/// `(Set WITH {Elt = er.Type})` — the sharing-constraint
 /// surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
-/// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `Er`;
-/// the body's `MODULE Generated` isn't sig-ascribed to `Set`, so end-to-end
+/// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `er`;
+/// the body's `MODULE generated` isn't sig-ascribed to `Set`, so end-to-end
 /// invocation would reject at `Signature { .. }` membership before reaching
 /// the pin check.
 #[test]
@@ -127,13 +127,13 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
         scope,
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :! Ordered)",
+         MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+         LET int_ord_view = (int_ord :! Ordered)",
     );
     run(
         scope,
-        "FN (MK Er :Ordered) -> :(Set WITH {Elt = Er.Type}) = \
-         (MODULE Generated = ((LET Elt = Number) (LET insert = 0)))",
+        "FN (MK er :Ordered) -> :(Set WITH {Elt = er.Type}) = \
+         (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");
     assert!(
@@ -155,11 +155,11 @@ fn functor_deferred_return_coarsens_list_carrier() {
     run(
         scope,
         "SIG Seq = ((TYPE Carrier) (VAL items :Carrier))\n\
-         MODULE Ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
-         LET IntsView = (Ints :! Seq)",
+         MODULE ints = ((LET Carrier = :(LIST OF Any)) (LET items = [1 2 3]))\n\
+         LET ints_view = (ints :! Seq)",
     );
-    run(scope, "FN (ITEMS Er :Seq) -> Er.Carrier = (Er.items)");
-    let result = run_one(scope, parse_one("ITEMS IntsView"));
+    run(scope, "FN (ITEMS er :Seq) -> er.Carrier = (er.items)");
+    let result = run_one(scope, parse_one("ITEMS ints_view"));
     match result {
         KObject::List(_, elem) => assert!(
             matches!(elem.as_ref(), KType::Any),
@@ -167,7 +167,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
             elem,
         ),
         other => panic!(
-            "expected a List from (ITEMS IntsView), got {:?}",
+            "expected a List from (ITEMS ints_view), got {:?}",
             other.ktype(),
         ),
     }
@@ -189,11 +189,11 @@ fn deferred_return_tail_call_stays_tco_flat() {
     run(
         scope,
         "SIG Seq = (VAL v :Number)\n\
-         MODULE Ints = (LET v = 1)",
+         MODULE ints = (LET v = 1)",
     );
     run(
         scope,
-        "FN (BB Er :Signature) -> Er = (Ints :| Er)\n\
+        "FN (BB Er :Signature) -> Er = (ints :| Er)\n\
          FN (AA Er :Signature) -> Er = (BB Er)",
     );
     let mut runtime = KoanRuntime::new();
@@ -209,13 +209,13 @@ fn deferred_return_tail_call_stays_tco_flat() {
     assert_eq!(
         runtime.len(),
         1,
-        "deferred-return tail chain AA -> BB -> (Er) must collapse to one slot, got {}",
+        "deferred-return tail chain AA -> BB -> (er) must collapse to one slot, got {}",
         runtime.len(),
     );
 }
 
-/// A chain of deferred-`Expression` functors (`-> Er.Carrier`) stays TCO-flat. The first call
-/// resolves `Er.Carrier` once and tail-replaces into the body; each subsequent tail call skips
+/// A chain of deferred-`Expression` functors (`-> er.Carrier`) stays TCO-flat. The first call
+/// resolves `er.Carrier` once and tail-replaces into the body; each subsequent tail call skips
 /// resolution (keep-first discards its contract) and tail-replaces, so the chain mints one region
 /// per call instead of accumulating a dep-finish per call. (The pre-`DeferredExprTail` lowering ran
 /// the body as dep-finish dependencies, making each onward call a dep — O(n).)
@@ -227,19 +227,19 @@ fn deferred_expression_return_tail_chain_stays_flat() {
     run(
         scope,
         "SIG Seq = ((TYPE Carrier) (VAL v :Number))\n\
-         MODULE Ints = ((LET Carrier = Number) (LET v = 7))\n\
-         LET View = (Ints :! Seq)",
+         MODULE ints = ((LET Carrier = Number) (LET v = 7))\n\
+         LET view = (ints :! Seq)",
     );
     run(
         scope,
-        "FN (DD Er :Seq) -> Er.Carrier = (Er.v)\n\
-         FN (CC Er :Seq) -> Er.Carrier = (DD Er)\n\
-         FN (BB Er :Seq) -> Er.Carrier = (CC Er)\n\
-         FN (AA Er :Seq) -> Er.Carrier = (BB Er)",
+        "FN (DD er :Seq) -> er.Carrier = (er.v)\n\
+         FN (CC er :Seq) -> er.Carrier = (DD er)\n\
+         FN (BB er :Seq) -> er.Carrier = (CC er)\n\
+         FN (AA er :Seq) -> er.Carrier = (BB er)",
     );
     let mut runtime = KoanRuntime::new();
     let minted_before = region_metrics().minted_total;
-    let id = runtime.dispatch_in_scope(parse_one("AA View"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("AA view"), scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
@@ -272,16 +272,16 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     run(
         scope,
         "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
-         MODULE IntOrd = ((LET Carrier = Number) (LET compare = 7))\n\
-         LET IntOrdView = (IntOrd :| Ordered)",
+         MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
+         LET int_ord_view = (int_ord :| Ordered)",
     );
-    // `Er.Carrier` is the SIG's abstract type member; under opaque ascription it is not
+    // `er.Carrier` is the SIG's abstract type member; under opaque ascription it is not
     // `Number`, so the `(1)` body fails the per-call return-type check. (Referencing a real
     // member, not the builtin `Type` name — module member access is module-own and does not
     // fall through to the builtin root.)
-    run(scope, "FN (BAD Er :Ordered) -> Er.Carrier = (1)");
+    run(scope, "FN (BAD er :Ordered) -> er.Carrier = (1)");
     let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("BAD IntOrdView"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("BAD int_ord_view"), scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");

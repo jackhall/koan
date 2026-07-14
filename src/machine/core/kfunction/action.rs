@@ -93,8 +93,28 @@ pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KE
     }
 }
 
+/// Resolve the identifier-name in the `Identifier`-arm of arg `slot` — the binder name of a
+/// value-defining builtin (MODULE) — or the canonical error: `MissingArg` for an absent slot,
+/// `ShapeError` for any other value shape. `surface` is the keyword embedded in the diagnostic.
+/// The value-channel twin of [`require_bare_type_name`]; an `Identifier` name part resolves to a
+/// `KObject::KString` cell.
+pub fn require_identifier_name<'a>(
+    args: &KObject<'a>,
+    slot: &str,
+    surface: &str,
+) -> Result<String, KError> {
+    match arg_object(args, slot) {
+        Some(KObject::KString(s)) => Ok(s.clone()),
+        Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
+            "{surface} {slot} must be a bare identifier, got `{}`",
+            other.ktype().name(),
+        )))),
+        None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
+    }
+}
+
 /// Resolve the bare type-name in the `Type`-arm of arg `slot` — the binder name of a
-/// type-defining builtin (UNION / NEWTYPE / MODULE / SIG / RECURSIVE) — or the canonical error:
+/// type-defining builtin (UNION / NEWTYPE / SIG / RECURSIVE) — or the canonical error:
 /// `MissingArg` for an absent slot, `ShapeError` for a structural type. `surface` is the keyword
 /// embedded in the diagnostic. The `Action`-side twin of
 /// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).

@@ -23,9 +23,9 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Tag = Number) (LET compare = 5))",
+        "MODULE int_ord = ((LET Tag = Number) (LET compare = 5))",
     );
-    let m = module_named(scope, "IntOrd");
+    let m = module_named(scope, "int_ord");
     let sig = m.self_sig();
     assert!(
         sig.abstract_members.is_empty(),
@@ -42,13 +42,13 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0) \
+        "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
-         LET View = (IntOrd :| Ordered)",
+         LET view = (int_ord :| Ordered)",
     );
-    let view = module_named(scope, "View");
+    let view = module_named(scope, "view");
     let sig = view.self_sig();
 
     // The view's manifest `Elem` is the per-call abstract identity it minted.
@@ -81,13 +81,13 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0) \
+        "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
-         LET View = (IntOrd :! Ordered)",
+         LET view = (int_ord :! Ordered)",
     );
-    let view = module_named(scope, "View");
+    let view = module_named(scope, "view");
     let sig = view.self_sig();
 
     // A transparent view reads the source's concrete `Elem = Number`.
@@ -109,13 +109,13 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
     let scope = run_root_silent(&region);
     run(
         scope,
-        "MODULE IntOrd = ((LET Elem = Number) (LET zero = 0))\n\
+        "MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          SIG Pointed = ((TYPE Elem) (VAL zero :Elem))\n\
-         LET First = (IntOrd :| Pointed)\n\
-         LET Second = (IntOrd :| Pointed)",
+         LET first = (int_ord :| Pointed)\n\
+         LET second = (int_ord :| Pointed)",
     );
-    let first = module_named(scope, "First");
-    let second = module_named(scope, "Second");
+    let first = module_named(scope, "first");
+    let second = module_named(scope, "second");
     // Generativity: each ascription mints its own abstract `Elem`, so the self-sigs differ.
     assert_ne!(
         first.self_sig().manifest_members.get("Elem"),
@@ -132,9 +132,9 @@ fn value_slot_type_mismatch_is_rejected() {
     run(
         scope,
         "SIG Numeric = ((VAL v :Number))\n\
-         MODULE StrMod = ((LET v = (\"hi\")))",
+         MODULE str_mod = ((LET v = (\"hi\")))",
     );
-    let err = run_one_err(scope, parse_one("StrMod :| Numeric"));
+    let err = run_one_err(scope, parse_one("str_mod :| Numeric"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Numeric") && msg.contains("`v`") && msg.contains("has type")),
@@ -150,9 +150,9 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
     run(
         scope,
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
-         MODULE IntList = ((LET Wrap = Number))",
+         MODULE int_list = ((LET Wrap = Number))",
     );
-    let err = run_one_err(scope, parse_one("IntList :| Monad"));
+    let err = run_one_err(scope, parse_one("int_list :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("1 parameter")),
@@ -172,12 +172,12 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
     run(
         scope,
         "SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
-         MODULE Impl = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
-         LET FirstView = (Impl :| Complete)\n\
-         LET SecondView = (Impl :| Complete)",
+         MODULE implementation = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
+         LET first_view = (implementation :| Complete)\n\
+         LET second_view = (implementation :| Complete)",
     );
-    assert!(binds_module(scope, "FirstView"));
-    assert!(binds_module(scope, "SecondView"));
+    assert!(binds_module(scope, "first_view"));
+    assert!(binds_module(scope, "second_view"));
     // The second ascription's satisfaction check is a registry hit on the first's verdict.
     assert!(
         memo_hit_count() > 0,
@@ -192,9 +192,9 @@ fn manifest_member_mismatch_names_the_member() {
     run(
         scope,
         "SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
-         MODULE Bad = ((LET Tag = Str) (LET item = 5))",
+         MODULE bad = ((LET Tag = Str) (LET item = 5))",
     );
-    let err = run_one_err(scope, parse_one("Bad :| Tagged"));
+    let err = run_one_err(scope, parse_one("bad :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),

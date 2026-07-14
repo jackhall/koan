@@ -102,7 +102,7 @@ fn backward_value_let_at_same_level_resolves() {
 #[test]
 fn module_body_forward_value_reference_is_unbound() {
     use koan::machine::KErrorKind;
-    let err = run_collecting_first_err("MODULE Mod = ((LET y = x) (LET x = 1))")
+    let err = run_collecting_first_err("MODULE some_module = ((LET y = x) (LET x = 1))")
         .expect("forward value LET in module body should surface UnboundName");
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n == "x"),
@@ -116,11 +116,15 @@ fn module_body_forward_value_reference_is_unbound() {
 fn module_body_backward_value_reference_resolves() {
     let region = run_root_storage();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&region, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
+    let scope = run(
+        &region,
+        captured,
+        "MODULE some_module = ((LET x = 1) (LET y = x))",
+    );
     // A module is a value — the `&Module` rides the Object-arm value in `data`.
-    let m = match scope.lookup("Mod") {
+    let m = match scope.lookup("some_module") {
         Some(KObject::Module(m)) => *m,
-        _ => panic!("Mod should bind a module value"),
+        _ => panic!("some_module should bind a module value"),
     };
     let y = m.child_scope().lookup("y");
     assert!(matches!(y, Some(KObject::Number(n)) if *n == 1.0));
@@ -261,10 +265,10 @@ fn backward_let_type_alias_resolves_to_number() {
     );
 }
 
-/// Module-qualified type name in LET-RHS position. `LET MyT = Mo.Ty` where `Mo` is a
-/// module exporting `Ty = Number`. MODULE is a nominal-binder carve-out, so `Mo` is
+/// Module-qualified type name in LET-RHS position. `LET MyT = mo.Ty` where `mo` is a
+/// module exporting `Ty = Number`. MODULE is a nominal-binder carve-out, so `mo` is
 /// visible to its sibling consumer regardless of source order; the inner module-body
-/// LET runs once `Mo` finalizes, the ATTR walker reads its `bindings.types`, and the
+/// LET runs once `mo` finalizes, the ATTR walker reads its `bindings.types`, and the
 /// LET-Type-LHS overload routes the carrier through `register_type` on the parent
 /// scope.
 #[test]
@@ -275,17 +279,17 @@ fn let_alias_via_module_qualified_type_resolves() {
     let scope = run(
         &region,
         captured,
-        "MODULE Mo = ((LET Ty = Number))\nLET MyT = Mo.Ty",
+        "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty",
     );
     assert!(
         matches!(scope.resolve_type("MyT"), Some(KType::Number)),
-        "expected MyT to resolve to Number via Mo.Ty, got {:?}",
+        "expected MyT to resolve to Number via mo.Ty, got {:?}",
         scope.resolve_type("MyT").map(|t| t.name()),
     );
 }
 
-/// Module-qualified type name in a `:(LIST OF)`-style type frame. `:(LIST OF Mo.Ty)` rides
-/// the existing `Deferred` path in `resolve_dispatch`. MODULE Mo is a nominal-binder
+/// Module-qualified type name in a `:(LIST OF)`-style type frame. `:(LIST OF mo.Ty)` rides
+/// the existing `Deferred` path in `resolve_dispatch`. MODULE mo is a nominal-binder
 /// carve-out so it's visible to the sibling `LET MyList`.
 #[test]
 fn type_frame_with_module_qualified_element_resolves() {
@@ -294,16 +298,16 @@ fn type_frame_with_module_qualified_element_resolves() {
     let scope = run(
         &region,
         captured,
-        "MODULE Mo = ((LET Ty = Number))\n\
-         LET MyList = :(LIST OF Mo.Ty)",
+        "MODULE mo = ((LET Ty = Number))\n\
+         LET MyList = :(LIST OF mo.Ty)",
     );
     assert!(
         scope.resolve_type("MyList").is_some(),
-        "expected MyList to bind via :(LIST OF Mo.Ty)",
+        "expected MyList to bind via :(LIST OF mo.Ty)",
     );
 }
 
-/// Chained module-qualified type name `Outer.Inner.T`. Both modules are nominal-binder
+/// Chained module-qualified type name `outer.inner.T`. Both modules are nominal-binder
 /// carve-outs and visible regardless of source order.
 #[test]
 fn chained_module_qualified_type_resolves() {
@@ -313,12 +317,12 @@ fn chained_module_qualified_type_resolves() {
     let scope = run(
         &region,
         captured,
-        "MODULE Outer = ((MODULE Inner = ((LET Ty = Number))))\n\
-         LET MyT = Outer.Inner.Ty",
+        "MODULE outer = ((MODULE inner = ((LET Ty = Number))))\n\
+         LET MyT = outer.inner.Ty",
     );
     assert!(
         matches!(scope.resolve_type("MyT"), Some(KType::Number)),
-        "expected MyT to resolve to Number via Outer.Inner.Ty, got {:?}",
+        "expected MyT to resolve to Number via outer.inner.Ty, got {:?}",
         scope.resolve_type("MyT"),
     );
 }

@@ -97,12 +97,12 @@ fn returned_block_locals_visible_from_outer_chain() {
     let region = run_root_storage();
     let scope = run_scope(
         &region,
-        "MODULE Mo = ((LET inside = 7) (LET also = 9))\n\
-         LET result = Mo.inside",
+        "MODULE mo = ((LET inside = 7) (LET also = 9))\n\
+         LET result = mo.inside",
     );
     assert!(
         matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 7.0),
-        "expected result = 7 via Mo.inside; got {:?}",
+        "expected result = 7 via mo.inside; got {:?}",
         scope.lookup("result").map(|o| o.summarize()),
     );
 }
@@ -115,9 +115,9 @@ fn nested_block_cutoff_is_per_scope() {
     let scope = run_scope(
         &region,
         "LET top = 1\n\
-         MODULE Mo = ((LET a = 2) (LET b = a))",
+         MODULE mo = ((LET a = 2) (LET b = a))",
     );
-    let m = lookup_module(scope, "Mo");
+    let m = lookup_module(scope, "mo");
     let data = m.child_scope().bindings().data();
     assert!(
         matches!(data.get("b").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0),
@@ -160,19 +160,19 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     );
 }
 
-/// `USING Mo SCOPE (...)` opens a transparent window onto Mo's child bindings;
-/// references to Mo's members inside the block resolve.
+/// `USING mo SCOPE (...)` opens a transparent window onto mo's child bindings;
+/// references to mo's members inside the block resolve.
 #[test]
 fn using_block_post_reference_visible() {
     let region = run_root_storage();
     let scope = run_scope(
         &region,
-        "MODULE Mo = ((LET hidden = 99))\n\
-         LET visible = (USING Mo SCOPE (hidden))",
+        "MODULE mo = ((LET hidden = 99))\n\
+         LET visible = (USING mo SCOPE (hidden))",
     );
     assert!(
         matches!(scope.lookup("visible"), Some(KObject::Number(n)) if *n == 99.0),
-        "expected visible = 99 via USING Mo SCOPE; got {:?}",
+        "expected visible = 99 via USING mo SCOPE; got {:?}",
         scope.lookup("visible").map(|o| o.summarize()),
     );
 }
@@ -216,13 +216,13 @@ fn struct_forward_reference_in_fn_param_is_position_error() {
 #[test]
 fn forward_module_reference_is_position_error() {
     let err = run_collect_err(
-        "LET inner = MyMod.x\n\
-         MODULE MyMod = ((LET x = 11))",
+        "LET inner = my_mod.x\n\
+         MODULE my_mod = ((LET x = 11))",
     )
     .expect("a forward MODULE reference should error");
     assert!(
-        format!("{err}").contains("MyMod"),
-        "expected the error to name the forward module `MyMod`, got {err}",
+        format!("{err}").contains("my_mod"),
+        "expected the error to name the forward module `my_mod`, got {err}",
     );
 }
 
