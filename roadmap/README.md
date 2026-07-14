@@ -59,6 +59,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
+- [Signature value slots off the binding map](type_language/signature-slots-off-the-binding-map.md)
 - [Functor collapse](type_memos/functor-collapse.md)
 - [User-defined type constructors](type_memos/user-defined-type-constructors.md)
 
