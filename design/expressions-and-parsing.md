@@ -314,3 +314,11 @@ tokens as keywords, and the dispatch table matches), but it is not
 documented surface — user code goes through the sigil. `#` desugars to no
 keyword at all: the quote is captured by the parser, so there is no bare
 form of it to dispatch.
+
+## Open work
+
+- [EVAL splices in place](../roadmap/metaprogramming/eval-splices-in-place.md)
+  — [design/metaprogramming.md](metaprogramming.md) specifies EVAL as a splice
+  into the enclosing scope, sequenced by a block-level barrier; the fresh
+  `CallFrame` confinement this doc describes is the shipped behavior it
+  replaces.

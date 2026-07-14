@@ -256,6 +256,7 @@ and pointers to the analysis tooling.
 - [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
 - [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
 - [design/operators.md](design/operators.md) — the `OP` / `GROUP` declaration surface: quoted symbols, chaining modes, the infix combiner, and type-gated shadowing.
+- [design/metaprogramming.md](design/metaprogramming.md) — quotation plus splicing: expression values, `EVAL` splicing in place, and the block-level EVAL barrier.
 - [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
 
 [design/effects.md](design/effects.md) captures one further cross-cutting design ahead of

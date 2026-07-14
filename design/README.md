@@ -69,6 +69,10 @@ Root concerns:
   ordinary argument, the binary / unary / pairwise forms, the combiner
   invoked infix, groups as modules, and shadowing that is type-gated
   rather than forbidden.
+- [metaprogramming.md](metaprogramming.md) — quotation plus splicing:
+  expression values, the interchangeable literal spellings `#(…)` / `(…)`
+  in lazy slots, parse-static shape slots, `EVAL` splicing in place, the
+  block-level EVAL barrier, and late group-member join.
 - [functional-programming.md](functional-programming.md) — functions
   as first-class `KObject` values, signature-driven evaluation,
   tail-call optimization, and the FN-as-extension-mechanism property.

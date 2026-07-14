@@ -213,6 +213,11 @@ run by the run's operand type.
 - [Stage 5 — Modular implicits](../roadmap/predicate_typing/modular-implicits.md)
   — implicit *selection* of a group by operand type, so a run finds its group
   without a `USING` window.
-- [Reject the unquoted operator symbol](../roadmap/operator_chaining/reject-the-unquoted-operator-symbol.md)
-  — an unquoted `OP (+)` still registers, but installs no park edges and errors
-  inside a `GROUP` body; the quote is the sole spelling this doc gives.
+- [One kind-blind reader per shape slot](../roadmap/metaprogramming/one-reader-per-shape-slot.md)
+  — [design/metaprogramming.md](metaprogramming.md) rules the quoted and
+  unquoted parenthesized symbol one spelling; today the unquoted `OP (+)`
+  registers but installs no park edges and errors inside a `GROUP` body.
+- [Group members may arrive by splice](../roadmap/metaprogramming/group-members-by-splice.md)
+  — late member join for an `OP` spliced into a group body by `EVAL`
+  ([design/metaprogramming.md](metaprogramming.md)); today membership is
+  decided solely by the pre-evaluation member scan.

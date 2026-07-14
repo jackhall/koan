@@ -14,7 +14,7 @@ Work is grouped into project subdirectories, each a coherent body of work whose 
 share design constraints and ship together. Each has a README naming what the project
 buys the language and listing its ready-to-start items:
 [predicate_typing/](predicate_typing/README.md), [libraries/](libraries/README.md),
-[operator_chaining/](operator_chaining/README.md), [type_language/](type_language/README.md),
+[metaprogramming/](metaprogramming/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
 [simplify_dispatch/](simplify_dispatch/README.md),
 [compile_safety/](compile_safety/README.md),
@@ -38,7 +38,8 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Typed pins for the pinned fold verbs](compile_safety/typed-fold-pins.md)
 - [Continue-on-error for the REPL and batch mode](editor_tooling/continue-on-error.md)
 - [Files and imports](libraries/files-and-imports.md)
-- [Reject the unquoted operator symbol](operator_chaining/reject-the-unquoted-operator-symbol.md)
+- [EVAL splices in place](metaprogramming/eval-splices-in-place.md)
+- [One kind-blind reader per shape slot](metaprogramming/one-reader-per-shape-slot.md)
 - [Module system stage 5 — Modular implicits](predicate_typing/modular-implicits.md)
 - [Fold the two type-write paths](refactor/fold-type-write-paths.md)
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
