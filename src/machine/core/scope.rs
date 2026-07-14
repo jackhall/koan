@@ -703,12 +703,13 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The `OP` door onto the `functions` bucket: [`Self::register_function`] without the
+    /// The operator door onto the `functions` bucket: [`Self::register_function`] without the
     /// builtin-shadowing guard, so a user module may declare an operator the root already
     /// declares (`OP #(+) OVER :(LIST OF Number)`). Shadowing an operator is **type-gated**, not
     /// free: dispatch consults the immutable root bucket first, so the builtin `+` still wins
     /// for the operand types it declares and only other operand types reach the module's body.
-    /// Ordinary user `FN`s keep the guard — this door is reachable only from `OP`.
+    /// Ordinary user `FN`s keep the guard — this door is reachable only from the operator
+    /// registration door in `builtins::op_def`, through which the builtin `|` also seeds.
     ///
     /// Bare-`FN` style: the overload lands in `functions` only, never in `data`. Exact-signature
     /// collisions still surface as `DuplicateOverload`, and the same conditional-defer shape

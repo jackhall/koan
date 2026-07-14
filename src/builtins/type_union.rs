@@ -18,7 +18,7 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::KKind;
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::resolve_or_await::expect_type_terminal;
 use super::{arg, kw, sig};
@@ -91,15 +91,19 @@ fn body_nary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>)
     Action::AwaitDeps { deps, finish }
 }
 
+/// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form
+/// `A | B`, and its own single-member `Unary` operator group — through the shared unary-operator
+/// door in [`super::op_def`]. The bodies are native: a `KType` composed at the fold brand, not a
+/// synthesized koan AST. A single-member group must never share a group with another operator.
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
-    use crate::machine::BindingIndex;
-    use std::collections::HashSet;
-
-    // Two-member keyworded form: `A | B`.
-    super::register_builtin(
+    super::op_def::register_unary_operator(
         scope,
         "|",
+        sig(
+            KType::OfKind(KKind::AnyType),
+            vec![kw("|"), arg("members", KType::KExpression)],
+        ),
+        Body::Builtin(body_nary),
         sig(
             KType::OfKind(KKind::AnyType),
             vec![
@@ -108,28 +112,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 arg("right", KType::OfKind(KKind::AnyType)),
             ],
         ),
-        body_binary,
-    );
-    // Reduced `Unary` form: `| [members...]`.
-    super::register_builtin(
-        scope,
-        "|",
-        sig(
-            KType::OfKind(KKind::AnyType),
-            vec![kw("|"), arg("members", KType::KExpression)],
-        ),
-        body_nary,
-    );
-
-    // `|` is its own single-member `Unary` group, registered here so the operator and its target
-    // builtin live together. A single-member group must never share a group with another operator.
-    let members: HashSet<String> = ["|"].iter().map(|s| s.to_string()).collect();
-    let group = scope
-        .brand()
-        .alloc_operator_group(OperatorGroup::new(members, ReductionMode::Unary));
-    scope
-        .register_operator_group("|".to_string(), group, BindingIndex::BUILTIN)
-        .expect("builtin `|` operator-group seeding must not collide");
+        Body::Builtin(body_binary),
+        BindingIndex::BUILTIN,
+    )
+    .expect("builtin `|` unary-operator seeding must not collide");
 }
 
 #[cfg(test)]
