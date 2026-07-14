@@ -46,21 +46,6 @@ impl<'a> KType<'a> {
         )
     }
 
-    /// Admissibility predicate for the FUNCTOR return-type slot. See
-    /// [design/typing/functors.md](../../../../design/typing/functors.md).
-    /// `KType::OfKind(KKind::AnyType)` is intentionally excluded — bare `Type` denotes "any type
-    /// value" rather than "a module or signature value", and the design pins
-    /// the seam to the narrower set.
-    pub fn is_admissible_functor_return(&self) -> bool {
-        match self {
-            // A module value's `ktype()` is its self-sig, so a concrete module return lands on
-            // the `Signature` arm alongside a declared-signature return.
-            KType::OfKind(KKind::Signature) | KType::Signature { .. } => true,
-            KType::KFunctor { ret, .. } => ret.is_admissible_functor_return(),
-            _ => false,
-        }
-    }
-
     /// Strict specificity ordering. Concrete types outrank `Any` and the
     /// unconstrained-name slot types (`Identifier`, `ProperType`), so an overload
     /// like `ATTR <s:NewType>` beats its `ATTR <s:Identifier>` sibling when both admit.

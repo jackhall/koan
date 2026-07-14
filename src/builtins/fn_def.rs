@@ -3,7 +3,6 @@ mod param_refs;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::types::KKind;
 use crate::machine::model::{Argument, KType, SignatureElement};
@@ -12,53 +11,16 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 use finalize::{classify, finalize_fn_with_kind, fn_action, FnKind, FnPlan, ParamListResult};
-use return_type::{classify_return_type, AdmissibleVerdict};
+use return_type::classify_return_type;
 use signature::ParamListOutcome;
 
 pub(crate) use signature::binder_bucket;
 
-/// Build a map of `param_name → declared-KType` for the FUNCTOR deferred-arm head
-/// inspector. Skips slots that don't elaborate eagerly; the dep-finish path's
-/// resolved validator catches the slack.
-fn collect_param_types<'a>(
-    signature: &KExpression<'a>,
-    scope: &Scope<'a>,
-) -> std::collections::HashMap<String, KType<'a>> {
-    use crate::machine::model::types::{elaborate_type_identifier, TypeResolution};
-    let mut map = std::collections::HashMap::new();
-    let mut el = Elaborator::new(scope);
-    let parts = &signature.parts;
-    let mut i = 0;
-    while i < parts.len() {
-        let param_name: Option<String> = match &parts[i].value {
-            ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) => Some(t.render()),
-            _ => None,
-        };
-        if let Some(name) = param_name {
-            if let Some(next_part) = parts.get(i + 1) {
-                if let ExpressionPart::Type(t) = &next_part.value {
-                    if let TypeResolution::Done(kt) = elaborate_type_identifier(&mut el, t) {
-                        map.insert(name, kt);
-                    }
-                }
-            }
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
-    map
-}
-
-/// Shared FN / FUNCTOR elaboration: extract the `signature` / return / `body`
-/// slots from `BodyCtx::args`, collect param names, classify the return type,
-/// parse the param list, and route to [`finalize_fn_with_kind`] (synchronous, via
-/// `Action::Done`) or [`finalize::defer`] (dep-finish).
-/// `kind` is the sole behavioral fork — `FnKind::Functor` builds the param-type
-/// map and acts on the return-admissibility verdict; FN passes `None` and
-/// [`classify_return_type`] returns `Admissible`, so the `Rejected` check is a
-/// no-op. `builtin` (`"FN"` / `"FUNCTOR"`) names the surface in slot errors.
+/// Shared FN elaboration: extract the `signature` / return / `body` slots from
+/// `BodyCtx::args`, collect param names, classify the return type, parse the param
+/// list, and route to [`finalize_fn_with_kind`] (synchronous, via `Action::Done`) or
+/// [`finalize::defer`] (dep-finish). `kind` selects how the finalized function is
+/// wired into the scope; `builtin` (`"FN"`) names the surface in slot errors.
 pub(crate) fn build_fn_like<'a>(
     ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
     builtin: &str,
@@ -72,21 +34,13 @@ pub(crate) fn build_fn_like<'a>(
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, builtin, "body"));
     let param_names = signature::collect_param_names_from_signature(&signature_expr);
-    let param_type_map = match kind {
-        FnKind::Functor => Some(collect_param_types(&signature_expr, ctx.scope)),
-        FnKind::Function | FnKind::Anonymous => None,
-    };
     let mut elaborator = Elaborator::new(ctx.scope).with_chain(ctx.chain.clone());
-    let (return_type_state, verdict) = crate::try_action!(classify_return_type(
+    let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
         &param_names,
         ctx.scope,
         ctx.chain.clone(),
-        param_type_map.as_ref(),
     ));
-    if let AdmissibleVerdict::Rejected(e) = verdict {
-        return Action::Done(Err(e));
-    }
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => {
@@ -186,12 +140,11 @@ pub fn body_record_schema<'a>(
     let param_names: Vec<String> = schema.keys().cloned().collect();
     let return_type_raw = crate::try_action!(extract_return_type_raw(ctx.args));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "FN", "body"));
-    let (return_type_state, _verdict) = crate::try_action!(classify_return_type(
+    let return_type_state = crate::try_action!(classify_return_type(
         return_type_raw,
         &param_names,
         ctx.scope,
         ctx.chain.clone(),
-        None,
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {

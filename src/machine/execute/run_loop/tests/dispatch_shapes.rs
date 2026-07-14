@@ -1056,39 +1056,6 @@ fn type_head_deferred_constructs_from_sigil_type() {
     assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
 }
 
-/// `TypeCall` → bound functor. A `LET`-bound functor name resolves type-side to a
-/// `KType::KFunctor { body: Some(f) }`; calling it via the `Type`-head call applies
-/// the functor and yields a module. The name lands type-side only — `scope.lookup`
-/// (value-side) is empty.
-#[test]
-fn type_call_applies_let_bound_functor() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
-    use crate::machine::model::KType;
-    let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET ApplyIt = (FUNCTOR (APPLYIT x :Number) -> Module = (MODULE inner = ((LET tag = x))))",
-    );
-    assert!(
-        scope.lookup("ApplyIt").is_none(),
-        "a functor name binds type-side only, never in bindings.data",
-    );
-    assert!(
-        matches!(
-            scope.resolve_type("ApplyIt"),
-            Some(KType::KFunctor { body: Some(_), .. })
-        ),
-        "ApplyIt should resolve type-side to a body-bearing KFunctor",
-    );
-    let out = run_one(scope, parse_one("ApplyIt {x = 5}"));
-    assert!(
-        matches!(out, KObject::Module(_)),
-        "applying a type-bound functor must yield a module; got {}",
-        out.summarize(),
-    );
-}
-
 /// `TypeCall` → bare functor annotation. A `LET`-bound `:(FUNCTOR …)` *annotation*
 /// (`body: None`) is type-shaped but not invocable — applying it surfaces a
 /// `TypeMismatch`, distinct from a missing name (`UnboundName`).

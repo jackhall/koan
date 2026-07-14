@@ -15,7 +15,6 @@ mod branch_walk;
 mod catch;
 mod eval;
 mod fn_def;
-mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
@@ -91,7 +90,7 @@ pub(crate) fn identifier_part_binder_name(
 /// Full-form builtin registration with both binder hooks and the `is_functor` flag. The `body` is
 /// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
 /// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`.
-/// `binder_bucket` lets FN / FUNCTOR key pending-overload entries by inner-call bucket.
+/// `binder_bucket` lets FN key pending-overload entries by inner-call bucket.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
@@ -211,7 +210,6 @@ pub fn default_scope<'a>(
     let_binding::register(scope);
     print::register(scope);
     fn_def::register(scope);
-    functor_def::register(scope);
     union::register(scope);
     result::register(scope);
     newtype_def::register(scope);

@@ -6,8 +6,8 @@
 //! decision tree to an [`FnPlan`] with two terminal shapes, so the caller in
 //! `super::fn_def` reduces to a two-arm match.
 //!
-//! The keyworded FN, FUNCTOR, and anonymous-FN binders ride the same path,
-//! selected by the [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
+//! The keyworded and anonymous FN binders ride the same path, selected by the
+//! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
 
 use crate::machine::core::kfunction::action::Action;
 use crate::machine::core::kfunction::KFunction;
@@ -28,14 +28,11 @@ use super::signature::{parse_fn_param_list, ParamListOutcome};
 /// How a finalized FN-def is wired into the scope:
 ///
 /// - `Function` — a keyworded FN registers under its lead keyword.
-/// - `Functor` — same registration; additionally flips the `is_functor` carrier
-///   bit and gates the FUNCTOR return-type admissibility check.
 /// - `Anonymous` — a record-schema binder (`FN :{…}`) has no keyword, so it
 ///   registers nothing; the value it evaluates to is its only handle.
 #[derive(Clone, Copy)]
 pub(crate) enum FnKind {
     Function,
-    Functor,
     Anonymous,
 }
 
@@ -76,8 +73,8 @@ pub(crate) struct DeferredInputs<'a> {
     /// `Some` for the anonymous (`FN :{…}`) path: the parameter list is already
     /// built from the resolved record schema, so the finish closure uses it
     /// verbatim instead of re-parsing `signature_expr` (which the anonymous path
-    /// has no keyword/arg form of). `None` for the keyworded FN / FUNCTOR paths,
-    /// which re-elaborate the spliced signature.
+    /// has no keyword/arg form of). `None` for the keyworded FN path, which
+    /// re-elaborates the spliced signature.
     pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
 }
 
@@ -184,12 +181,9 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
-/// `Functor` additionally validates a `Resolved` return type against
-/// [`KType::is_admissible_functor_return`] before the `KFunction` is registered;
-/// `Deferred` carriers ride the surface-form check at the FUNCTOR-binder site,
-/// and the per-call dispatch boundary's `matches_value` path catches any
-/// deferred carrier that resolves non-admissibly later. `Anonymous` skips
-/// registration entirely — the value it returns is the function's only handle.
+/// Build the `KFunction` and, for a keyworded `Function`, register it under its lead
+/// keyword. `Anonymous` skips registration entirely — the value it returns is the
+/// function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
@@ -198,20 +192,6 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-    let is_functor = matches!(kind, FnKind::Functor);
-    // FUNCTOR-only post-resolution return-type validation: fires here when the
-    // return slot resolved at dep-finish time rather than synchronously.
-    if is_functor {
-        if let ReturnType::Resolved(kt) = &return_type {
-            if !kt.is_admissible_functor_return() {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FUNCTOR return-type slot must denote a module, signature, or functor; \
-                     got `{}`",
-                    kt.name(),
-                ))));
-            }
-        }
-    }
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a
@@ -233,7 +213,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope,
         None,
         None,
-        is_functor,
+        false,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just

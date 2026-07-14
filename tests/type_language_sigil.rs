@@ -303,25 +303,20 @@ fn sigil_functor_forward_reference_defers_via_combine() {
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
     }
 }
-// --- User-functor application via sigil ---
+// --- User-functor application ---
 
-/// User-functor application through the sigil: a `FUNCTOR MyFunctor (...) =
-/// ...` binds a `KFunction` carrier under `MAKESET`, and the value-side
-/// call `(MAKESET int_ord)` produces a Module value. The same `FunctionValueCall`
-/// arm of the classifier serves both the value-side and sigiled surfaces, so
-/// `:(MyFunctor int_ord)` routes through the same machinery — covered by
-/// `tests/functor_binder_e2e.rs::functor_binder_and_sigil_coexist` for the
-/// sigiled surface; this test pins the value-side surface so both paths are
-/// exercised in CI.
+/// A functor — a module-returning FN — binds a `KFunction` carrier under `MAKESET`, and the
+/// keyworded call `(MAKESET int_ord)` produces a Module value. Ordinary dispatch, no type-side
+/// surface: the test pins that a functor application rides the same lane as any other call.
 #[test]
-fn sigil_user_functor_application_through_dispatch() {
+fn user_functor_application_through_dispatch() {
     let region = run_root_storage();
     let scope = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
          LET int_ord = (int_ord_base :! Ordered)\n\
-         FUNCTOR (MAKESET er :Ordered) -> Module = \
+         FN (MAKESET er :Ordered) -> Module = \
             (MODULE generated = ((LET tag = 0)))\n\
          LET my_set = (MAKESET int_ord)",
     );

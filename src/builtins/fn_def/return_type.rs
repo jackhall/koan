@@ -1,14 +1,12 @@
 //! FN return-type pipeline: extraction → classification → carriage across the
 //! dep-finish boundary → resolution at finish time.
 
-use std::collections::HashMap;
-
 use crate::builtins::resolve_or_await::{
     classify_type_hit, expect_type_terminal, resolve_at_wake, unbound_error,
 };
 use crate::machine::core::kfunction::action::DepTerminal;
 use crate::machine::core::LexicalFrame;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::ast::{KExpression, TypeIdentifier};
 use crate::machine::model::types::TypeResolution;
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
@@ -72,144 +70,40 @@ pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTy
     }
 }
 
-/// FUNCTOR-return admissibility verdict. FN paths pass `functor_param_types: None` and
-/// ignore the verdict; FUNCTOR paths pass the param-name → declared-`KType` map so the
-/// deferred-arm verdict resolves in the same walk.
-pub(crate) enum AdmissibleVerdict {
-    Admissible,
-    /// `Pending` and `ExprToSubDispatch` carriers can't be classified until the resolved
-    /// `KType` is in hand; the `is_functor: true` flag threaded through
-    /// `defer` re-runs the predicate at dep-finish.
-    Deferred,
-    /// Diagnostic is already formatted with the `FUNCTOR return-type slot` prefix.
-    Rejected(KError),
-}
-
-/// Fused walk: classify the carrier and emit the FUNCTOR-return admissibility verdict
-/// in one pass. The parameter-name scan runs first so a match short-circuits eager
-/// elaboration and the carrier survives verbatim to the dispatch boundary.
+/// Classify the return-type carrier. The parameter-name scan runs first so a match
+/// short-circuits eager elaboration and the carrier survives verbatim to the dispatch
+/// boundary.
 pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
-    functor_param_types: Option<&HashMap<String, KType<'a>>>,
-) -> Result<(ReturnTypeState<'a>, AdmissibleVerdict), KError> {
+) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
-        ReturnTypeRaw::Resolved(kt) => {
-            let verdict = verdict_for_resolved(&kt, functor_param_types.is_some());
-            Ok((ReturnTypeState::Done(kt), verdict))
-        }
+        ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
         ReturnTypeRaw::TypeExprCarrier(te) => {
             if type_expr_references_any(&te, param_names) {
-                let verdict = match functor_param_types {
-                    Some(map) => verdict_for_deferred_type_expr(&te, map),
-                    None => AdmissibleVerdict::Admissible,
-                };
-                return Ok((ReturnTypeState::Deferred(DeferredReturn::Type(te)), verdict));
+                return Ok(ReturnTypeState::Deferred(DeferredReturn::Type(te)));
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            let state = match classify_type_hit(scope.resolve_type_identifier(&te, chain)) {
-                TypeResolution::Done(kt) => ReturnTypeState::Done(kt),
-                TypeResolution::Park(producers) => ReturnTypeState::Pending { te, producers },
+            match classify_type_hit(scope.resolve_type_identifier(&te, chain)) {
+                TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
+                TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
                 // `Unbound` here is neither a type binder nor a builtin — a hard miss.
                 TypeResolution::Unbound(detail) => {
-                    return Err(unbound_error("FN return-type slot", &detail));
+                    Err(unbound_error("FN return-type slot", &detail))
                 }
-            };
-            let verdict = match &state {
-                ReturnTypeState::Done(kt) => {
-                    verdict_for_resolved(kt, functor_param_types.is_some())
-                }
-                _ => AdmissibleVerdict::Deferred,
-            };
-            Ok((state, verdict))
+            }
         }
         ReturnTypeRaw::ExprCarrier(e) => {
             if kexpression_references_any(&e, param_names) {
-                let verdict = match functor_param_types {
-                    Some(_) => verdict_for_deferred_expression(&e),
-                    None => AdmissibleVerdict::Admissible,
-                };
-                Ok((
-                    ReturnTypeState::Deferred(DeferredReturn::Expression(e)),
-                    verdict,
-                ))
+                Ok(ReturnTypeState::Deferred(DeferredReturn::Expression(e)))
             } else {
-                Ok((
-                    ReturnTypeState::ExprToSubDispatch(e),
-                    AdmissibleVerdict::Deferred,
-                ))
+                Ok(ReturnTypeState::ExprToSubDispatch(e))
             }
         }
-    }
-}
-
-fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdict {
-    if !is_functor || kt.is_admissible_functor_return() {
-        AdmissibleVerdict::Admissible
-    } else {
-        AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; got `{}`",
-            kt.name(),
-        ))))
-    }
-}
-
-/// Bare-leaf `Er` (a Type token — the only part kind a bare return leaf can be) matching a
-/// parameter name admits iff that parameter's declared
-/// `KType` is type-denoting (e.g. `:Ordered`, `:Module`). A `Functor`-headed
-/// parameterized form admits via the type-position sigil; other shapes are rejected
-/// so the diagnostic surfaces at the FUNCTOR site.
-fn verdict_for_deferred_type_expr<'a>(
-    te: &TypeIdentifier,
-    param_type_map: &HashMap<String, KType<'a>>,
-) -> AdmissibleVerdict {
-    // Map miss means the param-type slot didn't elaborate eagerly; admit
-    // conservatively and let downstream resolution surface any structured error.
-    if let Some(param_kt) = param_type_map.get(te.as_str()) {
-        if param_kt.is_type_denoting() {
-            AdmissibleVerdict::Admissible
-        } else {
-            AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
-                "FUNCTOR return-type slot must denote a module, signature, or functor; \
-                 parameter `{}` is declared as `{}`, which is not type-denoting",
-                te.as_str(),
-                param_kt.name(),
-            ))))
-        }
-    } else {
-        AdmissibleVerdict::Admissible
-    }
-}
-
-/// FUNCTOR-return admissibility verdict for a deferred return-type carrier, keyed on the
-/// expression's head keyword: `WITH` (signature specialization) admits; a dotted `ATTR`
-/// head produces an abstract type and rejects; other heads reject generically.
-fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
-    let head_keyword = e.parts.iter().find_map(|p| match &p.value {
-        ExpressionPart::Keyword(s) => Some(s.as_str()),
-        _ => None,
-    });
-    match head_keyword {
-        Some("WITH") => AdmissibleVerdict::Admissible,
-        Some("ATTR") => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             a module type-member access (`er.Type`) produces an abstract type, \
-             not a module or signature"
-                .to_string(),
-        ))),
-        Some(other) => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             head keyword `{other}` does not produce a module, signature, or functor",
-        )))),
-        None => AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             return-type expression has no recognizable head"
-                .to_string(),
-        ))),
     }
 }
 
