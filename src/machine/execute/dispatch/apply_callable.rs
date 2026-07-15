@@ -163,7 +163,7 @@ fn apply_union_construct<'step>(
     // Payload construction: `Maybe (Some v)` (paren-group body) newtype-constructs the member.
     match extract_call_body(expr) {
         Ok(CallBody::Positional(parts)) => {
-            let (tag, value_part) = match constructors::tagged_union::prepare_args(parts) {
+            let (tag, value_part) = match constructors::prepare_args(parts) {
                 Ok(v) => v,
                 Err(e) => return Outcome::Done(Err(e)),
             };

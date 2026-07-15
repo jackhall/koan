@@ -43,7 +43,6 @@ digraph {
     "koan::machine::core" [label="koan::machine::core"];
     "koan::machine::core::arena" [label="koan::machine::core::arena"];
     "koan::machine::core::bindings" [label="koan::machine::core::bindings"];
-    "koan::machine::core::bindings::pending" [label="koan::machine::core::bindings::pending"];
     "koan::machine::core::carrier_witness" [label="koan::machine::core::carrier_witness"];
     "koan::machine::core::kerror" [label="koan::machine::core::kerror"];
     "koan::machine::core::kfunction" [label="koan::machine::core::kfunction"];
@@ -62,7 +61,6 @@ digraph {
     "koan::machine::execute::dispatch" [label="koan::machine::execute::dispatch"];
     "koan::machine::execute::dispatch::apply_callable" [label="koan::machine::execute::dispatch::apply_callable"];
     "koan::machine::execute::dispatch::constructors" [label="koan::machine::execute::dispatch::constructors"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" [label="koan::machine::execute::dispatch::constructors::tagged_union"];
     "koan::machine::execute::dispatch::ctx" [label="koan::machine::execute::dispatch::ctx"];
     "koan::machine::execute::dispatch::exec" [label="koan::machine::execute::dispatch::exec"];
     "koan::machine::execute::dispatch::field_list" [label="koan::machine::execute::dispatch::field_list"];
@@ -176,7 +174,6 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::scope" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_ptr" [label="owns", style="solid"];
-    "koan::machine::core::bindings" -> "koan::machine::core::bindings::pending" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::action" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::bind_by_name" [label="owns", style="solid"];
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::body" [label="owns", style="solid"];
@@ -206,7 +203,6 @@ digraph {
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::resolve_type_identifier" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::single_poll" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::submit" [label="owns", style="solid"];
-    "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::constructors::tagged_union" [label="owns", style="solid"];
     "koan::machine::execute::runtime" -> "koan::machine::execute::runtime::interpret" [label="owns", style="solid"];
     "koan::machine::execute::runtime" -> "koan::machine::execute::runtime::submit" [label="owns", style="solid"];
     "koan::machine::model" -> "koan::machine::model::ast" [label="owns", style="solid"];
@@ -411,8 +407,6 @@ digraph {
     "koan::machine::core::bindings" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::bindings" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::core::bindings::pending" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
-    "koan::machine::core::bindings::pending" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::carrier_witness" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine" [label="uses", style="dashed"];
@@ -492,6 +486,7 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::constructors" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute" [label="uses", style="dashed"];
@@ -501,13 +496,8 @@ digraph {
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::run_loop" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::constructors" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::source" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::core" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::execute" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::parse" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors::tagged_union" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::ctx" -> "koan::machine::core" [label="uses", style="dashed"];

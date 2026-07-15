@@ -42,7 +42,37 @@ use crate::scheduler::{DepResults, Deps};
 struct RecordFieldsFamily;
 reattachable!(RecordFieldsFamily => (RegionHandle<'r, KoanStorageProfile>, Vec<(String, KObject<'r>)>));
 
-pub(in crate::machine::execute) mod tagged_union;
+/// Validate a tagged-union call site's args shape: exactly two parts, the first a
+/// `Type`-token tag (tags are capitalized variant types). The value part rides through
+/// unchanged so the dispatcher can sub-Dispatch it before construction sees its resolved
+/// value — the tag/value-type checks and the witnessed `KObject::Tagged` build live in
+/// [`finish_witnessed`], which folds the value carrier's reach onto the result.
+pub(in crate::machine::execute) fn prepare_args<'step>(
+    args_parts: Vec<Spanned<ExpressionPart<'step>>>,
+) -> Result<(String, ExpressionPart<'step>), KError> {
+    if args_parts.len() != 2 {
+        return Err(KError::new(KErrorKind::ArityMismatch {
+            expected: 2,
+            got: args_parts.len(),
+        }));
+    }
+    let mut iter = args_parts.into_iter();
+    let tag_part = iter.next().unwrap();
+    let value_part = iter.next().unwrap();
+    let tag = match tag_part.value {
+        ExpressionPart::Type(t) => t.render(),
+        other => {
+            return Err(KError::new(KErrorKind::ShapeError(format!(
+                "tagged-union construction = first arg must be a capitalized variant tag, got {}",
+                other.summarize()
+            ))));
+        }
+    };
+    Ok((tag, value_part.value))
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value
 /// expression (`expr.parts[1..]`); a single redundant `(...)` paren group unwraps so
@@ -138,7 +168,7 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
     reach: StoredReach<'step>,
     args_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
-    let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
+    let (tag, value_part) = match prepare_args(args_parts) {
         Ok(v) => v,
         Err(e) => return Outcome::Done(Err(e)),
     };

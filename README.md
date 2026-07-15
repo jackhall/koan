@@ -123,7 +123,7 @@ canonical signature-subtyping relation),
 [type_memos.rs](src/machine/model/types/type_memos.rs) (the thread-local LRU
 that memoizes subtype verdicts by digest pair),
 [builtins.rs](src/builtins.rs) (registry),
-[tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
+[constructors.rs](src/machine/execute/dispatch/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
 
 ```
@@ -206,8 +206,7 @@ src/
     ├── core/
     │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), FrameStorage, CallFrame — the Koan instantiation of the storage substrate plus the per-call frame
     │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the cycle gate; escape held as an owning EscapeOwner, no unsafe), names no Koan type
-    │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
-    │   ├── bindings/pending.rs   per-binding pending-overload state
+    │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]), and the PendingTypes in-flight binder map
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
     │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
     │   ├── scope.rs       Scope — lexical environment
