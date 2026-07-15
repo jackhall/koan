@@ -204,12 +204,20 @@ src/
     │       └── module.rs          Module / Signature — first-class module values
     ├── core.rs            module surface for core/
     ├── core/
-    │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), FrameStorage, CallFrame — the Koan instantiation of the storage substrate plus the per-call frame
+    │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), RegionBrand, FoldingBrand, KoanRegionExt — the Koan storage substrate and allocation veneer (children below)
+    │   ├── arena/
+    │   │   ├── frame.rs           FrameStorage / FrameSet / CallFrame — per-call allocation frame, run-root storage, witnessed child-scope construction door
+    │   │   ├── step_allocator.rs  StepAllocator — the step-branded construction doors (alloc_carried / alloc_type_* / alloc_object_scalar)
+    │   │   └── residence.rs       Residence / ResidenceEvidence, the AuditedStored family audits, and the evidence-tier Scope move-in doors
     │   ├── region.rs  Region<W> — generic run-lifetime erase-store substrate (the cycle gate; escape held as an owning EscapeOwner, no unsafe), names no Koan type
     │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)]), and the PendingTypes in-flight binder map
     │   ├── kerror.rs      KError, KErrorKind, TraceFrame — structured runtime errors
     │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
-    │   ├── scope.rs       Scope — lexical environment
+    │   ├── scope.rs       Scope — lexical environment: the struct, constructors, and small accessors (children below)
+    │   ├── scope/
+    │   │   ├── resolve.rs     name-resolution ladders — value / type / operator-group lookup, walk_chain / resolve_builtin_first, visibility cutoff, builtin-shadow consults
+    │   │   ├── registry.rs    bind / register write doors — value / type binds, function / operator registration, placeholders (USING-window forwarding + conditional-defer)
+    │   │   └── reach.rs       reach / carrier derivation — resident value / type carriers, envelope sealing, copy-free / copying adoption
     │   ├── scope_ptr.rs   ScopePtr — the single audited owner of Scope lifetime-erasure for region-stored carriers
     │   ├── source.rs      source-span and provenance carrier for errors
     │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types

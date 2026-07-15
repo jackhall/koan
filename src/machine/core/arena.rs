@@ -33,11 +33,11 @@ mod frame;
 mod residence;
 mod step_allocator;
 
-pub use frame::{run_root_storage, CallFrame, FrameSet, FrameStorage};
 pub(crate) use frame::FrameStorageExt;
-pub use step_allocator::StepAllocator;
+pub use frame::{run_root_storage, CallFrame, FrameSet, FrameStorage};
 pub(crate) use residence::Residence;
 use residence::ResidenceEvidence;
+pub use step_allocator::StepAllocator;
 
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
@@ -295,7 +295,6 @@ impl<'a> RegionBrand<'a> {
         Witnessed::from_erased(Erased::erase(carried), witness)
     }
 }
-
 
 /// The allocation capability inside a reach-folding closure: the enclosing combinator
 /// (`transfer_into` / `merge_pinned` / `map_pinned` / [`StepAllocator::alloc_carried_with`])
@@ -588,8 +587,6 @@ impl KoanRegionExt for KoanRegion {
     }
 }
 
-
-
 /// Test-only allocation counting over the generic [`Region`] — an extension trait for the same
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
@@ -612,7 +609,6 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<FrameSet>()
     }
 }
-
 
 #[cfg(test)]
 mod tests;
