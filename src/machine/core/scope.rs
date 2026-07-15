@@ -351,7 +351,7 @@ impl<'a> Scope<'a> {
 
     /// Per-call frame child built **witnessed**, at the construction-door brand `'a`. The lexical
     /// parent and the fresh region arrive already coupled at one generative `'a` — the door
-    /// ([`build_frame_child_witnessed`](super::arena::build_frame_child_witnessed)) brands them
+    /// ([`build_frame_child_witnessed`](crate::machine::core::arena::frame::build_frame_child_witnessed)) brands them
     /// together — so every field stores by plain coercion, honouring `Scope`'s invariance with no
     /// retype of its own. The door is the only caller; the brand `'a` is un-nameable and the result
     /// erases witness-less, so nothing at the brand escapes. The frame `Rc` pins the real parent (via

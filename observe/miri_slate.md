@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena.rs: 6
+src/machine/core/arena/residence.rs: 6
 src/machine/model/types/ktype_predicates.rs: 1
 -->
 
@@ -33,6 +33,14 @@ no — the test is redundant; **delete it** rather than whitelist. Do not whitel
 group just to silence the stale-anchor check.
 
 <!-- slate-audit-whitelist:start -->
+- `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator,residence}`
+  child modules. Its remaining groups (CallFrame lifetime erasure, reference-only carrier
+  retention, multi-region union, witness-set hosting, `alloc_type_of`, MATCH-Tagged / TRY-WITH
+  TCO, per-call frame re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region
+  drop-order and reattach disciplines whose backing `unsafe` is the `Region::alloc` retype in
+  `witnessed.rs`; the `unsafe impl AuditedStored` audits that gate those stores moved to
+  [`arena/residence.rs`](../src/machine/core/arena/residence.rs). arena.rs itself carries no
+  `unsafe` of its own.
 - `src/machine/execute/dispatch/keyworded.rs` — the type-channel splice reach group pins a
   safe-code discipline (`part_walk`'s wrap-slot arm must route a resolved type through
   `resolve_type_identifier` + `resident_type_carrier`, never seal empty reach); the real
@@ -174,7 +182,7 @@ record's stay unset. The only `unsafe` routed is the shared `retype` in `witness
 - `multi_region_closure_capturing_closures_survives_frame_free`
 - `multi_region_record_of_closures_survives_frame_free`
 
-**Envelope transfer — cross-region residence mint and pass-through duplication** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+**Envelope transfer — cross-region residence mint and pass-through duplication** ([src/machine/core/arena/residence.rs](../src/machine/core/arena/residence.rs))
 — the delivery-envelope relocation seam
 ([workgraph/src/witnessed/delivered.rs](../workgraph/src/witnessed/delivered.rs)): a
 `Residence::Kept` `transfer_into` of a foreign region-resident element mints the envelope's host into
@@ -184,8 +192,11 @@ aggregate-fold machinery. A use-after-free under tree borrows the instant the tr
 foreign host instead of materializing it. The duplication twin pins the walking half: duplicating an
 envelope for dep delivery bit-copies the reference-only carrier and clones exactly one `Rc` (the
 retained host) — the reach set itself rides by reference, never re-minted, so a regression shows as
-per-member refcount traffic or a leak. The only `unsafe` routed is the shared `retype` in
-`witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor.
+per-member refcount traffic or a leak. The `unsafe` routed is the shared `retype` in
+`witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor; the anchor file
+[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the six
+`unsafe impl AuditedStored` family audits — the soundness markers gating every checked
+cross-region store this seam and its siblings exercise.
 
 - `envelope_transfer_folds_an_independent_foreign_value`
 - `pass_through_duplicate_keeps_reach_pointer_and_mints_nothing`

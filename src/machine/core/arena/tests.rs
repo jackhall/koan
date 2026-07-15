@@ -13,7 +13,11 @@ use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 use crate::machine::KFunction;
-use crate::witnessed::{Delivered, Erased, FoldToken, FoldedPlacement, Residence, Witnessed};
+use crate::machine::ScopeId;
+use crate::witnessed::{
+    Delivered, Erased, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, Residence,
+    WitnessRegion, Witnessed,
+};
 
 /// Test-only destination-region operand: the library's [`RegionHandleFamily`], the
 /// `HasRegionHandle` mint target a `merge`/`transfer_into` composition needs — the same family
