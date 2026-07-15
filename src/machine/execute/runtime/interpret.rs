@@ -7,7 +7,7 @@
 use super::{DestHandleFamily, KoanRuntime};
 use crate::builtins::default_scope;
 use crate::machine::core::run_root_storage;
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::KExpression;
 use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
 use crate::parse::{parse, parse_with_path};
 use crate::witnessed::Witnessed;

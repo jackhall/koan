@@ -3,14 +3,12 @@
 //! Park-on-producer, re-resolve-on-wake, and the second-park protocol error live here, so every
 //! routing site states its own carrier shape and slot name and nothing else.
 
-use crate::machine::core::kfunction::action::{
-    Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
-};
-use crate::machine::core::TypeHit;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::TypeResolution;
+use crate::machine::model::KExpression;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KType};
 use crate::machine::DeliveredCarried;
+use crate::machine::TypeHit;
+use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
 

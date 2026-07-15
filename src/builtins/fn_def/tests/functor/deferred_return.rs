@@ -3,8 +3,8 @@
 use crate::builtins::test_support::{
     binds_module, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
-use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::run_root_storage;
 use crate::witnessed::region_metrics;
 
 /// Bare parameter-name return type: `-> er` resolves per-call to the carried type. The parameter is
@@ -180,7 +180,7 @@ fn functor_deferred_return_coarsens_list_carrier() {
 /// TCO-flat. (The pre-`PerCall` dep-finish lowering held a frame per call and would not collapse.)
 #[test]
 fn deferred_return_tail_call_stays_tco_flat() {
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     // `Er` is `:Signature`-kind, so the deferred `-> Er` return resolves per-call to a signature (a
@@ -221,7 +221,7 @@ fn deferred_return_tail_call_stays_tco_flat() {
 /// the body as dep-finish dependencies, making each onward call a dep — O(n).)
 #[test]
 fn deferred_expression_return_tail_chain_stays_flat() {
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -265,8 +265,8 @@ fn deferred_expression_return_tail_chain_stays_flat() {
 /// per-call check, not the static lift-time one.
 #[test]
 fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
-    use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(

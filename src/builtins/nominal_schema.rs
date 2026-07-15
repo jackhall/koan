@@ -7,14 +7,14 @@
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
-use crate::machine::core::kfunction::action::{Action, BodyCtx, FinishCtx};
-use crate::machine::core::PendingTypeEntry;
-use crate::machine::execute::{defer_field_list_action, StepCarried};
-use crate::machine::model::types::{
+use crate::machine::model::KType;
+use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, KKind,
 };
-use crate::machine::model::KType;
 use crate::machine::DeliveredCarried;
+use crate::machine::PendingTypeEntry;
+use crate::machine::{defer_field_list_action, StepCarried};
+use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
@@ -36,7 +36,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
 pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'a, '_>,
     name: String,
-    schema_expr: crate::machine::model::ast::KExpression<'a>,
+    schema_expr: crate::machine::model::KExpression<'a>,
     kind: KKind,
     context: &'static str,
     name_kind: FieldNameKind,

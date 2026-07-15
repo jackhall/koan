@@ -1,7 +1,7 @@
 use crate::builtins::default_scope;
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::SigSource;
+use crate::machine::model::SigSource;
 use crate::machine::model::{KObject, KType};
+use crate::machine::KoanRuntime;
 
 #[test]
 fn binder_name_extracts_let_name() {
@@ -17,8 +17,8 @@ fn binder_name_extracts_let_name() {
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::builtins::default_scope;
-    use crate::machine::core::run_root_storage;
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::run_root_storage;
+    use crate::machine::KoanRuntime;
     use crate::parse::parse;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -38,9 +38,9 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 #[test]
 fn let_t_cycle_errors() {
     use crate::builtins::default_scope;
-    use crate::machine::core::run_root_storage;
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
+    use crate::machine::KoanRuntime;
     use crate::parse::parse;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -69,7 +69,7 @@ fn let_t_cycle_errors() {
 /// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
@@ -96,8 +96,8 @@ fn let_type_class_with_non_type_value_errors() {
 /// via `register_type`, reachable through `Scope::resolve_type`.
 #[test]
 fn let_type_class_with_type_value_still_binds() {
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::KType;
+    use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -122,7 +122,7 @@ fn let_type_class_with_type_value_still_binds() {
 /// `KTypeValue(_)` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -150,7 +150,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 /// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
     let region = run_root_storage();
@@ -180,8 +180,8 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 #[test]
 fn let_aliases_struct_preserves_type_identity() {
     use crate::builtins::test_support::run;
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::KType;
+    use crate::machine::run_root_storage;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     run(
@@ -207,8 +207,8 @@ fn let_aliases_struct_preserves_type_identity() {
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::KErrorKind;
+    use crate::machine::{run_root_storage, FrameStorageExt};
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
@@ -242,7 +242,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 #[test]
 fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
@@ -266,7 +266,7 @@ fn let_type_class_with_plain_function_rejects() {
 #[test]
 fn let_type_class_in_sig_body_binds_manifest() {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -300,7 +300,7 @@ fn let_type_class_in_sig_body_binds_manifest() {
 #[test]
 fn let_type_class_signature_alias_preserves_identity() {
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -327,7 +327,7 @@ fn let_type_class_signature_alias_preserves_identity() {
 #[test]
 fn let_type_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
@@ -358,7 +358,7 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
@@ -380,7 +380,7 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
 #[test]
 fn let_value_class_with_module_rhs_binds_value_side() {
     use crate::builtins::test_support::{binds_module, run, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(

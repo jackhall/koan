@@ -4,8 +4,8 @@ use super::super::super::outcome::Outcome;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::ReturnType;
+use crate::machine::model::KExpression;
+use crate::machine::model::ReturnType;
 use crate::machine::model::{Carried, KObject};
 
 use super::let_expr;
@@ -119,9 +119,9 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::AwaitDeps` body parks the
     // slot as a dep-finish and leaves it with the dep-finish's terminal.
     use crate::builtins::{default_scope, register_builtin};
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue, BodyCtx};
-    use crate::machine::model::ast::ExpressionPart;
+    use crate::machine::core::{Action, AwaitContinue, BodyCtx};
     use crate::machine::model::Carried;
+    use crate::machine::model::ExpressionPart;
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 
     fn body<'run>(_ctx: &BodyCtx<'run, '_>) -> Action<'run> {

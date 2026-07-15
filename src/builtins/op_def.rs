@@ -1,6 +1,6 @@
 //! `OP #(<sym>) OVER <Operand> = (<body>)` — declare a chainable operator in the enclosing
 //! scope. The symbol is **quoted**: `#(+)` is a parse-static
-//! [`QuotedExpression`](crate::machine::model::ast::ExpressionPart::QuotedExpression) part, so it
+//! [`QuotedExpression`](crate::machine::model::ExpressionPart::QuotedExpression) part, so it
 //! rides an ordinary `:KExpression` slot and `OP` keeps a fixed untyped key — the dispatch
 //! classifier knows nothing about operator declarations.
 //!
@@ -25,18 +25,18 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
-use crate::machine::core::kfunction::action::{
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{ExpressionSignature, KKind, UntypedKey};
+use crate::machine::model::{KObject, KType};
+use crate::machine::KFunction;
+use crate::machine::StepCarried;
+use crate::machine::{
     arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepRequest,
     DepTerminal, FinishCtx,
 };
-use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{BindingIndex, StoredReach};
-use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::operators::{binary_key, unary_key, OperatorGroup, ReductionMode};
-use crate::machine::model::types::{ExpressionSignature, KKind, UntypedKey};
-use crate::machine::model::values::CarriedFamily;
-use crate::machine::model::{KObject, KType};
+use crate::machine::{BindingIndex, StoredReach};
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
 use crate::source::Spanned;

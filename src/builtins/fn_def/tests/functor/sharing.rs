@@ -3,9 +3,9 @@
 use crate::builtins::test_support::{
     lookup_fn, lookup_module, parse_one, run, run_root_silent, spliced_part,
 };
-use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::types::SigSource;
 use crate::machine::model::Carried;
+use crate::machine::model::SigSource;
+use crate::machine::{run_root_storage, FrameStorageExt};
 
 /// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Elem = Number}` admits a
 /// module iff its self-sig satisfies the signature *and* every pin names a manifest member
@@ -14,8 +14,8 @@ use crate::machine::model::Carried;
 /// no `Elem` rejected (pin absent). Admission is structural, so ascription is never required.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
-    use crate::machine::model::values::ModuleSignature;
     use crate::machine::model::KType;
+    use crate::machine::model::ModuleSignature;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
@@ -141,7 +141,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 /// counterpart is `functor_return_with_matching_sharing_constraint_passes`.
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -175,7 +175,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
 /// required. Counterpart to `functor_return_with_mismatched_sharing_constraint_errors`.
 #[test]
 fn functor_return_with_matching_sharing_constraint_passes() {
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(

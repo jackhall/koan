@@ -2,9 +2,9 @@ use super::*;
 use crate::builtins::test_support::{marker, run_root_bare};
 use crate::builtins::{default_scope, register_builtin};
 use crate::machine::core::{run_root_storage, FrameStorageExt, Scope};
-use crate::machine::model::ast::{KLiteral, TypeIdentifier};
-use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
+use crate::machine::model::{KLiteral, TypeIdentifier};
 
 fn body_any<'a>(ctx: &super::action::BodyCtx<'a, '_>) -> super::action::Action<'a> {
     super::action::Action::done_resident(crate::machine::model::Carried::Object(marker(
@@ -156,14 +156,14 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
 /// carrying its parameter record and return slot.
 #[test]
 fn function_value_ktype_projects_kfunction() {
-    use crate::machine::model::types::{ExpressionSignature, ReturnType};
+    use crate::machine::model::{ExpressionSignature, ReturnType};
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![
             SignatureElement::Keyword("CALL".into()),
-            SignatureElement::Argument(crate::machine::model::types::Argument {
+            SignatureElement::Argument(crate::machine::model::Argument {
                 name: "x".into(),
                 ktype: KType::Number,
             }),

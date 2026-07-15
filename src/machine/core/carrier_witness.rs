@@ -3,7 +3,7 @@
 //! delivery envelope that carries a value's retained frame pin in transit. See
 //! [design/witness-hosting.md § The carrier](../../../design/witness-hosting.md#the-carrier).
 
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
 
 use super::arena::FrameStorage;
 

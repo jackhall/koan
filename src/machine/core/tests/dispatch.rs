@@ -4,11 +4,9 @@ use super::super::{run_root_storage, FrameStorageExt, Scope};
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
-};
 use crate::machine::model::Carried;
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
 use crate::source::Spanned;
 
@@ -212,7 +210,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 /// sharing a lead keyword is not enough to collide.
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
-    use crate::machine::model::types::{UntypedElement, UntypedKey};
+    use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -388,7 +386,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     use crate::machine::core::kfunction::{Body, KFunction};
-    use crate::machine::model::values::KObject;
+    use crate::machine::model::KObject;
     use crate::machine::NodeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
@@ -505,7 +503,7 @@ fn scope_install_pending<'a>(
 /// entry.
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
-    use crate::machine::model::types::{UntypedElement, UntypedKey};
+    use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
     let region = run_root_storage();
     let scope = run_root_bare(&region);

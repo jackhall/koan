@@ -14,11 +14,11 @@
 //! The park/resume pair mirrors `park_on_literal` + the `type_call`
 //! head-placeholder resume, no new scheduler primitive.
 
-use crate::machine::core::kfunction::action::DepPlacement;
+use crate::machine::core::DepPlacement;
 use crate::machine::core::StoredReach;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
+use crate::machine::model::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 

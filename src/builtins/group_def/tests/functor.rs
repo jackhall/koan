@@ -7,8 +7,8 @@
 
 use super::list_numbers;
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::core::run_root_storage;
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// A functor over a bare `:Type` parameter: the member bodies need no operation on `Elt`, so the

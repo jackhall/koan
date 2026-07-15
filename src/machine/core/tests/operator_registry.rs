@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, Scope};
-use crate::machine::model::operators::{probe_key, OperatorGroup, ReductionMode};
+use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
 
 /// Arithmetic-shaped group: `+` and `-` fold left.
 fn arithmetic_group() -> OperatorGroup {

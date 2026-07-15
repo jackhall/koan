@@ -5,8 +5,8 @@
 use super::*;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
 use crate::machine::core::scope_id::ScopeId;
-use crate::machine::model::types::{KKind, KType};
-use crate::machine::model::values::KObject;
+use crate::machine::model::KObject;
+use crate::machine::model::{KKind, KType};
 
 /// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
 /// read hands back exactly the `FrameSet` stored at bind time, so the read wrapper can name the
@@ -394,7 +394,7 @@ fn new_bindings_has_empty_pending_types() {
 /// for a `pending_types` entry outside `#[cfg(test)]`.
 #[test]
 fn pending_binder_guard_drop_removes_entry() {
-    use crate::machine::model::ast::KExpression;
+    use crate::machine::model::KExpression;
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {
@@ -415,7 +415,7 @@ fn pending_binder_guard_drop_removes_entry() {
 /// Guard Drop must tolerate an already-removed entry without panicking.
 #[test]
 fn pending_binder_guard_drop_tolerates_absent_entry() {
-    use crate::machine::model::ast::KExpression;
+    use crate::machine::model::KExpression;
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
     let entry = PendingTypeEntry {

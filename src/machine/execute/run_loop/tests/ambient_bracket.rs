@@ -4,12 +4,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::core::kfunction::body::ReturnContract;
 use crate::machine::core::run_root_storage;
+use crate::machine::core::ReturnContract;
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::KType;
+use crate::machine::model::KType;
 use crate::machine::LexicalFrame;
 
 /// A trivial declared-return obligation the bracket tests deposit to stand in for the old

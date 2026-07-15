@@ -11,11 +11,11 @@
 //! builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
 //! builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
-use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::types::{KKind, SigSource};
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{KKind, SigSource};
 use crate::machine::model::{KObject, KType};
 use crate::machine::DeliveredCarried;
+use crate::machine::FinishCtx;
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -54,11 +54,9 @@ enum CarrierForm<'a> {
 /// args from `BodyCtx::args`, registers the value slot's declared type directly on a scope, and
 /// returns `Action::Done` for a structural carrier or an `Action::AwaitDeps` (one `OwnScope` type
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
+    use crate::machine::{arg_object, arg_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
 
@@ -152,8 +150,8 @@ fn finalize_val<'a>(
     declared_kt: KType<'a>,
     bind_index: BindingIndex,
     carrier: Option<&DeliveredCarried>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
+) -> crate::machine::Action<'a> {
+    use crate::machine::Action;
     // The fused door derives the slot's stored reach off its own `carrier` (kept mode) and registers
     // the declared type — the terminal is sealed separately below from the carrier's own view, so the
     // returned resident `&KType` is not needed here.

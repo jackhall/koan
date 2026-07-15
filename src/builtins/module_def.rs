@@ -6,13 +6,13 @@
 //! [`await_module_body`] is the body-dispatch-and-bind tail, shared with `GROUP`
 //! ([`super::group_def`]) — a group *is* a module, so it differs only in the child scope it mints.
 
-use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::BindingIndex;
-use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{KKind, SigSchema};
-use crate::machine::model::values::Module;
+use crate::machine::model::KExpression;
 use crate::machine::model::KType;
+use crate::machine::model::Module;
+use crate::machine::model::{KKind, SigSchema};
+use crate::machine::BindingIndex;
+use crate::machine::StepCarried;
+use crate::machine::{Action, BodyCtx};
 use crate::machine::{NameLookup, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
@@ -20,7 +20,7 @@ use super::{arg, kw, sig};
 /// The MODULE body: mints the child scope and hands it to [`await_module_body`], which dispatches
 /// the body block against it and binds the module **value** into the parent scope's `data`.
 pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    use crate::machine::core::kfunction::action::{require_identifier_name, require_kexpression};
+    use crate::machine::{require_identifier_name, require_kexpression};
 
     let name = crate::try_action!(require_identifier_name(ctx.args, "name", "MODULE"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
@@ -111,7 +111,7 @@ pub(super) fn await_module_body<'a>(
 /// value, so its name belongs in the value namespace. Registered with no binder hook — it always
 /// errors, so it installs nothing.
 pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    use crate::machine::core::kfunction::action::require_bare_type_name;
+    use crate::machine::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
@@ -160,9 +160,9 @@ mod tests {
     use crate::builtins::test_support::{
         lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
     };
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
+    use crate::machine::model::Module;
+    use crate::machine::{run_root_storage, FrameStorageExt};
     use crate::machine::{BindingIndex, KErrorKind};
 
     /// The binder name comes off the `Identifier` name part — a module binds value-side, so the
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
-        use crate::machine::model::values::Held;
+        use crate::machine::model::Held;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(

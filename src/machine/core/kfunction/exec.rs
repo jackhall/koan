@@ -20,9 +20,9 @@ use std::rc::Rc;
 use crate::machine::core::{
     BindingIndex, CallFrame, KError, RegionBrand, Scope, StoredReach, TypeHit,
 };
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
-use crate::machine::model::values::Carried;
+use crate::machine::model::Carried;
+use crate::machine::model::KExpression;
+use crate::machine::model::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;

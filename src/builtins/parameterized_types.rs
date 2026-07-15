@@ -9,18 +9,16 @@
 //! narrow candidate buckets so user-defined overloads of short connector words
 //! like `OF` don't pay a bucket-walk cost on every dispatched parameterized type.
 
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::{
+use crate::machine::model::Carried;
+use crate::machine::model::KKind;
+use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
-use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
 use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::execute::{
-    defer_field_list_action_composed, fold_field_list_sync, BrandCompose,
-};
+use crate::machine::{defer_field_list_action_composed, fold_field_list_sync, BrandCompose};
 
 /// Diagnostic context string for the shared field-list parser when it walks an `:(FN …)`
 /// parameter list.
@@ -41,8 +39,8 @@ fn finalize_carrier<'a>(fields: Vec<(String, KType<'a>)>, ret: KType<'a>) -> KTy
 /// either folds synchronously or defers via [`defer_field_list_action`].
 mod action_bodies {
     use super::build_carrier;
-    use crate::machine::core::kfunction::action::{require_ktype, Action, BodyCtx};
-    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::{require_ktype, Action, BodyCtx};
 
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
@@ -126,7 +124,7 @@ mod action_bodies {
 /// value when region-free, and errors loudly when it reaches a region carrier-less. The composed
 /// carrier folds its params and the crossed return type into a `KFunction` at the brand.
 fn ret_extras_and_compose<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'a, '_>,
     ret_slot: &str,
     ret: KType<'a>,
 ) -> Result<(Vec<DeliveredCarried>, BrandCompose<'a>), KError> {
@@ -168,11 +166,11 @@ fn ret_extras_and_compose<'a>(
 /// param names like `Ty` are accepted. Folds synchronously or defers via
 /// [`defer_field_list_action`] (no self-reference binder, no pending guard).
 fn build_carrier<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'a, '_>,
     sig_slot: &str,
     ret_slot: &str,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, require_ktype, Action};
+) -> crate::machine::Action<'a> {
+    use crate::machine::{require_kexpression, require_ktype, Action};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
     let mut elaborator = Elaborator::new(ctx.scope);
@@ -300,8 +298,8 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_one_type, run_root_silent,
     };
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::{KKind, KType, Record};
+    use crate::machine::run_root_storage;
     use crate::machine::{KErrorKind, Scope};
 
     #[test]
@@ -316,7 +314,7 @@ mod tests {
     // lowers to `ConstructorApply(Wrap, [Number])`.
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
-        use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
+        use crate::machine::model::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::{BindingIndex, ScopeId};
         let region = run_root_storage();
         let scope = run_root_silent(&region);

@@ -19,14 +19,14 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::{
+use crate::machine::core::{home_ambient_return_type, home_delivered_return_type};
+use crate::machine::core::{split_body_statements, ReturnContract};
+use crate::machine::core::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
 };
-use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
-use crate::machine::core::kfunction::exec::{home_ambient_return_type, home_delivered_return_type};
 use crate::machine::core::{FoldingBrand, ScopeRefFamily};
-use crate::machine::model::ast::KExpression;
 use crate::machine::model::Carried;
+use crate::machine::model::KExpression;
 use crate::machine::{CallFrame, CarrierWitness, KError, KErrorKind, NodeId};
 use crate::witnessed::SealedExtern;
 
@@ -41,7 +41,7 @@ use super::{
     catch_continuation, ignore_results, seal_witnessed, short_circuit, CatchFinish,
     ContinuationFamily,
 };
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ResolvedDeps, Scheduler, Workload};
 use crate::witnessed::Witnessed;
 

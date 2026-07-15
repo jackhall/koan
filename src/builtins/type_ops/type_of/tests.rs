@@ -4,9 +4,9 @@
 use crate::builtins::test_support::{
     lookup_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
 };
-use crate::machine::core::run_root_storage;
-use crate::machine::model::types::SigSource;
+use crate::machine::model::SigSource;
 use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 #[test]

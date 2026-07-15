@@ -3,8 +3,8 @@ mod param_refs;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
-use crate::machine::model::types::Elaborator;
-use crate::machine::model::types::KKind;
+use crate::machine::model::Elaborator;
+use crate::machine::model::KKind;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -22,11 +22,11 @@ pub(crate) use signature::binder_bucket;
 /// [`finalize::defer`] (dep-finish). `kind` selects how the finalized function is
 /// wired into the scope; `builtin` (`"FN"`) names the surface in slot errors.
 pub(crate) fn build_fn_like<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'a, '_>,
     builtin: &str,
     kind: FnKind,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, Action};
+) -> crate::machine::Action<'a> {
+    use crate::machine::{require_kexpression, Action};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
@@ -79,18 +79,16 @@ pub(crate) fn build_fn_like<'a>(
 /// `TypeCall` / `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs
 /// a fixed token. The keyword-less `FN :{…}` record-schema form is
 /// [`body_record_schema`].
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     build_fn_like(ctx, "FN", FnKind::Function)
 }
 
 /// `-> <identifier>` — a return slot naming a value. Always errors: the slot names a type, and the
 /// value it most often names is a module-valued parameter, whose type is `:(TYPE OF er)`.
 pub fn body_value_named_return<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_identifier_name, Action};
+    ctx: &crate::machine::BodyCtx<'a, '_>,
+) -> crate::machine::Action<'a> {
+    use crate::machine::{require_identifier_name, Action};
 
     let name = crate::try_action!(require_identifier_name(ctx.args, "return_type", "FN"));
     Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -108,10 +106,8 @@ pub fn body_value_named_return<'a>(
 /// resolved record. Each field becomes a keyword-less `Argument`; the function
 /// registers no dispatch keyword (see [`FnKind::Anonymous`]) and is reachable
 /// only through the value it returns.
-pub fn body_record_schema<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_type, require_kexpression, Action};
+pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_type, require_kexpression, Action};
     use finalize::defer;
     use return_type::extract_return_type_raw;
 
@@ -161,7 +157,7 @@ pub fn body_record_schema<'a>(
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
             defer(
-                crate::machine::model::ast::KExpression::new(Vec::new()),
+                crate::machine::model::KExpression::new(Vec::new()),
                 inputs,
                 body_expr,
                 FnKind::Anonymous,

@@ -12,12 +12,12 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
-use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
 use crate::machine::core::{BindKind, FunctionLookup, KError, LexicalFrame, Scope};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
+use crate::machine::core::{ClassifiedSlots, KFunction};
 use crate::machine::model::Carried;
+use crate::machine::model::KKind;
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::NodeId;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
@@ -54,7 +54,7 @@ pub fn reset_resolve_dispatch_entry_count() {
 /// Picked function plus the per-slot classification the dispatch driver needs
 /// for auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the
 /// disjoint `(eager_indices | wrap_indices | ref_name_indices)` invariant from
-/// [`crate::machine::core::kfunction::ClassifiedSlots`].
+/// [`crate::machine::core::ClassifiedSlots`].
 pub struct Resolved<'step> {
     pub function: &'step KFunction<'step>,
     /// The forward-reference name a binder declares, with the language it binds in, so the
@@ -64,7 +64,7 @@ pub struct Resolved<'step> {
     /// function (`FN`, `OP`): holds the inner-call bucket key of every overload the
     /// body will register, so a sibling call form parks on this slot rather than
     /// failing dispatch.
-    pub pending_overload_buckets: Vec<crate::machine::model::types::UntypedKey>,
+    pub pending_overload_buckets: Vec<crate::machine::model::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
 

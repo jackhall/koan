@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::types::TypeResolution;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KObject, KType, Parseable, RecursiveSet};
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
 
@@ -24,7 +24,7 @@ use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome};
 use crate::machine::core::StoredReach;
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Residence;
 

@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::machine::core::{run_root_storage, FrameStorage, StepAllocator};
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{Delivered, Reattachable, Witnessed};
 

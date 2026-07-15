@@ -12,12 +12,10 @@ use super::{arg, kw, sig};
 /// `TypeMismatch`.
 ///
 /// The `EVAL` head-keyword is not part of the surface; user code goes through the `$` sigil.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::block_tail::{block_tail, BlockBody, BlockScope};
-    use crate::machine::core::kfunction::action::{arg_object, Action, FramePlacement};
     use crate::machine::model::KObject;
+    use crate::machine::{arg_object, Action, FramePlacement};
     use crate::machine::{KError, KErrorKind};
     let inner = match arg_object(ctx.args, "expr") {
         Some(KObject::KExpression(e)) => e.clone(),
@@ -54,7 +52,7 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {

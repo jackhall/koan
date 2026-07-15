@@ -2,10 +2,10 @@
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KType, ReturnType};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::KoanRuntime;
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.

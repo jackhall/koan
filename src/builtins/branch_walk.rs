@@ -9,11 +9,11 @@
 //! enforce on their result.
 
 use super::{arg, sig};
-use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::LexicalFrame;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
-use crate::machine::model::types::{ExpressionSignature, RecursiveSet, TypeResolution};
+use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
+use crate::machine::model::{ExpressionSignature, RecursiveSet, TypeResolution};
 use crate::machine::model::{KObject, KType};
+use crate::machine::LexicalFrame;
+use crate::machine::ReturnContract;
 use crate::machine::{KError, KErrorKind, Scope};
 use std::rc::Rc;
 
@@ -21,10 +21,10 @@ use std::rc::Rc;
 /// against the call-site scope/chain) into the [`ReturnContract::Arm`] both `MATCH` and `TRY`
 /// arms are checked against.
 pub(crate) fn resolve_arm_contract<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    use crate::machine::core::kfunction::action::arg_type;
+    use crate::machine::arg_type;
     let ret_kt = match arg_type(ctx.args, "return_type") {
         Some(KType::Unresolved(te)) => {
             match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
@@ -89,9 +89,9 @@ pub(crate) fn arm_tail<'a>(
     it_source: ItSource<'a>,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+) -> crate::machine::Action<'a> {
     use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
-    use crate::machine::core::kfunction::action::FramePlacement;
+    use crate::machine::FramePlacement;
     use crate::machine::{BindingIndex, CallFrame};
     let frame: Rc<CallFrame> = CallFrame::new(root);
     // Bind `it` into the frame's own scope: `alloc_object` erases the caller-`'a` input and

@@ -3,8 +3,8 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
-use crate::machine::model::operators::{probe_key, OperatorGroup};
-use crate::machine::model::types::{KType, RecursiveSet};
+use crate::machine::model::{probe_key, OperatorGroup};
+use crate::machine::model::{KType, RecursiveSet};
 
 use super::arena::{FrameSet, FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
 use super::bindings::{ApplyOutcome, BindKind, BindingIndex, Bindings, NameLookup, StoredReach};
@@ -14,7 +14,7 @@ use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::values::{Carried, CarriedFamily, KObject};
+use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::DeliveredCarried;
 use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
 
@@ -464,9 +464,9 @@ impl<'a> Scope<'a> {
     /// module's shared memo would poison the module's own def-site resolution.
     pub(crate) fn type_identifier_memo_get(
         &self,
-        te: &crate::machine::model::ast::TypeIdentifier,
+        te: &crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>)> {
+    ) -> Option<(&'a crate::machine::model::KType<'a>, StoredReach<'a>)> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -478,9 +478,9 @@ impl<'a> Scope<'a> {
     /// cached alongside the `&KType` so a memo hit rebuilds the read carrier.
     pub(crate) fn type_identifier_memo_insert(
         &self,
-        te: crate::machine::model::ast::TypeIdentifier,
+        te: crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-        kt: &'a crate::machine::model::types::KType<'a>,
+        kt: &'a crate::machine::model::KType<'a>,
         reach: StoredReach<'a>,
     ) {
         if self.bindings.is_borrowed() {
@@ -538,7 +538,7 @@ impl<'a> Scope<'a> {
     /// user FN whose untyped signature key collides with a builtin is a
     /// `Rebind`; it must never merge into the builtin bucket. The consult reads the
     /// root directly.
-    fn shadows_builtin_function(&self, key: &crate::machine::model::types::UntypedKey) -> bool {
+    fn shadows_builtin_function(&self, key: &crate::machine::model::UntypedKey) -> bool {
         self.root_scope().bindings().has_builtin_function(key)
     }
 
@@ -753,7 +753,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_type(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'a>,
+        ktype: crate::machine::model::KType<'a>,
         index: BindingIndex,
         reach: StoredReach<'a>,
     ) {
@@ -766,7 +766,7 @@ impl<'a> Scope<'a> {
         // same scope's region — dest-relative by construction, so the audit only ever rejects a
         // caller that mis-minted its evidence (a programming error, matching this fn's infallible
         // contract).
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self
+        let kt_ref: &'a crate::machine::model::KType<'a> = self
             .alloc_ktype_reaching(ktype, &reach)
             .expect("register_type: reach must cover ktype's borrows (mis-minted evidence)");
         match self
@@ -797,10 +797,10 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_type_upsert(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'a>,
+        ktype: crate::machine::model::KType<'a>,
         index: BindingIndex,
         reach: StoredReach<'a>,
-    ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
+    ) -> Result<&'a crate::machine::model::KType<'a>, KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
@@ -809,7 +809,7 @@ impl<'a> Scope<'a> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> =
+        let kt_ref: &'a crate::machine::model::KType<'a> =
             self.alloc_ktype_reaching(ktype, &reach)?;
         match self
             .bindings
@@ -831,9 +831,9 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_nominal_upsert(
         &self,
         name: String,
-        identity: crate::machine::model::types::KType<'a>,
+        identity: crate::machine::model::KType<'a>,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
+    ) -> Result<&'a crate::machine::model::KType<'a>, KError> {
         self.register_type_upsert(name, identity, index, StoredReach::empty())
     }
 
@@ -846,10 +846,10 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_type_delivered(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'_>,
+        ktype: crate::machine::model::KType<'_>,
         carrier: Option<&DeliveredCarried>,
         index: BindingIndex,
-    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
@@ -882,10 +882,10 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_user_type_delivered(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'_>,
+        ktype: crate::machine::model::KType<'_>,
         carrier: Option<&DeliveredCarried>,
         index: BindingIndex,
-    ) -> Result<(&'a crate::machine::model::types::KType<'a>, StoredReach<'a>), KError> {
+    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
@@ -902,7 +902,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn bind_module(
         &self,
         name: String,
-        module: &'a crate::machine::model::values::Module<'a>,
+        module: &'a crate::machine::model::Module<'a>,
         child: &Scope<'a>,
         index: BindingIndex,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
@@ -918,7 +918,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_builtin_type(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'a>,
+        ktype: crate::machine::model::KType<'a>,
         index: BindingIndex,
     ) {
         self.register_type(name, ktype, index, StoredReach::empty());
@@ -937,7 +937,7 @@ impl<'a> Scope<'a> {
     pub fn preinstall_identity(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType<'a>,
+        ktype: crate::machine::model::KType<'a>,
         index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
@@ -947,7 +947,7 @@ impl<'a> Scope<'a> {
         // A pre-installed nominal identity is a `KType::SetRef` into the declaring set — owned data
         // reaching no foreign region — so its stored reach is empty (the reaching-tier evidence
         // degrades to the dest-only checked audit, which its pure members always pass).
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self
+        let kt_ref: &'a crate::machine::model::KType<'a> = self
             .alloc_ktype_reaching(ktype, &StoredReach::empty())
             .expect("preinstall_identity: a pre-installed SetRef's members are always owned");
         match self
@@ -1241,7 +1241,7 @@ impl<'a> Scope<'a> {
     /// `child_scope()` walk to rebuild the reach.
     pub(crate) fn resident_type_carrier<'r>(
         &self,
-        kt: &'a crate::machine::model::types::KType<'a>,
+        kt: &'a crate::machine::model::KType<'a>,
         stored: StoredReach<'r>,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.brand()
@@ -1316,7 +1316,7 @@ impl<'a> Scope<'a> {
     /// [`Bindings::try_install_pending_overload`].
     pub fn install_pending_overload(
         &self,
-        bucket: crate::machine::model::types::UntypedKey,
+        bucket: crate::machine::model::UntypedKey,
         idx: NodeId,
         index: BindingIndex,
     ) -> Result<(), KError> {
@@ -1334,7 +1334,7 @@ impl<'a> Scope<'a> {
     /// [`Self::resolve_type_with_chain`]: an in-flight [`NameLookup::Parked`]
     /// collapses to `None` here, so callers that must park on the producer use
     /// `resolve_type_with_chain` and match its `Parked` arm.
-    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {
+    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::KType<'a>> {
         self.resolve_type_with_chain(name, None)
             .and_then(NameLookup::bound)
     }

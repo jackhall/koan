@@ -1,14 +1,14 @@
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::core::{NameLookup, ScopeId};
-use crate::machine::execute::{seal_type_operand, StepCarried};
-use crate::machine::model::types::{
+use crate::machine::model::KType;
+use crate::machine::model::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
 };
-use crate::machine::model::KType;
+use crate::machine::FinishCtx;
+use crate::machine::{seal_type_operand, StepCarried};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{NameLookup, ScopeId};
 
 use super::{arg, kw, sig};
 use crate::machine::DeliveredCarried;
@@ -150,12 +150,10 @@ fn finalize_union<'a>(
 /// Elaborate the variant schema, folding synchronously via [`finalize_union`] or deferring through
 /// the shared `nominal_schema_action` field-list path (threading the binder name and the in-flight
 /// pending guard), then install the sealed `SetRef` identity.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
-    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
     use crate::machine::model::KObject;
+    use crate::machine::{arg_object, require_bare_type_name, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION"));
     let schema_expr = match arg_object(ctx.args, "schema") {
@@ -202,10 +200,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
-    use crate::machine::core::run_root_storage;
-    use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
-    use crate::machine::model::values::Carried;
+    use crate::machine::model::Carried;
     use crate::machine::model::KType;
+    use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::run_root_storage;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// The projected (`SetLocal`s resolved) newtype repr of union `name`'s `variant` member —
@@ -272,7 +270,7 @@ mod tests {
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
-        use crate::machine::execute::KoanRuntime;
+        use crate::machine::KoanRuntime;
 
         let region = run_root_storage();
         let scope = run_root_silent(&region);
@@ -336,7 +334,7 @@ mod tests {
     fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let fctx = crate::machine::core::kfunction::action::FinishCtx::for_scope(scope);
+        let fctx = crate::machine::FinishCtx::for_scope(scope);
         let fields = || {
             vec![
                 ("Some".to_string(), KType::Number),

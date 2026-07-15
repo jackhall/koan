@@ -6,14 +6,14 @@
 //! members at the right kind/arity, value slots covariantly compatible). Each view also seals
 //! its own self-sig at creation.
 
-use crate::machine::execute::StepCarried;
-use crate::machine::model::types::SigSource;
-use crate::machine::model::types::{
+use crate::machine::model::KType;
+use crate::machine::model::SigSource;
+use crate::machine::model::{
     abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members, KKind,
     NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
 };
-use crate::machine::model::values::{KObject, Module};
-use crate::machine::model::KType;
+use crate::machine::model::{KObject, Module};
+use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, NameLookup, Scope, ScopeId};
 
 use super::{arg, kw, sig};
@@ -22,10 +22,8 @@ use super::{arg, kw, sig};
 /// `BodyCtx::args` type channel, mints on `ctx.scope.region`, and returns the view module as a
 /// witnessed [`Action::Done(Ok)`](Action::Done) carrier ([`Scope::resident_type_carrier`] seals it under the
 /// child scope's token, derived via [`Scope::child_module_reach`]).
-pub fn body_opaque<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
+pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
 
@@ -163,10 +161,8 @@ pub fn body_opaque<'a>(
 /// own child scope and returns the retagged view as the Object-arm module value — the terminal is
 /// allocated reaching the token derived via [`Scope::child_module_reach`], which pins the (foreign)
 /// source module's child-scope region the view borrows.
-pub fn body_transparent<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
+pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
     if let Err(e) = check_satisfies(m, s) {
@@ -204,10 +200,7 @@ pub fn body_transparent<'a>(
 /// per-call abstract mints, a transparent view's concrete source types). Without this a slot
 /// typed against an abstract member would read concrete off the underlying value and the view
 /// would not structurally satisfy its own signature.
-fn seal_view_self_sig<'a>(
-    module: &Module<'a>,
-    sig: &crate::machine::model::values::ModuleSignature<'a>,
-) {
+fn seal_view_self_sig<'a>(module: &Module<'a>, sig: &crate::machine::model::ModuleSignature<'a>) {
     let mut view_sig = SigSchema::raw_self_sig(module);
     let member_map: std::collections::HashMap<String, KType<'a>> = view_sig
         .manifest_members
@@ -233,12 +226,12 @@ fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
 ) -> Result<
     (
-        &'a crate::machine::model::values::Module<'a>,
-        &'a crate::machine::model::values::ModuleSignature<'a>,
+        &'a crate::machine::model::Module<'a>,
+        &'a crate::machine::model::ModuleSignature<'a>,
     ),
     KError,
 > {
-    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type};
+    use crate::machine::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
         args: &crate::machine::model::KObject<'_>,
@@ -277,7 +270,7 @@ fn resolve_module_and_signature<'a>(
 /// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
 fn check_satisfies<'a>(
     m: &Module<'a>,
-    s: &'a crate::machine::model::values::ModuleSignature<'a>,
+    s: &'a crate::machine::model::ModuleSignature<'a>,
 ) -> Result<(), KError> {
     if m.structurally_satisfies(s) {
         return Ok(());

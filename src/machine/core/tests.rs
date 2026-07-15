@@ -7,8 +7,8 @@ mod queue;
 mod register;
 mod types;
 
-use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::values::KObject;
+use crate::machine::model::KObject;
+use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 
 pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
     ExpressionSignature {

@@ -10,8 +10,8 @@
 //! [design/execution/README.md § Submission-time binder install and recursive
 //! sub-Dispatch](../../../../design/execution/name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch).
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::UntypedKey;
+use crate::machine::model::UntypedKey;
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{
     BindKind, BindingIndex, FunctionLookup, KFunction, LexicalFrame, NodeId, Scope,

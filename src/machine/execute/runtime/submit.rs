@@ -6,9 +6,9 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::scope_frame;
+use crate::machine::core::scope_frame;
 use crate::machine::core::{assemble_body_chain, ScopeId, ScopeRefFamily};
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::KExpression;
 use crate::machine::{CallFrame, LexicalFrame, NodeId, Scope};
 use crate::witnessed::SealedExtern;
 

@@ -7,7 +7,7 @@
 //! the dispatch entry.
 
 use crate::machine::core::{KError, KErrorKind};
-use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::ExpressionPart;
 use crate::source::Spanned;
 
 /// Validate the args shape: exactly two parts, the first a `Type`-token

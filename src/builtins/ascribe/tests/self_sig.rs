@@ -7,10 +7,10 @@ use crate::builtins::test_support::{
     binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one_err,
     run_root_silent,
 };
-use crate::machine::core::run_root_storage;
-use crate::machine::model::types::{memo_hit_count, memo_reset};
-use crate::machine::model::values::Module;
 use crate::machine::model::KType;
+use crate::machine::model::Module;
+use crate::machine::model::{memo_hit_count, memo_reset};
+use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
 fn module_named<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {

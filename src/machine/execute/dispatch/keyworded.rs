@@ -1,9 +1,9 @@
 //! Keyworded dispatch shape: the catch-all for any expression with a
 //! keyword present, or a head that isn't a fast-lane shape.
 
-use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::TypeResolution;
+use crate::machine::core::{BlockEntry, FramePlacement};
+use crate::machine::model::KExpression;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
     BindingIndex, DispatchOutcome, KError, KErrorKind, NameLookup, NameOutcome, NodeId, TraceFrame,
@@ -108,7 +108,7 @@ pub(super) fn initial<'step>(
 fn walk_and_invoke<'step>(
     ctx: &SchedulerView<'step, '_>,
     resolved: Resolved<'step>,
-    parts: Vec<crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>>,
+    parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
     pre_subs: Vec<(usize, NodeId)>,
     bare_outcomes: &[Option<NameOutcome<'step>>],
     idx: usize,
@@ -339,7 +339,7 @@ fn park_walk_producer(
     ctx: &SchedulerView<'_, '_>,
     producer: NodeId,
     idx: usize,
-    part: &crate::machine::model::ast::ExpressionPart<'_>,
+    part: &crate::machine::model::ExpressionPart<'_>,
     producers_to_wait: &mut Vec<NodeId>,
 ) -> Result<(), KError> {
     if ctx.would_create_cycle(producer, NodeId(idx)) {
@@ -362,13 +362,13 @@ fn park_walk_producer(
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'step>(
     ctx: &SchedulerView<'step, '_>,
-    parts: Vec<crate::source::Spanned<crate::machine::model::ast::ExpressionPart<'step>>>,
+    parts: Vec<crate::source::Spanned<crate::machine::model::ExpressionPart<'step>>>,
     pre_subs: &[(usize, NodeId)],
     bare_outcomes: &[Option<NameOutcome<'step>>],
-    slots: &crate::machine::core::kfunction::ClassifiedSlots,
+    slots: &crate::machine::core::ClassifiedSlots,
     idx: usize,
 ) -> Result<PartWalkResult<'step>, KError> {
-    use crate::machine::model::ast::ExpressionPart;
+    use crate::machine::model::ExpressionPart;
     use crate::source::Spanned;
 
     let wrap_set = &slots.wrap_indices;

@@ -1,8 +1,8 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::core::{run_root_storage, KoanRegionTestExt};
-use crate::machine::execute::KoanRuntime;
+use crate::machine::KoanRuntime;
+use crate::machine::{run_root_storage, KoanRegionTestExt};
 use crate::witnessed::region_metrics;
 
 #[test]
@@ -190,8 +190,8 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 /// Pins that a tail chain keeps the **first** caller's return contract.
 #[test]
 fn tail_call_enforces_first_callers_return_contract() {
-    use crate::machine::execute::KoanRuntime;
     use crate::machine::KErrorKind;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(

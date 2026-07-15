@@ -32,6 +32,22 @@ pub use bindings::{
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
+pub(crate) use kfunction::action::{
+    arg_held, arg_object, arg_type, require_bare_type_name, require_identifier_name,
+    require_kexpression, require_ktype, scope_frame, Action, AwaitContinue, BlockEntry, BodyCtx,
+    BodyPlacement, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx, FramePlacement,
+    TailContract,
+};
+pub(crate) use kfunction::body::{
+    body_statement_refs, split_body_statements, ReturnContract, SealedContract,
+};
+pub(crate) use kfunction::exec::{
+    home_ambient_return_type, home_delivered_return_type, run_user_fn, ExecFrame, ExecOutcome,
+    PerCallReturn,
+};
+pub(crate) use kfunction::{
+    ActionFn, BinderBucketFn, BinderNameFn, Body, ClassifiedSlots, KFunction, NodeId,
+};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use scope::Scope;
 pub use scope_id::ScopeId;

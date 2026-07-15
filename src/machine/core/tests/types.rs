@@ -7,8 +7,8 @@ use super::super::Scope;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::types::KType;
-use crate::machine::model::values::Carried;
+use crate::machine::model::Carried;
+use crate::machine::model::KType;
 use crate::machine::BindingIndex;
 
 #[test]
@@ -74,7 +74,7 @@ fn resolve_type_inner_scope_shadows_outer() {
 /// consumer's fold pins the reached region for the value's new lifetime.
 #[test]
 fn adopt_sealed_reanchors_the_same_value_copy_free() {
-    use crate::machine::model::values::{Carried, KObject};
+    use crate::machine::model::{Carried, KObject};
     use crate::witnessed::{Delivered, Sealed};
 
     let storage = run_root_storage();
@@ -109,7 +109,7 @@ fn adopt_sealed_reanchors_the_same_value_copy_free() {
 fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
     use crate::machine::core::arena::KoanRegionExt;
     use crate::machine::core::KoanRegion;
-    use crate::machine::model::values::{Carried, KObject};
+    use crate::machine::model::{Carried, KObject};
     use crate::machine::DeliveredCarried;
     use crate::witnessed::{Delivered, Sealed};
     use std::rc::Rc;
@@ -150,7 +150,7 @@ fn adopt_sealed_reach_fold_pins_the_producer_region_after_drop() {
 #[test]
 fn child_module_reach_unions_member_entry_reaches_across_regions() {
     use crate::machine::core::arena::KoanRegion;
-    use crate::machine::model::values::KObject;
+    use crate::machine::model::KObject;
 
     // A frame foreign to everything else here — the region a nested member's own reach names.
     let inner_storage = run_root_storage();

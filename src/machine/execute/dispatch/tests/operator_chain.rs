@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::machine::core::run_root_storage;
-use crate::machine::model::operators::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{BindingIndex, Scope};
 

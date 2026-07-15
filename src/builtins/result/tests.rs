@@ -1,7 +1,7 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::model::types::{KKind, ProjectedSchema, RecursiveSet};
+use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 #[test]

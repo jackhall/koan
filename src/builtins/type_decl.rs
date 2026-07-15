@@ -20,10 +20,10 @@
 
 use std::collections::HashMap;
 
-use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{KKind, NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KKind, NominalSchema, RecursiveSet};
+use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 
 use super::{arg, kw, sig};
@@ -61,11 +61,11 @@ fn not_in_sig_body() -> KError {
 /// sentinel `SetRef`, so no delivered carrier folds in — the fused door picks the tier the
 /// type's own shape needs.
 fn bind_abstract_member<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
+    ctx: &crate::machine::BodyCtx<'a, '_>,
     name: String,
     kt: KType<'a>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::Action;
+) -> crate::machine::Action<'a> {
+    use crate::machine::Action;
     let bind_index = ctx.bind_index();
     let (kt_ref, stored) = match ctx
         .scope
@@ -79,10 +79,8 @@ fn bind_abstract_member<'a>(
 }
 
 /// `TYPE <name:ProperType>` — first-order abstract member. Binds `AbstractType { decl scope id, name }`.
-pub fn body_bare<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_bare_type_name, Action};
+pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{require_bare_type_name, Action};
 
     if !ctx.scope.is_in_sig_body() {
         return Action::Done(Err(not_in_sig_body()));
@@ -101,10 +99,8 @@ pub fn body_bare<'a>(
 /// `TYPE (<Param> AS <Name>)` — higher-kinded abstract member (declaration-by-example). Reads the
 /// raw `(Param AS Name)` expression, mints the sentinel `TypeConstructor` `SetRef` under `Name`
 /// with parameter `Param`. Arity 1 only.
-pub fn body_hk<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{require_kexpression, Action};
+pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{require_kexpression, Action};
 
     if !ctx.scope.is_in_sig_body() {
         return Action::Done(Err(not_in_sig_body()));

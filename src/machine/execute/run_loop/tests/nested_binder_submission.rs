@@ -10,7 +10,7 @@ use std::io::Write;
 use crate::builtins::default_scope;
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::UntypedElement;
+use crate::machine::model::UntypedElement;
 use crate::parse::parse;
 
 struct Sink;

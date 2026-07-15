@@ -17,15 +17,15 @@
 //! mirrors the sealed members into the enclosing scope and binds the group handle: exiting
 //! the block guarantees every forward reference resolved.
 
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::model::types::{NominalMember, RecursiveSet};
 use crate::machine::model::KType;
+use crate::machine::model::{NominalMember, RecursiveSet};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, KExpression};
 
 use super::{arg, kw, sig};
 
@@ -95,13 +95,9 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope) (which fans out per
 /// declaration), and the finish mirrors the sealed members + binds the group handle into
 /// the enclosing scope.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
-    use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action,
-    };
+    use crate::machine::{require_bare_type_name, require_kexpression, Action};
 
     let group_name =
         crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));

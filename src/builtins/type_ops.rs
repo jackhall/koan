@@ -7,9 +7,9 @@
 mod type_of;
 mod with;
 
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::Record;
+use crate::machine::model::KKind;
 use crate::machine::model::KType;
+use crate::machine::model::Record;
 use crate::machine::Scope;
 
 use super::{arg, kw, sig};

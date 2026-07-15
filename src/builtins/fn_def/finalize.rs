@@ -9,14 +9,14 @@
 //! The keyworded and anonymous FN binders ride the same path, selected by the
 //! [`FnKind`] threaded through `finalize_fn_with_kind` / `defer`.
 
-use crate::machine::core::kfunction::action::Action;
-use crate::machine::core::kfunction::KFunction;
-use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{Elaborator, ReturnType};
-use crate::machine::model::values::CarriedFamily;
 use crate::machine::model::Carried;
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::{Elaborator, ReturnType};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
+use crate::machine::Action;
+use crate::machine::KFunction;
+use crate::machine::StepCarried;
 use crate::machine::{BindingIndex, Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::witnessed::Witnessed;
 
@@ -265,10 +265,8 @@ pub(crate) fn defer<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        Action, AwaitContinue, DepPlacement, DepRequest,
-    };
+) -> crate::machine::Action<'a> {
+    use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest};
     let DeferredInputs {
         capture,
         park_producers,
@@ -352,5 +350,5 @@ pub(crate) fn defer<'a>(
             bind_index,
         ))
     });
-    crate::machine::core::kfunction::action::Action::AwaitDeps { deps, finish }
+    crate::machine::Action::AwaitDeps { deps, finish }
 }

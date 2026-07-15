@@ -4,11 +4,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, KExpression};
 
 use crate::machine::core::{FrameStorage, RegionBrand, Scope};
-use crate::machine::model::types::UntypedKey;
 use crate::machine::model::KType;
+use crate::machine::model::UntypedKey;
 use crate::scheduler::Sealed;
 use crate::witnessed::reattachable;
 

@@ -9,10 +9,10 @@ use std::rc::Rc;
 use crate::builtins::test_support::{
     delivered_with_host, parse_one, run, run_one, run_one_err, run_root_bare, run_root_silent,
 };
-use crate::machine::core::{run_root_storage, BindingIndex, Scope};
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::KErrorKind;
+use crate::machine::KoanRuntime;
+use crate::machine::{run_root_storage, BindingIndex, Scope};
 
 #[test]
 fn using_surfaces_module_value_as_bare_name() {

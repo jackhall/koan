@@ -12,11 +12,11 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::{scope_frame, DepPlacement};
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::KFunction;
+use crate::machine::core::{scope_frame, DepPlacement};
 use crate::machine::core::{FrameStorage, StepAllocator};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::FoldDirection;
+use crate::machine::model::FoldDirection;
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
@@ -144,7 +144,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     /// The step construction allocator wrapping [`Self::dest_frame`], branded at the step lifetime
     /// `'step` — its doors return a [`StepCarried`](crate::machine::execute::StepCarried) confined to
     /// the step (`design/scheduler-library.md` guarantees 3 and 5), handed to a finish through
-    /// [`FinishCtx`](crate::machine::core::kfunction::action::FinishCtx).
+    /// [`FinishCtx`](crate::machine::core::FinishCtx).
     pub(in crate::machine::execute) fn step_ctx(&self) -> StepAllocator<'step> {
         StepAllocator::over_frame(self.dest_frame())
     }

@@ -21,9 +21,9 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::TypeResolution;
+use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Parseable};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
 
@@ -31,14 +31,12 @@ use super::ignore_results;
 use super::nodes::{ChainOp, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::runtime::KoanWorkload;
-use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
+use crate::machine::core::{BlockEntry, FramePlacement};
 use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
-pub(in crate::machine::execute) use crate::machine::core::kfunction::action::{
-    BodyPlacement, DepRequest,
-};
+pub(in crate::machine::execute) use crate::machine::core::{BodyPlacement, DepRequest};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -73,7 +71,7 @@ pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 /// time); re-exported here so dispatch-internal call sites and tests keep the
 /// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
 #[allow(unused_imports)]
-pub use crate::machine::model::ast::{classify_dispatch_shape, DispatchShape};
+pub(crate) use crate::machine::model::{classify_dispatch_shape, DispatchShape};
 
 /// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
 /// against `scope`. `consumer = Some(idx)` enables the cycle check;
@@ -266,7 +264,7 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
 /// through unchanged.
 ///
 /// `wrap_indices` names bare-name value slots (the `wrap_indices` set from
-/// [`KFunction::classify_for_pick`](crate::machine::core::kfunction::KFunction::classify_for_pick))
+/// [`KFunction::classify_for_pick`](crate::machine::core::KFunction::classify_for_pick))
 /// to resolve before bind. The keyword path resolves these via `bare_outcomes`
 /// because it must know their carried type *during* overload selection; the
 /// post-pick named-argument / function-value tail has already committed to one

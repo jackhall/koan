@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Both quoted slots — the members' `#(<sym>)` and the pairwise `#(<combiner>)` — are parse-static
-//! [`QuotedExpression`](crate::machine::model::ast::ExpressionPart::QuotedExpression) parts, so they
+//! [`QuotedExpression`](crate::machine::model::ExpressionPart::QuotedExpression) parts, so they
 //! ride ordinary `:KExpression` slots and every `GROUP` overload keeps a *fixed* untyped key. An
 //! unquoted symbol would be a `Keyword` part, which lands in the expression's untyped key and so
 //! would key a different bucket per operator — no fixed overload could match it.
@@ -38,15 +38,13 @@
 
 use std::collections::HashSet;
 
-use crate::machine::core::kfunction::action::{
-    require_identifier_name, require_kexpression, Action, BodyCtx,
-};
-use crate::machine::core::kfunction::body::body_statement_refs;
-use crate::machine::core::BindingIndex;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::types::KKind;
+use crate::machine::body_statement_refs;
+use crate::machine::model::KKind;
 use crate::machine::model::KType;
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::BindingIndex;
+use crate::machine::{require_identifier_name, require_kexpression, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::op_def::{symbol_from_parts, symbol_from_slot};
@@ -214,7 +212,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // parks on is tagged `Value` — the same hook MODULE installs.
     let value_binder = || {
         Some((
-            super::identifier_part_binder_name as crate::machine::core::kfunction::BinderNameFn,
+            super::identifier_part_binder_name as crate::machine::BinderNameFn,
             crate::machine::BindKind::Value,
         ))
     };
@@ -222,8 +220,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     for (direction, fold_body, pairwise_body) in [
         (
             "LEFT",
-            body_fold_left as crate::machine::core::kfunction::ActionFn,
-            body_pairwise_left as crate::machine::core::kfunction::ActionFn,
+            body_fold_left as crate::machine::ActionFn,
+            body_pairwise_left as crate::machine::ActionFn,
         ),
         ("RIGHT", body_fold_right, body_pairwise_right),
     ] {

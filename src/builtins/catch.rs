@@ -6,10 +6,10 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
-use crate::machine::execute::StepCarried;
 use crate::machine::model::{KObject, KType};
 use crate::machine::Scope;
+use crate::machine::StepCarried;
+use crate::machine::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
 
 use super::{arg, kw, sig};
 
@@ -34,16 +34,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 /// Watches the captured `expr` and recovers into a `Result` carrier
 /// (`Ok(v)` / `Error(KError::to_tagged())`) via a `Catch` finish.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
-    };
-    use crate::machine::core::FoldingBrand;
-    use crate::machine::execute::build_type_operand;
-    use crate::machine::model::values::CarriedFamily;
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::build_type_operand;
     use crate::machine::model::Carried;
+    use crate::machine::model::CarriedFamily;
+    use crate::machine::FoldingBrand;
+    use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
     use crate::machine::{KoanRegion, RegionTypeFamily};
     use crate::witnessed::Residence;
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));

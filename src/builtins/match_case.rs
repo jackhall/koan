@@ -1,4 +1,4 @@
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 
 use crate::machine::model::KType;
 use crate::machine::{KError, KErrorKind, Scope};
@@ -15,16 +15,14 @@ use super::{arg, kw, sig};
 /// (ruling F3); a boolean head binds `Null`. `-> :T` is the mandatory declared return
 /// type every arm must agree on; the selected arm's result is checked against it (and
 /// re-tagged to it) when its value lifts, via the
-/// [`ReturnContract::Arm`](crate::machine::core::kfunction::body::ReturnContract) carried
+/// [`ReturnContract::Arm`](crate::machine::ReturnContract) carried
 /// on the tail. `branches` is the parens-wrapped body of repeated `<head> -> <body>`
 /// triples; the winning arm is dispatched as a tail expression with `it` bound in a
 /// per-MATCH child scope (so the binding can't leak). No admitting arm → `ShapeError`
 /// naming the scrutinee's runtime type; an F1 ambiguity or malformed shape → `ShapeError`.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
-    use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
+    use crate::machine::{arg_object, require_kexpression, Action};
 
     // Selection needs only a borrow of the scrutinee — it never stores the reference — so no
     // upfront copy is made.
@@ -97,7 +95,7 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
     };
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {

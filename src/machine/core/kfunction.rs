@@ -2,12 +2,12 @@
 //! a `Body` (an action `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
-use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
-use crate::machine::model::values::{Held, NamedPairs};
+use crate::machine::model::{ExpressionSignature, Parseable, Record, SignatureElement};
+use crate::machine::model::{Held, NamedPairs};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
 /// `machine::execute::runtime::run_action`.

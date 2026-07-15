@@ -4,12 +4,12 @@
 use crate::builtins::resolve_or_await::{
     classify_type_hit, expect_type_terminal, resolve_at_wake, unbound_error,
 };
-use crate::machine::core::kfunction::action::DepTerminal;
-use crate::machine::core::LexicalFrame;
-use crate::machine::model::ast::{KExpression, TypeIdentifier};
-use crate::machine::model::types::TypeResolution;
-use crate::machine::model::types::{DeferredReturn, ReturnType};
+use crate::machine::model::TypeResolution;
+use crate::machine::model::{DeferredReturn, ReturnType};
+use crate::machine::model::{KExpression, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
+use crate::machine::DepTerminal;
+use crate::machine::LexicalFrame;
 use crate::machine::{KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
 use std::rc::Rc;
@@ -67,7 +67,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
     slot: &str,
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type};
+    use crate::machine::{arg_object, arg_type};
     if let Some(kt) = arg_type(args, slot) {
         match kt {
             KType::Unresolved(te) => Ok(ReturnTypeRaw::TypeExprCarrier(te.clone())),

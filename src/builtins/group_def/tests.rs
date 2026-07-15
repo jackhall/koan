@@ -8,9 +8,9 @@ mod functor;
 use crate::builtins::test_support::{
     binds_module, parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
 };
-use crate::machine::core::run_root_storage;
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
 use crate::machine::model::{KObject, Parseable};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list

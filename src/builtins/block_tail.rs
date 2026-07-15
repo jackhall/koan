@@ -2,15 +2,15 @@
 //! the same thing — run a body and yield its last statement as this slot's own structural terminal —
 //! and each is a pure configuration of [`block_tail`]: a frame policy, a block scope, an optional
 //! seed, and how the body maps to the tail. It is the sole site that builds an
-//! [`Action::Tail`](crate::machine::core::kfunction::action::Action::Tail); no builtin constructs one
+//! [`Action::Tail`](crate::machine::Action::Tail); no builtin constructs one
 //! elsewhere, so every "block, return the tail" terminal is one structural shape.
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::core::kfunction::body::{split_body_statements, ReturnContract};
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::KExpression;
 use crate::machine::Scope;
+use crate::machine::{split_body_statements, ReturnContract};
+use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
 
 /// How the body maps onto the tail.
 pub(crate) enum BlockBody<'a> {

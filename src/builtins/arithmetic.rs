@@ -20,10 +20,10 @@
 
 use std::collections::HashSet;
 
-use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
-use crate::machine::core::BindingIndex;
-use crate::machine::model::operators::{FoldDirection, OperatorGroup, ReductionMode};
+use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
 use crate::machine::model::{KObject, KType};
+use crate::machine::BindingIndex;
+use crate::machine::{arg_object, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};

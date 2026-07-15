@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
+use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
@@ -262,8 +262,7 @@ impl<'step> KoanRuntime<'step> {
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
                 // `Carried::Type`, like the keyworded eager-subs path — it cannot `resolve()`.
-                let wrapped =
-                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
+                let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
             }
             ExpressionPart::QuotedExpression(_) => {
@@ -271,8 +270,7 @@ impl<'step> KoanRuntime<'step> {
                 // seals it through the checked door) rather than a static cell: a
                 // `KObject::KExpression` is invariant in its region lifetime with no `'static`
                 // rebuild, so `resolve_region_pure` cannot build it at the `yoke` brand below.
-                let wrapped =
-                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part)]);
+                let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
             }
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
@@ -364,7 +362,7 @@ impl<'step> KoanRuntime<'step> {
             Some(slot) => slot,
             None => {
                 let expr =
-                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
+                    crate::machine::model::KExpression::new(vec![Spanned::bare(part.clone())]);
                 Slot::owned(deps, self.dispatch_in_own_scope(expr))
             }
         }

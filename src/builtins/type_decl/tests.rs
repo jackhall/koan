@@ -1,11 +1,11 @@
 use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::types::{
+use crate::machine::model::ExpressionPart;
+use crate::machine::model::KObject;
+use crate::machine::model::{
     KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet, SigSource,
 };
-use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
+use crate::machine::KoanRuntime;
 use crate::machine::{BindingIndex, ScopeId};
 
 /// Resolve a SIG-declared member's stored `KType` out of the signature's decl-scope type table.

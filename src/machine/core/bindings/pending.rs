@@ -10,8 +10,8 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::KKind;
+use crate::machine::model::KExpression;
+use crate::machine::model::KKind;
 
 use super::super::scope_id::ScopeId;
 

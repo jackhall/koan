@@ -4,7 +4,7 @@
 use crate::builtins::test_support::{
     parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
 };
-use crate::machine::core::run_root_storage;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 fn run_program(source: &str) -> Vec<u8> {

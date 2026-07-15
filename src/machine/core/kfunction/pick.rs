@@ -4,9 +4,9 @@
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::{KType, SignatureElement};
+use crate::machine::model::KKind;
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, SignatureElement};
 
 use super::KFunction;
 

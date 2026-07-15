@@ -9,13 +9,13 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::KErrorKind;
 use crate::parse::parse;
 
-fn parse_one<'run>(src: &str) -> crate::machine::model::ast::KExpression<'run> {
+fn parse_one<'run>(src: &str) -> crate::machine::model::KExpression<'run> {
     let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
 
-fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::ast::KExpression<'run>> {
+fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::KExpression<'run>> {
     parse(src).expect("parse should succeed")
 }
 

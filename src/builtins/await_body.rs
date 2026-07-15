@@ -6,11 +6,9 @@
 //! states only its declaration-specific finish. Pattern precedent:
 //! [`resolve_or_await`](super::resolve_or_await).
 
-use crate::machine::core::kfunction::action::{
-    Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx,
-};
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::KExpression;
 use crate::machine::Scope;
+use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx};
 
 /// Whether the combinator seals the child scope's reach-set before running the finish.
 ///

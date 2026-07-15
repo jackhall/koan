@@ -10,18 +10,16 @@
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
-use crate::machine::core::kfunction::action::{arg_object, Action, BodyCtx};
 use crate::machine::core::run_root_storage;
 use crate::machine::core::StoredReach;
+use crate::machine::core::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
-};
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
+use crate::machine::model::KExpression;
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
@@ -73,7 +71,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     };
     let f = scope.brand().alloc_function(KFunction::new(
         sig,
-        crate::machine::core::kfunction::Body::Builtin(body_identity),
+        crate::machine::core::Body::Builtin(body_identity),
         scope,
         None,
         None,
@@ -372,7 +370,7 @@ fn fast_lane_on_tagged_union_constructs() {
         KObject::Wrapped { inner, type_id } => {
             assert!(matches!(inner.get(), KObject::Number(n) if *n == 42.0));
             match type_id {
-                crate::machine::model::types::KType::SetRef { set, index } => {
+                crate::machine::model::KType::SetRef { set, index } => {
                     assert_eq!(set.member(*index).name, "Some");
                 }
                 other => panic!("expected a member SetRef type_id, got {other:?}"),
@@ -839,7 +837,7 @@ fn operator_chain_undeclared_errors_cleanly() {
 /// reduction, not which body runs.
 #[test]
 fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
-    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
+    use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
 
     let region = run_root_storage();
@@ -891,7 +889,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 #[test]
 fn operator_chain_registered_unary_group_hands_body_the_list() {
     use crate::builtins::test_support::run;
-    use crate::machine::model::operators::{OperatorGroup, ReductionMode};
+    use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
 
     let region = run_root_storage();

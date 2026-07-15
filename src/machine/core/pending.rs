@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::StoredReach;
-use crate::machine::model::values::KObject;
+use crate::machine::model::KObject;
 
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 
@@ -32,7 +32,7 @@ enum PendingWrite<'a> {
     },
     Type {
         name: String,
-        kt: &'a crate::machine::model::types::KType<'a>,
+        kt: &'a crate::machine::model::KType<'a>,
         index: BindingIndex,
         /// The bound type's home-omitted foreign reach, carried through the deferred write so a
         /// drained type register stores the same reach a direct register would.
@@ -84,7 +84,7 @@ impl<'a> PendingQueue<'a> {
     pub fn defer_type(
         &self,
         name: String,
-        kt: &'a crate::machine::model::types::KType<'a>,
+        kt: &'a crate::machine::model::KType<'a>,
         index: BindingIndex,
         reach: StoredReach<'a>,
     ) {
@@ -196,7 +196,7 @@ impl<'a> Default for PendingQueue<'a> {
 mod tests {
     use super::*;
     use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::types::KType;
+    use crate::machine::model::KType;
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {

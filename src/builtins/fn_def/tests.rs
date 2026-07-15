@@ -24,7 +24,7 @@ mod return_type;
 mod tail_region_turnover;
 
 use crate::builtins::test_support::{run, run_root_with_buf};
-use crate::machine::core::run_root_storage;
+use crate::machine::run_root_storage;
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
     let region = run_root_storage();

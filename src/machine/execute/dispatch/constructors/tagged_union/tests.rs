@@ -5,8 +5,8 @@ use std::rc::Rc;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorage, KErrorKind, Scope};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::values::KObject;
+use crate::machine::model::KExpression;
+use crate::machine::model::KObject;
 use crate::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -104,7 +104,7 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 /// ordinary `KObject::Wrapped` over the member `SetRef`, not a `KObject::Tagged`.
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
-    use crate::machine::model::types::KType;
+    use crate::machine::model::KType;
     let region = run_root_storage();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&region, captured);

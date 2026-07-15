@@ -24,9 +24,9 @@
 //! once.
 
 use crate::machine::core::Scope;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::operators::{binary_key, unary_key, FoldDirection, ReductionMode};
 use crate::machine::model::Parseable;
+use crate::machine::model::{binary_key, unary_key, FoldDirection, ReductionMode};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::scheduler::{ProducerDisposition, ResolvedDeps};
 use crate::source::{Span, Spanned};

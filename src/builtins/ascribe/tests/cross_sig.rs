@@ -3,11 +3,11 @@
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
 use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::memo_reset;
+use crate::machine::model::memo_reset;
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::KoanRuntime;
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s
 /// `Base`), so `Wide` is strictly more specific: a module satisfying both dispatches to the

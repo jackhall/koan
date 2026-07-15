@@ -13,9 +13,9 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::types::Record;
-use crate::machine::model::values::Carried;
+use crate::machine::model::Carried;
+use crate::machine::model::ExpressionPart;
+use crate::machine::model::Record;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -27,10 +27,8 @@ use super::{arg, kw, sig};
 /// must be a bare `Identifier` naming a field (never name-resolved). The `record`
 /// operand is typed `:{}`, so dispatch shape-gates the slot to records and the body
 /// reads a guaranteed `KObject::Record` carrier.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, require_kexpression, Action};
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_object, require_kexpression, Action};
 
     let fields_expr = crate::try_action!(require_kexpression(ctx.args, "FROM", "fields"));
 
@@ -149,8 +147,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::{KObject, KType};
+    use crate::machine::run_root_storage;
 
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
@@ -234,8 +232,8 @@ mod tests {
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
-        use crate::machine::core::KErrorKind;
-        use crate::machine::execute::KoanRuntime;
+        use crate::machine::KErrorKind;
+        use crate::machine::KoanRuntime;
 
         let region = run_root_storage();
         let scope = run_root_silent(&region);
@@ -258,8 +256,8 @@ mod tests {
     /// only the `:{x,y}` arm admits.
     #[test]
     fn from_breaks_ambiguous_record_dispatch_tie() {
-        use crate::machine::core::KErrorKind;
-        use crate::machine::execute::KoanRuntime;
+        use crate::machine::KErrorKind;
+        use crate::machine::KoanRuntime;
 
         let region = run_root_storage();
         let scope = run_root_silent(&region);

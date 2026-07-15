@@ -6,7 +6,7 @@
 //! state at the top of every step and is visible to the readers, the Done-boundary check, and the
 //! error-label path within the step's dynamic extent.
 
-use crate::machine::core::kfunction::body::{ReturnContract, SealedContract};
+use crate::machine::core::{ReturnContract, SealedContract};
 use crate::machine::FrameSet;
 use crate::witnessed::{Erased, Sealed, Witnessed};
 

@@ -13,10 +13,10 @@ use crate::machine::core::{
     CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator, TypeOperand,
 };
 use crate::machine::execute::StepCarried;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{KType, Record};
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
 use crate::machine::model::{Carried, KObject};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, Record};
 use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
 #[cfg(test)]
@@ -295,7 +295,7 @@ impl<'a> FinishCtx<'a> {
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered::transfer_into)), its reach named on the
 /// result by construction; a finish that parks the carrier on the working expression across steps
 /// (the working-copy splice) duplicates the whole envelope into the
-/// [`Spliced`](crate::machine::model::ast::ExpressionPart::Spliced) cell, keeping the value's backing
+/// [`Spliced`](crate::machine::model::ExpressionPart::Spliced) cell, keeping the value's backing
 /// retained (its host = the scheduler's retention hold, `None` for a frameless / run-region producer
 /// whose backing already outlives the terminal) through the `Replace` to the step that adopts it.
 /// Defined here in core (not the execute layer that resolves it) so the builtin-`Action` currency —

@@ -26,9 +26,9 @@ use super::scope::Scope;
 use super::scope_id::ScopeId;
 use super::scope_ptr::ScopeRefFamily;
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::operators::OperatorGroup;
-use crate::machine::model::types::KType;
-use crate::machine::model::values::{Carried, CarriedFamily, KObject, Module, ModuleSignature};
+use crate::machine::model::KType;
+use crate::machine::model::OperatorGroup;
+use crate::machine::model::{Carried, CarriedFamily, KObject, Module, ModuleSignature};
 use crate::witnessed::reattachable;
 use crate::witnessed::SealedExtern;
 use crate::witnessed::{
@@ -255,7 +255,7 @@ impl<'a> RegionBrand<'a> {
     /// before anything is stored, and the value is stored — sealed under the same empty
     /// (own-region-only) witness [`Self::alloc_object_witnessed`] uses — only if it passes. The
     /// standard `KObject` residence walk gates a `KObject::KExpression` by its
-    /// [`is_splice_free`](crate::machine::model::ast::KExpression::is_splice_free) flag, so a spliced
+    /// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free) flag, so a spliced
     /// expression (a resolved value carrying a producer reach the empty seal cannot name) is
     /// rejected. Storing nothing on a failed audit; a foreign-region dangle errors loudly instead of
     /// landing unvetted.
@@ -831,9 +831,9 @@ impl KoanRegionExt for KoanRegion {
 
 /// Ownership predicate for the checked/reaching-tier residence audits: "`dest`, or the hosting
 /// arena of some member of `reach`, or a region `ambient` reports as already covered" —
-/// [`KType::resident_in`](crate::machine::model::types::KType::resident_in) /
+/// [`KType::resident_in`](crate::machine::model::KType::resident_in) /
 /// [`KObject::resident_in`](KObject::resident_in)'s dest-only check is the `reach: &[]`,
-/// `ambient: None` case; [`KType::resident_in_reach`](crate::machine::model::types::KType::resident_in_reach)
+/// `ambient: None` case; [`KType::resident_in_reach`](crate::machine::model::KType::resident_in_reach)
 /// and the object delivered tier widen it. Each `reach` set was minted into `dest`'s own arena by
 /// the same scope the audit runs against (`Scope::host_reach_of` / `adopted_reach_of`), so
 /// membership here is dest-relative by construction — no separate "is this evidence dest-relative"

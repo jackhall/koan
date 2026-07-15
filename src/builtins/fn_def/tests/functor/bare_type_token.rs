@@ -5,10 +5,10 @@
 //! carriers.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::KExpression;
 use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::run_root_storage;
+use crate::machine::KoanRuntime;
 use crate::machine::{KError, KErrorKind, Scope};
 
 /// Tolerates the error surfacing either from `KoanRuntime::execute()` (resolve
@@ -161,7 +161,7 @@ fn deferred_return_resolves_against_builtin_keyed_bind() {
 /// route through the same dep-finish slot check.
 #[test]
 fn deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic() {
-    use crate::machine::execute::KoanRuntime;
+    use crate::machine::KoanRuntime;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "FN (BUILD Elt :Type) -> :Elt = (42)");

@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::body::ReturnContract;
+use crate::machine::core::ReturnContract;
 use crate::machine::core::{FoldingBrand, KoanStorageProfile};
-use crate::machine::model::values::CarriedFamily;
+use crate::machine::model::CarriedFamily;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, RegionHandle, Residence, Sealed, SealedExtern, Witnessed};
@@ -185,7 +185,7 @@ pub(in crate::machine::execute) fn finalize_error(
 fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType<'o>, bool)> {
     match contract {
         ReturnContract::Function(f) => match &f.signature.return_type {
-            crate::machine::model::types::ReturnType::Resolved(d) => Some((d, false)),
+            crate::machine::model::ReturnType::Resolved(d) => Some((d, false)),
             _ => None,
         },
         ReturnContract::Arm { ret, .. } => Some((ret, false)),

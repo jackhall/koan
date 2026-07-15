@@ -2,8 +2,8 @@
 //! § Multi-statement FN body split](../../../../design/execution/calls-and-values.md#multi-statement-fn-body-split).
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::core::run_root_storage;
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 
 use super::capture_program_output;
 

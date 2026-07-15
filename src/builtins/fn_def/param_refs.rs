@@ -6,7 +6,7 @@
 //! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
 //! scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 
 pub(super) fn type_expr_references_any(te: &TypeIdentifier, param_names: &[String]) -> bool {
     param_names.iter().any(|n| n.as_str() == te.as_str())

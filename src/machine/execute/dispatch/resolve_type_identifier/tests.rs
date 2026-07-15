@@ -59,8 +59,8 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
 
 /// A singleton record-repr newtype `SetRef` named `name` at `scope_id`.
 fn struct_setref<'step>(name: &str, scope_id: ScopeId) -> KType<'step> {
-    use crate::machine::model::types::{NominalSchema, RecursiveSet};
     use crate::machine::model::Record;
+    use crate::machine::model::{NominalSchema, RecursiveSet};
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -88,7 +88,7 @@ fn ktype_user_refs_yields_nested_structural_refs_in_order() {
 /// the outer `SetRef` is yielded, the inner stays invisible.
 #[test]
 fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
-    use crate::machine::model::types::{NominalSchema, RecursiveSet};
+    use crate::machine::model::{NominalSchema, RecursiveSet};
     let outer_id = ScopeId::next();
     let inner_id = ScopeId::next();
     let inner = struct_setref("Inner", inner_id);
@@ -118,10 +118,10 @@ mod bare_leaf_resolution {
     use crate::machine::core::run_root_storage;
     use crate::machine::core::BindingIndex;
     use crate::machine::core::StoredReach;
-    use crate::machine::model::ast::TypeIdentifier;
-    use crate::machine::model::types::TypeResolution;
-    use crate::machine::model::KType;
     use crate::machine::core::TypeHit;
+    use crate::machine::model::KType;
+    use crate::machine::model::TypeIdentifier;
+    use crate::machine::model::TypeResolution;
 
     #[test]
     fn builtin_synthesizes_type_carrier() {
@@ -164,12 +164,12 @@ mod bare_leaf_resolution {
     /// returned the pre-installed `SetRef` while the schema was still empty.
     #[test]
     fn mid_seal_member_parks_then_resolves() {
-        use crate::machine::core::kfunction::NodeId;
         use crate::machine::core::BindingIndex;
+        use crate::machine::core::NodeId;
         use crate::machine::core::{Bindings, PendingTypeEntry};
-        use crate::machine::model::ast::KExpression;
-        use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
+        use crate::machine::model::KExpression;
         use crate::machine::model::Record;
+        use crate::machine::model::{KKind, NominalMember, NominalSchema, RecursiveSet};
 
         let region = run_root_storage();
         let scope = run_root_bare(&region);

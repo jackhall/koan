@@ -15,18 +15,18 @@
 //! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 use std::cell::RefCell;
 
-use crate::machine::core::kfunction::action::FinishCtx;
-use crate::machine::execute::{seal_type_operand, StepCarried};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{
+use crate::machine::model::KObject;
+use crate::machine::model::KType;
+use crate::machine::model::{
     finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, Record,
     RecursiveSet, SchemaSealResult, SealOutcome,
 };
-use crate::machine::model::values::KObject;
-use crate::machine::model::KType;
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::FinishCtx;
+use crate::machine::{seal_type_operand, StepCarried};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 
@@ -140,13 +140,9 @@ fn finalize_record_newtype<'a>(
 /// A resolved repr finalizes synchronously; a bare-leaf name resolves against the scope chain,
 /// parks on an in-flight producer (a `DepRequest::Existing` dep-finish), or errors; a raw sigil repr
 /// sub-dispatches via [`defer_resolved_sigil`].
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
-    use crate::machine::core::kfunction::action::{
-        arg_object, arg_type, require_bare_type_name, Action,
-    };
+    use crate::machine::{arg_object, arg_type, require_bare_type_name, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let chain = ctx.chain.clone();
@@ -195,9 +191,9 @@ fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
     bind_index: BindingIndex,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
-    use crate::machine::core::kfunction::action::Action;
+    use crate::machine::Action;
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
@@ -209,11 +205,9 @@ fn defer_resolved_sigil<'a>(
 /// Body of the record-repr overload `NEWTYPE <name> = :{…}`: elaborate the `:{…}` field list
 /// (threading the binder name + pending guard), folding via [`finalize_record_newtype`] or deferring
 /// through the shared `nominal_schema_action` field-list path.
-pub fn body_record_repr<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::nominal_schema::nominal_schema_action;
-    use crate::machine::core::kfunction::action::{arg_object, require_bare_type_name, Action};
+    use crate::machine::{arg_object, require_bare_type_name, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let fields = match arg_object(ctx.args, "repr") {
@@ -274,7 +268,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     use crate::builtins::register_builtin_full;
-    let binder: crate::machine::core::kfunction::BinderNameFn = super::type_part_binder_name;
+    let binder: crate::machine::BinderNameFn = super::type_part_binder_name;
     let binder_kind = crate::machine::BindKind::Type;
     // Scalar / bare-leaf repr (`= Number`, `= Foo`) and non-record sigil repr (`= :(LIST OF T)`)
     // share `body`; the record repr (`= :{…}`) routes to `body_record_repr`.
@@ -308,10 +302,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
 
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
-    use crate::machine::execute::KoanRuntime;
-    use crate::machine::model::types::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
+    use crate::machine::run_root_storage;
+    use crate::machine::KoanRuntime;
     use crate::machine::{KErrorKind, Scope};
     use std::rc::Rc;
 

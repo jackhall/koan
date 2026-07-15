@@ -14,15 +14,13 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::machine::model::types::{abstract_members_of, manifest_type_members_of, SigSource};
+use crate::machine::model::{abstract_members_of, manifest_type_members_of, SigSource};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
 /// returns the specialized `KType::Signature` as a `Carried::Type`.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_held, arg_object, arg_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
     let s = match arg_type(ctx.args, "sig") {
@@ -180,9 +178,9 @@ pub fn body<'a>(
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
-    use crate::machine::core::run_root_storage;
-    use crate::machine::execute::KoanRuntime;
     use crate::machine::model::KType;
+    use crate::machine::run_root_storage;
+    use crate::machine::KoanRuntime;
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {

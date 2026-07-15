@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{lookup_module, parse_one};
 use crate::machine::core::run_root_storage;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::source::Spanned;
 
 use super::let_expr;
@@ -67,7 +67,7 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 
 #[test]
 fn module_body_chain_parent_points_at_module_statement_frame() {
-    use crate::machine::model::values::Module;
+    use crate::machine::model::Module;
     let region = run_root_storage();
     let root = default_scope(&region, Box::new(std::io::sink()));
     let mut runtime = KoanRuntime::new();

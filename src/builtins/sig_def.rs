@@ -10,9 +10,9 @@
 //! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
-use crate::machine::model::types::{KKind, SigSource};
-use crate::machine::model::values::ModuleSignature;
 use crate::machine::model::KType;
+use crate::machine::model::ModuleSignature;
+use crate::machine::model::{KKind, SigSource};
 use crate::machine::{Scope, TraceFrame};
 
 use super::{arg, kw, sig};
@@ -21,13 +21,9 @@ use super::{arg, kw, sig};
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish captures
 /// that scope into a [`ModuleSignature`] and installs the `KType::Signature` identity into
 /// the parent scope.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
-    use crate::machine::core::kfunction::action::{
-        require_bare_type_name, require_kexpression, Action,
-    };
+    use crate::machine::{require_bare_type_name, require_kexpression, Action};
 
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG"));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
@@ -87,7 +83,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use super::SigSource;
     use crate::builtins::test_support::{run, run_root_silent};
-    use crate::machine::core::run_root_storage;
+    use crate::machine::run_root_storage;
     use crate::parse::parse;
 
     #[test]
@@ -100,7 +96,7 @@ mod tests {
 
     #[test]
     fn sig_binds_under_name_in_scope() {
-        use crate::machine::model::types::KType;
+        use crate::machine::model::KType;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG Ordered = (VAL x :Number)");
@@ -114,7 +110,7 @@ mod tests {
 
     #[test]
     fn sig_path_records_name() {
-        use crate::machine::model::types::KType;
+        use crate::machine::model::KType;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG Ordered = (VAL x :Number)");
@@ -135,7 +131,7 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
-        use crate::machine::model::types::KType;
+        use crate::machine::model::KType;
         let sig = match scope.resolve_type("Foo") {
             Some(KType::Signature {
                 sig: SigSource::Declared(sig),

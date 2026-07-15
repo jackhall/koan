@@ -10,7 +10,7 @@
 //! `expr` is `KExpression` so the catch path can intercept evaluation — an eager slot
 //! would short-circuit through eager-subs dep-error propagation before `TRY`'s body ran.
 
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -20,13 +20,9 @@ use super::{arg, kw, sig};
 
 /// Watches `expr`, then a `Catch` finish walks the arms against the `Result`, tail-replacing
 /// into the matched arm under the `-> :T` contract and re-raising on no match.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::branch_walk::{arm_tail, resolve_arm_contract, ItProjection, ItSource};
-    use crate::machine::core::kfunction::action::{
-        require_kexpression, Action, CatchContinue, DepPlacement, DepRequest,
-    };
+    use crate::machine::{require_kexpression, Action, CatchContinue, DepPlacement, DepRequest};
 
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "TRY", "expr"));
     let contract = crate::try_action!(resolve_arm_contract(ctx, "TRY"));

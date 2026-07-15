@@ -5,8 +5,8 @@
 use crate::builtins::test_support::{
     lookup_module, parse_one, run, run_one, run_one_type, run_root_silent,
 };
-use crate::machine::core::run_root_storage;
 use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::run_root_storage;
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
 /// subsequent run-root churn. End-to-end mirror of

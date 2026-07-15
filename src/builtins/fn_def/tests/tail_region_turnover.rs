@@ -9,10 +9,10 @@
 //!   outlives the adoption that reads it).
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
+use crate::machine::KoanRuntime;
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
 /// A depth-1000 tail-recursive countdown runs on one scheduler slot and in `O(1)` live regions.

@@ -10,19 +10,17 @@ use std::rc::{Rc, Weak};
 use super::NodeFinalize;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_root_silent};
-use crate::machine::core::kfunction::action::{Action, BodyCtx};
-use crate::machine::core::kfunction::body::{Body, ReturnContract};
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::KFunction;
 use crate::machine::core::{
     run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope,
 };
+use crate::machine::core::{Action, BodyCtx};
+use crate::machine::core::{Body, ReturnContract};
 use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::types::{
-    ExpressionSignature, KType, ReturnType, SigSource, SignatureElement,
-};
-use crate::machine::model::values::Module;
+use crate::machine::model::Module;
 use crate::machine::model::{Carried, KObject};
+use crate::machine::model::{ExpressionSignature, KType, ReturnType, SigSource, SignatureElement};
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
@@ -34,7 +32,7 @@ fn resident_scalar(
     producer: &Rc<CallFrame>,
     borrows_into_home: bool,
 ) -> (
-    crate::witnessed::Witnessed<crate::machine::model::values::CarriedFamily, CarrierWitness>,
+    crate::witnessed::Witnessed<crate::machine::model::CarriedFamily, CarrierWitness>,
     Weak<FrameStorage>,
 ) {
     let carrier = producer.with_scope(|child| {

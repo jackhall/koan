@@ -10,14 +10,12 @@
 //! value with no wrapper. This builtin only constructs the union *type* as a first-class type
 //! value.
 
-use crate::machine::core::kfunction::action::{
-    arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest,
-};
-use crate::machine::core::TypeOperand;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::KKind;
-use crate::machine::model::values::KObject;
+use crate::machine::model::KExpression;
+use crate::machine::model::KKind;
+use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use crate::machine::TypeOperand;
+use crate::machine::{arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
 use super::op_def::OperatorForm;
@@ -29,10 +27,10 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// The two-member keyworded form `A | B`: both operands ride resolved-type slots (the shared
 /// parameterized-type slot shape), so the body builds its composite `KType` at the fold brand
 /// from a total, embedding-ordered operand list — mirroring `parameterized_types::body_map`. Each
-/// member crosses via [`crate::machine::core::kfunction::action::BodyCtx::type_operand`]: a
+/// member crosses via [`crate::machine::BodyCtx::type_operand`]: a
 /// carrier-bearing member folds its reach into the result's witness, a region-free member
 /// rebuilds at the brand with no reach contribution.
-fn body_binary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>) -> Action<'a> {
+fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, "left"));
     let right = crate::try_action!(require_ktype(ctx.args, "right"));
     let operands = vec![
@@ -53,7 +51,7 @@ fn body_binary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_
 /// rides the ordinary type-resolution machinery. `expect_type_terminal` yields a carrier for every
 /// member, so each crosses the fold as a [`TypeOperand::Reaching`] operand and the composite union
 /// builds at the brand through [`KType::union_of`].
-fn body_nary<'a>(ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>) -> Action<'a> {
+fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let members = match arg_object(ctx.args, "members") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {

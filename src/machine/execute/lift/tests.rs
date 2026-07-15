@@ -7,8 +7,8 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
-use crate::machine::model::types::KType;
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
+use crate::machine::model::KType;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
 use crate::witnessed::FoldedPlacement;
@@ -30,7 +30,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
                 elements: vec![SignatureElement::Keyword("__INNER__".into())],
             },
             Body::Builtin(|ctx| {
-                crate::machine::core::kfunction::action::Action::done_resident(Carried::Object(
+                crate::machine::core::Action::done_resident(Carried::Object(
                     ctx.scope.brand().alloc_object(KObject::Null),
                 ))
             }),
@@ -119,8 +119,8 @@ fn list_relocation_shares_inner_rc() {
 /// A `Dict`'s inner `Rc<HashMap<_>>` is likewise shared through relocation.
 #[test]
 fn dict_relocation_shares_inner_rc() {
-    use crate::machine::model::types::Serializable;
-    use crate::machine::model::values::KKey;
+    use crate::machine::model::KKey;
+    use crate::machine::model::Serializable;
     use std::collections::HashMap;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
@@ -166,7 +166,7 @@ fn dict_relocation_shares_inner_rc() {
 /// rides along unchanged.
 #[test]
 fn tagged_relocation_shares_value_and_set_rc() {
-    use crate::machine::model::types::{NominalSchema, RecursiveSet};
+    use crate::machine::model::{NominalSchema, RecursiveSet};
     use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
@@ -261,7 +261,7 @@ fn kfunction_borrow_preserved_verbatim() {
 /// escaping the region that built it with a dangling self-reference (cf. `recursive_tagged_match`).
 #[test]
 fn type_recursive_setref_relocates_and_navigates() {
-    use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
+    use crate::machine::model::{NominalSchema, Record, RecursiveSet};
     use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));

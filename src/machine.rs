@@ -10,8 +10,18 @@ pub(crate) mod core;
 pub(crate) mod execute;
 pub mod model;
 
-pub use core::kfunction::{KFunction, NodeId};
 pub(crate) use core::kfunction::Body;
+pub use core::kfunction::{KFunction, NodeId};
+#[cfg(test)]
+pub(crate) use core::KoanRegionTestExt;
+pub(crate) use core::{
+    arg_held, arg_object, arg_type, body_statement_refs, kerror_ktype, require_bare_type_name,
+    require_identifier_name, require_kexpression, require_ktype, split_body_statements, Action,
+    ActionFn, AwaitContinue, BinderBucketFn, BinderNameFn, BlockEntry, BodyCtx, CatchContinue,
+    DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
+    FrameStorageExt, KoanRegionExt, KoanStorageProfile, PendingTypeEntry, ReturnContract,
+    StepAllocator, StoredReach, TailContract, TypeHit, TypeOperand,
+};
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
 };
@@ -19,5 +29,9 @@ pub(crate) use core::{
     BindKind, BindingIndex, CallFrame, CarrierWitness, FrameSet, FunctionLookup, KoanRegion,
     LexicalFrame, MemberResolution, NameLookup, RegionBrand, RegionTypeFamily, TraceFrame,
 };
+pub(crate) use execute::{
+    build_type_operand, defer_field_list_action, defer_field_list_action_composed,
+    fold_field_list_sync, seal_type_operand, BrandCompose, DispatchOutcome, NameOutcome,
+    StepCarried,
+};
 pub use execute::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
-pub(crate) use execute::{DispatchOutcome, NameOutcome};

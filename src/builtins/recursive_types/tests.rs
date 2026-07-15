@@ -3,9 +3,9 @@
 //! name binds the set handle. Exiting the block guarantees every forward reference resolved.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::KType;
+use crate::machine::model::{NominalSchema, RecursiveSet};
+use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
 /// `(set, field-types)` of a sealed record-repr newtype member, read off its `SetRef` identity. Field

@@ -7,8 +7,8 @@
 //! per-argument type-check — that is the picker's job, and the carried type is trusted here.
 
 use super::KFunction;
-use crate::machine::model::types::{Argument, ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::Carried;
+use crate::machine::model::{Argument, ExpressionSignature, Record, SignatureElement};
 use crate::machine::{KError, KErrorKind};
 
 impl<'a> KFunction<'a> {
@@ -53,9 +53,9 @@ fn arguments<'sig, 'a>(
 mod tests {
     use super::*;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::types::ReturnType;
-    use crate::machine::model::values::KObject;
+    use crate::machine::model::KObject;
     use crate::machine::model::KType;
+    use crate::machine::model::ReturnType;
 
     /// `(DOUBLE x: Number)` — one keyword, one parameter.
     fn double_signature<'a>() -> ExpressionSignature<'a> {

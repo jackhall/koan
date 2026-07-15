@@ -3,9 +3,9 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{KKind, KType, NominalSchema, Parseable, Record, RecursiveSet};
-use crate::machine::model::values::{KObject, WrappedPayload};
+use crate::machine::model::KExpression;
+use crate::machine::model::{KKind, KType, NominalSchema, Parseable, Record, RecursiveSet};
+use crate::machine::model::{KObject, WrappedPayload};
 use crate::machine::RegionBrand;
 use crate::source::{self, FileId, SourceLoc, Span};
 

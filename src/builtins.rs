@@ -1,10 +1,8 @@
-use crate::machine::core::kfunction::{BinderNameFn, Body, KFunction};
-use crate::machine::core::{BindingIndex, FrameStorageExt, Scope};
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
-};
-use crate::machine::model::values::KObject;
+use crate::machine::model::KKind;
+use crate::machine::model::KObject;
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::{BinderNameFn, Body, KFunction};
+use crate::machine::{BindingIndex, FrameStorageExt, Scope};
 
 pub(crate) mod arithmetic;
 mod ascribe;
@@ -70,7 +68,7 @@ pub(crate) fn sig<'a>(
 /// `KExpression::binder_name_from_type_part` method reference) so the signature is higher-ranked
 /// over the expression lifetime, as `BinderNameFn` requires.
 pub(crate) fn type_part_binder_name(
-    expr: &crate::machine::model::ast::KExpression<'_>,
+    expr: &crate::machine::model::KExpression<'_>,
 ) -> Option<String> {
     expr.binder_name_from_type_part()
 }
@@ -80,25 +78,25 @@ pub(crate) fn type_part_binder_name(
 /// [`type_part_binder_name`], so each overload's extractor matches exactly its own name-part kind
 /// and the submit-time placeholder is tagged `Value` xor `Type` to match where the bind lands.
 pub(crate) fn identifier_part_binder_name(
-    expr: &crate::machine::model::ast::KExpression<'_>,
+    expr: &crate::machine::model::KExpression<'_>,
 ) -> Option<String> {
     match &expr.parts.get(1)?.value {
-        crate::machine::model::ast::ExpressionPart::Identifier(s) => Some(s.clone()),
+        crate::machine::model::ExpressionPart::Identifier(s) => Some(s.clone()),
         _ => None,
     }
 }
 
 /// Full-form builtin registration with both binder hooks. The `body` is
-/// an [`ActionFn`](crate::machine::core::kfunction::ActionFn) (`fn(&BodyCtx) -> Action`) installed
+/// an [`ActionFn`](crate::machine::ActionFn) (`fn(&BodyCtx) -> Action`) installed
 /// as [`Body::Builtin`] — the builtin runs through `machine::execute::runtime::run_action`.
 /// `binder_bucket` lets FN key pending-overload entries by inner-call bucket.
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: crate::machine::core::kfunction::ActionFn,
-    binder_name: Option<(BinderNameFn, crate::machine::core::BindKind)>,
-    binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
+    body: crate::machine::ActionFn,
+    binder_name: Option<(BinderNameFn, crate::machine::BindKind)>,
+    binder_bucket: Option<crate::machine::BinderBucketFn>,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -119,7 +117,7 @@ pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: crate::machine::core::kfunction::ActionFn,
+    body: crate::machine::ActionFn,
 ) {
     register_builtin_full(scope, name, signature, body, None, None);
 }
@@ -133,7 +131,7 @@ pub(crate) fn register_overload_at<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
-    body: crate::machine::core::kfunction::ActionFn,
+    body: crate::machine::ActionFn,
     index: BindingIndex,
 ) {
     let region = scope.brand();
@@ -161,7 +159,7 @@ pub(crate) fn register_overload_at<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn default_scope<'a>(
-    run_storage: &'a std::rc::Rc<crate::machine::core::FrameStorage>,
+    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = run_storage

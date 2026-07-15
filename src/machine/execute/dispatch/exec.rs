@@ -13,13 +13,13 @@ use super::super::obligation::{with_obligation, ReturnObligation};
 use super::super::outcome::Outcome;
 use super::super::runtime::KoanWorkload;
 use super::SchedulerView;
-use crate::machine::core::kfunction::action::{Action, BlockEntry, FramePlacement, TailContract};
-use crate::machine::core::kfunction::body::ReturnContract;
-use crate::machine::core::kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
-use crate::machine::core::kfunction::{Body, KFunction};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{Record, SignatureElement};
+use crate::machine::core::ReturnContract;
+use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
+use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
+use crate::machine::core::{Body, KFunction};
 use crate::machine::model::{Carried, Parseable};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
 use crate::scheduler::ResolvedDeps;
 
@@ -230,11 +230,11 @@ fn map_arg_carriers<'e, 'step>(
 /// one it embeds; an absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
-    f: crate::machine::core::kfunction::ActionFn,
-    args: Record<crate::machine::model::values::Held<'step>>,
+    f: crate::machine::core::ActionFn,
+    args: Record<crate::machine::model::Held<'step>>,
     arg_carriers: Record<&DeliveredCarried>,
 ) -> Outcome<'step> {
-    use crate::machine::core::kfunction::action::BodyCtx;
+    use crate::machine::core::BodyCtx;
     use crate::machine::model::KObject;
 
     let scope = view.current_scope();
@@ -249,8 +249,8 @@ fn run_action_builtin<'step>(
         .filter_map(|(name, cell)| {
             let carrier = arg_carriers.get(name)?;
             Some(match cell {
-                crate::machine::model::values::Held::Object(_) => scope.adopted_reach_of(carrier),
-                crate::machine::model::values::Held::Type(_) => scope.host_reach_of(carrier),
+                crate::machine::model::Held::Object(_) => scope.adopted_reach_of(carrier),
+                crate::machine::model::Held::Type(_) => scope.host_reach_of(carrier),
             })
         })
         .collect();

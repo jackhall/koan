@@ -10,14 +10,14 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::DepPlacement;
+use crate::machine::core::DepPlacement;
 use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope, StoredReach,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::model::values::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{Carried, KObject, Record};
+use crate::machine::model::{CarriedFamily, WrappedPayload};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily,
 };

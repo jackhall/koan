@@ -5,8 +5,8 @@
 //! names no type on its own (see
 //! [design/typing/modules.md](../../../design/typing/modules.md)).
 
-use crate::machine::core::kfunction::action::{arg_held, Action, BodyCtx};
-use crate::machine::model::values::{Carried, Held};
+use crate::machine::model::{Carried, Held};
+use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 
 pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {

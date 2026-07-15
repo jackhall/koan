@@ -13,8 +13,8 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::{BindingIndex, Scope};
-use crate::machine::model::types::{KType, NominalSchema, RecursiveSet};
+use crate::machine::model::{KType, NominalSchema, RecursiveSet};
+use crate::machine::{BindingIndex, Scope};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let scope_id = scope.id;

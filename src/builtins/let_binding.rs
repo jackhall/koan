@@ -1,6 +1,6 @@
-use crate::machine::execute::StepCarried;
-use crate::machine::model::types::KKind;
+use crate::machine::model::KKind;
 use crate::machine::model::{KObject, KType};
+use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -10,11 +10,9 @@ use super::{arg, kw, sig};
 /// `Identifier` and `ProperType`. Same partition logic across both: reads its args from the
 /// `BodyCtx::args` record, writes the binding directly on `ctx.scope` (interior-mutable), and
 /// returns the bound carrier as `Action::Done`.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_held, arg_object, arg_type, Action};
-    use crate::machine::model::values::Held;
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::model::Held;
+    use crate::machine::{arg_held, arg_object, arg_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
     let bind_index = ctx.bind_index();

@@ -16,13 +16,13 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::action::{DepPlacement, FinishCtx};
+use crate::machine::core::{DepPlacement, FinishCtx};
 use crate::machine::core::{FoldingBrand, LexicalFrame, PendingBinderGuard, StepAllocator};
-use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{
+use crate::machine::model::Carried;
+use crate::machine::model::KExpression;
+use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };
-use crate::machine::model::values::Carried;
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
@@ -51,7 +51,7 @@ pub(crate) type BrandCompose<'step> = Box<
 
 /// `Action`-path finalize, returning a witnessed carrier — used by
 /// [`defer_field_list_action`], whose finish lifts the result straight into
-/// [`Action::Done(Ok)`](crate::machine::core::kfunction::action::Action::Done). Takes the
+/// [`Action::Done(Ok)`](crate::machine::core::Action::Done). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
 pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn FnOnce(
@@ -278,7 +278,7 @@ pub(crate) fn defer_field_list<'step>(
 }
 
 /// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] vector
-/// but wraps the dep-finish as an [`Action`](crate::machine::core::kfunction::action::Action) — its
+/// but wraps the dep-finish as an [`Action`](crate::machine::core::Action) — its
 /// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_action<'a>(
@@ -292,8 +292,8 @@ pub(crate) fn defer_field_list_action<'a>(
     pending_guard: Option<PendingBinderGuard<'a>>,
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalizeAction<'a>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue};
+) -> crate::machine::core::Action<'a> {
+    use crate::machine::core::{Action, AwaitContinue};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
     // park_producers; the scheduler feeds results as [park.. , owned..] — so the re-walk consumes
     // the owned suffix, exactly as the scheduler-side twin does.
@@ -343,8 +343,8 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     error_frame: Option<TraceFrame>,
     extras: Vec<DeliveredCarried>,
     compose: BrandCompose<'a>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{Action, AwaitContinue};
+) -> crate::machine::core::Action<'a> {
+    use crate::machine::core::{Action, AwaitContinue};
     // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
     // park_producers; the scheduler feeds results as [park.. , owned..].
     let deps = field_list_deps(park_producers, sub_dispatches);

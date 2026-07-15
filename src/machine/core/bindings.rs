@@ -34,10 +34,10 @@ use std::collections::HashMap;
 
 use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::operators::OperatorGroup;
-use crate::machine::model::types::{KType, UntypedKey};
-use crate::machine::model::values::KObject;
+use crate::machine::model::KObject;
+use crate::machine::model::OperatorGroup;
+use crate::machine::model::TypeIdentifier;
+use crate::machine::model::{KType, UntypedKey};
 
 use super::kerror::{KError, KErrorKind};
 
@@ -59,7 +59,7 @@ pub enum BindKind {
 /// producer `NodeId` of an earlier still-finalizing binder the consumer waits on. A miss is the
 /// enclosing `Option`'s `None` — the caller keeps walking ancestors — so "unbound" is not a
 /// variant here; the terminal unbound disposition (with its diagnostic) is materialized one level
-/// up on the resolution path ([`crate::machine::model::types::TypeResolution`] /
+/// up on the resolution path ([`crate::machine::model::TypeResolution`] /
 /// [`crate::machine::NameOutcome`]).
 ///
 /// Invariant: within one scope, `data` and a `BindKind::Value` `placeholders` entry never both
@@ -246,7 +246,7 @@ pub struct Bindings<'a> {
     /// Whether this scope's `types` map is a **signature slot table** rather than a type-binding
     /// universe. A SIG body records each `VAL <name> :Type` slot's declared type into `types` keyed
     /// by the slot's *value* name, alongside its `TYPE <Name>` abstract members — one table that
-    /// [`SigSchema`](crate::machine::model::types::SigSchema) splits back apart by token class. That
+    /// [`SigSchema`](crate::machine::model::SigSchema) splits back apart by token class. That
     /// is a schema, not a binding, so it is the one place a value token legitimately appears on the
     /// type side, and the token-class partition ([`Self::partition_guard`]) stands down for it.
     slot_table: bool,

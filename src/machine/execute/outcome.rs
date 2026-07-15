@@ -14,9 +14,9 @@
 //!   another outcome.
 //! - [`Outcome::Forward`] — splice the slot out as an alias of an existing producer.
 
-use crate::machine::core::kfunction::action::{BlockEntry, FramePlacement};
+use crate::machine::core::{BlockEntry, FramePlacement};
 #[cfg(test)]
-use crate::machine::model::values::Carried;
+use crate::machine::model::Carried;
 use crate::machine::DeliveredCarried;
 
 use crate::machine::{KError, NodeId, TraceFrame};
@@ -189,7 +189,7 @@ pub(in crate::machine::execute) type CatchFinish<'a> = Box<
 /// core so the builtin-`Action` currency can name it, re-exported here. Its `value` is re-anchored
 /// live at the step brand; its reach rides the dep's own `carrier`, folded onto the scope reach-set
 /// only when the value is *bound* (`let` / user-fn arg).
-pub(in crate::machine::execute) use crate::machine::core::kfunction::action::DepTerminal;
+pub(in crate::machine::execute) use crate::machine::core::DepTerminal;
 
 /// The one continuation every node runs when its deps resolve — the unified currency
 /// [`NodeWork`](super::nodes::NodeWork) carries. Receives the dep terminals in submission order as

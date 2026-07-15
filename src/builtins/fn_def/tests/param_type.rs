@@ -3,10 +3,10 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
-use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use crate::machine::KoanRuntime;
 
 use super::capture_program_output;
 

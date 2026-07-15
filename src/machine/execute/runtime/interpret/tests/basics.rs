@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::model::values::Held;
+use crate::machine::model::Held;
 use crate::machine::model::KObject;
 
 use super::run;
@@ -116,9 +116,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
             assert!(items.is_empty());
             assert_eq!(
                 obj.ktype(),
-                crate::machine::model::types::KType::list(Box::new(
-                    crate::machine::model::types::KType::Number,
-                )),
+                crate::machine::model::KType::list(Box::new(crate::machine::model::KType::Number,)),
             );
         }
         _ => panic!("expected `xs` bound to a stamped empty List<Number>"),

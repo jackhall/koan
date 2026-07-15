@@ -17,10 +17,10 @@
 
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::KFunction;
 use crate::machine::core::StoredReach;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{KType, ProjectedSchema, RecursiveSet};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
 

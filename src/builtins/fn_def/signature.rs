@@ -1,9 +1,9 @@
 //! Signature parsing for the `FN` builtin.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::Carried;
+use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::{Argument, SignatureElement};
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::NodeId;
 use crate::source::Spanned;
 
@@ -194,8 +194,8 @@ pub(crate) fn parse_fn_param_list<'a>(
 /// Returns `None` only when the signature slot itself is missing.
 pub(crate) fn binder_bucket(
     expr: &KExpression<'_>,
-) -> Option<Vec<crate::machine::model::types::UntypedKey>> {
-    use crate::machine::model::types::UntypedElement;
+) -> Option<Vec<crate::machine::model::UntypedKey>> {
+    use crate::machine::model::UntypedElement;
     let signature_expr = signature_expr_part(expr)?;
     let parts = &signature_expr.parts;
     let mut key = Vec::with_capacity(parts.len());

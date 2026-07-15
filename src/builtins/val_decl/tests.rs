@@ -1,7 +1,7 @@
 use crate::builtins::test_support::{binds_module, parse_one, run, run_one_err, run_root_silent};
-use crate::machine::core::run_root_storage;
-use crate::machine::model::types::SigSource;
 use crate::machine::model::KType;
+use crate::machine::model::SigSource;
+use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// Smoke: the VAL slot lives in `bindings.types` under its value-class name so

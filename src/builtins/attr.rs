@@ -12,13 +12,13 @@
 //! resolves the overloads: an `Identifier` lhs wins `body_identifier`, a module / type-token lhs
 //! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
 
-use crate::machine::core::StepAllocator;
-use crate::machine::execute::StepCarried;
-use crate::machine::model::types::KKind;
-use crate::machine::model::types::SigSource;
-use crate::machine::model::types::TypeResolution;
-use crate::machine::model::values::{Carried, Module, WrappedPayload};
+use crate::machine::model::KKind;
+use crate::machine::model::SigSource;
+use crate::machine::model::TypeResolution;
+use crate::machine::model::{Carried, Module, WrappedPayload};
 use crate::machine::model::{Held, KObject, KType};
+use crate::machine::StepAllocator;
+use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
 
 use super::{arg, kw, sig};
@@ -30,16 +30,14 @@ use crate::machine::DeliveredCarried;
 /// brand from the lhs operand's view (its reach folded by construction), a type identity witnessed
 /// in place from its stored reach via [`Scope::resident_type_carrier`] (or, for a projected type
 /// field, re-projected and sealed under the folded lhs reach).
-fn route<'a>(
-    result: Result<StepCarried<'a>, KError>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    crate::machine::core::kfunction::action::Action::Done(result)
+fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<'a> {
+    crate::machine::Action::Done(result)
 }
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
 fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type};
+    use crate::machine::{arg_object, arg_type};
     if let Some(obj) = arg_object(args, "field") {
         return match obj {
             KObject::KString(s) => Ok(s.clone()),
@@ -64,10 +62,8 @@ fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
 /// (Identifier-classed) parameter member access like `elem.compare` inside a functor body reaches
 /// the module through the value arm. The type-side probe serves a name bound to an abstract
 /// identity (a SIG value slot's `VAL zero :Carrier` type), which names no receiver to project off.
-pub fn body_identifier<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, Action};
+pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_object, Action};
     let s_name = match arg_object(ctx.args, "s") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
@@ -104,10 +100,8 @@ pub fn body_identifier<'a>(
 /// a Type token reaches the same projection. Projects a member off the Type-classed `s`, resolving
 /// an `Unresolved` leaf through the memoized bridge first. A module lhs rides the value channel and
 /// picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
-pub fn body_type_lhs<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, arg_type, Action};
+pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_object, arg_type, Action};
     let s_kt = match arg_type(ctx.args, "s") {
         Some(kt) => kt,
         None => {
@@ -145,10 +139,8 @@ pub fn body_type_lhs<'a>(
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
-pub fn body_newtype<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, Action};
+pub fn body_newtype<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_object, Action};
     let target = match arg_object(ctx.args, "s") {
         Some(obj) => obj,
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("s".to_string())))),
@@ -172,10 +164,8 @@ pub fn body_newtype<'a>(
 }
 
 /// Projects the field off a module lhs riding the value channel's Object arm.
-pub fn body_module<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_object, Action};
+pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_object, Action};
     let m = match arg_object(ctx.args, "s") {
         Some(KObject::Module(module)) => *module,
         Some(other) => {
@@ -499,8 +489,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::core::run_root_storage;
     use crate::machine::model::KObject;
+    use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     #[test]

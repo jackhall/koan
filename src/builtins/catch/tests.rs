@@ -3,8 +3,8 @@
 //! TCO position.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::core::run_root_storage;
 use crate::machine::model::KObject;
+use crate::machine::run_root_storage;
 
 fn run_program(source: &str) -> Vec<u8> {
     let region = run_root_storage();

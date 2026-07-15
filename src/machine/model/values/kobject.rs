@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{

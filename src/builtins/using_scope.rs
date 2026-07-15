@@ -8,7 +8,7 @@
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
 //! binds and functions defined in the block stay live after the block ends.
 //! A bind colliding with a surfaced member is rejected in
-//! [`Scope::bind_value`](crate::machine::core::Scope)'s borrowed-window arm.
+//! [`Scope::bind_value`](crate::machine::Scope)'s borrowed-window arm.
 //!
 //! Only `data` and `functions` are surfaced; `Module::type_members` is not in
 //! `Bindings`, so abstract ascriptions stay opaque inside the block.
@@ -29,14 +29,10 @@ use super::{arg, kw, sig};
 /// USING's result is the body's tail — the block's last statement's own witnessed terminal via the
 /// ordinary `DoneWitnessed` path, not a forwarded dep. Surfaced members resolve through
 /// [`Scope::binding_cutoff`]'s index-0 (no-cutoff) rule for a borrowed window.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
-    use crate::machine::core::kfunction::action::{
-        arg_held, require_kexpression, Action, FramePlacement,
-    };
-    use crate::machine::model::values::{Held, KObject};
+    use crate::machine::model::{Held, KObject};
+    use crate::machine::{arg_held, require_kexpression, Action, FramePlacement};
 
     let module = match arg_held(ctx.args, "m") {
         // A module reaches USING on the value channel's Object arm.

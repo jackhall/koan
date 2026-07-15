@@ -5,10 +5,8 @@ use super::{arg, kw, sig};
 
 /// `PRINT <msg:Any>` — renders the `msg` object cell, writes it plus a newline to
 /// `ctx.scope`'s nearest `out`, and returns the rendered string as a `KObject::KString` value.
-pub fn body<'a>(
-    ctx: &crate::machine::core::kfunction::action::BodyCtx<'a, '_>,
-) -> crate::machine::core::kfunction::action::Action<'a> {
-    use crate::machine::core::kfunction::action::{arg_held, Action};
+pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
+    use crate::machine::{arg_held, Action};
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {

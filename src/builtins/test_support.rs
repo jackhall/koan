@@ -6,16 +6,14 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::{FrameStorage, FrameStorageExt};
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::{
-    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
-};
-use crate::machine::model::values::Module;
+use crate::machine::model::Module;
+use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::KFunction;
+use crate::machine::KoanRuntime;
 use crate::machine::{DeliveredCarried, KError, Scope};
+use crate::machine::{FrameStorage, FrameStorageExt};
 use crate::parse::parse;
 use crate::scheduler::NodeId;
 use crate::witnessed::{Delivered, Sealed, Witnessed};
@@ -103,7 +101,7 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
 /// can supply a signature's higher-kinded abstract slot (`TYPE (Type AS <Member>)`). The only
 /// builtin constructor, `Result`, is arity 2, so an arity-1 slot needs a minted one.
 pub(crate) fn register_arity1_constructor<'a>(scope: &'a Scope<'a>, name: &str) {
-    use crate::machine::model::types::{NominalSchema, RecursiveSet};
+    use crate::machine::model::{NominalSchema, RecursiveSet};
     use crate::machine::{BindingIndex, ScopeId};
     let set = RecursiveSet::singleton(
         name.into(),
@@ -246,7 +244,7 @@ pub(crate) fn spliced_part(c: Carried<'_>) -> ExpressionPart<'_> {
     ExpressionPart::Spliced {
         cell: Delivered::hosted(
             Sealed::seal(Witnessed::resident(c)),
-            crate::machine::core::run_root_storage(),
+            crate::machine::run_root_storage(),
         ),
     }
 }

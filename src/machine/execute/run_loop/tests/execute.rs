@@ -3,8 +3,8 @@
 use crate::builtins::default_scope;
 use crate::machine::core::run_root_storage;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
+use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use super::let_expr;

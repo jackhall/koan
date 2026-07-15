@@ -1,7 +1,7 @@
 //! The witnessed-transfer copy hook.
 
 use crate::machine::core::FoldingBrand;
-use crate::machine::model::values::Carried;
+use crate::machine::model::Carried;
 
 /// The structural-copy callback a witnessed transfer's fold runs
 /// ([`Delivered::transfer_into`](crate::witnessed::Delivered)): copy a [`Carried`] into `dest`'s

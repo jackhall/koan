@@ -12,10 +12,10 @@
 //! `pending_types`). The `Park` arm — a referenced type still in flight — never writes the
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
-use crate::machine::core::kfunction::NodeId;
+use crate::machine::core::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId, TypeHit};
-use crate::machine::model::ast::TypeIdentifier;
-use crate::machine::model::types::{KType, SigSource, TypeResolution};
+use crate::machine::model::TypeIdentifier;
+use crate::machine::model::{KType, SigSource, TypeResolution};
 
 impl<'step> Scope<'step> {
     /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, elaborates against
@@ -27,7 +27,7 @@ impl<'step> Scope<'step> {
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
     ) -> TypeResolution<TypeHit<'step>> {
-        use crate::machine::model::types::{elaborate_type_identifier, Elaborator};
+        use crate::machine::model::{elaborate_type_identifier, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));

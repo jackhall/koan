@@ -247,7 +247,7 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
 #[test]
 fn resident_in_true_for_same_region_kfunction() {
     use crate::builtins::default_scope;
-    use crate::machine::core::kfunction::Body;
+    use crate::machine::core::Body;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
@@ -276,7 +276,7 @@ fn resident_in_true_for_same_region_kfunction() {
 #[test]
 fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     use crate::builtins::default_scope;
-    use crate::machine::core::kfunction::Body;
+    use crate::machine::core::Body;
     use crate::machine::core::{run_root_storage, FrameSet, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
     use crate::machine::model::types::{ExpressionSignature, ReturnType};

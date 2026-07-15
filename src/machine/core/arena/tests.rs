@@ -6,9 +6,9 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
-use crate::machine::model::types::{KType, SigSource};
-use crate::machine::model::values::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::model::Record;
+use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
+use crate::machine::model::{KType, SigSource};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
@@ -970,7 +970,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
 /// returns the *type*, since it is the signature type's `decl_scope_ref` borrow the fold closes a
 /// hole around.
 fn alloc_home_signature_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
-    use crate::machine::model::values::ModuleSignature;
+    use crate::machine::model::ModuleSignature;
     home.with_scope(|child| {
         let sig_ref: &ModuleSignature = home
             .brand()
@@ -1349,7 +1349,7 @@ fn mint_teardown_releases_members() {
 /// (no evidence naming A) — a structured `ShapeError`, and nothing stored.
 #[test]
 fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
-    use crate::machine::model::values::ModuleSignature;
+    use crate::machine::model::ModuleSignature;
 
     let region_a = run_root_storage();
     let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
@@ -1381,7 +1381,7 @@ fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
 /// the parameter's binding does not pin still errors loudly.
 #[test]
 fn alloc_ktype_reaching_rejects_foreign_signature_with_no_evidence() {
-    use crate::machine::model::values::ModuleSignature;
+    use crate::machine::model::ModuleSignature;
 
     let region_a = run_root_storage();
     let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
@@ -1459,7 +1459,7 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
 }
 
 /// The checked seal's family audit gates a `KObject::KExpression` by
-/// [`is_splice_free`](crate::machine::model::ast::KExpression::is_splice_free): a `Spliced` part is
+/// [`is_splice_free`](crate::machine::model::KExpression::is_splice_free): a `Spliced` part is
 /// a resolved value, not raw AST, and its cell carries a producer reach the empty
 /// (foreign-reach-only) witness this door seals under cannot name. Because
 /// `alloc_object_witnessed_checked` is an always-on loud gate rather than a `debug_assert!`, the
@@ -1468,7 +1468,7 @@ fn alloc_carried_with_scope_folds_dep_view_and_scope_read() {
 /// every quoted body through this door.
 #[test]
 fn spliced_expression_is_rejected_by_the_checked_object_seal() {
-    use crate::machine::model::ast::{ExpressionPart, KExpression};
+    use crate::machine::model::{ExpressionPart, KExpression};
     use crate::witnessed::Sealed;
 
     let storage = run_root_storage();
