@@ -27,12 +27,12 @@ pub(crate) use arena::{
 };
 pub use bindings::{
     BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
-    PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit, ValueHit,
+    PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
 pub use kerror::{KError, KErrorKind, TraceFrame};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
-pub use scope::{Scope, ScopeKind};
+pub use scope::Scope;
 pub use scope_id::ScopeId;
 pub use scope_ptr::ScopeRefFamily;

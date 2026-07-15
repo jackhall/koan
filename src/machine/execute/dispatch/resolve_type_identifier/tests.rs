@@ -121,7 +121,7 @@ mod bare_leaf_resolution {
     use crate::machine::model::ast::TypeIdentifier;
     use crate::machine::model::types::TypeResolution;
     use crate::machine::model::KType;
-    use crate::machine::TypeHit;
+    use crate::machine::core::TypeHit;
 
     #[test]
     fn builtin_synthesizes_type_carrier() {

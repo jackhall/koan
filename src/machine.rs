@@ -10,14 +10,14 @@ pub(crate) mod core;
 pub(crate) mod execute;
 pub mod model;
 
-pub use core::kfunction::{Body, KFunction, NodeId};
+pub use core::kfunction::{KFunction, NodeId};
+pub(crate) use core::kfunction::Body;
 pub use core::{
-    run_root_storage, BindKind, BindingIndex, Bindings, CallFrame, CarrierWitness,
-    DeliveredCarried, FrameSet, FrameStorage, FunctionLookup, KError, KErrorKind, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, RegionBrand, RegionTypeFamily, Scope, ScopeId,
-    ScopeKind, TraceFrame, TypeHit, ValueHit,
+    run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
 };
-pub use execute::{
-    interpret, interpret_with_writer, interpret_with_writer_path, DispatchOutcome, KoanRuntime,
-    NameOutcome, Resolved,
+pub(crate) use core::{
+    BindKind, BindingIndex, CallFrame, CarrierWitness, FrameSet, FunctionLookup, KoanRegion,
+    LexicalFrame, MemberResolution, NameLookup, RegionBrand, RegionTypeFamily, TraceFrame,
 };
+pub use execute::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};
+pub(crate) use execute::{DispatchOutcome, NameOutcome};
