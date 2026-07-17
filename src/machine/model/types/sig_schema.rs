@@ -186,35 +186,38 @@ pub fn substitute_sig_members<'a>(
 }
 
 /// Why a [`sig_subtype`] check failed — one of the five per-member rules, carrying the offending
-/// member name and the types that disagreed.
-pub enum SigSubtypeFailure<'a> {
+/// member name and the *rendered* types that disagreed. The disagreeing types come from the `sub`
+/// and `sup` schemas, which carry independent lifetimes; rendering them to `String` at the failure
+/// site (the only thing [`Self::render_fragment`] ever does with them) keeps this type lifetime-free
+/// so the heterogeneous [`sig_subtype`] can return it without unifying the two lifetimes.
+pub enum SigSubtypeFailure {
     MissingTypeMember {
         name: String,
     },
     ManifestMismatch {
         name: String,
-        got: KType<'a>,
-        expected: KType<'a>,
+        got: String,
+        expected: String,
     },
     /// A type member's kind/arity disagreed. `expected_arity` is `Some(n)` when the super
     /// signature declares a constructor taking `n` parameters, `None` when it declares a
-    /// first-order proper type; `got` is the sub binding that failed to match.
+    /// first-order proper type; `got` is the rendered sub binding that failed to match.
     KindMismatch {
         name: String,
         expected_arity: Option<usize>,
-        got: KType<'a>,
+        got: String,
     },
     MissingValueSlot {
         name: String,
     },
     ValueSlotMismatch {
         name: String,
-        got: KType<'a>,
-        expected: KType<'a>,
+        got: String,
+        expected: String,
     },
 }
 
-impl SigSubtypeFailure<'_> {
+impl SigSubtypeFailure {
     /// Render the failure as the message fragment an ascription error embeds after
     /// `` module does not satisfy signature `{path}`: ``.
     pub fn render_fragment(&self) -> String {
@@ -227,29 +230,21 @@ impl SigSubtypeFailure<'_> {
                 got,
                 expected,
             } => format!(
-                "type member `{}` is `{}` but the signature fixes it to `{}`",
-                name,
-                got.render(),
-                expected.render()
+                "type member `{name}` is `{got}` but the signature fixes it to `{expected}`"
             ),
             SigSubtypeFailure::KindMismatch {
                 name,
                 expected_arity: Some(n),
                 got,
             } => format!(
-                "type member `{}` must be a type constructor taking {} parameter(s), got `{}`",
-                name,
-                n,
-                got.render()
+                "type member `{name}` must be a type constructor taking {n} parameter(s), got `{got}`"
             ),
             SigSubtypeFailure::KindMismatch {
                 name,
                 expected_arity: None,
                 got,
             } => format!(
-                "type member `{}` must be a proper type, got the type constructor `{}`",
-                name,
-                got.render()
+                "type member `{name}` must be a proper type, got the type constructor `{got}`"
             ),
             SigSubtypeFailure::MissingValueSlot { name } => format!("missing member `{name}`"),
             SigSubtypeFailure::ValueSlotMismatch {
@@ -257,10 +252,7 @@ impl SigSubtypeFailure<'_> {
                 got,
                 expected,
             } => format!(
-                "member `{}` has type `{}` but the signature declares `{}`",
-                name,
-                got.render(),
-                expected.render()
+                "member `{name}` has type `{got}` but the signature declares `{expected}`"
             ),
         }
     }
@@ -273,16 +265,16 @@ impl SigSubtypeFailure<'_> {
 ///
 /// The failure is boxed: `SigSubtypeFailure` carries `KType`s and is large relative to the
 /// common `Ok` path.
-pub fn sig_subtype<'a>(
-    sub: &SigSchema<'a>,
-    sup: &SigSchema<'a>,
-) -> Result<(), Box<SigSubtypeFailure<'a>>> {
+pub fn sig_subtype<'s, 'p>(
+    sub: &SigSchema<'s>,
+    sup: &SigSchema<'p>,
+) -> Result<(), Box<SigSubtypeFailure>> {
     // 1. Abstract members: present at the matching kind/arity (manifest or abstract in `sub`).
     for (name, (_, sup_arity)) in &sup.abstract_members {
         let (sub_repr, sub_arity) = if let Some(kt) = sub.manifest_members.get(name) {
-            (kt.clone(), constructor_arity(kt))
+            (kt.render(), constructor_arity(kt))
         } else if let Some((kt, arity)) = sub.abstract_members.get(name) {
-            (kt.clone(), *arity)
+            (kt.render(), *arity)
         } else {
             return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
                 name: name.clone(),
@@ -304,8 +296,8 @@ pub fn sig_subtype<'a>(
             Some(got) => {
                 return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                     name: name.clone(),
-                    got: got.clone(),
-                    expected: fixed.clone(),
+                    got: got.render(),
+                    expected: fixed.render(),
                 }))
             }
             None => {
@@ -313,8 +305,8 @@ pub fn sig_subtype<'a>(
                 if let Some((repr, _)) = sub.abstract_members.get(name) {
                     return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                         name: name.clone(),
-                        got: repr.clone(),
-                        expected: fixed.clone(),
+                        got: repr.render(),
+                        expected: fixed.render(),
                     }));
                 }
                 return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
@@ -325,9 +317,14 @@ pub fn sig_subtype<'a>(
     }
 
     // 3. Value slots: present and covariantly compatible after abstract-member substitution.
-    // The substitution map binds every `sub` type-member name to its representation, so a
-    // `sup` slot referencing an abstract member reads through `sub`'s binding for it.
-    let mut sub_member_map: HashMap<String, KType<'a>> = HashMap::new();
+    // The substitution binds every `sub` type-member name to its representation, so a `sup` slot
+    // referencing one of `sup`'s abstract members reads through `sub`'s binding for it. `sub` and
+    // `sup` carry independent lifetimes, so the substituted type would mix `'s` and `'p` content —
+    // unrepresentable. `slot_satisfied_by` computes the same verdict as
+    // `substitute_sig_members(declared, id, sub_member_map).satisfied_by(sub_type)` by comparing
+    // structurally and swapping in `sub`'s binding on reaching a self-abstract reference, so no
+    // mixed type is ever built.
+    let mut sub_member_map: HashMap<String, KType<'s>> = HashMap::new();
     for (name, kt) in &sub.manifest_members {
         sub_member_map.insert(name.clone(), kt.clone());
     }
@@ -340,19 +337,349 @@ pub fn sig_subtype<'a>(
                 name: name.clone(),
             }));
         };
-        let expected = match sup.sig_id {
-            Some(id) => substitute_sig_members(declared, id, &sub_member_map),
-            None => declared.clone(),
+        let ok = match sup.sig_id {
+            Some(id) => slot_satisfied_by(declared, sub_type, &sub_member_map, id),
+            // No `sig_id`: nothing to substitute, so the heterogeneous `satisfied_by` is exact.
+            None => declared.satisfied_by(sub_type),
         };
-        if !expected.satisfied_by(sub_type) {
+        if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
                 name: name.clone(),
-                got: sub_type.clone(),
-                expected,
+                got: sub_type.render(),
+                expected: declared.render(),
             }));
         }
     }
     Ok(())
+}
+
+/// True iff `declared` contains a reference to one of `sig_id`'s abstract members that
+/// [`substitute_sig_members`] would rewrite (a first-order `AbstractType`, or a sentinel
+/// type-constructor `SetRef`, whose name `members` binds). When false, substitution is the
+/// identity and a plain heterogeneous compare on `declared` is exact.
+fn references_sig_member<'p, 's>(
+    declared: &KType<'p>,
+    sig_id: ScopeId,
+    members: &HashMap<String, KType<'s>>,
+) -> bool {
+    match declared {
+        KType::AbstractType { source, name } => *source == sig_id && members.contains_key(name),
+        KType::SetRef { set, index } => {
+            let m = set.member(*index);
+            m.kind == KKind::TypeConstructor
+                && m.scope_id == ScopeId::SENTINEL
+                && members.contains_key(&m.name)
+        }
+        KType::List { element, .. } => references_sig_member(element, sig_id, members),
+        KType::Dict { key, value, .. } => {
+            references_sig_member(key, sig_id, members)
+                || references_sig_member(value, sig_id, members)
+        }
+        KType::Record { fields, .. } => fields
+            .values()
+            .any(|v| references_sig_member(v, sig_id, members)),
+        KType::KFunction { params, ret, .. } => {
+            params
+                .values()
+                .any(|v| references_sig_member(v, sig_id, members))
+                || references_sig_member(ret, sig_id, members)
+        }
+        KType::Union { members: us, .. } => {
+            us.iter().any(|m| references_sig_member(m, sig_id, members))
+        }
+        KType::ConstructorApply { ctor, args, .. } => {
+            references_sig_member(ctor, sig_id, members)
+                || args
+                    .iter()
+                    .any(|a| references_sig_member(a, sig_id, members))
+        }
+        _ => false,
+    }
+}
+
+/// The `sub`-side binding a substitution point in `declared` resolves to, if any — the type
+/// `substitute_sig_members` would splice in for this node.
+fn substitution_binding<'p, 's, 'm>(
+    declared: &KType<'p>,
+    sig_id: ScopeId,
+    members: &'m HashMap<String, KType<'s>>,
+) -> Option<&'m KType<'s>> {
+    match declared {
+        KType::AbstractType { source, name } if *source == sig_id => members.get(name),
+        KType::SetRef { set, index } => {
+            let m = set.member(*index);
+            if m.kind == KKind::TypeConstructor && m.scope_id == ScopeId::SENTINEL {
+                members.get(&m.name)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Verdict of `substitute_sig_members(declared, sig_id, members).satisfied_by(sub_type)` — does the
+/// `sub` value slot fill the substituted `sup` slot? — computed without materializing the
+/// mixed-lifetime substituted type. `declared` (the `sup` slot) rides `'p`; `sub_type` and the
+/// member bindings ride `'s`. On reaching a self-abstract reference the walk switches to a pure-`'s`
+/// compare against `sub`'s binding; on a member-free node it falls to the heterogeneous
+/// `satisfied_by`; otherwise it descends the shared container structure with the same covariance
+/// [`KType::satisfied_by`] applies (`Dict`/`Record`/`KFunction` component rules included).
+fn slot_satisfied_by<'p, 's>(
+    declared: &KType<'p>,
+    sub_type: &KType<'s>,
+    members: &HashMap<String, KType<'s>>,
+    sig_id: ScopeId,
+) -> bool {
+    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+        return binding.satisfied_by(sub_type);
+    }
+    if !references_sig_member(declared, sig_id, members) {
+        return declared.satisfied_by(sub_type);
+    }
+    match (declared, sub_type) {
+        (KType::List { element: ed, .. }, KType::List { element: es, .. }) => {
+            slot_satisfied_by(ed, es, members, sig_id)
+        }
+        (
+            KType::Dict {
+                key: kd, value: vd, ..
+            },
+            KType::Dict {
+                key: ks, value: vs, ..
+            },
+        ) => {
+            slot_satisfied_by(kd, ks, members, sig_id) && slot_satisfied_by(vd, vs, members, sig_id)
+        }
+        (KType::Record { fields: fd, .. }, KType::Record { fields: fs, .. }) => {
+            // Record-value covariance: every slot field present in the value, covariantly.
+            fd.iter().all(|(name, dt)| {
+                fs.get(name)
+                    .is_some_and(|st| slot_satisfied_by(dt, st, members, sig_id))
+            })
+        }
+        (
+            KType::ConstructorApply {
+                ctor: cd, args: ad, ..
+            },
+            KType::ConstructorApply {
+                ctor: cs,
+                args: as_,
+                ..
+            },
+        ) => {
+            ad.len() == as_.len()
+                && slot_types_equal(cd, cs, members, sig_id)
+                && ad
+                    .iter()
+                    .zip(as_.iter())
+                    .all(|(d, s)| slot_satisfied_by(d, s, members, sig_id))
+        }
+        (
+            KType::KFunction {
+                params: pd,
+                ret: rd,
+                ..
+            },
+            KType::KFunction {
+                params: ps,
+                ret: rs,
+                ..
+            },
+        ) => {
+            // Contravariant params (width-drop): every value param names a slot param the
+            // substituted slot fixes equal-or-more-specific. Covariant return.
+            ps.keys().all(|k| pd.get(k).is_some())
+                && ps.iter().all(|(name, sp)| {
+                    pd.get(name)
+                        .is_some_and(|dp| slot_more_specific_or_equal(dp, sp, members, sig_id))
+                })
+                && slot_satisfied_by(rd, rs, members, sig_id)
+        }
+        (KType::Union { members: ud, .. }, _) => {
+            // A value satisfies a substituted union slot iff it (each of its members, if it is
+            // itself a union) refines some slot member — the union-membership rule of `satisfied_by`.
+            let ys: Vec<&KType<'s>> = match sub_type {
+                KType::Union { members: us, .. } => us.iter().collect(),
+                other => vec![other],
+            };
+            ys.iter().all(|y| {
+                ud.iter()
+                    .any(|md| slot_satisfied_by(md, y, members, sig_id))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Verdict of `substitute_sig_members(declared, ...) == target
+/// || substitute_sig_members(declared, ...).is_more_specific_than(target)` — the contravariant
+/// direction [`slot_satisfied_by`] needs for a function parameter, computed without building the
+/// substituted type.
+fn slot_more_specific_or_equal<'p, 's>(
+    declared: &KType<'p>,
+    target: &KType<'s>,
+    members: &HashMap<String, KType<'s>>,
+    sig_id: ScopeId,
+) -> bool {
+    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+        return binding == target || binding.is_more_specific_than(target);
+    }
+    if !references_sig_member(declared, sig_id, members) {
+        return declared == target || declared.is_more_specific_than(target);
+    }
+    // The substituted slot outranks `Any` / an unconstrained name, and refines a union it has a
+    // member in — the top guards of `more_specific_walk`, mirrored here.
+    match target {
+        KType::Any => return true,
+        KType::Identifier | KType::OfKind(KKind::ProperType) => return true,
+        KType::Union { members: ts, .. } => {
+            return ts
+                .iter()
+                .any(|t| slot_more_specific_or_equal(declared, t, members, sig_id))
+        }
+        _ => {}
+    }
+    match (declared, target) {
+        (KType::List { element: ed, .. }, KType::List { element: et, .. }) => {
+            slot_more_specific_or_equal(ed, et, members, sig_id)
+        }
+        (
+            KType::Dict {
+                key: kd, value: vd, ..
+            },
+            KType::Dict {
+                key: kt, value: vt, ..
+            },
+        ) => {
+            slot_more_specific_or_equal(kd, kt, members, sig_id)
+                && slot_more_specific_or_equal(vd, vt, members, sig_id)
+        }
+        (KType::Record { fields: fd, .. }, KType::Record { fields: ft, .. }) => {
+            // Record-value covariance with width-superset: the more-specific record has every
+            // field of `target`, each covariantly refined.
+            ft.keys().all(|k| fd.get(k).is_some())
+                && ft.iter().all(|(name, tt)| {
+                    fd.get(name)
+                        .is_some_and(|dt| slot_more_specific_or_equal(dt, tt, members, sig_id))
+                })
+        }
+        (
+            KType::ConstructorApply {
+                ctor: cd, args: ad, ..
+            },
+            KType::ConstructorApply {
+                ctor: ct, args: at, ..
+            },
+        ) => {
+            ad.len() == at.len()
+                && slot_types_equal(cd, ct, members, sig_id)
+                && ad
+                    .iter()
+                    .zip(at.iter())
+                    .all(|(d, t)| slot_more_specific_or_equal(d, t, members, sig_id))
+        }
+        (
+            KType::KFunction {
+                params: pd,
+                ret: rd,
+                ..
+            },
+            KType::KFunction {
+                params: pt,
+                ret: rt,
+                ..
+            },
+        ) => {
+            // Contravariant params, covariant return — the dual of the `slot_satisfied_by` case.
+            pd.keys().all(|k| pt.get(k).is_some())
+                && pd.iter().all(|(name, dp)| {
+                    pt.get(name)
+                        .is_some_and(|tp| slot_satisfied_by(dp, tp, members, sig_id))
+                })
+                && slot_more_specific_or_equal(rd, rt, members, sig_id)
+        }
+        _ => false,
+    }
+}
+
+/// Verdict of `substitute_sig_members(declared, ...) == other` — structural equality with `sub`'s
+/// bindings spliced in. Only the constructor identity of a `ConstructorApply` needs this (a
+/// constructor is a leaf `SetRef`, so the recursion bottoms out immediately in practice).
+fn slot_types_equal<'p, 's>(
+    declared: &KType<'p>,
+    other: &KType<'s>,
+    members: &HashMap<String, KType<'s>>,
+    sig_id: ScopeId,
+) -> bool {
+    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+        return binding == other;
+    }
+    if !references_sig_member(declared, sig_id, members) {
+        return declared == other;
+    }
+    match (declared, other) {
+        (KType::List { element: ed, .. }, KType::List { element: eo, .. }) => {
+            slot_types_equal(ed, eo, members, sig_id)
+        }
+        (
+            KType::Dict {
+                key: kd, value: vd, ..
+            },
+            KType::Dict {
+                key: ko, value: vo, ..
+            },
+        ) => slot_types_equal(kd, ko, members, sig_id) && slot_types_equal(vd, vo, members, sig_id),
+        (KType::Record { fields: fd, .. }, KType::Record { fields: fo, .. }) => {
+            fd.len() == fo.len()
+                && fd.iter().all(|(name, dt)| {
+                    fo.get(name)
+                        .is_some_and(|ot| slot_types_equal(dt, ot, members, sig_id))
+                })
+        }
+        (
+            KType::ConstructorApply {
+                ctor: cd, args: ad, ..
+            },
+            KType::ConstructorApply {
+                ctor: co, args: ao, ..
+            },
+        ) => {
+            ad.len() == ao.len()
+                && slot_types_equal(cd, co, members, sig_id)
+                && ad
+                    .iter()
+                    .zip(ao.iter())
+                    .all(|(d, o)| slot_types_equal(d, o, members, sig_id))
+        }
+        (
+            KType::KFunction {
+                params: pd,
+                ret: rd,
+                ..
+            },
+            KType::KFunction {
+                params: po,
+                ret: ro,
+                ..
+            },
+        ) => {
+            pd.len() == po.len()
+                && pd.iter().all(|(name, dt)| {
+                    po.get(name)
+                        .is_some_and(|ot| slot_types_equal(dt, ot, members, sig_id))
+                })
+                && slot_types_equal(rd, ro, members, sig_id)
+        }
+        (KType::Union { members: ud, .. }, KType::Union { members: uo, .. }) => {
+            ud.len() == uo.len()
+                && ud.iter().all(|dm| {
+                    uo.iter()
+                        .any(|om| slot_types_equal(dm, om, members, sig_id))
+                })
+        }
+        _ => false,
+    }
 }
 
 /// Classify a SIG type-table entry by its *representation*: an abstract member carries no

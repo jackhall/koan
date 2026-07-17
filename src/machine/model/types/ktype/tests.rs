@@ -283,6 +283,30 @@ fn set_ref_identity_unifies_by_content_digest() {
     assert_ne!(a, d);
 }
 
+#[test]
+fn equality_compares_across_distinct_lifetimes() {
+    // `PartialEq<KType<'b>> for KType<'a>` compares content digests, which are lifetime-free.
+    // Build one operand in a nested (shorter) scope and compare it to a `'static` one, so the
+    // two lifetimes genuinely differ.
+    let sid = ScopeId::from_raw(0, 0x5151);
+    let outer: KType<'static> = KType::SetRef {
+        set: record_newtype_set("Point", sid),
+        index: 0,
+    };
+    let region = run_root_storage();
+    {
+        let inner: KType<'_> = KType::SetRef {
+            set: record_newtype_set("Point", sid),
+            index: 0,
+        };
+        // Same content across lifetimes → equal; a list wrapper distinguishes structure.
+        assert!(outer == inner);
+        assert!(KType::list(Box::new(outer.clone())) == KType::list(Box::new(inner.clone())));
+        assert!(KType::Number != inner);
+    }
+    drop(region);
+}
+
 /// The two-phase window: before a set seals it has no digest, so `SetRef` identity falls to
 /// the set pointer (the only path that answers "equal" pre-seal); once `fill_member` seals it,
 /// the content-digest rule takes over and same-content sets in different allocations unify.

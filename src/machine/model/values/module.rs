@@ -94,10 +94,13 @@ impl<'a> Module<'a> {
     /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
     /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
     /// applies to a pinned schema's residue.
-    pub fn satisfies_pins(&self, pins: &[(String, KType<'a>)]) -> bool {
+    pub fn satisfies_pins<'p>(&self, pins: &[(String, KType<'p>)]) -> bool {
         let sig = self.self_sig();
-        pins.iter()
-            .all(|(name, expected)| sig.manifest_members.get(name) == Some(expected))
+        pins.iter().all(|(name, expected)| {
+            sig.manifest_members
+                .get(name)
+                .is_some_and(|m| m == expected)
+        })
     }
 
     /// Structural satisfaction: `self_sig <: bare-schema(sig)` under [`sig_subtype`] — the
@@ -105,7 +108,7 @@ impl<'a> Module<'a> {
     /// Consults the thread-local match registry under `SigSatisfies`, keyed by this module's
     /// and `sig`'s digests, both outcomes cached; a `WITH`-pinned slot's residue is checked
     /// separately via [`Module::satisfies_pins`].
-    pub fn structurally_satisfies(&self, sig: &'a ModuleSignature<'a>) -> bool {
+    pub fn structurally_satisfies<'p>(&self, sig: &'p ModuleSignature<'p>) -> bool {
         let subject = self.self_sig_digest();
         let candidate = signature_digest(SigSource::Declared(sig), &[]);
         if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {

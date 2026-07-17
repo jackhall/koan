@@ -456,7 +456,7 @@ fn slot_admits_strict<'e>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(c)) => arg.ktype.accepts_resolved(*c),
+                Some(NameOutcome::Resolved(c)) => arg.ktype.accepts_carried(*c),
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.
                 Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {

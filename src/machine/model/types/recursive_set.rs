@@ -198,13 +198,16 @@ impl<'a> RecursiveSet<'a> {
 /// escapes its declaring elaboration, so this can only fire on a mid-declaration
 /// self-comparison, which the pointer path has already settled. There is no structural
 /// fallback — the digest is the truth.
-pub(crate) fn same_nominal<'a>(
+pub(crate) fn same_nominal<'a, 'b>(
     s1: &Rc<RecursiveSet<'a>>,
     i1: usize,
-    s2: &Rc<RecursiveSet<'a>>,
+    s2: &Rc<RecursiveSet<'b>>,
     i2: usize,
 ) -> bool {
-    if Rc::ptr_eq(s1, s2) {
+    // Address compare (not `Rc::ptr_eq`, which requires both sides at one lifetime): the shared-set
+    // fast path when a set was lifted by `Rc::clone`. Different lifetimes are fine — a data-pointer
+    // match means the same allocation regardless of how each side's `'_` was inferred.
+    if Rc::as_ptr(s1) as *const () == Rc::as_ptr(s2) as *const () {
         return i1 == i2;
     }
     match (s1.digest(), s2.digest()) {

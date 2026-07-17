@@ -87,7 +87,7 @@ impl<'a> SigSource<'a> {
     /// caller, as they live on `KType::Signature`, not here). `Empty` admits every module;
     /// `Declared(s)` admits a module whose self-sig structurally satisfies `s`; `SelfOf(m2)`
     /// admits `m` when it is the same module or its self-sig is a subtype of `m2`'s.
-    pub fn satisfied_by_module(&self, m: &Module<'a>) -> bool {
+    pub fn satisfied_by_module<'v>(&self, m: &Module<'v>) -> bool {
         match self {
             SigSource::Empty => true,
             SigSource::Declared(s) => m.structurally_satisfies(s),
@@ -652,8 +652,8 @@ fn render_param_record(params: &Record<KType<'_>>) -> String {
 /// [`same_nominal`] (set-pointer fast path, else content digest + index). `AbstractType`, the
 /// remaining id-keyed variant, compares by its source [`ScopeId`] plus its name, so two
 /// `AbstractType` values minted from the same source-and-name compare equal.
-impl<'a> PartialEq for KType<'a> {
-    fn eq(&self, other: &Self) -> bool {
+impl<'a, 'b> PartialEq<KType<'b>> for KType<'a> {
+    fn eq(&self, other: &KType<'b>) -> bool {
         use KType::*;
         match (self, other) {
             (Number, Number)

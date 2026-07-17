@@ -70,7 +70,7 @@ use super::sig_subtype as relation;
 
 /// Run the relation and unbox the failure so `matches!` can name the variant directly.
 #[allow(clippy::result_large_err)] // test ergonomics: unbox so assertions name the variant
-fn check<'a>(sub: &SigSchema<'a>, sup: &SigSchema<'a>) -> Result<(), SigSubtypeFailure<'a>> {
+fn check<'s, 'p>(sub: &SigSchema<'s>, sup: &SigSchema<'p>) -> Result<(), SigSubtypeFailure> {
     relation(sub, sup).map_err(|e| *e)
 }
 
@@ -338,6 +338,60 @@ fn value_slot_abstract_ref_substitutes_to_sub_manifest() {
         )],
     );
     assert!(check(&sub, &sup).is_ok());
+}
+
+#[test]
+fn value_slot_list_of_abstract_ref_substitutes_nested() {
+    // Super: abstract `Type`, slot `items :(LIST OF Type)` — the substitution point sits
+    // *nested* inside a container, so the walk must descend the `List` before comparing.
+    let sup = schema(
+        Some(SUP_ID),
+        vec![("Type", sig_abstract(SUP_ID, "Type"), None)],
+        vec![],
+        vec![("items", KType::list(Box::new(sig_abstract(SUP_ID, "Type"))))],
+    );
+    // Sub with `Type = Number` and `items :(LIST OF Number)` subtypes.
+    let sub_ok = schema(
+        None,
+        vec![],
+        vec![("Type", KType::Number)],
+        vec![("items", KType::list(Box::new(KType::Number)))],
+    );
+    assert!(check(&sub_ok, &sup).is_ok());
+    // `items :(LIST OF Str)` against `Type = Number` fails at the nested element compare.
+    let sub_bad = schema(
+        None,
+        vec![],
+        vec![("Type", KType::Number)],
+        vec![("items", KType::list(Box::new(KType::Str)))],
+    );
+    assert!(matches!(
+        check(&sub_bad, &sup),
+        Err(SigSubtypeFailure::ValueSlotMismatch { .. })
+    ));
+}
+
+#[test]
+fn sig_subtype_runs_across_distinct_lifetimes() {
+    // The relation takes `sub` and `sup` at independent lifetimes. Build one in a fresh
+    // shorter-lived scope and the other in `'static` to prove the heterogeneous signature
+    // is exercised (not just same-lifetime `check`).
+    let sup: SigSchema<'static> = schema(
+        Some(SUP_ID),
+        vec![("Type", sig_abstract(SUP_ID, "Type"), None)],
+        vec![],
+        vec![("v", sig_abstract(SUP_ID, "Type"))],
+    );
+    let name = String::from("v");
+    {
+        let sub = schema(
+            None,
+            vec![],
+            vec![("Type", KType::Number)],
+            vec![(name.as_str(), KType::Number)],
+        );
+        assert!(sig_subtype(&sub, &sup).is_ok());
+    }
 }
 
 // --- pins via of_sig ------------------------------------------------------------------

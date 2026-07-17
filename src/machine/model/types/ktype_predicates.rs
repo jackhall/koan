@@ -46,7 +46,7 @@ impl<'a> KType<'a> {
     /// OfKind(Proper)`), and a sealed `SetRef` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
     /// inner slots. Returns `false` for equal types.
-    pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
+    pub fn is_more_specific_than<'b>(&self, other: &KType<'b>) -> bool {
         if self.is_stored_digest_variant() && other.is_stored_digest_variant() {
             let (subject, candidate) = (self.digest(), other.digest());
             if let Some(verdict) = type_memos::lookup(subject, candidate, Relation::MoreSpecific) {
@@ -81,7 +81,7 @@ impl<'a> KType<'a> {
         )
     }
 
-    fn more_specific_walk(&self, other: &KType<'a>) -> bool {
+    fn more_specific_walk<'b>(&self, other: &KType<'b>) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
@@ -103,8 +103,8 @@ impl<'a> KType<'a> {
             ) => {
                 let k_more = ka.is_more_specific_than(kb);
                 let v_more = va.is_more_specific_than(vb);
-                let k_eq = ka == kb;
-                let v_eq = va == vb;
+                let k_eq = **ka == **kb;
+                let v_eq = **va == **vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
             // Record-value subtyping: width-superset + covariant depth (the dual of the
@@ -220,7 +220,7 @@ impl<'a> KType<'a> {
                 ConstructorApply {
                     ctor: cb, args: ab, ..
                 },
-            ) if ca == cb && aa.len() == ab.len() => {
+            ) if **ca == **cb && aa.len() == ab.len() => {
                 let any_more = aa
                     .iter()
                     .zip(ab.iter())
@@ -235,7 +235,7 @@ impl<'a> KType<'a> {
             // `a` is equal to or more specific than some member of `b`. Set equality (not the
             // positional `Vec` compare) gates the strictness, matching order-blind identity.
             (Union { members: a, .. }, Union { members: b, .. }) => {
-                let same_set = a.len() == b.len() && a.iter().all(|m| b.contains(m));
+                let same_set = a.len() == b.len() && a.iter().all(|m| b.iter().any(|bm| bm == m));
                 !same_set
                     && a.iter()
                         .all(|x| b.iter().any(|y| x == y || x.is_more_specific_than(y)))
@@ -252,7 +252,7 @@ impl<'a> KType<'a> {
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
     /// refinement. A `List<Any>` value (the join an empty or heterogeneous literal
     /// memoizes) does not satisfy `:(LIST OF Number)`.
-    pub fn satisfied_by(&self, carried: &KType<'a>) -> bool {
+    pub fn satisfied_by<'v>(&self, carried: &KType<'v>) -> bool {
         *self == *carried || carried.is_more_specific_than(self)
     }
 
@@ -401,13 +401,14 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Per-value admissibility for a resolved [`Carried`] argument — the same-lifetime core the
-    /// spliced arms of [`accepts_part`] delegate to, and the classifier a spliced cell opens against
-    /// at its own brand. `self` and `c` share `'a`, so every comparison is a same-lifetime check
-    /// (`== self`, `satisfied_by`, `same_nominal`); a differently-branded value is re-anchored to the
-    /// slot type's brand before it reaches here. "Dispatch trusts the carried element type": a
-    /// container's memoized carried `KType` is read via `satisfied_by`, never by walking its contents.
-    pub fn accepts_carried(&self, c: Carried<'a>) -> bool {
+    /// Per-value admissibility for a resolved [`Carried`] argument — the classifier the spliced
+    /// arms of [`accepts_part`] delegate to, and what a spliced cell opens against at its own brand.
+    /// The slot (`'a`) and the value (`'v`) carry independent lifetimes: every comparison is a
+    /// verdict-only structural check (`== self`, heterogeneous `satisfied_by`, `same_nominal`), none
+    /// of which relates the two lifetimes, so no re-anchoring is needed. "Dispatch trusts the
+    /// carried element type": a container's memoized carried `KType` is read via `satisfied_by`,
+    /// never by walking its contents.
+    pub fn accepts_carried<'v>(&self, c: Carried<'v>) -> bool {
         match self {
             KType::Any => true,
             KType::Number => matches!(c, Carried::Object(KObject::Number(_))),
@@ -496,27 +497,13 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Classify a resolved value against this slot **across lifetimes** — the probe an overload
-    /// picker runs (a candidate signature at `'step` against a resolved arg at `'e`, two invariant
-    /// lifetimes), and the core [`accepts_cell`](Self::accepts_cell) delegates to after opening. The
-    /// value is re-anchored to `self`'s `'a` for the same-lifetime [`accepts_carried`](Self::accepts_carried):
-    /// the one cross-lifetime step `KType` invariance forces, the same lifetime-only cast
-    /// [`accepts_part`](Self::accepts_part) carries for a part.
-    pub(crate) fn accepts_resolved(&self, c: Carried<'_>) -> bool {
-        // SAFETY: `Carried<'_>` and `Carried<'a>` share layout (the value channel is layout-invariant
-        // in its lifetime). The read is synchronous and read-only — the value outlives the call and
-        // only the `bool` verdict escapes, nothing content-branded — so the re-anchored borrow cannot
-        // dangle. A *probe*: it never adopts (no reach fold).
-        let c: Carried<'a> = unsafe { std::mem::transmute::<Carried<'_>, Carried<'a>>(c) };
-        self.accepts_carried(c)
-    }
-
     /// Classify a spliced **cell** against this slot without adopting it — opens the delivery
-    /// envelope at a fresh brand under its retained host pin and routes the opened value through
-    /// [`accepts_resolved`](Self::accepts_resolved) (which re-anchors it to the slot's lifetime).
-    /// The picker may reject the candidate, so this deliberately does not adopt.
+    /// envelope at a fresh brand under its retained host pin and routes the opened value through the
+    /// lifetime-heterogeneous [`accepts_carried`](Self::accepts_carried) at that brand. No cast: the
+    /// slot's `'a` and the opened value's brand stay independent through a verdict-only walk. The
+    /// picker may reject the candidate, so this deliberately does not adopt.
     pub(crate) fn accepts_cell(&self, cell: &DeliveredCarried) -> bool {
-        cell.open(|c| self.accepts_resolved(c))
+        cell.open(|c| self.accepts_carried(c))
     }
 
     /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
@@ -593,12 +580,12 @@ impl<'a> KType<'a> {
 /// are mutually-satisfying (structurally equal) and neither strictly refines. Both
 /// directions memoize under `SigSatisfies`, keyed by the two signature digests (which fold
 /// their pins, so the key is exact).
-fn declared_sig_more_specific<'a>(
+fn declared_sig_more_specific<'a, 'b>(
     a: &ModuleSignature<'a>,
     pins_a: &[(String, KType<'a>)],
     digest_a: TypeDigest,
-    b: &ModuleSignature<'a>,
-    pins_b: &[(String, KType<'a>)],
+    b: &ModuleSignature<'b>,
+    pins_b: &[(String, KType<'b>)],
     digest_b: TypeDigest,
 ) -> bool {
     let forward_hit = type_memos::lookup(digest_a, digest_b, Relation::SigSatisfies);
@@ -643,11 +630,11 @@ fn declared_sig_more_specific<'a>(
 /// - covariant return: `ra == rb || ra ≺ rb`;
 /// - at least one strict edge (narrower width, a strictly-more-general param, or a
 ///   strictly-more-specific return).
-fn param_record_more_specific<'a>(
+fn param_record_more_specific<'a, 'b>(
     pa: &Record<KType<'a>>,
     ra: &KType<'a>,
-    pb: &Record<KType<'a>>,
-    rb: &KType<'a>,
+    pb: &Record<KType<'b>>,
+    rb: &KType<'b>,
 ) -> bool {
     if !pa.keys().all(|k| pb.get(k).is_some()) {
         return false;
@@ -678,7 +665,7 @@ fn param_record_more_specific<'a>(
 /// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
 /// call-by-name function parameters. Records and function params share the `Record`
 /// substrate but order opposite ways — do **not** unify the two helpers.
-fn record_value_more_specific<'a>(a: &Record<KType<'a>>, b: &Record<KType<'a>>) -> bool {
+fn record_value_more_specific<'a, 'b>(a: &Record<KType<'a>>, b: &Record<KType<'b>>) -> bool {
     if !b.keys().all(|k| a.get(k).is_some()) {
         return false;
     }
@@ -724,8 +711,8 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 ///   specific than the value's (`slot_pt == &a.ktype || slot_pt ≺ &a.ktype`). Extra
 ///   slot params the value doesn't declare are fine — under call-by-name they arrive
 ///   unbound (width drop), so there is no exhaustiveness check.
-pub(super) fn function_compat<'a>(
-    sig: &ExpressionSignature<'a>,
+pub(super) fn function_compat<'a, 'v>(
+    sig: &ExpressionSignature<'v>,
     params: &Record<KType<'a>>,
     ret: &KType<'a>,
 ) -> bool {

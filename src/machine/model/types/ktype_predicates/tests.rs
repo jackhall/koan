@@ -162,9 +162,9 @@ fn record_disjoint_fields_incomparable() {
     assert!(!xz.is_more_specific_than(&xy));
 }
 
-/// `accepts_carried` is the same-lifetime core `accepts_part`'s `Spliced` arm delegates to: a
-/// resolved value classifies identically whether reached as a spliced part or opened directly. Also
-/// pins the value-shaped arms (object type-tag, type-channel `OfKind`) the delegation now owns.
+/// `accepts_carried` is the lifetime-heterogeneous classifier `accepts_part`'s `Spliced` arm
+/// delegates to: a resolved value classifies identically whether reached as a spliced part or opened
+/// directly. Also pins the value-shaped arms (object type-tag, type-channel `OfKind`) it owns.
 #[test]
 fn accepts_carried_matches_spliced_delegation() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
@@ -195,12 +195,12 @@ fn accepts_carried_matches_spliced_delegation() {
     assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n)));
 }
 
-/// A spliced **cell** classifies through `accepts_part` by opening at its own brand and re-anchoring
-/// for the same-lifetime predicate: a `7.0` value is admitted by `:Number` / `:Any` and refused by
-/// `:Str`, matching a direct `accepts_carried`. Built through the scope's own carrier surface
-/// (`resident_value_carrier` + `Sealed::seal`) — the exact construction a real splice rests on the
-/// working expression — so the open exercises the confined lifetime cast under Miri. Also pins the
-/// cell's `is_splice_free` (a resolved value is not raw AST, so the checked seal's guard rejects it).
+/// A spliced **cell** classifies through `accepts_part` by opening at its own brand and handing the
+/// value to the lifetime-heterogeneous `accepts_carried` (no re-anchoring): a `7.0` value is admitted
+/// by `:Number` / `:Any` and refused by `:Str`, matching a direct `accepts_carried`. Built through
+/// the scope's own carrier surface (`resident_value_carrier` + `Sealed::seal`) — the exact
+/// construction a real splice rests on the working expression. Also pins the cell's `is_splice_free`
+/// (a resolved value is not raw AST, so the checked seal's guard rejects it).
 #[test]
 fn spliced_cell_classifies_by_opening() {
     use crate::builtins::test_support::run_root_bare;
