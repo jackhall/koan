@@ -29,8 +29,10 @@ which content-addressed systems like git treat hash equality as identity.
 Because identity is content, two declarations with the same structure denote
 the same type: a `NEWTYPE` in an FN body elaborated on every call yields the
 *same* type each time, and equal record, union, or function types built in
-different corners of a program compare equal by digest. Dispatch, matching, and
-memo caches all inherit this unification.
+different corners of a program compare equal by digest. Signatures share the
+rule: a `SIG` digests over its schema content and a module over its sealed
+self-sig, so identical interfaces denote one signature type. Dispatch, matching,
+and memo caches all inherit this unification.
 
 ## Opaque ascription is the generative exception
 
@@ -40,9 +42,16 @@ content, so two applications of the same signature member over the same
 representation are distinct types. Generativity survives exactly where
 abstraction demands it and nowhere else.
 
-Minted leaves also appear where a schema embeds an id-keyed type (`Signature`,
-`AbstractType`): those digests are stable within a run, and the
-order-independence property above is scoped to types without minted leaves.
+The sole remaining id-keyed leaf is `AbstractType`: its digest folds the
+minting scope id, is stable within a run, and the order-independence property
+above is scoped to types without such a leaf. A `Signature` is *not* id-keyed —
+it digests by its source's schema content (member names, abstract members'
+arity, and manifest-member / value-slot type digests), with references to the
+schema's own abstract members canonicalized to a name leaf. Two textually
+identical `SIG` declarations, and two modules with identical interfaces, are
+therefore one type. Opacity still rides `AbstractType`: the abstract-type slots
+a `:|` view mints stay id-keyed, so they flow into a self-sig's content digest
+unchanged and two opaque views stay distinct.
 
 ## Content lives on the type value
 

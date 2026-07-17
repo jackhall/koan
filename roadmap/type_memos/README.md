@@ -30,14 +30,21 @@ paragraphs name the gap, not the fix.
   two distinct signatures falls to `Any`, so a heterogeneous module list never satisfies a
   `:(LIST OF Ordered)` slot even when every member satisfies `Ordered`. A principled join
   would meet at a common signature supertype over the canonical subtyping relation.
+- **Empty signature is not `:Module`.** An empty `SIG E = ()` constrains nothing, so it admits
+  exactly the modules the `:Module` lattice top admits — under content identity the two are the
+  same interface and should be one type. But `signature_digest` gives `SigSource::Empty` a distinct
+  `TAG_SIG_EMPTY` sentinel digest ([`type_digest.rs`](../../src/machine/model/types/type_digest.rs)),
+  so `E` and `:Module` compare unequal, and once
+  [structural value equality](../refactor/structural-value-equality.md) ships `(E == :Module)`
+  observably returns false. Relatedly, the `Signature` arms of `is_more_specific_than`
+  ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)) branch on the
+  `Empty` source *variant* rather than on content, so they treat two equal-content signature types
+  asymmetrically. A principled fix makes `Empty` digest and specify by its (empty) content like
+  every other signature.
 - **Interned type content behind `Copy` handles.** With digests shipped, structural
   content (and `RecursiveSet`) could move behind per-frame registry entries, making
   `KType` a `Copy` `{digest, registry}` handle: trivial clones, per-frame dedup of
   repeatedly built types, and a transitively-closed registry whose lift merge early-outs
   at any digest the parent already holds. Justified by measured clone cost, not assumed;
   reconciling `RecursiveSet`'s shared content is this item's nominal instance.
-- **Value equality by rendering.** `Parseable::equal` compares `summarize()` output, so two
-  distinct values with identical rendering compare equal under `==` — for modules, two
-  same-path modules with different members. The pattern is shared by every `KObject` shape;
-  a structural (or identity) equality ruling would replace the rendered-string compare.
 

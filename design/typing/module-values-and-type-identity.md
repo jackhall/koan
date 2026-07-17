@@ -38,9 +38,18 @@ after creation. Implicit
 resolution keeps its lexically-scoped candidate set ([implicits.md](implicits.md)), so
 structural satisfaction does not widen implicit search.
 
+A signature's type identity is its schema content: a `SIG` digests over its members
+(names, abstract-member arity, manifest and VAL-slot types, with references to the
+signature's own abstract members canonicalized by name), and a module's principal
+signature digests over its sealed self-sig. Two textually identical `SIG`
+declarations, and two unascribed modules with identical interfaces, are one type —
+the same structural-unification rule that governs every other `KType`.
+
 Ascription operators construct views; they do not grant admission: `:!` asserts satisfaction and yields a
 transparent view; `:|` is generative, minting fresh abstract-type identities per
-application. `AbstractType` identity is id-keyed — `KType` holds no `&Module`.
+application. `AbstractType` identity is id-keyed — `KType` holds no `&Module` — so
+the abstract-type slots a `:|` view mints flow into its self-sig's content digest
+unchanged, keeping two opaque views distinct.
 
 ## The empty signature
 
@@ -64,7 +73,9 @@ Subtype outcomes — including signature subtyping, the most frequently checked 
 design adds — are cached in a thread-local flat LRU keyed by `(subject digest, candidate
 digest, relation)`, positive and negative outcomes alike. A module's structural satisfaction
 check (`self_sig <: schema(sig)`) memoizes under the `SigSatisfies` relation with the module's
-and signature's digests as the key; a repeat admissibility check is then O(1). Dispatch
+self-sig content digest and the signature's content digest as the key; because the subject
+keys on interface content rather than the module mint, two modules with identical interfaces
+share one cached verdict, and a repeat admissibility check is O(1). Dispatch
 specificity between two distinct SIG slots reuses the same relation to order them (see
 [modules.md § First-class modules](modules.md#first-class-modules)). Types are immutable, so
 verdicts never invalidate; LRU eviction or a cold thread costs a re-walk, never a wrong

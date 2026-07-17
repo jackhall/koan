@@ -1,80 +1,92 @@
 # Structural value equality
 
-Compare values by structure, not by their rendered strings.
+Compare values by structure, not by their rendered strings — and give the language
+`==` / `!=`.
 
-**Problem.** Value equality is string-based. [`Parseable::equal`](../../src/machine/model/types/ktraits.rs)
-is implemented as `self.summarize() == other.summarize()` — rendering both operands to
-a `String` and comparing the strings — for
-[`KObject`](../../src/machine/model/values/kobject.rs),
+**Problem.** Value equality is string-based and the language has no equality
+operator (`< <= > >=` are the only comparisons).
+[`Parseable::equal`](../../src/machine/model/types/ktraits.rs) is implemented as
+`self.summarize() == other.summarize()` — rendering both operands and comparing the
+strings — for [`KObject`](../../src/machine/model/values/kobject.rs),
 [`KKey`](../../src/machine/model/values/kkey.rs), and
-[`KExpression`](../../src/machine/model/ast.rs). `summarize()` is the same renderer
-`PRINT` uses. The `PartialEq` / `Eq` / `Hash` impls on `dyn Serializable`
-([`ktraits.rs`](../../src/machine/model/types/ktraits.rs)) — the dict-key path —
-delegate to it, so dict-key identity is string-based too. There is no per-variant
-structural comparison and no derived `PartialEq` / `Eq` on `KObject` / `KType`.
+[`KExpression`](../../src/machine/model/ast.rs). Its one live runtime consumer is
+the dict-key path: the `PartialEq` impl on `dyn Serializable`
+([`ktraits.rs`](../../src/machine/model/types/ktraits.rs)) delegates to it, and the
+sole implementor, `KKey`, compares rendered strings while hashing `f64::to_bits` —
+so two NaN keys with different bit patterns are equal-but-hash-unequal, violating
+the map contract. For `KObject`/`KExpression` the string compare is latent but
+wrong wherever rendering loses identity: `NaN` renders equal to `NaN`; distinct
+newtypes with identical representations render alike; records are order-blind by
+spec but render in declaration order; `Tagged` `type_args` and container element
+types are erased; expressions compare by rendered syntax even when spliced values
+differ.
 
-Comparing rendered strings is wrong wherever the rendered form loses or distorts
-identity:
-
-- *Numbers.* `NaN` renders equal to `NaN` (should be unequal); `-0.0` / `0.0` and
-  formatting collisions conflate distinct values.
-- *Nominal identity.* Two different newtypes with identical reprs render alike — the
-  `Wrapped { type_id }` identity is dropped.
-- *Records.* Records are order-blind by spec, but `summarize()` renders fields in order,
-  so reordered-field records compare unequal.
-- *Parameterization.* `Tagged` `type_args` and container element types are erased by
-  rendering.
-- *Functions / expressions.* Compared by syntax, not identity.
-
-Separately, `KType` impls `PartialEq` only *same-lifetime*
-([`impl<'a> PartialEq for KType<'a>`](../../src/machine/model/types/ktype.rs)), so a `KType<'a>` cannot
-be compared to a `KType<'b>` without coercion. The dispatch-resolution decouple (threading a scope at
-an independent `'b` so `resolve_dispatch` no longer ties scope = expr = result, shipped with the
-FrameStorage restructure) needs exactly this comparison,
-and works around it with a read-only `unsafe` lifetime transmute in
-[`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) (coercing the matched part
-to the type's lifetime for the structural compare).
+Separately, `KType`'s `PartialEq` is same-lifetime only
+([`impl<'a> PartialEq for KType<'a>`](../../src/machine/model/types/ktype.rs))
+even though the digest compare it performs is lifetime-independent, and the
+cross-lifetime step dispatch needs is discharged by an `unsafe` transmute in
+[`KType::accepts_resolved`](../../src/machine/model/types/ktype_predicates.rs)
+re-anchoring an entire `Carried` so the same-lifetime predicate suite can run.
 
 **Acceptance criteria.**
 
-- `KType` structural equality is **lifetime-agnostic** (`KType<'a>` compares to `KType<'b>` directly),
-  and the interim `unsafe` lifetime transmute in `KType::accepts_part` is removed (the `Rc::ptr_eq`
-  identity arms compare allocation addresses, the structural arms compare cross-lifetime).
-
-- Value equality is a per-variant structural comparison over `KObject` (and dict keys),
-  not a comparison of rendered strings; the `summarize`-based `equal` path is gone for
-  value equality.
-- The enumerated cases are correct: `NaN ≠ NaN`; distinct newtypes with equal reprs are
-  unequal; records compare equal under field reordering; container and `Tagged` type
-  parameters participate; function/expression equality is defined deliberately (by
-  identity, not syntax).
-- Dict-key equality and hashing use the structural comparison and stay consistent
-  (equal keys hash equal), respecting the record order-blind rule.
-- Equality and the renderer terminate on a cyclic value, if and when one is
-  constructible.
+- `==` and `!=` builtins exist over `(left :Any) op (right :Any) -> Bool`,
+  **binary-only**: they belong to no operator group, and a chain
+  (`a == b == c`, or mixed with `<`) is a structured error.
+- Value equality is a per-variant structural walk over `KObject`; no rendered-string
+  equality remains anywhere (`Parseable::equal` is gone; the deferred-return
+  duplicate-overload check compares expressions structurally).
+- Numbers compare IEEE: `NaN != NaN`, `-0.0 == 0.0`.
+- Nominal identity participates: distinct newtypes/abstract types with equal
+  representations are unequal, and a `Wrapped` value is unequal to its bare
+  representation; identity compares via digest-based `KType` equality.
+- Records compare order-blind under field reordering.
+- Containers gate on comparability: `List`/`Dict`/`Record`/`Tagged` compare contents
+  iff their memoized/ascribed type parameters are related (one `satisfied_by` the
+  other, either direction); unrelated parameters compare unequal. The relation is
+  deliberately intransitive and the design doc says so.
+- Module and function operands (at any depth of the walk) are a structured error,
+  not `false`; the module message names `(TYPE OF m)` comparison as the interface
+  idiom.
+- `KExpression` equality is structural over parts; spliced results compare by the
+  value walk.
+- Dict keys are the concrete `KKey` (the `Box<dyn Serializable>` slot and the
+  `Serializable` trait are deleted); NaN keys are rejected at construction, `-0.0`
+  normalizes to `0.0`, and `KKey`'s `PartialEq`/`Hash` agree.
+- `KType` structural equality is lifetime-agnostic (`KType<'a>` compares to
+  `KType<'b>` directly), the predicate suite takes heterogeneous slot/value
+  lifetimes, and the `unsafe` transmute in `KType::accepts_resolved` is deleted.
+- Equality terminates on every constructible value (values are acyclic today; the
+  cycle-guard obligation transfers to
+  [Constructing circular values](../type_language/circular-value-construction.md)
+  if value cycles land).
 
 **Directions.**
 
-- *Derive vs dedicated walk — open.* Either implement `PartialEq` / `Eq` structurally
-  on `KObject` / `KType` (custom where needed) or write a dedicated `value_eq` walk.
-  Recommended: a dedicated walk, so float/NaN handling, record order-blindness, and
-  nominal identity are explicit rather than fighting a derive.
-- *Nominal identity source — open.* Value-side newtype/tagged equality still routes
-  through rendering today; the shipped `Copy` type digest from
-  [Type identity](../../design/typing/type-identity.md) gives a cheaper comparison.
-  Coordinate so equality keys on that digest rather than baking in `Rc::ptr_eq`.
-- *Hash consistency — decided.* The dict-key `Hash` impl is rewritten alongside `equal`
-  so structural equality and hashing agree — no rendered-string hashing.
+- *Dedicated walk vs derive — decided.* A dedicated `value_equal` walk returning
+  `Result<bool, _>` (banned operands are errors), so IEEE floats, order-blind
+  records, nominal identity, and the comparability gate are explicit.
+- *Nominal identity source — decided.* The shipped content digest; no `Rc::ptr_eq`
+  in equality semantics.
+- *Comparability gate — decided.* Type parameters participate via subtype
+  relatedness, trading transitivity for ascription-invariance
+  (`f(x) == x` across a coarsening boundary) plus empty-container distinction.
+- *Module/function equality — decided.* Banned operands; module values are
+  generative (fresh mint per evaluation), so the honest comparisons are interface
+  content (`TYPE OF`) or nothing. A directional `SATISFIES` operator stays future
+  work.
+- *Chaining — decided.* Binary-only; equality joins no pairwise-chain group.
+- *Hash consistency — decided.* `KKey` is the only hashable domain; its equality and
+  hash read the same bits over a NaN-free, zero-normalized key space.
 
 ## Dependencies
 
-An engine-internal value-semantics item. It is the comparison side of
+The comparison side of
 [Constructing circular values](../type_language/circular-value-construction.md) (a
-cyclic value must not hang equality) and is simplified by
-[Type identity](../../design/typing/type-identity.md) (a `Copy` nominal
-identity). Update [design/execution/README.md](../../design/execution/README.md) if a
-documented value-equality semantics lands.
+cyclic value must not hang equality). Implementation plan:
+`scratch/structural-value-equality-plan.md` (untracked).
 
-**Requires:** none — engine-internal.
+**Requires:**
+
 
 **Unblocks:** none tracked yet.
