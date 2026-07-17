@@ -4,12 +4,12 @@
 //! them; a transparent view records the source's concrete types.
 
 use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one_err,
-    run_root_silent,
+    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one,
+    run_one_err, run_root_silent,
 };
 use crate::machine::model::KType;
 use crate::machine::model::Module;
-use crate::machine::model::{memo_hit_count, memo_reset};
+use crate::machine::model::{memo_hit_count, memo_reset, KObject};
 use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
@@ -199,5 +199,53 @@ fn manifest_member_mismatch_names_the_member() {
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),
         "expected a manifest-mismatch error naming `Tag`, got {err}",
+    );
+}
+
+/// Opacity survives content identity: two `:|` ascriptions of the same module against the same
+/// SIG mint distinct per-call abstract identities, so their `TYPE OF` types stay distinct even
+/// though both self-sigs digest by content. This is the sole generative exception (`AbstractType`
+/// stays id-keyed).
+#[test]
+fn opaque_views_have_distinct_type_of() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
+         MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
+         LET v1 = (int_ord :| Ordered)\n\
+         LET v2 = (int_ord :| Ordered)",
+    );
+    let v1 = lookup_module(scope, "v1");
+    let v2 = lookup_module(scope, "v2");
+    assert_ne!(
+        KObject::Module(v1).ktype(),
+        KObject::Module(v2).ktype(),
+        "each opaque ascription is a fresh generative identity",
+    );
+}
+
+/// The `SigSatisfies` memo keys the subject on the module's self-sig content digest, so a second
+/// module with an identical interface reuses the first's cached satisfaction verdict rather than
+/// re-walking `sig_subtype`.
+#[test]
+fn identical_modules_share_satisfaction_verdict() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG Ord = ((VAL x :Number))\n\
+         MODULE a = ((LET x = 1))\n\
+         MODULE b = ((LET x = 2))\n\
+         FN (TAKE m :Ord) -> Number = (m.x)",
+    );
+    memo_reset();
+    run_one(scope, parse_one("TAKE a")); // computes + caches the verdict for self-sig {x:Number}
+    let before = memo_hit_count();
+    run_one(scope, parse_one("TAKE b")); // b's self-sig has identical content -> cache hit
+    assert!(
+        memo_hit_count() > before,
+        "an identical-interface module reuses the cached satisfaction verdict",
     );
 }

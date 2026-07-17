@@ -186,4 +186,74 @@ mod tests {
             "Foo must not bind (type side) when its body errors",
         );
     }
+
+    /// Content identity: two textually identical SIG declarations denote one type; a member whose
+    /// type or name differs is a distinct type. Names bind the declaration, not the schema, so the
+    /// differing binder names `Alpha`/`Beta` do not distinguish.
+    #[test]
+    fn identical_sigs_share_identity_differing_members_distinguish() {
+        use crate::machine::model::KType;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG Alpha = ((VAL x :Number) (VAL y :Str))\n\
+             SIG Beta = ((VAL x :Number) (VAL y :Str))\n\
+             SIG Gamma = ((VAL x :Number) (VAL y :Bool))\n\
+             SIG Delta = ((VAL x :Number) (VAL z :Str))",
+        );
+        let alpha = scope.resolve_type("Alpha").expect("Alpha binds");
+        let beta = scope.resolve_type("Beta").expect("Beta binds");
+        let gamma = scope.resolve_type("Gamma").expect("Gamma binds");
+        let delta = scope.resolve_type("Delta").expect("Delta binds");
+        assert!(matches!(alpha, KType::Signature { .. }));
+        assert_eq!(alpha, beta, "identical schemas are one type");
+        assert_ne!(alpha, gamma, "a differing member type distinguishes");
+        assert_ne!(alpha, delta, "a differing member name distinguishes");
+    }
+
+    /// The binder-canonicalization trick: a value slot referencing the SIG's own abstract member
+    /// digests as a name leaf, so two identical declarations unify despite distinct decl ids — and
+    /// the self-reference digests differently from the same slot spelled with a manifest type.
+    #[test]
+    fn sig_self_referential_slot_canonicalizes() {
+        use crate::machine::model::KType;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "SIG OrdA = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
+             SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
+             SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
+        );
+        let a = scope.resolve_type("OrdA").expect("OrdA binds");
+        let b = scope.resolve_type("OrdB").expect("OrdB binds");
+        let manifest = scope.resolve_type("OrdManifest").expect("OrdManifest binds");
+        assert!(matches!(a, KType::Signature { .. }));
+        assert_eq!(a, b, "self-reference canonicalizes; identical declarations unify");
+        assert_ne!(
+            a, manifest,
+            "an abstract self-reference is not the same content as a manifest slot type",
+        );
+    }
+
+    /// `WITH` pins fold into signature identity: differently-pinned views of one SIG are distinct,
+    /// and a pinned view differs from the bare SIG. (Pin folding is unchanged by content identity —
+    /// this guards it stays a content distinction.)
+    #[test]
+    fn with_pins_distinguish_signature_identity() {
+        use crate::machine::model::KType;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "SIG Container = ((TYPE Elem) (VAL item :Elem))");
+        let container = match scope.resolve_type("Container") {
+            Some(KType::Signature { sig, .. }) => *sig,
+            _ => panic!("Container should be a signature"),
+        };
+        let pin_num = KType::signature(container, vec![("Elem".into(), KType::Number)]);
+        let pin_str = KType::signature(container, vec![("Elem".into(), KType::Str)]);
+        let bare = KType::signature(container, Vec::new());
+        assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
+        assert_ne!(pin_num, bare, "a pin refines away from the bare signature");
+    }
 }

@@ -207,3 +207,32 @@ fn type_of_unstamped_empty_container_errors() {
         "expected an unknowable-element-type ShapeError, got {err}",
     );
 }
+
+/// Two unascribed modules with identical interfaces report equal `TYPE OF` types — identity is
+/// self-sig content, not the module mint. A module whose interface differs by one member's type is
+/// a distinct type. (`zero`'s *value* differing would not distinguish — a self-sig records slot
+/// types, not values — so the distinct module differs by a manifest member type.)
+#[test]
+fn identical_modules_share_type_of() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE m1 = ((LET Elt = Number) (LET zero = 7))\n\
+         MODULE m2 = ((LET Elt = Number) (LET zero = 7))\n\
+         MODULE m3 = ((LET Elt = Str) (LET zero = 7))",
+    );
+    let m1 = lookup_module(scope, "m1");
+    let m2 = lookup_module(scope, "m2");
+    let m3 = lookup_module(scope, "m3");
+    assert_eq!(
+        KObject::Module(m1).ktype(),
+        KObject::Module(m2).ktype(),
+        "identical interfaces share one type",
+    );
+    assert_ne!(
+        KObject::Module(m1).ktype(),
+        KObject::Module(m3).ktype(),
+        "a differing manifest member distinguishes",
+    );
+}
