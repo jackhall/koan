@@ -828,8 +828,9 @@ fn union_specificity_ordering() {
     assert!(!number_or_str.is_more_specific_than(&str_or_number));
 }
 
-/// A module value's `ktype()` reports `Signature { SelfOf(m) }`, and its identity keys on the
-/// module's `scope_id` (equal for the same module, distinct across modules).
+/// A module value's `ktype()` reports `Signature { SelfOf(m) }`, and its identity is its self-sig
+/// *content*: two modules with identical interfaces share one type, a differing member
+/// distinguishes them.
 #[test]
 fn module_object_ktype_reports_self_sig() {
     use crate::builtins::default_scope;
@@ -846,21 +847,41 @@ fn module_object_ktype_reports_self_sig() {
     let m: &Module = region
         .brand()
         .alloc_module(Module::new("Mod".into(), child));
+    m.type_members
+        .borrow_mut()
+        .insert("Elt".into(), KType::Number);
     let kt = KObject::Module(m).ktype();
     assert!(matches!(
         &kt,
         KType::Signature { sig: SigSource::SelfOf(mm), pinned_slots, .. }
             if mm.scope_id() == m.scope_id() && pinned_slots.is_empty()
     ));
-    // Identity keys on `scope_id`: same module compares equal, a distinct module does not.
+    // Identity is content: the same module equals its own re-derived signature.
     assert_eq!(kt, KType::signature(SigSource::SelfOf(m), Vec::new()));
+
+    // A second module with the identical interface shares the type — content, not mint.
     let child2 = region
         .brand()
         .alloc_scope(Scope::child_under_module(scope, "Mod2".into()));
     let m2: &Module = region
         .brand()
         .alloc_module(Module::new("Mod2".into(), child2));
-    assert_ne!(kt, KObject::Module(m2).ktype());
+    m2.type_members
+        .borrow_mut()
+        .insert("Elt".into(), KType::Number);
+    assert_eq!(kt, KObject::Module(m2).ktype());
+
+    // A module whose interface differs by one member is a distinct type.
+    let child3 = region
+        .brand()
+        .alloc_scope(Scope::child_under_module(scope, "Mod3".into()));
+    let m3: &Module = region
+        .brand()
+        .alloc_module(Module::new("Mod3".into(), child3));
+    m3.type_members
+        .borrow_mut()
+        .insert("Elt".into(), KType::Str);
+    assert_ne!(kt, KObject::Module(m3).ktype());
 }
 
 /// `matches_value` admits a module *object* into a `Signature` slot: a `Declared` slot by

@@ -783,6 +783,7 @@ digraph {
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_digest" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::type_memos" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::type_memos" -> "koan::machine::model::types" [label="uses", style="dashed"];

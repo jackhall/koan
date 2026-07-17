@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use crate::machine::core::{Scope, ScopeId};
 
 use super::super::types::{
-    memo_insert, memo_lookup, module_digest, sig_subtype, signature_digest, KType, Relation,
-    SigSchema, SigSource,
+    memo_insert, memo_lookup, schema_content_digest, sig_subtype, signature_digest, KType,
+    Relation, SigSchema, SigSource, TypeDigest,
 };
 
 /// First-class module value. `path` is the lexical-source label (`"int_ord"`,
@@ -48,6 +48,10 @@ pub struct Module<'a> {
     /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
     /// installed after the surrounding value is alloc'd.
     self_sig: OnceCell<SigSchema<'a>>,
+    /// The self-sig content digest — the identity a `Signature { SelfOf(self) }` carries and the
+    /// `SigSatisfies` memo subject key. Filled once from the sealed self-sig (content is stable
+    /// after `seal_self_sig`) and immutable thereafter.
+    self_sig_digest: OnceCell<TypeDigest>,
 }
 
 impl<'a> Module<'a> {
@@ -58,6 +62,7 @@ impl<'a> Module<'a> {
             type_members: RefCell::new(HashMap::new()),
             slot_type_tags: RefCell::new(HashMap::new()),
             self_sig: OnceCell::new(),
+            self_sig_digest: OnceCell::new(),
         }
     }
 
@@ -76,6 +81,15 @@ impl<'a> Module<'a> {
         self.self_sig.get_or_init(|| SigSchema::raw_self_sig(self))
     }
 
+    /// The module's self-sig content digest — the identity a `Signature { SelfOf(self) }` carries
+    /// and the `SigSatisfies` memo subject key. Computed once from the sealed self-sig and cached;
+    /// a bare, never-sealed [`Module::new`] derives its self-sig lazily first, then digests that.
+    pub fn self_sig_digest(&self) -> TypeDigest {
+        *self
+            .self_sig_digest
+            .get_or_init(|| schema_content_digest(self.self_sig()))
+    }
+
     /// Pin agreement for a `WITH`-specialized signature slot: every pinned slot names a type
     /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
     /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
@@ -92,7 +106,7 @@ impl<'a> Module<'a> {
     /// and `sig`'s digests, both outcomes cached; a `WITH`-pinned slot's residue is checked
     /// separately via [`Module::satisfies_pins`].
     pub fn structurally_satisfies(&self, sig: &'a ModuleSignature<'a>) -> bool {
-        let subject = module_digest(self.scope_id());
+        let subject = self.self_sig_digest();
         let candidate = signature_digest(SigSource::Declared(sig), &[]);
         if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
             return hit;
@@ -127,6 +141,9 @@ pub struct ModuleSignature<'a> {
     /// ([`SigSchema::project_decl`]) — every consumer (`of_sig`, ascription, `WITH`) reads this
     /// stored schema rather than re-classifying the decl scope's type table per read.
     schema: SigSchema<'a>,
+    /// The schema content digest — the identity a `Signature { Declared(self) }` carries. Filled
+    /// once from the stored schema (sealed at SIG finish) and immutable thereafter.
+    schema_digest: OnceCell<TypeDigest>,
 }
 
 impl<'a> ModuleSignature<'a> {
@@ -140,6 +157,7 @@ impl<'a> ModuleSignature<'a> {
             path,
             decl_scope_ref: decl_scope,
             schema: SigSchema::project_decl(decl_scope),
+            schema_digest: OnceCell::new(),
         }
     }
 
@@ -152,10 +170,20 @@ impl<'a> ModuleSignature<'a> {
         &self.schema
     }
 
-    /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is
-    /// `sig.sig_id()` + `pinned_slots`). Each `SIG` declares its own decl_scope and thus a
-    /// fresh `ScopeId`; two `SIG Foo = (...)` in the same lexical scope already error
-    /// (`Rebind`), so distinct `ModuleSignature`s always have distinct ids.
+    /// The signature's schema content digest — the identity a `Signature { Declared(self) }`
+    /// carries. Computed once from the stored schema and cached.
+    pub fn schema_digest(&self) -> TypeDigest {
+        *self
+            .schema_digest
+            .get_or_init(|| schema_content_digest(&self.schema))
+    }
+
+    /// The same-declaration key overload-specificity uses to refine between two signature slots
+    /// sourced from this declaration with different `WITH` pins — not the type's identity, which
+    /// is the schema content digest (see [`schema_digest`](Self::schema_digest)). Each `SIG`
+    /// declares its own decl_scope and thus a fresh `ScopeId`; two `SIG Foo = (...)` in the same
+    /// lexical scope already error (`Rebind`), so distinct `ModuleSignature`s always have
+    /// distinct ids.
     pub fn sig_id(&self) -> ScopeId {
         self.decl_scope().id
     }

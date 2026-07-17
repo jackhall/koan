@@ -9,10 +9,11 @@
 //! The digest is a pure function of type content, so two independently built types with the
 //! same content digest equal with no shared interner. The two generative exceptions fold a
 //! minted `ScopeId` into the content — opaque ascription's per-application nonce (a set's
-//! `generative_nonce`) and the id-keyed leaves (`Signature`, whose `SelfOf` source keys on the
-//! module's scope id, and `AbstractType`) —
-//! so distinct abstractions stay distinct; the order-independence property is scoped to
-//! types without such minted leaves.
+//! `generative_nonce`) and the sole id-keyed leaf, `AbstractType` — so distinct abstractions
+//! stay distinct. A `Signature` digests by its source's schema content (see
+//! [`schema_content_digest`]), so two textually identical declarations minted against
+//! different scope ids digest identically; the order-independence property is scoped to
+//! types without a minted leaf.
 //!
 //! **The hasher lives here and only here.** Swapping the hash function or width is a
 //! one-file change (the roadmap marks the exact function open, recommending 128-bit
@@ -21,6 +22,7 @@
 //! concatenation is unambiguous, and every child digest / `ScopeId` / integer is fed
 //! little-endian.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::ScopeId;
@@ -29,6 +31,7 @@ use super::kkind::KKind;
 use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::{NominalSchema, RecursiveSet};
+use super::sig_schema::SigSchema;
 use super::signature::DeferredReturnSurface;
 
 /// A `KType`'s content identity: the low 128 bits of a BLAKE3 hash of its content.
@@ -61,10 +64,13 @@ const TAG_SET_REF: u8 = 0x14;
 const TAG_RECURSIVE_GROUP: u8 = 0x15;
 const TAG_UNION: u8 = 0x16;
 const TAG_SIGNATURE: u8 = 0x17;
-const TAG_MODULE: u8 = 0x18;
+// 0x18 (TAG_MODULE) is retired — never reuse it.
 const TAG_ABSTRACT_TYPE: u8 = 0x19;
 const TAG_CONSTRUCTOR_APPLY: u8 = 0x1A;
 const TAG_RECURSIVE_SET: u8 = 0x1B;
+const TAG_SIG_CONTENT: u8 = 0x1C;
+const TAG_SIG_SELF_REF: u8 = 0x1D;
+const TAG_SIG_EMPTY: u8 = 0x1E;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -235,11 +241,13 @@ pub(crate) fn constructor_apply_digest(ctor: TypeDigest, args: &[KType]) -> Type
     h.finish()
 }
 
-/// A module-signature type — positional over `pinned_slots` (matching `PartialEq`; do NOT
-/// sort).
+/// A module-signature type's digest: the schema content digest of its [`SigSource`] (identity by
+/// interface, not by mint — see
+/// [type-identity.md](../../../../design/typing/type-identity.md)) wrapped with the `WITH` pins
+/// that specialize it. Positional over `pinned_slots` (matching `PartialEq`; do NOT sort).
 pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)]) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
-    h.scope_id(sig.sig_id());
+    h.digest(sig.content_digest());
     h.count(pinned_slots.len());
     for (name, kt) in pinned_slots {
         h.string(name).digest(kt.digest());
@@ -247,12 +255,153 @@ pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)])
     h.finish()
 }
 
-/// A module value's identity digest, keyed on its scope id — what
-/// [`SigSource::SelfOf`](super::ktype::SigSource::SelfOf) feeds the enclosing signature's digest,
-/// and the subject/candidate key the [`type_memos`](super::type_memos) `SigSatisfies` relation
-/// uses for a module's self-sig side.
-pub(crate) fn module_digest(id: ScopeId) -> TypeDigest {
-    DigestHasher::new(TAG_MODULE).scope_id(id).finish()
+/// The content digest of a normalized signature schema — a pure function of its members:
+/// abstract members `(name, arity)`, manifest members `(name, type)`, and value slots
+/// `(name, type)`, each group fed in name-sorted order (the maps are unordered). References to
+/// the schema's *own* abstract members are canonicalized to a `(TAG_SIG_SELF_REF, name)` leaf, so
+/// two textually identical declarations — whose members are minted against different scope ids —
+/// digest identically. Every other minted `AbstractType` (an opaque view's slot tags, a manifest
+/// member sourced from another sig) keeps its id-keyed stored digest, so opacity stays generative.
+/// A module / signature caches this per value (see `Module::self_sig_digest`,
+/// `ModuleSignature::schema_digest`).
+pub(crate) fn schema_content_digest(schema: &SigSchema) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_SIG_CONTENT);
+
+    let mut abstracts: Vec<(&str, Option<usize>)> = schema
+        .abstract_members
+        .iter()
+        .map(|(name, (_, arity))| (name.as_str(), *arity))
+        .collect();
+    abstracts.sort_by(|a, b| a.0.cmp(b.0));
+    h.count(abstracts.len());
+    for (name, arity) in abstracts {
+        h.string(name);
+        match arity {
+            Some(n) => {
+                h.byte(1).count(n);
+            }
+            None => {
+                h.byte(0);
+            }
+        }
+    }
+
+    feed_named_types(&mut h, &schema.manifest_members, schema);
+    feed_named_types(&mut h, &schema.value_slots, schema);
+    h.finish()
+}
+
+/// The digest `SigSource::Empty` folds in — the module-lattice top (`:Module`), the type a
+/// module-accepting slot lowers to. A fixed sentinel: distinct from every real schema's content
+/// digest (those open with `TAG_SIG_CONTENT`) and carrying no scope id, so the top keeps a stable
+/// identity of its own — it is a wildcard admitting every module, not a user's zero-member `SIG`,
+/// and the specificity walk branches on the `Empty` source variant to place it at the top.
+pub(crate) fn empty_schema_digest() -> TypeDigest {
+    DigestHasher::new(TAG_SIG_EMPTY).finish()
+}
+
+/// Feed a `name -> type` member map into `h` in name-sorted order (the map is unordered), each
+/// type digested through [`canonical_type_digest`] so self-member references collapse to a name
+/// leaf. Shared by manifest members and value slots.
+fn feed_named_types(h: &mut DigestHasher, members: &HashMap<String, KType>, schema: &SigSchema) {
+    let mut pairs: Vec<(&str, TypeDigest)> = members
+        .iter()
+        .map(|(name, kt)| (name.as_str(), canonical_type_digest(kt, schema)))
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    h.count(pairs.len());
+    for (name, d) in pairs {
+        h.string(name).digest(d);
+    }
+}
+
+/// A member type's digest, with references to `schema`'s own abstract members canonicalized to a
+/// `(TAG_SIG_SELF_REF, name)` leaf. Recurses through exactly the composite variants
+/// [`substitute_sig_members`](super::sig_schema::substitute_sig_members) rewrites — List, Dict,
+/// Record, KFunction, Union, ConstructorApply — rebuilding each composite's digest from its
+/// canonicalized children (mirroring the per-shape builders in this file). Every other variant
+/// contributes its stored digest, so a minted `AbstractType` from another source keeps its
+/// generative identity.
+fn canonical_type_digest(kt: &KType, schema: &SigSchema) -> TypeDigest {
+    if let Some(name) = schema_self_ref(kt, schema) {
+        return DigestHasher::new(TAG_SIG_SELF_REF).string(name).finish();
+    }
+    match kt {
+        KType::List { element, .. } => DigestHasher::new(TAG_LIST)
+            .digest(canonical_type_digest(element, schema))
+            .finish(),
+        KType::Dict { key, value, .. } => DigestHasher::new(TAG_DICT)
+            .digest(canonical_type_digest(key, schema))
+            .digest(canonical_type_digest(value, schema))
+            .finish(),
+        KType::Record { fields, .. } => {
+            let mut h = DigestHasher::new(TAG_RECORD);
+            feed_record_canonical(&mut h, fields, schema);
+            h.finish()
+        }
+        KType::KFunction { params, ret, .. } => {
+            let mut h = DigestHasher::new(TAG_KFUNCTION);
+            feed_record_canonical(&mut h, params, schema);
+            h.digest(canonical_type_digest(ret, schema)).finish()
+        }
+        KType::Union { members, .. } => {
+            let mut member_digests: Vec<TypeDigest> = members
+                .iter()
+                .map(|m| canonical_type_digest(m, schema))
+                .collect();
+            member_digests.sort_unstable();
+            let mut h = DigestHasher::new(TAG_UNION);
+            h.count(member_digests.len());
+            for d in member_digests {
+                h.digest(d);
+            }
+            h.finish()
+        }
+        KType::ConstructorApply { ctor, args, .. } => {
+            let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
+            h.digest(canonical_type_digest(ctor, schema));
+            h.count(args.len());
+            for a in args {
+                h.digest(canonical_type_digest(a, schema));
+            }
+            h.finish()
+        }
+        _ => kt.digest(),
+    }
+}
+
+/// `Some(member name)` iff `kt` references one of `schema`'s own abstract members — a first-order
+/// `AbstractType` sourced at the schema's `sig_id`, or a sentinel higher-kinded `TypeConstructor`
+/// `SetRef` naming one of the schema's abstract members (the ctor position of a `ConstructorApply`
+/// or a bare higher-kinded slot). The two shapes `substitute_sig_members` rewrites. `None` for a
+/// self-sig (no `sig_id`, no abstract members), so a self-sig's member digests are its content
+/// unchanged — including any generative `AbstractType` mints, which correctly stay id-keyed.
+fn schema_self_ref<'k>(kt: &'k KType, schema: &SigSchema) -> Option<&'k str> {
+    match kt {
+        KType::AbstractType { source, name } if schema.sig_id == Some(*source) => Some(name),
+        KType::SetRef { set, index }
+            if set.member(*index).kind == KKind::TypeConstructor
+                && set.member(*index).scope_id == ScopeId::SENTINEL
+                && schema.abstract_members.contains_key(&set.member(*index).name) =>
+        {
+            Some(&set.member(*index).name)
+        }
+        _ => None,
+    }
+}
+
+/// [`feed_record`] with each field type routed through [`canonical_type_digest`] — the canonical
+/// twin used inside a signature's schema-content walk.
+fn feed_record_canonical(h: &mut DigestHasher, record: &Record<KType>, schema: &SigSchema) {
+    let mut pairs: Vec<(&str, TypeDigest)> = record
+        .iter()
+        .map(|(name, value)| (name.as_str(), canonical_type_digest(value, schema)))
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    h.count(pairs.len());
+    for (name, d) in pairs {
+        h.string(name).digest(d);
+    }
 }
 
 /// A member reference's digest: `(set digest, index)` once the set is sealed.

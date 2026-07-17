@@ -35,7 +35,7 @@ pub use signature::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature,
     ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
-pub(crate) use type_digest::{module_digest, signature_digest};
+pub(crate) use type_digest::{schema_content_digest, signature_digest, TypeDigest};
 #[cfg(test)]
 pub(crate) use type_memos::{hit_count as memo_hit_count, reset as memo_reset};
 pub(crate) use type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};

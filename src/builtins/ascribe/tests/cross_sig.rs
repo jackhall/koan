@@ -92,20 +92,21 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     );
 }
 
-/// Two structurally-identical but distinct SIGs are mutually-satisfying under
-/// `sig_subtype` — forward and reverse both hold, so neither strictly refines the other.
-/// A module satisfying both admits both overloads with equal specificity, so dispatch is
-/// ambiguous. This guards the `forward && !reverse` strictness: a one-way check would let
-/// declaration order silently pick a winner instead of surfacing the tie.
+/// Two incomparable distinct SIGs — `Alpha` requires `x`, `Beta` requires `y` — that a module
+/// supplying both satisfies. Neither strictly `sig_subtype`s the other, so the overloads tie and
+/// dispatch is ambiguous. This guards the `forward && !reverse` strictness: a one-way check would
+/// let declaration order silently pick a winner instead of surfacing the tie. (Two *structurally
+/// identical* SIGs are one type under content identity, so a tie can only arise from incomparable
+/// interfaces like these, never from mutual satisfaction.)
 #[test]
-fn mutually_satisfying_distinct_sigs_are_ambiguous() {
+fn incomparable_distinct_sigs_are_ambiguous() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     memo_reset();
     run(
         scope,
         "SIG Alpha = ((VAL x :Number))\n\
-         SIG Beta = ((VAL x :Number))",
+         SIG Beta = ((VAL y :Number))",
     );
     run(
         scope,
@@ -115,7 +116,7 @@ fn mutually_satisfying_distinct_sigs_are_ambiguous() {
         scope,
         "FN (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))",
     );
-    run(scope, "MODULE implementation = ((LET x = 1))");
+    run(scope, "MODULE implementation = ((LET x = 1) (LET y = 2))");
     run(scope, "LET arg = implementation");
 
     let mut runtime = KoanRuntime::new();

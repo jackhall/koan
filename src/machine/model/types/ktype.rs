@@ -15,7 +15,7 @@ use super::record::Record;
 use super::recursive_set::{same_nominal, NominalSchema, RecursiveSet};
 use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
-use super::type_digest::{self, module_digest, TypeDigest};
+use super::type_digest::{self, TypeDigest};
 use super::type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
 use crate::machine::core::ScopeId;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
@@ -28,7 +28,9 @@ use std::rc::Rc;
 /// a module value's principal signature (its self-sig), the type
 /// [`KObject::Module`](crate::machine::model::values::KObject::Module) reports; `Empty` is the
 /// empty signature, the lattice top the `:Module` name lowers to (it constrains nothing, so
-/// it admits every module). Identity/hash key on [`sig_id`](SigSource::sig_id).
+/// it admits every module). A `KType::Signature`'s identity is its source's content digest (see
+/// [`content_digest`](SigSource::content_digest)); `sig_id` remains the dispatch-specificity key
+/// for same-declaration pin refinement.
 #[derive(Clone, Copy)]
 pub enum SigSource<'a> {
     Declared(&'a ModuleSignature<'a>),
@@ -37,7 +39,9 @@ pub enum SigSource<'a> {
 }
 
 impl<'a> SigSource<'a> {
-    /// Stable identity key for the enclosing `KType::Signature`. `Declared`/`SelfOf` key on
+    /// The same-declaration key overload-specificity uses (see `ktype_predicates`) to refine
+    /// between two signature slots sourced from the same declaration with different `WITH`
+    /// pins — not the type's identity, which is the content digest. `Declared`/`SelfOf` key on
     /// their decl/module `scope_id`; `Empty` keys on [`ScopeId::SENTINEL`]. A `Declared` never
     /// carries `SENTINEL`, and the `KType` hash mixes the variant discriminant, so no
     /// cross-variant collision arises.
@@ -46,6 +50,18 @@ impl<'a> SigSource<'a> {
             SigSource::Declared(s) => s.sig_id(),
             SigSource::SelfOf(m) => m.scope_id(),
             SigSource::Empty => ScopeId::SENTINEL,
+        }
+    }
+
+    /// The content digest of the schema this source names — a module's cached self-sig digest, a
+    /// signature's cached schema digest, or the fixed empty-schema digest. The identity a
+    /// `KType::Signature` built over this source carries, wrapped with its pins by
+    /// [`signature_digest`](super::type_digest::signature_digest).
+    pub(crate) fn content_digest(&self) -> TypeDigest {
+        match self {
+            SigSource::Declared(s) => s.schema_digest(),
+            SigSource::SelfOf(m) => m.self_sig_digest(),
+            SigSource::Empty => type_digest::empty_schema_digest(),
         }
     }
 
@@ -71,8 +87,8 @@ impl<'a> SigSource<'a> {
                 if m.scope_id() == m2.scope_id() {
                     return true;
                 }
-                let subject = module_digest(m.scope_id());
-                let candidate = module_digest(m2.scope_id());
+                let subject = m.self_sig_digest();
+                let candidate = m2.self_sig_digest();
                 if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
                     return hit;
                 }
@@ -193,8 +209,8 @@ pub enum KType<'a> {
     /// `pinned_slots` carries `WITH` abstract-type specializations (empty for a bare
     /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
-    /// Identity is `sig.sig_id()` + `pinned_slots`; the [`SigSource`]'s path is
-    /// diagnostic-only.
+    /// Identity is the source's schema-content digest + `pinned_slots`; the [`SigSource`]'s path
+    /// is diagnostic-only.
     Signature {
         sig: SigSource<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
