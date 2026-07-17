@@ -13,6 +13,7 @@ mod named_pairs;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use kkey::KKey;
-pub use kobject::{KObject, WrappedPayload};
+pub(crate) use kobject::expression_equal;
+pub use kobject::{KObject, ValueEqualityError, WrappedPayload};
 pub use module::{Module, ModuleSignature};
 pub use named_pairs::NamedPairs;

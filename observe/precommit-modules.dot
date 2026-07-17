@@ -110,6 +110,7 @@ digraph {
     "koan::machine::model::values::carried" [label="koan::machine::model::values::carried"];
     "koan::machine::model::values::kkey" [label="koan::machine::model::values::kkey"];
     "koan::machine::model::values::kobject" [label="koan::machine::model::values::kobject"];
+    "koan::machine::model::values::kobject::equality" [label="koan::machine::model::values::kobject::equality"];
     "koan::machine::model::values::module" [label="koan::machine::model::values::module"];
     "koan::machine::model::values::named_pairs" [label="koan::machine::model::values::named_pairs"];
     "koan::parse" [label="koan::parse"];
@@ -239,6 +240,7 @@ digraph {
     "koan::machine::model::values" -> "koan::machine::model::values::kobject" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::module" [label="owns", style="solid"];
     "koan::machine::model::values" -> "koan::machine::model::values::named_pairs" [label="owns", style="solid"];
+    "koan::machine::model::values::kobject" -> "koan::machine::model::values::kobject::equality" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::dict_literal" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::expression_tree" [label="owns", style="solid"];
     "koan::parse" -> "koan::parse::frame" [label="owns", style="solid"];
@@ -811,6 +813,14 @@ digraph {
     "koan::machine::model::values::kobject" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::kobject" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine::model::ast" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine::model::types" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::machine::model::values::kobject" [label="uses", style="dashed"];
+    "koan::machine::model::values::kobject::equality" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::values::module" -> "koan::machine::model::types" [label="uses", style="dashed"];

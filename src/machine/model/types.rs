@@ -20,6 +20,7 @@ pub use kkind::KKind;
 pub use ktraits::Parseable;
 pub use ktype::{KType, SigSource};
 pub use record::Record;
+pub(crate) use recursive_set::same_nominal;
 pub use recursive_set::{
     seal_recursive_refs, seal_union_refs, NominalMember, NominalSchema, ProjectedSchema,
     RecursiveSet,

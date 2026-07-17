@@ -141,9 +141,10 @@ impl<'a> PartialEq for DeferredReturn<'a> {
         match (self, other) {
             (DeferredReturn::Type(a), DeferredReturn::Type(b)) => a == b,
             (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
-                // `KExpression` doesn't impl `Eq` (parts carry `&'a KObject` futures);
-                // canonical render is sufficient for duplicate-overload detection.
-                a.summarize() == b.summarize()
+                // Structural syntax equality over the two captured expressions — the same walk
+                // `==` runs on a quoted value. A banned-shape splice inside a deferred return
+                // conservatively counts as a distinct overload (`Err` → not equal).
+                crate::machine::model::values::expression_equal(a, b).unwrap_or(false)
             }
             _ => false,
         }

@@ -11,7 +11,7 @@ pub use types::{
     KType, NominalMember, NominalSchema, Parseable, ProjectedSchema, Record, RecursiveSet,
     ReturnType, SigSource, SignatureElement, UntypedElement, UntypedKey,
 };
-pub use values::{Carried, Held, KKey, KObject};
+pub use values::{Carried, Held, KKey, KObject, ValueEqualityError};
 
 pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,

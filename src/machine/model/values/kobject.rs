@@ -10,6 +10,10 @@ use crate::machine::model::types::{
 
 use super::{Held, KKey, Module};
 
+mod equality;
+pub(crate) use equality::expression_equal;
+pub use equality::ValueEqualityError;
+
 #[cfg(test)]
 mod tests;
 

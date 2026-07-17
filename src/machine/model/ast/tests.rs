@@ -103,16 +103,14 @@ fn kexpression_summarize_joins_parts_with_spaces() {
 }
 
 #[test]
-fn parseable_equal_and_ktype_for_kexpression() {
-    let a = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
-    let b = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
-    let c = KExpression::new(parts_of(vec![kw("LET"), ident("y")]));
-    assert!(a.summarize() == b.summarize());
-    assert!(a.summarize() != c.summarize());
-    assert!(matches!(
-        a.ktype(),
-        crate::machine::model::KType::KExpression
-    ));
+fn structural_equal_and_ktype_for_kexpression() {
+    use crate::machine::model::values::KObject;
+    let a = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
+    let b = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
+    let c = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("y")])));
+    assert_eq!(a.value_equal(&b), Ok(true));
+    assert_eq!(a.value_equal(&c), Ok(false));
+    assert!(matches!(a.ktype(), KType::KExpression));
 }
 
 #[test]
