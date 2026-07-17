@@ -36,7 +36,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     }
 }
 
-/// `er.Type` dotted return type registers as
+/// `er.Carrier` dotted return type registers as
 /// `ReturnType::Deferred(Expression(...))` rather than erroring "unbound name
 /// `er`" at FN-construction. Pins the FN-def side; the end-to-end invocation is
 /// covered by [`functor_get_zero_on_opaque_view_re_tags_slot_read`].
@@ -56,7 +56,10 @@ fn functor_return_dotted_type_member_parameter_resolves_per_call() {
         "int_ord_view should be an opaquely-ascribed module value satisfying WithZero's \
          VAL zero slot",
     );
-    run(scope, "FN (GET_ZERO er :WithZero) -> er.Type = (er.zero)");
+    run(
+        scope,
+        "FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero)",
+    );
     let f = lookup_fn(scope, "GET_ZERO");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -112,7 +115,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     }
 }
 
-/// `(Set WITH {Elt = er.Type})` — the sharing-constraint
+/// `(Set WITH {Elt = er.Carrier})` — the sharing-constraint
 /// surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
 /// Pins that FN-def registers `Deferred(_)` without erroring `Unbound` on `er`;
 /// the body's `MODULE generated` isn't sig-ascribed to `Set`, so end-to-end
@@ -132,7 +135,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     );
     run(
         scope,
-        "FN (MK er :Ordered) -> :(Set WITH {Elt = er.Type}) = \
+        "FN (MK er :Ordered) -> :(Set WITH {Elt = er.Carrier}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MK");

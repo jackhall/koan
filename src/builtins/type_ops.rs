@@ -1,6 +1,6 @@
 //! The infix `WITH` signature specialization and the `TYPE OF` value → type introspection. The
 //! container type operations read as their plain-English surfaces instead: `:(LIST OF Elem)` /
-//! `:(MAP Key -> Val)` (see [`super::parameterized_types`]) and the dotted `some_module.Type`
+//! `:(MAP Key -> Val)` (see [`super::parameterized_types`]) and the dotted `some_module.Carrier`
 //! access (see [`super::attr`]). See
 //! [design/typing/scheduler.md](../../design/typing/scheduler.md).
 

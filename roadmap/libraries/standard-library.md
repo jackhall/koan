@@ -72,8 +72,8 @@ for value slots. An `ORDERED` signature reads
 
 ```
 SIG Ordered = (
-  (LET Type = Number)
-  (VAL compare :(FN (Type, Type) -> Number))
+  (TYPE Carrier)
+  (VAL compare :(FN (Carrier, Carrier) -> Number))
 )
 ```
 
@@ -81,13 +81,14 @@ and a `SET` functor's signature reads
 
 ```
 SIG Set = (
-  (LET Elt = Number)
-  (VAL empty :Type)
-  (VAL insert :(FN (Type, Elt) -> Type))
+  (TYPE Carrier)
+  (TYPE Elt)
+  (VAL empty :Carrier)
+  (VAL insert :(FN (Carrier, Elt) -> Carrier))
 )
 ```
 
-— operations declared against the SIG's abstract `Type` / `Elt` members
+— operations declared against the SIG's abstract `Carrier` / `Elt` members
 directly, without standing in an example value of an arbitrary
 concrete type.
 

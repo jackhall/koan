@@ -174,7 +174,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     //
     // Two keyworded overloads cover the return-type carrier — `ProperType` for a bare
     // `Type(_)` (`-> Number`) and `SigiledTypeExpr` for a `:(…)` / dotted form
-    // (`-> er.Type`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
+    // (`-> er.Carrier`, `-> :(Set WITH {…})`). A post-dep-finish `Spliced` cell carrying a type
     // admits only against `ProperType`. A third overload (below) carries the
     // anonymous `:{…}` record-schema signature.
     //
@@ -203,7 +203,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> er.Type`, `-> :(LIST OF T)`) is a
+    // Lazy `:(...)` return carrier — a dotted/sigil return (`-> er.Carrier`, `-> :(LIST OF Elem)`) is a
     // `SigiledTypeExpr`; the `:SigiledTypeExpr` slot captures it raw (more specific than
     // `:ProperType`, so it wins) and `extract_return_type_raw` defers a param-referencing one
     // per-call instead of eager-sub-dispatching it to an unbound parameter.

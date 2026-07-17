@@ -82,8 +82,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use super::SigSource;
-    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::run_root_storage;
+    use crate::machine::KErrorKind;
     use crate::parse::parse;
 
     #[test]
@@ -148,6 +149,29 @@ mod tests {
         assert!(
             matches!(x, KType::Number),
             "x's declared type must elaborate to Number through the alias, got {x:?}",
+        );
+    }
+
+    /// A SIG-body abstract member named `Type` collides with the builtin `Type`
+    /// meta-type: `TYPE Type` raises `Rebind` naming `Type`, the same unshadowable-builtins
+    /// rule that gates a MODULE body's `LET Type`. Signatures name their principal abstract
+    /// member `Carrier` (see [design/typing/modules.md](../../design/typing/modules.md)); this
+    /// pins that the `Type` spelling does not declare a member.
+    #[test]
+    fn sig_member_named_type_collides_with_builtin_type() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(
+            scope,
+            parse_one("SIG Ordered = ((TYPE Type) (VAL compare :Number))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Type"),
+            "a SIG member named `Type` must be a Rebind naming `Type`, got {err}",
+        );
+        assert!(
+            scope.resolve_type("Ordered").is_none(),
+            "the colliding signature binds nothing",
         );
     }
 

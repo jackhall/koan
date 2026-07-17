@@ -21,12 +21,12 @@ module language itself.
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs :(LIST OF mo.Type) {mo: Ordered}) -> :(LIST OF mo.Type) = (...))
+LET sort = (FN (SORT xs :(LIST OF mo.Carrier) {mo: Ordered}) -> :(LIST OF mo.Carrier) = (...))
 ```
 
-At a call site `(SORT [3, 1, 2])`, the compiler infers `mo.Type = Number`,
+At a call site `(SORT [3, 1, 2])`, the compiler infers `mo.Carrier = Number`,
 searches in scope for a module satisfying
-`(Ordered WITH {Type = Number})`, and inserts it. Searching is
+`(Ordered WITH {Carrier = Number})`, and inserts it. Searching is
 **lexical**: the candidate set is the implicit modules defined in the current
 module plus those explicitly imported. Nothing leaks through transitive
 dependencies.
@@ -67,9 +67,9 @@ operations:
 
 ```
 SIG Ordered = (
-  (LET Type = ...)
-  (VAL compare :(FN (x :Type, y :Type) -> Number))
-  (VAL gen :(FN (r :Random) -> Type))
+  (TYPE Carrier)
+  (VAL compare :(FN (x :Carrier, y :Carrier) -> Number))
+  (VAL gen :(FN (r :Random) -> Carrier))
 
   (AXIOM #((compare x x) = 0))
   (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
@@ -83,7 +83,7 @@ a `KExpression` value. At ascription time, the engine evaluates each
 axiom's quote under a scope it builds by drawing samples from the module's
 `gen` slot for every free identifier the quote references. Variable types
 are resolved through the surrounding signature scope: `x`, `y`, `z` above
-take type `Type` because `compare`'s parameters fix that kind.
+take type `Carrier` because `compare`'s parameters fix that kind.
 
 `IMPLIES` is the engine's discard combinator — when the antecedent is
 false, the sample is dropped without counting against the test budget,
@@ -97,7 +97,7 @@ non-transitive comparisons, hashes that disagree with their own equality,
 monoids whose identity isn't.
 
 **Generators live in modules; the signature requires them.** A
-`(VAL gen :(FN (r :Random) -> Type))` slot in a signature body is an
+`(VAL gen :(FN (r :Random) -> Carrier))` slot in a signature body is an
 obligation: every ascribing module must supply a generator for the abstract
 type. This folds
 generator presence into the existing structural-conformance check —

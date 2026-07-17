@@ -123,7 +123,7 @@ pub enum KType<'a> {
     },
     /// Confined carrier for a synthesized FN `ret` slot whose source return is a
     /// `ReturnType::Deferred` — a per-call-elaborated return like `-> er` or
-    /// `-> er.Type`. Holds only the hashable surface shadow
+    /// `-> er.Carrier`. Holds only the hashable surface shadow
     /// ([`DeferredReturnSurface`]) so equality/hashing/specificity read the deferred
     /// shape directly instead of coarsening it to `Any`. Valid *only* inside a
     /// `KFunction` `ret` box that `function_value_ktype` builds; no runtime
@@ -139,7 +139,7 @@ pub enum KType<'a> {
     /// Lazy slot for a `:(...)` type expression — the sibling of [`KType::KExpression`] for a
     /// `SigiledTypeExpr` part. Captures it raw (via `resolve_for`, as the inner
     /// `KObject::KExpression`) instead of eager-sub-dispatching, so a builtin can defer a
-    /// param-referencing dotted/sigil return (`-> er.Type`) to per-call elaboration. More
+    /// param-referencing dotted/sigil return (`-> er.Carrier`) to per-call elaboration. More
     /// specific than [`KType::OfKind(KKind::ProperType)`], so it wins the overload when both admit.
     SigiledTypeExpr,
     /// Lazy slot for a `:{…}` record type — the sibling of [`KType::SigiledTypeExpr`] for a

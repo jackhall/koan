@@ -5,7 +5,7 @@
 //! signature identity unchanged), and an unequal one is a type error.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
-//! values are resolved `Held::Type`s — a dotted `er.Type` value sub-dispatches in value
+//! values are resolved `Held::Type`s — a dotted `er.Carrier` value sub-dispatches in value
 //! context for free — so the body reads `(name, Held::Type)` entries directly: no lazy
 //! binding slot, no `AwaitDeps`.
 

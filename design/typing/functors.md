@@ -10,7 +10,7 @@ parameter; generic functions are built this way — see [generics.md](generics.m
   parameter under a signature-typed slot (`er :Ordered`), so its name is
   Identifier-class (`er`, `mo` — lowercase-first per [tokens.md](tokens.md)). The
   parameter still reaches type position, through two projections: the dotted
-  `er.Type`, which extracts the module's abstract type member, and
+  `er.Carrier`, which extracts the module's abstract type member, and
   `:(TYPE OF er)`, which names the argument module's own principal signature (see
   [modules.md § Modules in type position](modules.md#modules-in-type-position-type-of)).
   A bare `er` in a slot or a return is an error — a value token names no type.
@@ -26,8 +26,8 @@ parameter; generic functions are built this way — see [generics.md](generics.m
 ```
 LET make_set = (FN (MAKESET er :Ordered) -> Module = (
   MODULE result = (
-    (LET Type = ...)
-    (LET insert = (FN (INSERT s :Type x :er.Type) -> Type = ...))
+    (LET Carrier = ...)
+    (LET insert = (FN (INSERT s :Carrier x :er.Carrier) -> Carrier = ...))
     ...
   )
 ))
@@ -111,7 +111,7 @@ the constraint at the return slot; the body's `MODULE result` must mirror
 
 Pin values that reference only the FN's outer scope are elaborated at
 binder-construction time. Concrete builtins (`Number`, `Str`) and
-outer-scope-bound type values (`mo.Type` where `mo` is
+outer-scope-bound type values (`mo.Carrier` where `mo` is
 bound outside the FN) both work as pin values resolved eagerly.
 
 ## Parameters
@@ -174,7 +174,7 @@ above the value language.
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call parameter
-(`-> :(TYPE OF er)`, `-> er.Type`, `-> :(Set WITH {Elt = er.Type})`)
+(`-> :(TYPE OF er)`, `-> er.Carrier`, `-> :(Set WITH {Elt = er.Carrier})`)
 ride a *deferred* return-type carrier through the per-call scope.
 [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
@@ -244,14 +244,14 @@ written with the `:(FN (params) -> R)` sigil:
 
 ```
 LET make_map = (FN (MAKEMAP er :Ordered)
-                 -> :(FN (vo :Monoid) -> :(Map WITH {Key = er.Type})) = (
-  FN (MAKEVALS vo :Monoid) -> :(Map WITH {Key = er.Type}) = (
+                 -> :(FN (vo :Monoid) -> :(Map WITH {Key = er.Carrier})) = (
+  FN (MAKEVALS vo :Monoid) -> :(Map WITH {Key = er.Carrier}) = (
     MODULE result = ( ... )
   )
 ))
 ```
 
-The inner FN inherits the outer's per-call scope, so `er.Type` in its return slot resolves
+The inner FN inherits the outer's per-call scope, so `er.Carrier` in its return slot resolves
 through the same per-call type-side bind path body-position references use.
 
 ## Higher-kinded type slots
@@ -297,7 +297,7 @@ their `(set ptr, index)` identities differ and `First.Wrap<Number>` and
 loop in `ascribe.rs:body_opaque` that mints `KType::AbstractType` slots; it
 inspects the SIG's `bindings.types[<slot>]` and matches a sentinel
 `TypeConstructor`-kind member so the slot inherits its declared kind
-(falling back to `AbstractType` for a plain `TYPE Type` slot).
+(falling back to `AbstractType` for a plain `TYPE Carrier` slot).
 
 The surface is **arity-1 only.** The `param_names` list always carries one
 entry; multi-parameter constructors are tracked in
@@ -331,14 +331,14 @@ slot semantics are positional, `WITH {…}` for slot-named constraints.
 
 - **`WITH`.** Infix signature specialization — `<sig> WITH {Slot = Type, …}`
   pins abstract type slots of a signature to specific concrete types.
-  `(Ordered WITH {Type = Number})` is `Ordered` with its `Type` slot
+  `(Ordered WITH {Carrier = Number})` is `Ordered` with its `Carrier` slot
   pinned to `Number`; `(Set WITH {Elt = Number, Ord = :(TYPE OF int_ord)})` pins multiple
   slots in one call. The bindings are a record literal keyed by slot name
   (capitalized Type-token field names); each `Slot = Type` field is one pin.
 - **Type-valued slot values.** `WITH` slot values accept any
   expression that evaluates to a `KType`, not only bare type-name
-  tokens. `(Pinnable WITH {Elt = mo.Type})`
-  works because the dotted `mo.Type` access returns the abstract type of
+  tokens. `(Pinnable WITH {Elt = mo.Carrier})`
+  works because the dotted `mo.Carrier` access returns the abstract type of
   module `mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
   modules. `(Set WITH {Elt = Number, Ord = :(TYPE OF int_ord)})` works because

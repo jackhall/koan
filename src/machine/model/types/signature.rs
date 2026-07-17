@@ -6,7 +6,7 @@
 //! [`crate::machine::model::values::module::ModuleSignature`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so return types that
-//! reference a per-call parameter (`-> er`, `-> er.Type`) survive FN-definition without
+//! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
 //! sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
@@ -70,7 +70,7 @@ pub enum ReturnType<'a> {
 ///
 /// - `Type` — parser-preserved structured form (`er`, `List<er>`). Re-elaborated per
 ///   call via `elaborate_type_identifier`. Owns its strings, so no region lifetime.
-/// - `Expression` — captured `:(…)` / dotted return expression (`er.Type`,
+/// - `Expression` — captured `:(…)` / dotted return expression (`er.Carrier`,
 ///   `Set WITH {…}`). Re-runs as a sub-Dispatch under the per-call scope; the resulting
 ///   `Carried::Type`'s inner `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {

@@ -13,7 +13,7 @@ module, so `KType` carries no module variant: the type channel contains only thi
 type a field. Module names are snake_case value identifiers (`int_ord`); `MODULE` binds
 value-side. Signature names use the Type-token spelling with no suffix (`Ordered`), making
 the Type-token namespace exactly the set of things that type fields. Member access is ATTR
-over the value. A type expression whose head names a module — e.g. a return type `er.Type`,
+over the value. A type expression whose head names a module — e.g. a return type `er.Carrier`,
 where `er` is a module-valued parameter — resolves by reading the named type member off the
 module value. A concrete module's identity is never a
 slot or return type — slots and returns name signatures, and a module's own signature is

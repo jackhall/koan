@@ -54,9 +54,9 @@ not at lex time. A **module** is a value, so module names (`int_ord`, `int_set`)
 take the Identifier class: `MODULE` requires one, and the Type class is thereby
 exactly the set of names that can type a field. A `.`-compound on a module name
 resolves to module member access the same way a `.`-compound on a struct value
-resolves to a field read, and a module-qualified `int_ord.Type` in type position
+resolves to a field read, and a module-qualified `int_ord.Carrier` in type position
 parses as a single `TypeName` leaf. Abstract type declarations inside a signature
-use the Type-class spelling — the convention is `LET Type = ...` for the principal
+use the Type-class spelling — the convention is `Carrier` for the principal
 abstract type, with `Elt`, `Key`, `Val` etc. when more than one is needed.
 
 A bare module name is therefore never a type: `:int_ord` fails at the `:` sigil,

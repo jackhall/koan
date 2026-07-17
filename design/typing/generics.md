@@ -19,7 +19,7 @@ LET make_head = (FN (MAKEHEAD Ty :Type) -> Module = (
 
 Inside the body `Ty` is a bound parameter, so the inner FN is ordinary:
 `Ty` resolves through the outer FN's per-call scope, the same path body-position
-`er.Type` references use ([functors.md](functors.md)). No free type-parameter
+`er.Carrier` references use ([functors.md](functors.md)). No free type-parameter
 name is introduced anywhere.
 
 At a call site `HEAD some_list`, modular-implicit resolution

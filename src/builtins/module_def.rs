@@ -193,6 +193,31 @@ mod tests {
         );
     }
 
+    /// A MODULE-body manifest member named `Type` collides with the builtin `Type`
+    /// meta-type. Builtins are immutable and unshadowable in either channel
+    /// ([`crate::machine::core::scope`] `shadows_builtin_type`), so `LET Type = Number`
+    /// raises `Rebind` naming `Type` rather than declaring the member. Modules and
+    /// signatures name their principal abstract type member `Carrier`
+    /// (see [design/typing/modules.md](../../design/typing/modules.md)); this pins the
+    /// collision so the docs and the implementation cannot silently disagree.
+    #[test]
+    fn module_member_named_type_collides_with_builtin_type() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(
+            scope,
+            parse_one("MODULE int_ord = ((LET Type = Number) (LET zero = 0))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Type"),
+            "a MODULE member named `Type` must be a Rebind naming `Type`, got {err}",
+        );
+        assert!(
+            scope.bindings().data().get("int_ord").is_none(),
+            "the colliding module binds nothing",
+        );
+    }
+
     #[test]
     fn module_binds_under_name_in_scope() {
         let region = run_root_storage();

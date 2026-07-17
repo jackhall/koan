@@ -95,20 +95,22 @@ in scope for every other:
 
 ```koan
 RECURSIVE TYPES Listy = (
-  UNION Chain = (Link :Cell Done :Null)
-  NEWTYPE Cell = :{head :Number, tail :Chain}
+  NEWTYPE Cell = :{head :Number, tail :Rest}
+  NEWTYPE Rest = :{next :(Cell | Null)}
 )
-LET empty = (Chain (Done null))
-LET one = (Chain (Link (Cell {head = 1, tail = empty})))
-PRINT one
+LET empty = (Rest {next = null})
+LET one = (Cell {head = 1, tail = empty})
+LET chain = (Rest {next = one})
+PRINT chain
 ```
 
 ```text
-Link(Cell({head = 1, tail = Done(null)}))
+Rest({next = Cell({head = 1, tail = Rest({next = null})})})
 ```
 
-Here `Chain` names `Cell` and `Cell` names `Chain`. The body holds only `UNION`
-and `NEWTYPE` declarations, one per line, each indented under the opening line.
-The group name (`Listy`) must differ from every member name.
+Here `Cell` names `Rest` and `Rest` names `Cell` — each definition mentions the
+other. The body holds only type declarations (two `NEWTYPE`s here), one per line,
+each indented under the opening line. The group name (`Listy`) must differ from
+every member name.
 
 Next: [Errors](09-errors.md).

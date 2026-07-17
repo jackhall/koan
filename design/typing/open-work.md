@@ -31,10 +31,6 @@ Future work on the type and module system. Each entry points at a
 
 ## Cross-cutting
 
-- [Abstract member names versus builtin type names](../../roadmap/type_language/abstract-member-names-vs-builtin-types.md)
-  — the `Type` member convention this tree teaches (`LET Type = Number`, `TYPE Type`) is
-  rejected by the unshadowable-builtins rule
-  ([lookup-protocol.md](lookup-protocol.md)). One of the two has to move.
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as functors — module-returning FNs — over their element/key types. Parks the
   **applicative functor semantics** open question: the decided seam is the

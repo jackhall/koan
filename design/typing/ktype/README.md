@@ -120,10 +120,10 @@
   tag — **owned data**, id-keyed, with no `&Module` inside it. The single variant has
   two **minting sites**, and the distinction between them is load-bearing for
   generativity even though the representation is one shape: `source` is the SIG decl
-  scope's id for a member named at SIG-declaration time (a SIG-local `LET Type = ...`
-  that would otherwise collapse to its underlying type binds this name-bearing tag
-  instead), or the freshly-allocated ascription module's scope id for the per-call
-  mint `:|` opaque ascription produces (`view.Type`). Because each `:|` application
+  scope's id for a member named at SIG-declaration time (a SIG-local `TYPE Carrier`
+  binds this name-bearing tag rather than collapsing to an underlying type),
+  or the freshly-allocated ascription module's scope id for the per-call
+  mint `:|` opaque ascription produces (`view.Carrier`). Because each `:|` application
   allocates a fresh child scope, the two never collide.
   Manual `PartialEq` keys `KType::AbstractType` on `(source, name)`, while
   `KType::Signature` compares by its stored content

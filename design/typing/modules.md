@@ -22,14 +22,14 @@ A **structure** (declared with `MODULE`) bundles type definitions, values,
 and functions:
 
 ```
-MODULE int_ord = ((LET Type = Number) (LET compare = (FN ...)))
+MODULE int_ord = ((LET Carrier = Number) (LET compare = (FN ...)))
 ```
 
 A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG Ordered = ((TYPE Type) (VAL compare :(FN (x :Type, y :Type) -> Number)))
+SIG Ordered = ((TYPE Carrier) (VAL compare :(FN (x :Carrier, y :Carrier) -> Number)))
 ```
 
 A module is a value, so a module name is an **Identifier** token: snake_case,
@@ -47,7 +47,7 @@ module does, and handing a module to a Type-token parameter is a bind-time error
 counterexample worth keeping in view is `Er :Signature` — a *signature*-valued parameter
 carries a type-language value, so it keeps the Type-token spelling.
 Abstract types declared inside a signature take the Type-token spelling
-too — the convention is `Type` for the principal abstract type, with additional
+too — the convention is `Carrier` for the principal abstract type, with additional
 abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed. The
 token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no lowercase)
 from `Ordered` (Type token) and `int_ord` (Identifier) is described in
@@ -100,11 +100,11 @@ LET int_ord_abstract = (int_ord :| Ordered)   -- opaque
 
 An ascription yields a module, so its `LET` name is snake_case like any other
 module binding. *Transparent ascription* (`:!`) checks that the structure satisfies
-the signature but leaves type definitions visible: `int_ord_view.Type` resolves to
-`Number` just as `int_ord.Type` does. *Opaque ascription* (`:|`) additionally
-hides the representation: outside the ascription, `int_ord_abstract.Type` is
+the signature but leaves type definitions visible: `int_ord_view.Carrier` resolves to
+`Number` just as `int_ord.Carrier` does. *Opaque ascription* (`:|`) additionally
+hides the representation: outside the ascription, `int_ord_abstract.Carrier` is
 **not** the same type as `Number`, even though that's its underlying
-definition. Type checking forbids passing an `int_ord_abstract.Type` value to
+definition. Type checking forbids passing an `int_ord_abstract.Carrier` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
@@ -129,9 +129,9 @@ A SIG-local abstract-type binding stays *named* end to end, so a slot read
 through an opaque view reports the abstract type rather than the underlying
 representation. Three sites cooperate.
 
-A `TYPE Type` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
+A `TYPE Carrier` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
 the name-bearing `KType::AbstractType { source: <decl scope id>, name }`, so a
-later `VAL zero :Type` records that `zero` *names* the abstract member `Type`. The
+later `VAL zero :Carrier` records that `zero` *names* the abstract member `Carrier`. The
 higher-kinded `TYPE (Type AS Wrap)` binds a sentinel `TypeConstructor` so
 ascription's per-call constructor mint preserves the parameterization. A manifest
 `LET Tag = Number` binds the concrete `Number` — it carries no abstract identity,
@@ -186,7 +186,7 @@ ATTR's `access_module_member`
 `type_id` is the per-call abstract identity — the same `Wrapped` variant NEWTYPE
 uses, distinguished by its `type_id`'s KType. So `(int_ord_view.zero)` reads as the
 abstract `Type` (opaque), not the underlying `Number`, and a functor body
-`(FN (GET_ZERO er :WithZero) -> er.Type = (er.zero))` whose return
+`(FN (GET_ZERO er :WithZero) -> er.Carrier = (er.zero))` whose return
 type is the per-call abstract member admits the slot read. The carrier and its
 `type_id` are allocated in the *module's* region (declaration-stable), so the
 `type_id` outlives any lift or deep-clone of the read value into a per-call functor
@@ -216,9 +216,12 @@ carrier to reach `module.access_module_member(field)`. Member access is
 module's own `data` then `types` and returns the value-or-type in a single pass
 (the `data`/`types` cross-kind exclusion makes the result unambiguous), so a name
 that isn't a declared member is a missing member — it does **not** fall through to
-a builtin type or a lexically enclosing binding. `int_ord.Type` therefore resolves
-only when `int_ord` declares a `Type` member (the `LET Type = …` convention),
-never to the builtin `Type` meta-type. Signature member access
+a builtin type or a lexically enclosing binding. `int_ord.Carrier` therefore resolves
+only when `int_ord` declares a `Carrier` member (the `LET Carrier = …` convention),
+never to a lexically enclosing binding. The module-own rule holds even for a spelling
+that collides with a builtin: `int_ord.Type` reads module-own too, and since `Type`
+is an unshadowable builtin meta-type no module can declare that member, so it is a
+missing member, never the builtin. Signature member access
 (`access_type_member` over `KType::Signature`) reads its decl scope the same way.
 
 `MODULE` binds **value-side**: it takes an `Identifier` name part, installs a
@@ -244,7 +247,7 @@ A module name is an Identifier token, so the resolver ladder reads it on the
 **value** channel like any other value name: no ladder arm is keyed to "a Type token
 that turns out to name a module", and a module's value write clears no Type-kind
 placeholder. ATTR's `body_module` reads its module receiver off the Object arm, so
-`int_ord.Type` and `er.Carrier` alike project off the module *value*; there is no
+`int_ord.Carrier` and `er.Carrier` alike project off the module *value*; there is no
 type-side module projection anywhere.
 
 ### Modules in type position: `TYPE OF`
@@ -347,8 +350,8 @@ implements this, memoizing each direction under the `SigSatisfies` relation.
 Module-typed bindings reuse the existing ascription operators:
 
 ```
-LET m = (int_ord :! Ordered)   -- transparent: m.Type ≡ Number
-LET m = (int_ord :| Ordered)   -- opaque:      m.Type is fresh
+LET m = (int_ord :! Ordered)   -- transparent: m.Carrier ≡ Number
+LET m = (int_ord :| Ordered)   -- opaque:      m.Carrier is fresh
 ```
 
 `:!` and `:|` are the typing primitives. There is no third
@@ -357,7 +360,7 @@ case and would be strictly less expressive than the operators that already
 exist.
 
 FN parameters and return types accept signature names directly. The
-constrained-signature case (`(Ordered WITH {Type = Number})`)
+constrained-signature case (`(Ordered WITH {Carrier = Number})`)
 uses the `WITH` builtin in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
 

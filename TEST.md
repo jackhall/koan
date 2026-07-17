@@ -28,7 +28,9 @@ CI runs `cargo build --verbose && cargo test --verbose` on push and PR against
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against
 the interpreter by [`tools/verify_snippets.py`](tools/verify_snippets.py): it runs
 each `koan` block that is immediately followed by a `text` expected-output block
-and diffs the result. Run it after editing the tutorial:
+and diffs the result. This runs as a step in the verify slate (`tools/verify.sh`),
+so tutorial drift fails the same gate as tests and lints. Run it standalone after
+editing the tutorial:
 
 ```sh
 cargo build && python3 tools/verify_snippets.py
