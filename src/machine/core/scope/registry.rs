@@ -3,7 +3,7 @@
 //! forwarding + conditional-defer shape they share. Split out of the parent `scope`
 //! module.
 
-use super::Scope;
+use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{ApplyOutcome, BindKind, BindingIndex, NameLookup};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId, StoredReach};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup};
@@ -331,6 +331,51 @@ impl<'a> Scope<'a> {
                 Ok((kt_ref, stored))
             }
         }
+    }
+
+    /// Record a SIG value slot: derive the declared type's stored reach off the delivered
+    /// carrier (`None` ⇒ the empty token), allocate the type into this region under that
+    /// evidence, and insert it into the nearest enclosing SIG decl scope's slot collector.
+    /// Duplicate slot name is a `Rebind`. The slot is a schema entry, not a binding — it takes
+    /// no `BindingIndex` (no lexical read can see it) and touches no binding map.
+    pub(crate) fn register_sig_slot_delivered(
+        &self,
+        name: String,
+        ktype: crate::machine::model::KType<'_>,
+        carrier: Option<&DeliveredCarried>,
+    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
+        // Mirrors `is_in_sig_body`'s walk exactly: a scope with `sig_slots: Some` wins; a
+        // `Module` scope short-circuits (no SIG body encloses); `Root`/`Anonymous`/`Sig`
+        // (a `Sig` scope always carries `sig_slots: Some` by construction, so it never
+        // reaches the `None` arm in practice) fall through transparently.
+        let target = self
+            .ancestors()
+            .find_map(|s| match (&s.sig_slots, &s.kind) {
+                (Some(_), _) => Some(Some(s)),
+                (None, ScopeKind::Module { .. }) => Some(None),
+                (None, ScopeKind::Root | ScopeKind::Anonymous | ScopeKind::Sig { .. }) => None,
+            })
+            .flatten()
+            .ok_or_else(|| {
+                KError::new(KErrorKind::ShapeError(
+                    "VAL slot outside a SIG body reached the slot door".to_string(),
+                ))
+            })?;
+        target.assert_open(&name);
+        let stored = match carrier {
+            Some(cell) => self.host_reach_of(cell),
+            None => StoredReach::empty(),
+        };
+        let kt_ref = self.alloc_ktype_reaching(ktype, &stored)?;
+        let slots = target
+            .sig_slots
+            .as_ref()
+            .expect("the walk above selects only a scope with sig_slots: Some");
+        if slots.borrow().contains_key(&name) {
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        slots.borrow_mut().insert(name, (kt_ref, stored));
+        Ok((kt_ref, stored))
     }
 
     /// User-facing twin of [`Self::register_type_delivered`] for `LET <TypeIdentifier> = …` / `VAL`:

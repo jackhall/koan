@@ -6,8 +6,8 @@
 //! `module_def` / `recursive_types`: body statements dispatch against a fresh child scope
 //! on the outer scheduler, and the finish captures the populated scope into a
 //! [`ModuleSignature`] value, allocates it in the parent's region, and binds it under the
-//! signature's name. Body declarations are `LET name = (FN <signature> -> <return> = ...)`
-//! for operations and `LET Carrier = TypeIdentifier` for abstract type declarations. The
+//! signature's name. `VAL <name> :Type` declares a value slot, `TYPE <Name>` declares an
+//! abstract type member, and `LET <Name> = <Type>` declares a manifest type member. The
 //! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::model::KType;
@@ -141,11 +141,10 @@ mod tests {
             _ => panic!("Foo should be a signature"),
         };
         let x = sig
-            .decl_scope()
-            .bindings()
-            .lookup_type("x", None)
-            .and_then(crate::machine::NameLookup::bound)
-            .expect("VAL slot `x` must live in SIG's type table");
+            .schema()
+            .value_slots
+            .get("x")
+            .expect("VAL slot `x` must live in the signature's stored schema");
         assert!(
             matches!(x, KType::Number),
             "x's declared type must elaborate to Number through the alias, got {x:?}",

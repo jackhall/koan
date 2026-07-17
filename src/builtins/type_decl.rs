@@ -15,8 +15,8 @@
 //!
 //! Both bind through the same fused `register_user_type_delivered` + `resident_type_carrier`
 //! path the `LET` type route uses, so a `TYPE`-declared member rides the same
-//! `bindings.types` entry a manifest `LET` member does — value slots (`VAL`) stay
-//! distinguishable by their value-class name.
+//! `bindings.types` entry a manifest `LET` member does — value slots (`VAL`) live in the
+//! decl scope's own slot collector, a separate storage channel `bindings.types` never sees.
 
 use std::collections::HashMap;
 

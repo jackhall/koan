@@ -9,12 +9,12 @@
 use crate::machine::model::KType;
 use crate::machine::model::SigSource;
 use crate::machine::model::{
-    abstract_members_of, manifest_type_members_of, sig_subtype, substitute_sig_members, KKind,
-    NominalMember, NominalSchema, ProjectedSchema, RecursiveSet, SigSchema,
+    sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, ProjectedSchema,
+    RecursiveSet, SigSchema,
 };
 use crate::machine::model::{KObject, Module};
 use crate::machine::StepCarried;
-use crate::machine::{KError, KErrorKind, NameLookup, Scope, ScopeId};
+use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 
 use super::{arg, kw, sig};
 
@@ -49,58 +49,55 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();
-    {
-        let sig_bindings = s.decl_scope().bindings();
-        for name in abstract_members_of(s.decl_scope()) {
-            let kt = match sig_bindings
-                .lookup_type(&name, None)
-                .and_then(NameLookup::bound)
+    for (name, (kt, _arity)) in &s.schema().abstract_members {
+        let minted_kt = match kt {
+            KType::SetRef { set, index }
+                if set.member(*index).kind == KKind::TypeConstructor
+                    && set.member(*index).scope_id == ScopeId::SENTINEL =>
             {
-                Some(KType::SetRef { set, index })
-                    if set.member(*index).kind == KKind::TypeConstructor
-                        && set.member(*index).scope_id == ScopeId::SENTINEL =>
-                {
-                    let ProjectedSchema::TypeConstructor {
+                let ProjectedSchema::TypeConstructor {
+                    schema,
+                    param_names,
+                } = RecursiveSet::projected_schema(set, *index)
+                else {
+                    unreachable!("TypeConstructor-kind member projects a TypeConstructor schema")
+                };
+                let member = NominalMember::pending(
+                    name.clone(),
+                    new_module.scope_id(),
+                    KKind::TypeConstructor,
+                );
+                // Generative: the per-application nonce (the minted module's `scope_id`)
+                // folds into the set digest, so two `:|` applications never unify.
+                let fresh = RecursiveSet::new_generative(vec![member], new_module.scope_id());
+                fresh.fill_member(
+                    0,
+                    NominalSchema::TypeConstructor {
                         schema,
                         param_names,
-                    } = RecursiveSet::projected_schema(set, *index)
-                    else {
-                        unreachable!(
-                            "TypeConstructor-kind member projects a TypeConstructor schema"
-                        )
-                    };
-                    let member = NominalMember::pending(
-                        name.clone(),
-                        new_module.scope_id(),
-                        KKind::TypeConstructor,
-                    );
-                    // Generative: the per-application nonce (the minted module's `scope_id`)
-                    // folds into the set digest, so two `:|` applications never unify.
-                    let fresh = RecursiveSet::new_generative(vec![member], new_module.scope_id());
-                    fresh.fill_member(
-                        0,
-                        NominalSchema::TypeConstructor {
-                            schema,
-                            param_names,
-                        },
-                    );
-                    KType::SetRef {
-                        set: std::rc::Rc::new(fresh),
-                        index: 0,
-                    }
+                    },
+                );
+                KType::SetRef {
+                    set: std::rc::Rc::new(fresh),
+                    index: 0,
                 }
-                _ => KType::AbstractType {
-                    source: new_module.scope_id(),
-                    name: name.clone(),
-                },
-            };
-            minted.push((name.clone(), kt));
-        }
+            }
+            _ => KType::AbstractType {
+                source: new_module.scope_id(),
+                name: name.clone(),
+            },
+        };
+        minted.push((name.clone(), minted_kt));
     }
     // A manifest member reads concretely through the opaque view: the view scope carries no
     // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
     // is mirrored into `type_members` alongside the per-call abstract mints.
-    let manifest = manifest_type_members_of(s.decl_scope());
+    let manifest: Vec<(String, KType<'a>)> = s
+        .schema()
+        .manifest_members
+        .iter()
+        .map(|(n, t)| (n.clone(), t.clone()))
+        .collect();
     if !minted.is_empty() || !manifest.is_empty() {
         let mut tm = new_module.type_members.borrow_mut();
         for (n, t) in minted {
@@ -114,13 +111,10 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     {
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType<'a>)> = Vec::new();
-        for (slot_name, kt) in s.decl_scope().bindings().iter_types() {
-            if crate::parse::is_type_name(&slot_name) {
-                continue;
-            }
+        for (slot_name, kt) in &s.schema().value_slots {
             if let KType::AbstractType { name: member, .. } = kt {
                 if let Some(per_call) = tm.get(member) {
-                    tags.push((slot_name, per_call.clone()));
+                    tags.push((slot_name.clone(), per_call.clone()));
                 }
             }
         }
@@ -207,12 +201,9 @@ fn seal_view_self_sig<'a>(module: &Module<'a>, sig: &crate::machine::model::Modu
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
         .collect();
-    for (slot_name, declared) in sig.decl_scope().bindings().iter_types() {
-        if crate::parse::is_type_name(&slot_name) {
-            continue;
-        }
+    for (slot_name, declared) in &sig.schema().value_slots {
         view_sig.value_slots.insert(
-            slot_name,
+            slot_name.clone(),
             substitute_sig_members(declared, sig.sig_id(), &member_map),
         );
     }

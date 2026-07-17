@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
-use crate::machine::model::{abstract_members_of, manifest_type_members_of, SigSource};
+use crate::machine::model::SigSource;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -54,11 +54,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // A binding names either an abstract slot (recorded as a pin) or a manifest member (its
     // type is already fixed). Slot names are capitalized, so a lowercase / unknown key is in
     // neither set; no separate name-shape check is needed.
-    let abstract_slots: HashSet<String> = abstract_members_of(s.decl_scope()).into_iter().collect();
-    let manifest_members: std::collections::HashMap<String, KType> =
-        manifest_type_members_of(s.decl_scope())
-            .into_iter()
-            .collect();
+    let abstract_slots: HashSet<String> = s.schema().abstract_members.keys().cloned().collect();
+    let manifest_members: std::collections::HashMap<String, KType> = s
+        .schema()
+        .manifest_members
+        .iter()
+        .map(|(n, t)| (n.clone(), t.clone()))
+        .collect();
     // Validation only: every pin must name a known slot and hold a type. A pin equal to a
     // manifest member's fixed type is normalized away (added to `dropped`, never recorded), so
     // `S WITH {Tag = Number}` keeps `S`'s signature identity; an unequal manifest pin is a type

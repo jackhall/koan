@@ -17,10 +17,10 @@ pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
 pub(crate) use types::{
-    abstract_members_of, elaborate_type_identifier, finalize_nominal_member,
-    manifest_type_members_of, parse_typed_field_list_via_elaborator, seal_recursive_refs,
-    seal_union_refs, sig_subtype, substitute_sig_members, Elaborator, FieldListOutcome,
-    FieldNameKind, ResultFeed, SchemaSealResult, SealOutcome, SigSchema, TypeResolution,
+    elaborate_type_identifier, finalize_nominal_member, parse_typed_field_list_via_elaborator,
+    seal_recursive_refs, seal_union_refs, sig_subtype, substitute_sig_members, Elaborator,
+    FieldListOutcome, FieldNameKind, ResultFeed, SchemaSealResult, SealOutcome, SigSchema,
+    TypeResolution,
 };
 #[cfg(test)]
 pub(crate) use types::{memo_hit_count, memo_reset};

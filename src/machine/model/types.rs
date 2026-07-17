@@ -28,7 +28,6 @@ pub use resolver::{
     elaborate_type_identifier, finalize_nominal_member, Elaborator, SchemaSealResult, SealOutcome,
     TypeResolution,
 };
-pub(crate) use sig_schema::{abstract_members_of, manifest_type_members_of};
 pub use sig_schema::{sig_subtype, substitute_sig_members, SigSchema};
 #[allow(unused_imports)]
 pub use signature::Specificity;

@@ -1,6 +1,6 @@
 //! `register` arm of `machine::core` tests.
 
-use super::super::{BindingIndex, NameLookup};
+use super::super::{BindingIndex, NameLookup, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
@@ -636,4 +636,30 @@ fn visibility_type_side_gate_mirrors_value_side() {
     assert!(scope
         .resolve_type_with_chain("TyLate", Some(&consumer_after))
         .is_some());
+}
+
+/// Partition strictness at a SIG decl scope: `child_under_sig` mints an ordinary `Bindings`
+/// (no slot-table carve-out), so a value-token key written straight to `types` is rejected by
+/// `partition_guard` exactly like on any other scope's bindings.
+#[test]
+fn sig_scope_bindings_reject_value_token_type_write() {
+    let region = run_root_storage();
+    let outer = run_root_bare(&region);
+    let sig_scope = region
+        .brand()
+        .alloc_scope(Scope::child_under_sig(outer, "S".to_string()));
+    let kt: &KType = region.brand().alloc_ktype(KType::Number);
+    let error = match sig_scope.bindings().try_register_type(
+        "compare",
+        kt,
+        BindingIndex::BUILTIN,
+        StoredReach::empty(),
+    ) {
+        Err(e) => e,
+        Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
+    };
+    assert!(
+        matches!(&error.kind, crate::machine::core::KErrorKind::ShapeError(msg) if msg.contains("is a value token")),
+        "expected the token-class partition error, got {error}",
+    );
 }

@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::io::Write;
 use std::rc::{Rc, Weak};
 
+use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::RecursiveSet;
 
@@ -69,6 +71,12 @@ pub struct Scope<'a> {
     /// is lifetime-free (member set + mode + combiner *name*), so holding it costs the scope no
     /// region borrow.
     group: Option<&'a OperatorGroup>,
+    /// SIG-decl-scope slot collector: `VAL <name> :Type` records `name → (declared type,
+    /// stored reach)` here — a schema in progress, not a binding universe (nothing resolves
+    /// names in it; no visibility index). `Some` only for scopes minted by
+    /// [`Self::child_under_sig`]; the SIG finish projects it into the signature's stored
+    /// [`SigSchema`], and ATTR over the signature reads a slot's declared type back out of it.
+    sig_slots: Option<SigSlots<'a>>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
@@ -111,6 +119,10 @@ impl<'a> ScopeBindings<'a> {
     }
 }
 
+/// name → (region-resident declared type, its stored reach). Plain `borrow_mut` inside the
+/// single write door is fine: the cell is never held across calls.
+type SigSlots<'a> = RefCell<HashMap<String, (&'a KType<'a>, StoredReach<'a>)>>;
+
 /// Lexical classification for a [`Scope`]. The SIG-body gate walks outward and
 /// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
 /// rejects LET-by-example; `Module` is the opposite. The per-variant `name` field
@@ -147,6 +159,7 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Root,
             recursive_set: None,
             group: None,
+            sig_slots: None,
             closed: Cell::new(false),
             root_region: true,
         }
@@ -238,6 +251,7 @@ impl<'a> Scope<'a> {
             kind,
             recursive_set,
             group: None,
+            sig_slots: None,
             closed: Cell::new(false),
             root_region: outer.root_region,
         }
@@ -279,6 +293,7 @@ impl<'a> Scope<'a> {
             kind: ScopeKind::Anonymous,
             recursive_set: None,
             group: None,
+            sig_slots: None,
             closed: Cell::new(false),
             root_region: false,
         }
@@ -286,12 +301,14 @@ impl<'a> Scope<'a> {
 
     /// `child_under`, stamped as a SIG decl_scope.
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
-        Self::child_inheriting(
+        let mut child = Self::child_inheriting(
             outer,
-            ScopeBindings::Owned(Bindings::new_slot_table()),
+            ScopeBindings::Owned(Bindings::new()),
             ScopeKind::Sig { name },
             None,
-        )
+        );
+        child.sig_slots = Some(RefCell::new(HashMap::new()));
+        child
     }
 
     /// `child_under`, stamped as a MODULE body (also used for the per-ascription view
@@ -446,6 +463,24 @@ impl<'a> Scope<'a> {
                 (None, ScopeKind::Root | ScopeKind::Anonymous) => None,
             })
             .flatten()
+    }
+
+    /// The declared type + stored reach of value slot `name` on THIS scope (a SIG decl scope),
+    /// or `None`. No ancestor walk — callers hold the decl scope directly.
+    pub(crate) fn sig_slot(&self, name: &str) -> Option<(&'a KType<'a>, StoredReach<'a>)> {
+        self.sig_slots.as_ref()?.borrow().get(name).copied()
+    }
+
+    /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read.
+    pub(crate) fn sig_value_slots(&self) -> Vec<(String, &'a KType<'a>)> {
+        match &self.sig_slots {
+            Some(slots) => slots
+                .borrow()
+                .iter()
+                .map(|(name, (kt, _))| (name.clone(), *kt))
+                .collect(),
+            None => Vec::new(),
+        }
     }
 
     /// Write `bytes` to the nearest writer up the `outer` chain. Writer errors are

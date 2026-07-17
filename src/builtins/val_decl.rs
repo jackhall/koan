@@ -3,9 +3,10 @@
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
 //! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
-//! `bindings.types[name]` — the same type table `TYPE <Name>` abstract members and
-//! `LET <Name> = <Type>` manifest members live in. A value-class slot name keeps it
-//! distinguishable from a type member (Type-class name) when ascription enumerates the table.
+//! own slot collector ([`Scope::sig_slot`]/[`Scope::sig_value_slots`]) — a schema-in-progress
+//! separate from `bindings.types`, the table `TYPE <Name>` abstract members and
+//! `LET <Name> = <Type>` manifest members live in. VAL never binds a value: the slot is a
+//! specification (name → declared type) the module supplies a value for.
 //!
 //! Type resolution dispatches on the `ty` carrier shape: a [`KType::Unresolved`] leaf or a
 //! builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
@@ -16,7 +17,7 @@ use crate::machine::model::{KKind, SigSource};
 use crate::machine::model::{KObject, KType};
 use crate::machine::DeliveredCarried;
 use crate::machine::FinishCtx;
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -103,20 +104,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         }
     };
 
-    let bind_index = ctx.bind_index();
-
     let te = match carrier {
         CarrierForm::Direct(kt) => {
             // A bind-time `ty` argument: any caller-supplied carrier (a `:(...)` sub-dispatch
             // spliced in before this call), so `arg_carrier` names its own foreign reach if it
             // has one.
-            return finalize_val(
-                &ctx.finish_ctx(),
-                name,
-                kt,
-                bind_index,
-                ctx.arg_carrier("ty"),
-            );
+            return finalize_val(&ctx.finish_ctx(), name, kt, ctx.arg_carrier("ty"));
         }
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
@@ -127,37 +120,29 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
     dispatch_type_then(expr, "VAL type slot", move |fctx, kt, carrier| {
-        finalize_val(fctx, name, kt, bind_index, Some(carrier))
+        finalize_val(fctx, name, kt, Some(carrier))
     })
 }
 
-/// Records the value slot's declared type in `bindings.types` and returns the slot's carrier as
-/// `Action::Done`. A VAL is a *value* member whose *declared type* we keep; storing the `KType`
-/// directly (not a boxed carrier) keeps the type table the single home for everything ascription
-/// enumerates. Uses the same infallible `register_type` path as a SIG-local `TYPE <Name>`
-/// abstract member.
+/// Records the value slot's declared type into the SIG decl scope's slot collector and returns
+/// the slot's carrier as `Action::Done`.
 ///
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a declared `Signature`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
-/// dep terminal. When `carrier` is `Some`, the stored binding's reach and the sealed result's
-/// witness fold it in. When `carrier` is `None`, the seal picks the tier `declared_kt`'s own shape
-/// needs — the compile-enforced `'static` tier ([`StepAllocator::alloc_type`]) for an owned leaf,
-/// the runtime-audited seal ([`StepAllocator::alloc_type_checked`]) otherwise — so neither
-/// under-witnesses the declared type's actual reach.
+/// dep terminal. [`Scope::register_sig_slot_delivered`] derives the slot's stored reach off
+/// `carrier` (the empty token when `carrier` is `None`) and installs a region-resident copy of the
+/// type into the collector; the returned resident `&KType` is not needed here, because the terminal
+/// is sealed separately below from the carrier's own view.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
     declared_kt: KType<'a>,
-    bind_index: BindingIndex,
     carrier: Option<&DeliveredCarried>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    // The fused door derives the slot's stored reach off its own `carrier` (kept mode) and registers
-    // the declared type — the terminal is sealed separately below from the carrier's own view, so the
-    // returned resident `&KType` is not needed here.
-    if let Err(e) =
-        fctx.scope
-            .register_user_type_delivered(name, declared_kt.clone(), carrier, bind_index)
+    if let Err(e) = fctx
+        .scope
+        .register_sig_slot_delivered(name, declared_kt.clone(), carrier)
     {
         return Action::Done(Err(e));
     }
@@ -184,13 +169,6 @@ fn finalize_val<'a>(
     Action::Done(Ok(sealed))
 }
 
-pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
-    match &expr.parts.get(1)?.value {
-        ExpressionPart::Identifier(s) => Some(s.clone()),
-        _ => None,
-    }
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
@@ -202,14 +180,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ],
     );
     crate::builtins::register_builtin_full(
-        scope,
-        "VAL",
-        signature,
-        body,
-        // VAL records a value-slot's declared type into the SIG decl-scope's `types` map
-        // (a type-language write), so its forward-reference placeholder is `Type`-kind.
-        Some((binder_name, crate::machine::BindKind::Type)),
-        None,
+        scope, "VAL", signature, body,
+        // VAL installs no dispatch-time placeholder: it records into the decl scope's slot
+        // collector, not into a binding map any name lookup or forward-reference walk can see.
+        None, None,
     );
 }
 

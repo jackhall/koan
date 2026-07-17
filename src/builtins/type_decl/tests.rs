@@ -102,16 +102,29 @@ fn hk_arity_above_one_errors() {
     );
 }
 
-/// A `VAL item :Elt` slot after `TYPE Elt` records the abstract member as its declared type.
+/// A `VAL item :Elt` slot after `TYPE Elt` records the abstract member as its declared type. The
+/// slot lives in the signature's stored schema (`value_slots`), not the decl scope's type table.
 #[test]
 fn val_slot_after_type_records_abstract_member() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Container = ((TYPE Elt) (VAL item :Elt))");
-    match member_type(scope, "Container", "item") {
+    let sig = match scope.resolve_type("Container") {
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
+        other => panic!("Container must bind a Signature, got {other:?}"),
+    };
+    match sig
+        .schema()
+        .value_slots
+        .get("item")
+        .expect("item must live in Container's stored schema value_slots")
+    {
         KType::AbstractType { source, name } => {
             assert_eq!(name, "Elt");
-            assert_eq!(source, sig_decl_scope_id(scope, "Container"));
+            assert_eq!(*source, sig_decl_scope_id(scope, "Container"));
         }
         other => panic!("item's declared type must be the abstract Elt, got {other:?}"),
     }
@@ -254,9 +267,13 @@ fn monad_signature_smoke() {
     };
     let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
     assert_type_constructor(wrap_kt, &["Type"]);
-    // A SIG-body `VAL pure :T` slot lives in `bindings.types` under its value-class
-    // name, carrying the declared type directly.
-    let kt: &KType = s.decl_scope().bindings().expect_type("pure");
+    // A SIG-body `VAL pure :T` slot lives in the signature's stored schema (`value_slots`),
+    // carrying the declared type directly.
+    let kt: &KType = s
+        .schema()
+        .value_slots
+        .get("pure")
+        .expect("pure must live in Monad's stored schema value_slots");
     match kt {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.get("x"), Some(&KType::Number));

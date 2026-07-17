@@ -123,18 +123,33 @@ pub struct ModuleSignature<'a> {
     /// `Scope<'a>` is invariant in `'a`, so this reference is what pins `ModuleSignature<'a>`
     /// invariant in `'a` — no separate marker field is needed.
     decl_scope_ref: &'a Scope<'a>,
+    /// The signature's normalized schema, projected once from `decl_scope_ref` at construction
+    /// ([`SigSchema::project_decl`]) — every consumer (`of_sig`, ascription, `WITH`) reads this
+    /// stored schema rather than re-classifying the decl scope's type table per read.
+    schema: SigSchema<'a>,
 }
 
 impl<'a> ModuleSignature<'a> {
+    /// Builds the signature's stored schema from `decl_scope` — which must already be fully
+    /// populated (every `TYPE`/`LET`/`VAL` body statement resolved) and closed: production
+    /// constructs a `ModuleSignature` only from a SIG finish, whose `ChildScopeSeal::SealBeforeFinish`
+    /// guarantees the decl scope closes before this runs; a test that builds one directly must bind
+    /// every member/slot first.
     pub fn new(path: String, decl_scope: &'a Scope<'a>) -> Self {
         Self {
             path,
             decl_scope_ref: decl_scope,
+            schema: SigSchema::project_decl(decl_scope),
         }
     }
 
     pub fn decl_scope(&self) -> &'a Scope<'a> {
         self.decl_scope_ref
+    }
+
+    /// The signature's stored schema (see the field doc on `schema`).
+    pub fn schema(&self) -> &SigSchema<'a> {
+        &self.schema
     }
 
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is

@@ -210,10 +210,17 @@ fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>
                 Some(MemberResolution::Type { kt, stored }) => {
                     Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
                 }
-                None => Err(KError::new(KErrorKind::ShapeError(format!(
-                    "signature `{}` has no member `{}`",
-                    s.path, field
-                )))),
+                // Not a binding-map member — consult the decl scope's slot collector before
+                // erroring: a `VAL <name> :Type` slot lives there, not in `bindings`.
+                None => match decl.sig_slot(field) {
+                    Some((kt, stored)) => {
+                        Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
+                    }
+                    None => Err(KError::new(KErrorKind::ShapeError(format!(
+                        "signature `{}` has no member `{}`",
+                        s.path, field
+                    )))),
+                },
             }
         }
         KType::AbstractType { name, .. } => Err(abstract_type_has_no_members(name)),
@@ -488,8 +495,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{
+        parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
+    };
     use crate::machine::model::KObject;
+    use crate::machine::model::KType;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
@@ -673,6 +683,19 @@ mod tests {
             "transparent-view slot read must stay the underlying Number, got {:?}",
             result.ktype(),
         );
+    }
+
+    /// ATTR on a bare signature type value — not a module/view instance — reads a `VAL` slot's
+    /// declared type straight out of the decl scope's slot collector (the `sig_slot` fallback in
+    /// `access_type_member`): `Ordered.compare` yields the slot's declared `Number`, as a type-side
+    /// result (a `VAL` slot is a specification, never a value).
+    #[test]
+    fn attr_on_signature_type_reads_val_slot_declared_type() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "SIG Ordered = (VAL compare :Number)");
+        let kt = run_one_type(scope, parse_one("Ordered.compare"));
+        assert_eq!(*kt, KType::Number);
     }
 
     /// A missing field on the wrapped record names the carrier's nominal type in the

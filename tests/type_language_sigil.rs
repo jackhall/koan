@@ -65,10 +65,10 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
     }
 }
 
-/// Read the SIG named `sig_name`'s decl_scope value-slot for `name` as its declared
-/// `KType`. Reads the run-root scope's type side (`resolve_type`) to grab the Signature
-/// carrier, then reads the Signature decl_scope's `bindings.types` — where VAL value slots
-/// record their declared type under their value-class name.
+/// Read the SIG named `sig_name`'s value slot for `name` as its declared `KType`. Reads the
+/// run-root scope's type side (`resolve_type`) to grab the Signature carrier, then reads the
+/// Signature's stored schema (`value_slots`) — where VAL value slots record their declared type
+/// under their value-class name.
 fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
     let s = match scope.resolve_type(sig_name) {
         Some(KType::Signature {
@@ -80,12 +80,11 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
             other
         ),
     };
-    let entries = s.decl_scope().bindings().iter_types();
-    entries
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, kt)| (*kt).clone())
-        .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG decl_scope's types"))
+    s.schema()
+        .value_slots
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG's stored schema"))
 }
 
 // --- LIST OF ---

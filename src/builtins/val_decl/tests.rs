@@ -4,8 +4,8 @@ use crate::machine::model::SigSource;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
-/// Smoke: the VAL slot lives in `bindings.types` under its value-class name so
-/// `ascribe::shape_check` will require it of an ascribed module.
+/// Smoke: the VAL slot lives in the signature's stored schema (`value_slots`) under its
+/// value-class name so `ascribe::check_satisfies` will require it of an ascribed module.
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
     let region = run_root_storage();
@@ -18,7 +18,11 @@ fn val_inside_sig_binds_typeexpr_carrier() {
         }) => *sig,
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let zero = s.decl_scope().bindings().expect_type("zero");
+    let zero = s
+        .schema()
+        .value_slots
+        .get("zero")
+        .expect("zero must live in Ordered's stored schema value_slots");
     assert_eq!(*zero, KType::Number);
 }
 
@@ -38,7 +42,11 @@ fn val_resolves_sig_local_type_shadow() {
         }) => *sig,
         _ => panic!("WithZero must bind a Signature KType"),
     };
-    let zero = s.decl_scope().bindings().expect_type("zero");
+    let zero = s
+        .schema()
+        .value_slots
+        .get("zero")
+        .expect("zero must live in WithZero's stored schema value_slots");
     match zero {
         KType::AbstractType { source, name } => {
             assert_eq!(
@@ -49,6 +57,24 @@ fn val_resolves_sig_local_type_shadow() {
         }
         other => panic!("expected AbstractType(Carrier), got {other:?}"),
     }
+}
+
+/// Duplicate `VAL x` within one SIG body errors `Rebind` naming `x` at the slot insert (VAL
+/// installs no dispatch-time placeholder, so the collision surfaces one step later than a
+/// placeholder-backed binder would) and the enclosing SIG binds nothing.
+#[test]
+fn duplicate_val_slot_name_is_rebind() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let err = run_one_err(scope, parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"));
+    assert!(
+        matches!(&err.kind, KErrorKind::Rebind { name } if name == "x"),
+        "expected Rebind naming `x`, got {err}",
+    );
+    assert!(
+        scope.resolve_type("SigDup").is_none(),
+        "the colliding signature binds nothing",
+    );
 }
 
 /// Gate fires on the immediate-enclosing labeled scope.
@@ -103,7 +129,11 @@ fn val_function_typed_slot() {
         }) => *sig,
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let compare = s.decl_scope().bindings().expect_type("compare");
+    let compare = s
+        .schema()
+        .value_slots
+        .get("compare")
+        .expect("compare must live in Ordered's stored schema value_slots");
     match compare {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 2);
@@ -156,10 +186,10 @@ fn val_slot_satisfied_by_module_let_member() {
 }
 
 /// Pins the canonical SIG form: abstract type via `TYPE Carrier` plus a VAL
-/// slot whose declared type references it. `Carrier` lives in `bindings.types`,
-/// `zero` in `bindings.data`; both carry the same `AbstractType` identity, sourced at the SIG
-/// decl scope (so opacity threads to the per-call module's `slot_type_tags`), not the
-/// collapsed underlying `Number`.
+/// slot whose declared type references it. `Carrier` lives in the decl scope's type table,
+/// `zero` in the signature's stored schema `value_slots`; both carry the same `AbstractType`
+/// identity, sourced at the SIG decl scope (so opacity threads to the per-call module's
+/// `slot_type_tags`), not the collapsed underlying `Number`.
 #[test]
 fn val_with_abstract_type_member_declaration() {
     let region = run_root_storage();
@@ -178,10 +208,14 @@ fn val_with_abstract_type_member_declaration() {
         type_kt,
         KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
     ));
-    let zero = s.decl_scope().bindings().expect_type("zero");
+    let zero = s
+        .schema()
+        .value_slots
+        .get("zero")
+        .expect("zero must live in WithZero's stored schema value_slots");
     assert!(matches!(
         zero,
         KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
     ));
-    assert_eq!(type_kt, zero, "both name the same abstract identity");
+    assert_eq!(*type_kt, *zero, "both name the same abstract identity");
 }

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::ScopeId;
+use crate::machine::core::{Scope, ScopeId};
 
 use super::kkind::KKind;
 use super::ktype::KType;
@@ -25,6 +25,7 @@ use crate::machine::model::values::{Module, ModuleSignature};
 /// concrete witness (a [`KType::AbstractType`] or a sentinel type-constructor
 /// `SetRef`), a manifest member fixes a concrete type. A module self-sig never has abstract
 /// members — `TYPE` is a SIG-body-only construct.
+#[derive(Clone)]
 pub struct SigSchema<'a> {
     /// `Some(sig_id)` when derived from a SIG declaration — `Sig`-sourced abstract refs in
     /// value-slot types substitute against this id. `None` for a module self-sig (whose slot
@@ -41,38 +42,44 @@ pub struct SigSchema<'a> {
 }
 
 impl<'a> SigSchema<'a> {
-    /// Project a SIG declaration into a schema, then apply `WITH` pins.
-    ///
-    /// The decl scope's type table splits by name class (`is_type_name`): type-class names are
-    /// members (abstract / manifest via [`is_abstract_sig_member`]), value-class names are value
-    /// slots recording their declared type. A pin `(name, kt)` converts an abstract member to a
-    /// manifest one fixed to `kt` (a pin naming an already-manifest member overwrites it —
-    /// unreachable through `WITH`, which normalizes equal pins away and errors on unequal ones).
-    pub fn of_sig(sig: &ModuleSignature<'a>, pins: &[(String, KType<'a>)]) -> SigSchema<'a> {
+    /// Project a SIG decl scope into its schema, at SIG finish. Every type-table entry is a
+    /// genuine type member (the token-class partition holds — value slots live in the scope's
+    /// slot collector, not in `types`), classified abstract/manifest by representation; the
+    /// value slots come from the scope's own slot collector. The only place this
+    /// classification runs — once per SIG.
+    pub(crate) fn project_decl(decl_scope: &Scope<'a>) -> SigSchema<'a> {
         let mut abstract_members = HashMap::new();
         let mut manifest_members = HashMap::new();
-        let mut value_slots = HashMap::new();
-        for (name, kt) in sig.decl_scope().bindings().iter_types() {
-            if crate::parse::is_type_name(&name) {
-                if is_abstract_sig_member(kt) {
-                    abstract_members.insert(name, (kt.clone(), constructor_arity(kt)));
-                } else {
-                    manifest_members.insert(name, kt.clone());
-                }
+        for (name, kt) in decl_scope.bindings().iter_types() {
+            if is_abstract_sig_member(kt) {
+                abstract_members.insert(name, (kt.clone(), constructor_arity(kt)));
             } else {
-                value_slots.insert(name, kt.clone());
+                manifest_members.insert(name, kt.clone());
             }
         }
-        for (name, kt) in pins {
-            abstract_members.remove(name);
-            manifest_members.insert(name.clone(), kt.clone());
+        let mut value_slots = HashMap::new();
+        for (name, kt) in decl_scope.sig_value_slots() {
+            value_slots.insert(name, kt.clone());
         }
         SigSchema {
-            sig_id: Some(sig.sig_id()),
+            sig_id: Some(decl_scope.id),
             abstract_members,
             manifest_members,
             value_slots,
         }
+    }
+
+    /// Apply `WITH` pins to a SIG's stored schema: clone it and convert each pinned abstract
+    /// member into a manifest one fixed to the pin's type (a pin naming an already-manifest
+    /// member overwrites it — unreachable through `WITH`, which normalizes equal pins away and
+    /// errors on unequal ones).
+    pub fn of_sig(sig: &ModuleSignature<'a>, pins: &[(String, KType<'a>)]) -> SigSchema<'a> {
+        let mut schema = sig.schema().clone();
+        for (name, kt) in pins {
+            schema.abstract_members.remove(name);
+            schema.manifest_members.insert(name.clone(), kt.clone());
+        }
+        schema
     }
 
     /// Derive a module's principal signature (self-sig) directly from its body.
@@ -90,9 +97,7 @@ impl<'a> SigSchema<'a> {
         let child = module.child_scope();
         let mut manifest_members: HashMap<String, KType<'a>> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
-            if crate::parse::is_type_name(&name) {
-                manifest_members.insert(name, kt.clone());
-            }
+            manifest_members.insert(name, kt.clone());
         }
         for (name, kt) in module.type_members.borrow().iter() {
             manifest_members.insert(name.clone(), kt.clone());
@@ -365,32 +370,6 @@ pub(crate) fn is_abstract_sig_member(kt: &KType<'_>) -> bool {
         }
         _ => false,
     }
-}
-
-/// Type-class-named type-table entries that classify abstract by [`is_abstract_sig_member`].
-/// Value slots (`VAL …`, value-class names) filter out by name class.
-pub(crate) fn abstract_members_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
-    scope
-        .bindings()
-        .iter_types()
-        .into_iter()
-        .filter(|(n, kt)| crate::parse::is_type_name(n) && is_abstract_sig_member(kt))
-        .map(|(n, _)| n)
-        .collect()
-}
-
-/// Type-class-named type-table entries that classify manifest (the concrete witness a
-/// satisfying module must match), paired with their fixed `KType`.
-pub(crate) fn manifest_type_members_of<'a>(
-    scope: &crate::machine::Scope<'a>,
-) -> Vec<(String, KType<'a>)> {
-    scope
-        .bindings()
-        .iter_types()
-        .into_iter()
-        .filter(|(n, kt)| crate::parse::is_type_name(n) && !is_abstract_sig_member(kt))
-        .map(|(n, kt)| (n, kt.clone()))
-        .collect()
 }
 
 #[cfg(test)]
