@@ -5,10 +5,10 @@ use crate::machine::core::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::{
-    KType, Parseable, Record, RecursiveSet, Serializable, SigSource, SignatureElement,
+    KType, Parseable, Record, RecursiveSet, SigSource, SignatureElement,
 };
 
-use super::{Held, Module};
+use super::{Held, KKey, Module};
 
 #[cfg(test)]
 mod tests;
@@ -65,14 +65,10 @@ pub enum KObject<'a> {
     /// the tuple directly outside this module.
     List(Rc<Vec<Held<'a>>>, Box<KType<'a>>),
     /// Dict value. Each value cell is a [`Held`] (an object or a first-class type); keys
-    /// stay scalar ([`Serializable`]). The second/third fields are the memoized/ascribed
+    /// are the concrete scalar [`KKey`]. The second/third fields are the memoized/ascribed
     /// key + value types, computed as the join of the keys / values at fresh construction
     /// or re-stamped at an annotated boundary.
-    Dict(
-        Rc<HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>>,
-        Box<KType<'a>>,
-        Box<KType<'a>>,
-    ),
+    Dict(Rc<HashMap<KKey, Held<'a>>>, Box<KType<'a>>, Box<KType<'a>>),
     KExpression(KExpression<'a>),
     KFunction(&'a KFunction<'a>),
     /// Tagged-union value. `(set, index)` references the union's sealed `RecursiveSet`
@@ -147,13 +143,13 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
-    pub fn dict(map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>) -> KObject<'a> {
+    pub fn dict(map: HashMap<KKey, KObject<'a>>) -> KObject<'a> {
         KObject::dict_of_held(map.into_iter().map(|(k, v)| (k, Held::Object(v))).collect())
     }
 
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value
     /// may be a first-class type; keys stay scalar).
-    pub fn dict_of_held(map: HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>) -> KObject<'a> {
+    pub fn dict_of_held(map: HashMap<KKey, Held<'a>>) -> KObject<'a> {
         let k = KType::join_iter(map.keys().map(|k| k.ktype()));
         let v = KType::join_iter(map.values().map(|v| v.ktype()));
         KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
@@ -161,7 +157,7 @@ impl<'a> KObject<'a> {
 
     /// `Dict` carrier with explicitly supplied key + value types. See [`Self::list_with_type`].
     pub fn dict_with_type(
-        map: Rc<HashMap<Box<dyn Serializable<'a> + 'a>, Held<'a>>>,
+        map: Rc<HashMap<KKey, Held<'a>>>,
         key: KType<'a>,
         value: KType<'a>,
     ) -> KObject<'a> {
@@ -455,9 +451,6 @@ fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType<'a> {
 }
 
 impl<'a> Parseable<'a> for KObject<'a> {
-    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
-        self.summarize() == other.summarize()
-    }
     fn ktype(&self) -> KType<'a> {
         KObject::ktype(self)
     }

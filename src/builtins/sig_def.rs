@@ -228,9 +228,14 @@ mod tests {
         );
         let a = scope.resolve_type("OrdA").expect("OrdA binds");
         let b = scope.resolve_type("OrdB").expect("OrdB binds");
-        let manifest = scope.resolve_type("OrdManifest").expect("OrdManifest binds");
+        let manifest = scope
+            .resolve_type("OrdManifest")
+            .expect("OrdManifest binds");
         assert!(matches!(a, KType::Signature { .. }));
-        assert_eq!(a, b, "self-reference canonicalizes; identical declarations unify");
+        assert_eq!(
+            a, b,
+            "self-reference canonicalizes; identical declarations unify"
+        );
         assert_ne!(
             a, manifest,
             "an abstract self-reference is not the same content as a manifest slot type",

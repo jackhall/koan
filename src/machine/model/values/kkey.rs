@@ -1,14 +1,14 @@
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 
 use super::kobject::KObject;
-use crate::machine::model::types::{KType, Parseable, Serializable};
+use crate::machine::model::types::{KType, Parseable};
 
-/// Concrete dict-key implementor for the `Box<dyn Serializable>` slot on
-/// `KObject::Dict`. Restricted to Python's hashable scalars; non-scalar keys
-/// are rejected at construction via `try_from_kobject`.
+/// Concrete dict-key value for the `KObject::Dict` map. Restricted to the hashable scalars;
+/// non-scalar keys are rejected at construction via [`Self::try_from_kobject`].
 ///
-/// `Number` hashes via `f64::to_bits()`, so NaN equals only an identical NaN
-/// bit pattern — matching Python's object-identity behavior for NaN keys.
+/// The key domain is kept NaN-free and zero-normalized (see `try_from_kobject`), so `Number`
+/// bit equality coincides with IEEE equality here and the [`PartialEq`] / [`Hash`] impls agree
+/// by construction — the map contract holds.
 #[derive(Clone, Debug)]
 pub enum KKey {
     String(String),
@@ -17,13 +17,15 @@ pub enum KKey {
 }
 
 impl KKey {
-    /// Returns the rejection reason as a plain `String` so this value-type
-    /// conversion stays free of the runtime `KError` type; the caller wraps
-    /// it into a structured error.
+    /// Returns the rejection reason as a plain `String` so this value-type conversion stays
+    /// free of the runtime `KError` type; the caller wraps it into a structured error. NaN is
+    /// rejected (it would be equal-to-nothing, breaking key lookup) and `-0.0` is normalized to
+    /// `0.0` so the two zeros are one key.
     pub fn try_from_kobject(obj: &KObject<'_>) -> Result<KKey, String> {
         match obj {
             KObject::KString(s) => Ok(KKey::String(s.clone())),
-            KObject::Number(n) => Ok(KKey::Number(*n)),
+            KObject::Number(n) if n.is_nan() => Err("dict key must not be NaN".to_string()),
+            KObject::Number(n) => Ok(KKey::Number(if *n == 0.0 { 0.0 } else { *n })),
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
             other => Err(format!(
                 "dict key must be String, Number, or Bool; got {}",
@@ -33,11 +35,41 @@ impl KKey {
     }
 }
 
-impl<'a> Parseable<'a> for KKey {
-    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
-        self.summarize() == other.summarize()
+impl PartialEq for KKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (KKey::String(a), KKey::String(b)) => a == b,
+            (KKey::Bool(a), KKey::Bool(b)) => a == b,
+            // Bit equality over the NaN-free, zero-normalized domain — the same bits `Hash`
+            // reads, and equal to IEEE `==` on this domain.
+            (KKey::Number(a), KKey::Number(b)) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
     }
+}
 
+impl Eq for KKey {}
+
+impl Hash for KKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            KKey::String(s) => {
+                state.write_u8(0);
+                s.hash(state);
+            }
+            KKey::Number(n) => {
+                state.write_u8(1);
+                state.write_u64(n.to_bits());
+            }
+            KKey::Bool(b) => {
+                state.write_u8(2);
+                b.hash(state);
+            }
+        }
+    }
+}
+
+impl<'a> Parseable<'a> for KKey {
     fn ktype(&self) -> KType<'a> {
         match self {
             KKey::String(_) => KType::Str,
@@ -53,64 +85,6 @@ impl<'a> Parseable<'a> for KKey {
             KKey::Number(n) => n.to_string(),
             KKey::Bool(b) => b.to_string(),
         }
-    }
-}
-
-impl<'a> Serializable<'a> for KKey {
-    fn hash(&self, state: &mut dyn Hasher) {
-        match self {
-            KKey::String(s) => {
-                state.write_u8(0);
-                state.write(s.as_bytes());
-            }
-            KKey::Number(n) => {
-                state.write_u8(1);
-                state.write(&n.to_bits().to_ne_bytes());
-            }
-            KKey::Bool(b) => {
-                state.write_u8(2);
-                state.write_u8(*b as u8);
-            }
-        }
-    }
-
-    fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        match self {
-            KKey::String(s) => {
-                out.push(0);
-                out.extend_from_slice(s.as_bytes());
-            }
-            KKey::Number(n) => {
-                out.push(1);
-                out.extend_from_slice(&n.to_bits().to_ne_bytes());
-            }
-            KKey::Bool(b) => {
-                out.push(2);
-                out.push(*b as u8);
-            }
-        }
-        out
-    }
-
-    fn decode(bytes: &[u8]) -> Self
-    where
-        Self: Sized,
-    {
-        match bytes.first() {
-            Some(&0) => KKey::String(String::from_utf8_lossy(&bytes[1..]).into_owned()),
-            Some(&1) => {
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&bytes[1..9]);
-                KKey::Number(f64::from_bits(u64::from_ne_bytes(buf)))
-            }
-            Some(&2) => KKey::Bool(bytes.get(1).copied().unwrap_or(0) != 0),
-            _ => panic!("KKey::decode = unrecognized tag byte"),
-        }
-    }
-
-    fn clone_box(&self) -> Box<dyn Serializable<'a>> {
-        Box::new(self.clone())
     }
 }
 

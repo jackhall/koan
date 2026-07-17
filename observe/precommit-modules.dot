@@ -737,6 +737,7 @@ digraph {
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::ktraits" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
-use crate::machine::model::{Carried, Held, KKey, KObject, Record, Serializable};
+use crate::machine::model::{Carried, Held, KKey, KObject, Record};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
     NodeId, TraceFrame,
@@ -202,11 +202,7 @@ impl<'step> KoanRuntime<'step> {
             deps,
             rows,
             Box::new(|keys, value_helds| {
-                let map: HashMap<Box<dyn Serializable + '_>, Held<'_>> = keys
-                    .into_iter()
-                    .zip(value_helds)
-                    .map(|(k, v)| (Box::new(k) as Box<dyn Serializable + '_>, v))
-                    .collect();
+                let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
                 KObject::dict_of_held(map)
             }),
         )

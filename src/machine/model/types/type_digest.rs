@@ -386,7 +386,9 @@ fn schema_self_ref<'k>(kt: &'k KType, schema: &SigSchema) -> Option<&'k str> {
         KType::SetRef { set, index }
             if set.member(*index).kind == KKind::TypeConstructor
                 && set.member(*index).scope_id == ScopeId::SENTINEL
-                && schema.abstract_members.contains_key(&set.member(*index).name) =>
+                && schema
+                    .abstract_members
+                    .contains_key(&set.member(*index).name) =>
         {
             Some(&set.member(*index).name)
         }

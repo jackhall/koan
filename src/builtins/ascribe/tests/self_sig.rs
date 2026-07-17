@@ -4,8 +4,8 @@
 //! them; a transparent view records the source's concrete types.
 
 use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one,
-    run_one_err, run_root_silent,
+    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one, run_one_err,
+    run_root_silent,
 };
 use crate::machine::model::KType;
 use crate::machine::model::Module;

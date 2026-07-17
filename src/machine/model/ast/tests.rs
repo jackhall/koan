@@ -107,8 +107,8 @@ fn parseable_equal_and_ktype_for_kexpression() {
     let a = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
     let b = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
     let c = KExpression::new(parts_of(vec![kw("LET"), ident("y")]));
-    assert!(a.equal(&b));
-    assert!(!a.equal(&c));
+    assert!(a.summarize() == b.summarize());
+    assert!(a.summarize() != c.summarize());
     assert!(matches!(
         a.ktype(),
         crate::machine::model::KType::KExpression

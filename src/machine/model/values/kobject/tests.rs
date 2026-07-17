@@ -47,10 +47,9 @@ fn ktype_of_nested_list() {
 
 #[test]
 fn ktype_of_dict_string_number() {
-    let mut map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> =
-        HashMap::new();
-    map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
-    map.insert(Box::new(KKey::String("b".into())), KObject::Number(2.0));
+    let mut map: HashMap<KKey, KObject<'static>> = HashMap::new();
+    map.insert(KKey::String("a".into()), KObject::Number(1.0));
+    map.insert(KKey::String("b".into()), KObject::Number(2.0));
     let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
@@ -60,7 +59,7 @@ fn ktype_of_dict_string_number() {
 
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
-    let map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
+    let map: HashMap<KKey, KObject<'static>> = HashMap::new();
     let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
@@ -161,7 +160,7 @@ fn unstamped_empty_container_detection() {
     assert!(!stamped.is_unstamped_empty_container());
     let hetero = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(!hetero.is_unstamped_empty_container());
-    let map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
+    let map: HashMap<KKey, KObject<'static>> = HashMap::new();
     assert!(KObject::dict(map).is_unstamped_empty_container());
 }
 

@@ -9,7 +9,7 @@ pub use operators::{
 pub use types::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature, KKind,
     KType, NominalMember, NominalSchema, Parseable, ProjectedSchema, Record, RecursiveSet,
-    ReturnType, Serializable, SigSource, SignatureElement, UntypedElement, UntypedKey,
+    ReturnType, SigSource, SignatureElement, UntypedElement, UntypedKey,
 };
 pub use values::{Carried, Held, KKey, KObject};
 

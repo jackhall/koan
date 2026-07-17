@@ -120,18 +120,14 @@ fn list_relocation_shares_inner_rc() {
 #[test]
 fn dict_relocation_shares_inner_rc() {
     use crate::machine::model::KKey;
-    use crate::machine::model::Serializable;
     use std::collections::HashMap;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
 
-    let mut map: HashMap<Box<dyn Serializable<'_>>, Held> = HashMap::new();
-    map.insert(
-        Box::new(KKey::String("a".into())),
-        Held::Object(KObject::Number(1.0)),
-    );
+    let mut map: HashMap<KKey, Held> = HashMap::new();
+    map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
     let entries = Rc::new(map);
     let dict: &KObject = source
         .brand()

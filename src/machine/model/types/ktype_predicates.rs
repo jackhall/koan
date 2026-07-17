@@ -3,6 +3,7 @@
 //! [design/typing/ktype/README.md](../../../../design/typing/ktype/README.md).
 
 use super::kkind::KKind;
+use super::ktraits::Parseable;
 use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::same_nominal;

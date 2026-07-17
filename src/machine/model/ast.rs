@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use crate::source::{FileId, Span, Spanned};
 
 use crate::machine::model::{
-    Carried, Held, KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
+    Carried, Held, KKey, KObject, Parseable, Record, UntypedElement, UntypedKey,
 };
 use crate::witnessed::reattachable;
 
@@ -292,13 +292,13 @@ impl<'a> ExpressionPart<'a> {
             // Non-scalar keys reaching here are a scheduler bug — it must surface them as
             // a structured `ShapeError` before resolve.
             ExpressionPart::DictLiteral(pairs) => {
-                let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>> = HashMap::new();
+                let mut map: HashMap<KKey, KObject<'a>> = HashMap::new();
                 for (k, v) in pairs {
                     let key_obj = k.resolve();
                     let kkey = KKey::try_from_kobject(&key_obj).unwrap_or_else(|e| {
                         panic!("DictLiteral::resolve = non-scalar key reached resolve(): {e}")
                     });
-                    map.insert(Box::new(kkey), v.resolve());
+                    map.insert(kkey, v.resolve());
                 }
                 KObject::dict(map)
             }
@@ -714,9 +714,6 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 }
 
 impl<'a> Parseable<'a> for KExpression<'a> {
-    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
-        self.summarize() == other.summarize()
-    }
     fn ktype(&self) -> crate::machine::model::KType<'a> {
         crate::machine::model::KType::KExpression
     }

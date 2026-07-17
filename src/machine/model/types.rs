@@ -17,7 +17,7 @@ mod type_memos;
 mod typed_field_list;
 
 pub use kkind::KKind;
-pub use ktraits::{Parseable, Serializable};
+pub use ktraits::Parseable;
 pub use ktype::{KType, SigSource};
 pub use record::Record;
 pub use recursive_set::{

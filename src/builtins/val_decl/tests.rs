@@ -66,7 +66,10 @@ fn val_resolves_sig_local_type_shadow() {
 fn duplicate_val_slot_name_is_rebind() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"));
+    let err = run_one_err(
+        scope,
+        parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"),
+    );
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "x"),
         "expected Rebind naming `x`, got {err}",
