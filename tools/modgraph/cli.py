@@ -85,6 +85,9 @@ def _add_score_args(p: argparse.ArgumentParser) -> None:
                    help="prune unreachable-SHA entries, prepend today's measurement, "
                         "trim to 5, and write the file; prints a delta line against "
                         "the prior top entry (e.g. --baseline observe/complexity.txt).")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress the per-module report, printing only the final "
+                        "score line (and any --baseline delta).")
 
 
 def _run_score(args: argparse.Namespace) -> int:
@@ -107,6 +110,7 @@ def _run_score(args: argparse.Namespace) -> int:
         args.lambda_facade,
         prose_redirect or None,
         args.denominator,
+        report=not args.quiet,
     )
     if args.baseline is not None:
         update_baseline(args.baseline, score, root_loc)

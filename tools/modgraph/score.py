@@ -193,9 +193,11 @@ def score_tree(
     lambda_facade: float,
     prose_redirect: dict[Path, Path] | None = None,
     denominator: float = 1000.0,
+    report: bool = True,
 ) -> Score:
     """Walk the subtree, print the per-module report, and return the
-    fixed-denominator Score breakdown."""
+    fixed-denominator Score breakdown. With `report=False` the per-module
+    breakdown is suppressed and only the final score line is printed."""
     modules = discover_modules(edges)
     root_loc = subtree_loc(root, modules, src_root)
     prose_attribution, hop_count = build_prose_attribution(src_root, prose_redirect)
@@ -228,7 +230,8 @@ def score_tree(
         head = f"{indent}{module:<60} loc {loc:>6}"
 
         if not children:
-            print(f"{head}   leaf{size_tail}")
+            if report:
+                print(f"{head}   leaf{size_tail}")
             return Score(size=size)
 
         partition = {c: [f"{module}::{c}"] for c in children}
@@ -236,15 +239,17 @@ def score_tree(
             edges, partition, alpha, lambda_facade, exact_threshold)
         beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
         nest = beta * beta_scale
-        print(f"{head}   children {len(children)}   cross {cross}   fb {fb}   fan {fan}"
-              f"   nest {nest:.1f}   index {coupling + nest:.1f}{size_tail}")
+        if report:
+            print(f"{head}   children {len(children)}   cross {cross}   fb {fb}   fan {fan}"
+                  f"   nest {nest:.1f}   index {coupling + nest:.1f}{size_tail}")
 
         here = Score(coupling=coupling * loc, nesting=nest * loc, size=size)
         return sum((walk(f"{module}::{c}", depth + 1) for c in children), here)
 
     totals = walk(root, 0)
     per = totals.per(denominator)
-    print()
+    if report:
+        print()
     print(f"score (denominator {denominator:g}, loc({root}) = {root_loc}, "
           f"γ={gamma}, T={pivot:g}):  {per.total:.2f}   "
           f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")

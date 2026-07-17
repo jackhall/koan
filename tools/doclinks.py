@@ -1364,10 +1364,11 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     print("## next items (derived from dependency graph)")
     rc_next = _check_next_items()
-    print()
 
-    print(f"## source-tree changes vs {base}")
-    _report_src_changes(base)
+    if not getattr(args, "gates_only", False):
+        print()
+        print(f"## source-tree changes vs {base}")
+        _report_src_changes(base)
 
     return max(rc_links, rc_deps, rc_orphans, rc_next)
 
@@ -1390,6 +1391,11 @@ def main(argv: list[str] | None = None) -> int:
              "The working tree is compared to this ref, so both committed and "
              "uncommitted edits are surfaced in one pass. Only affects the "
              "informational source-tree section, not the gating sections.",
+    )
+    p_check.add_argument(
+        "--gates-only", action="store_true",
+        help="print only the four gating sections; skip the informational "
+             "source-tree changes report.",
     )
     p_check.set_defaults(func=cmd_check)
 
