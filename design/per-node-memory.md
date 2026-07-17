@@ -119,13 +119,14 @@ the Resolved arm through the binding scope's own
 [`resident_value_carrier`](../src/machine/core/scope.rs) — so the projected object
 names every region it reaches by construction. No construction terminal pairs an *already-built* value
 with a separately-asserted witness: the **type** family seals the same way — a delivered type terminal
-through the step context's [`alloc_type_of`](../src/machine/core/arena.rs), which rebuilds the type at the
-fold brand from the dep's own view, a region-referencing module self-sig
-(`KType::Signature { sig: SelfOf(m), .. }`) through
-[`Scope::resident_type_carrier`](../src/machine/core/scope.rs) under the child-scope reach folded at
-construction ([`Scope::child_module_reach`](../src/machine/core/scope.rs), from the child scope the birth
-site holds directly) — so every multi-dep constructed value, object or type, is born co-located by the
-`yoke` brand. The region-pure
+through the binding scope's own [`Scope::resident_type_carrier`](../src/machine/core/scope.rs), born
+co-located with the region-resident slot type the register door
+([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs (its stored reach derived from
+the delivered carrier via [`host_reach_of`](../src/machine/core/scope.rs)); a region-referencing module
+self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals the same way, under the child-scope reach
+folded at construction ([`Scope::child_module_reach`](../src/machine/core/scope.rs), from the child scope
+the birth site holds directly) — so every multi-dep constructed value, object or type, is born
+co-located by the `yoke` brand. The region-pure
 carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/witnessed.rs), which fixes the
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
 witness, only with the empty reach a region-pure value genuinely has; that emptiness is sound as a
@@ -270,11 +271,14 @@ aggregate and region-pure inversions, the newtype / tagged-union constructors, a
 dep carriers via `transfer_into`; the bare-arg value-embedding sites (`attr`, `FROM`, the literal
 Resolved arm) `transfer_into` the [delivered carrier](#storage-and-access-seal-open-transfer_into) of the value
 they project; and a `let` or user-fn arg bind mints the bound value's carrier into the scope's own arena
-(below). The **type** channel rides the same construction: a delivered type terminal seals via
-the step context's [`alloc_type_of`](../src/machine/core/arena.rs), which rebuilds the type at the fold
-brand from the dep's view, folding its own region (the producer's home frame) plus the dep's reach at
-the alloc site itself; a
-region-referencing module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals via
+(below). The **type** channel rides the same construction: a delivered type terminal — a `VAL` slot
+([`val_decl`](../src/builtins/val_decl.rs)), an abstract or manifest type member
+([`type_decl`](../src/builtins/type_decl.rs)), or a `LET` type alias
+([`let_binding`](../src/builtins/let_binding.rs)) — seals via
+[`Scope::resident_type_carrier`](../src/machine/core/scope.rs), born co-located with the region-resident
+type the register door ([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs, its
+stored reach derived from the delivered carrier via [`host_reach_of`](../src/machine/core/scope.rs); a
+region-referencing module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals via that same
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
 under the child-scope reach minted once at construction from the child scope the birth site holds
 directly ([`Scope::child_module_reach`](../src/machine/core/scope.rs)) — the same token the module

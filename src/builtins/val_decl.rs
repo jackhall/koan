@@ -17,6 +17,7 @@ use crate::machine::model::{KKind, SigSource};
 use crate::machine::model::{KObject, KType};
 use crate::machine::DeliveredCarried;
 use crate::machine::FinishCtx;
+use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
@@ -125,14 +126,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 }
 
 /// Records the value slot's declared type into the SIG decl scope's slot collector and returns
-/// the slot's carrier as `Action::Done`.
+/// the slot's carrier as `Action::Done`, uniform with `type_decl::bind_abstract_member` and the
+/// `LET` type route.
 ///
 /// `declared_kt` can embed a borrow into `carrier`'s producer region (a declared `Signature`, a
 /// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
 /// dep terminal. [`Scope::register_sig_slot_delivered`] derives the slot's stored reach off
-/// `carrier` (the empty token when `carrier` is `None`) and installs a region-resident copy of the
-/// type into the collector; the returned resident `&KType` is not needed here, because the terminal
-/// is sealed separately below from the carrier's own view.
+/// `carrier` (the empty token when `carrier` is `None`), installs a region-resident copy of the
+/// type into the collector, and hands back that resident `&KType` paired with its reach — which
+/// [`Scope::resident_type_carrier`] seals into the terminal, born co-located with the stored slot
+/// rather than rebuilt from a second allocation.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
@@ -140,33 +143,16 @@ fn finalize_val<'a>(
     carrier: Option<&DeliveredCarried>,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    if let Err(e) = fctx
+    let (kt_ref, stored) = match fctx
         .scope
-        .register_sig_slot_delivered(name, declared_kt.clone(), carrier)
+        .register_sig_slot_delivered(name, declared_kt, carrier)
     {
-        return Action::Done(Err(e));
-    }
-    let sealed = match carrier {
-        // Seal the carrier's own type terminal. `alloc_type_of` rebuilds the type from the dep's
-        // view at the fold brand — the built value equals `declared_kt` because both callers source
-        // `kt` from this carrier's own terminal (`expect_type_terminal` clones `Carried::Type(kt)`;
-        // the `Direct` arm's `ty` argument is the spliced sub-dispatch this carrier delivers), so
-        // the view and the ambient `declared_kt` are the same delivered type.
-        Some(c) => fctx.ctx.alloc_type_of(c),
-        // A region-free declared type takes the compile-enforced `'static` tier; one embedding a
-        // region borrow (a declared `Signature`, a nominal `SetRef`) takes the runtime-checked seal.
-        None => {
-            let sealed = match declared_kt.to_static() {
-                Some(owned) => Ok(fctx.ctx.alloc_type(owned)),
-                None => fctx.ctx.alloc_type_checked(declared_kt),
-            };
-            match sealed {
-                Ok(sealed) => sealed,
-                Err(e) => return Action::Done(Err(e)),
-            }
-        }
+        Ok(pair) => pair,
+        Err(e) => return Action::Done(Err(e)),
     };
-    Action::Done(Ok(sealed))
+    Action::Done(Ok(StepCarried::born(
+        fctx.scope.resident_type_carrier(kt_ref, stored),
+    )))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -181,23 +181,27 @@ value-side gate untouched.
 Two consequences follow, and both are load-bearing elsewhere in this tree:
 
 - **A name is committed to one universe before any value reaches it.** A *cross-kind
-  collision* — the same name in both maps — is therefore unconstructible in an ordinary scope;
-  the collision check that rejects it stays live only for the slot table below.
+  collision* — the same name in both maps — is therefore unconstructible; the collision check
+  that would reject it survives as a belt-and-braces backstop, never a routine gate.
 - **A parameter's name picks its universe, not its argument.** A `:Type`- or
   `:Signature`-slotted parameter carries a type-language value, so it must spell as a Type
   token (`Ty`, `Er`); a module-valued parameter carries a *value*, so it must spell snake_case
   (`er`). Handing a module to a Type-token parameter is a bind-time error, not a silent
   crossing.
 
-**The SIG slot table is the one legitimate crossing.** A SIG body records each `VAL <name>
-:<Type>` slot's declared type into the decl scope's `types` map keyed by the slot's *value*
-name, alongside its `TYPE <Name>` abstract members — one table that
-[`SigSchema`](../../src/machine/model/types/sig_schema.rs) splits back apart by token class
-(`is_abstract_sig_member` reads representation; the token class separates value slots from type
-members). That is a **schema, not a binding universe**, so a SIG body's `Bindings` is built by
-`Bindings::new_slot_table()` ([`Scope::child_under_sig`](../../src/machine/core/scope.rs)) and
-the value-token→`types` gate stands down for it — and it is the one place where a genuine
-cross-kind collision can occur, so the collision check is still live there.
+**SIG value slots live off the binding map.** A SIG body records each `VAL <name> :<Type>`
+slot's declared type into a **slot collector** on the decl scope
+([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
+value name and paired with the type's stored reach — never into the `types` map. That collector
+is a **schema in progress, not a binding universe**: no name resolves against it and it carries
+no `BindingIndex`. The `types` map holds only the SIG's genuine type members (`TYPE <Name>`
+abstract, `LET <Name> = <Type>` manifest), so the value-token→`types` gate needs no exemption
+and the decl scope's `Bindings` is an ordinary [`Bindings::new()`](../../src/machine/core/bindings.rs)
+([`Scope::child_under_sig`](../../src/machine/core/scope.rs)). At SIG finish the member map and
+the slot collector project once into the signature's stored
+[`SigSchema`](../../src/machine/model/types/sig_schema.rs) — `is_abstract_sig_member` reads
+representation to split abstract from manifest members, and the slot collector supplies
+`value_slots` directly, with no per-read reprojection.
 
 Token-class-driven lookup at the resolver
 decides which map to consult — Type-class tokens consult `types`,

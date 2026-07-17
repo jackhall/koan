@@ -69,15 +69,17 @@ supply:
   naming an operation the signature requires, with the slot's declared type
   recorded explicitly rather than inferred from an example value.
 
-A SIG body's declarators all write **one table**: the decl scope's `types` map records each
-`TYPE <Name>` abstract member under its Type-token name *and* each `VAL <name> :<Type>` slot's
-declared type under the slot's **value** name.
-[`SigSchema`](../../src/machine/model/types/sig_schema.rs) splits it back apart — by
-representation for abstract-vs-manifest, by token class for type members vs value slots. This
-**slot table** is a schema, not a binding universe, and it is the sole exemption from the
-token-class partition that otherwise keeps value tokens out of the type map
-([elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)): a SIG body's
-`Bindings` is built by `Bindings::new_slot_table()`.
+A SIG body's declarators write two separate channels. The decl scope's `types` map records
+each `TYPE <Name>` abstract member and each `LET <Name> = <Type>` manifest member under its
+Type-token name — genuine type bindings. Each `VAL <name> :<Type>` value slot instead records
+its declared type into a **slot collector** on the decl scope
+([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
+value name — a schema in progress, off the binding map. At SIG finish both channels project once
+into the signature's stored [`SigSchema`](../../src/machine/model/types/sig_schema.rs): the
+`types` map splits by representation into abstract vs manifest members, and the slot collector
+supplies `value_slots`. Because value slots never enter `types`, the token-class partition needs
+no exemption ([elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)) and
+a SIG body's `Bindings` is an ordinary `Bindings::new()`.
 
 `VAL` and `TYPE` are meaningful only inside a SIG body; outside it the
 declarator is unbound. The lowercase-name `(LET name = <value>)` form is

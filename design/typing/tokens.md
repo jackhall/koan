@@ -36,8 +36,9 @@ A keyword-class name (all-uppercase, no lowercase) is neither, so builtin dispat
 registration is unaffected. The rule reaches past declarations to **parameters**: a
 parameter's *name* picks its universe, not the argument it is handed, so a `:Type` /
 `:Signature` parameter spells as a Type token (`Ty`, `Er`) and a module-valued parameter
-spells snake_case (`er`). The one exception is a SIG body's slot table, which keys value slots
-by their value names inside the type map — a schema rather than a binding universe (see
+spells snake_case (`er`). The partition admits no exception: a SIG body's value slots
+(`VAL <name> :Type`) are recorded off the binding map entirely, in the decl scope's own slot
+collector, so no value token ever lands in the type map (see
 [elaboration.md § Binding-map partition](elaboration.md#binding-map-partition)).
 
 A token that starts uppercase but classifies as neither keyword nor type

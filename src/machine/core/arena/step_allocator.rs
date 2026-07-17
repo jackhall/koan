@@ -188,29 +188,6 @@ impl<'step> StepAllocator<'step> {
         ))))
     }
 
-    /// Seal a delivered *type* terminal's value as this step's own carrier. The type is rebuilt at
-    /// the fold brand from the dep's view — never captured at an ambient lifetime — so reach = own
-    /// region ∪ the dep's reach and host. Scalar gate: a region-free scalar type references no
-    /// region, so it routes to the no-fold path and seals with an empty reach.
-    pub(crate) fn alloc_type_of(&self, dep: &DeliveredCarried) -> StepCarried<'step> {
-        // Scalar gate: a region-free scalar type references no region, so folding the dep's reach in
-        // would only over-retain. Route it to the no-fold path so it seals with an empty reach.
-        // `is_region_free_scalar` is exactly `to_static`'s owned-leaf class, so the rebuild always
-        // succeeds.
-        if let Some(owned) = dep.open(|c| match c {
-            Carried::Type(kt) if kt.is_region_free_scalar() => kt.to_static(),
-            _ => None,
-        }) {
-            return self.alloc_type(owned);
-        }
-        self.alloc_carried_with(&[dep], |b, views| match views[0] {
-            Carried::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
-            Carried::Object(_) => {
-                unreachable!("alloc_type_of precondition: the dep terminal is a type")
-            }
-        })
-    }
-
     /// The correlated multi-operand type build: `operands` lists **every** type the composite
     /// embeds, in embedding order, and `compose` receives exactly one `&'b KType<'b>` per operand
     /// at the same position — so the composite is built at the brand from declared operands only.

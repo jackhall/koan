@@ -82,8 +82,9 @@ and [elaboration.md § Binding-map partition](elaboration.md#binding-map-partiti
 **cross-kind exclusion**: every value write path rejects a
 name already committed to `types`, and every type write path rejects one
 already in `data` (a `Rebind` either way). The token-class gate makes the second
-unreachable in an ordinary scope — a name that cannot cross cannot collide — so the collision
-check earns its keep in the one map that legitimately mixes classes, a SIG body's slot table.
+unreachable — a name that cannot cross cannot collide — so cross-kind exclusion is a
+belt-and-braces backstop rather than a routine gate: no map mixes classes, since a SIG body's
+value slots live off the binding map in the decl scope's slot collector.
 One name can never hold both a
 value and a type, and a lookup can never return the wrong kind. `bind_value`
 and `register_function` remove their own *matching-kind* placeholder before

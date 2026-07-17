@@ -35,7 +35,7 @@ group just to silence the stale-anchor check.
 <!-- slate-audit-whitelist:start -->
 - `src/machine/core/arena.rs` — arena.rs split into `arena/{frame,step_allocator,residence}`
   child modules. Its remaining groups (CallFrame lifetime erasure, reference-only carrier
-  retention, multi-region union, witness-set hosting, `alloc_type_of`, MATCH-Tagged / TRY-WITH
+  retention, multi-region union, witness-set hosting, `alloc_carried_with`, MATCH-Tagged / TRY-WITH
   TCO, per-call frame re-anchor, NodeStore reinstall) pin safe-code frame / carrier / region
   drop-order and reattach disciplines whose backing `unsafe` is the `Region::alloc` retype in
   `witnessed.rs`; the `unsafe impl AuditedStored` audits that gate those stores moved to
@@ -228,13 +228,13 @@ multi-region-union tests and the envelope-transfer tests above route entirely th
 `unsafe` beyond the impl's contract and the pinned `with_reach` re-anchor: the erase/reattach
 otherwise routes the shared `retype` in `witnessed.rs`.
 
-**`alloc_type_of` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
-— `KoanStepContextExt::alloc_carried_with`/`alloc_type_of` route a finish's result through the
+**`alloc_carried_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
+— `KoanStepContextExt::alloc_carried_with` routes a finish's result through the
 library combinator `StepContext::alloc_with`, folding each listed dep's sealed reach into the
 result's witness by construction before the caller's `build` closure ever clones a dep-derived
 value in. This test seals a region-borrowing `KType::Signature { sig: SigSource::Declared(&s) }`
 resident in a producer frame's region (the stand-in for a dep terminal's `t.value`/`t.carrier`)
-as a *different* consumer frame's own carrier via `alloc_type_of`, rebuilt at the fold brand from
+as a *different* consumer frame's own carrier via `alloc_carried_with`, rebuilt at the fold brand from
 the dep's view; it then drops the dep envelope and every producer-frame handle and reads the sealed
 signature's decl scope back — a use-after-free under tree borrows if the fold is skipped (as
 `alloc_type`, its unfolded sibling, would leave it). The only `unsafe` routed is the shared
@@ -544,9 +544,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-17: 625s — 40 tests, 0 leaks, 0 UB
+- 2026-07-17: 638s — 40 tests, 0 leaks, 0 UB
 - 2026-07-14: 1108s — 40 tests, 0 leaks, 0 UB
 - 2026-07-13: 509s — 40 tests, 0 leaks, 0 UB
 - 2026-07-13: 650s — 40 tests, 0 leaks, 0 UB
-- 2026-07-13: 562s — 40 tests, 0 leaks, 0 UB
-- 2026-07-13: 505s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

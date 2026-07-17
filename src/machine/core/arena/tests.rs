@@ -998,9 +998,9 @@ fn declared_sig_id(kt: &KType<'_>) -> ScopeId {
     }
 }
 
-/// **`alloc_type_of`'s reach fold, exercised through the actual finish-surface helper.** A dep
-/// terminal's `KType::Signature { sig: SigSource::Declared(&s) }` — the stand-in for
-/// `t.value`/`t.carrier` — is sealed as the step's own carrier via `alloc_type_of`, rebuilt at the
+/// **`alloc_carried_with`'s single-dep reach fold, exercised through the actual finish-surface
+/// combinator.** A dep terminal's `KType::Signature { sig: SigSource::Declared(&s) }` — the
+/// stand-in for `t.value`/`t.carrier` — is sealed as the step's own carrier by rebuilding it at the
 /// fold brand from the dep's view in a *different* frame's region. The fold unions the producer's
 /// reach into the result's witness; every producer-frame handle then drops, and reading the sealed
 /// signature's decl scope must not dangle. Fails on UB, not values — the closing case for the reach
@@ -1021,10 +1021,14 @@ fn signature_field_reach_fold_survives_producer_frame_free() {
     );
 
     // Consumer: a StepContext over a *different* frame — the finish surface's own region.
-    // `alloc_type_of` rebuilds `kt` at the brand from the dep's view and folds the producer's reach.
+    // `alloc_carried_with` rebuilds `kt` at the fold brand from the dep's view and folds the
+    // producer's reach into the sealed carrier's witness.
     let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let sealed: StepCarried = ctx.alloc_type_of(&dep);
+    let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| match views[0] {
+        Carried::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
+        Carried::Object(_) => unreachable!("the dep terminal is a Signature type"),
+    });
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
     // producer's region alive, through the set minted into the consumer arena — itself pinned by
@@ -1043,38 +1047,6 @@ fn signature_field_reach_fold_survives_producer_frame_free() {
         read_id, expected_id,
         "signature type read back after producer frame freed"
     );
-}
-
-/// **`alloc_type_of`'s scalar gate.** A region-free scalar type (`Number`) delivered as a dep
-/// terminal seals with an **empty** reach — it references no region, so the fold is skipped and the
-/// carrier pins nothing, even though the dep envelope names a producer frame. The complement of the
-/// fold arm above: reach = own region ∪ dep reach for a region-reaching type, empty for a scalar.
-#[test]
-fn alloc_type_of_scalar_gate_seals_empty_reach() {
-    let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
-
-    // A region-free scalar type sealed as a dep terminal, its envelope naming a producer frame.
-    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = producer_frame.brand().alloc_ktype(KType::Number);
-    let dep: DeliveredCarried = Delivered::seal(
-        Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
-        producer_frame.storage_rc(),
-    );
-
-    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
-    let sealed: StepCarried = ctx.alloc_type_of(&dep);
-
-    assert!(
-        sealed.reach_is_empty(),
-        "a region-free scalar type folds no dep: empty reach"
-    );
-    // The scalar value rebuilds owned at the brand, so the sealed carrier is the same `Number`.
-    let is_number = sealed.inspect_pinned(&consumer_frame.storage_rc(), |c| {
-        matches!(c, Carried::Type(KType::Number))
-    });
-    assert!(is_number, "alloc_type_of seals the scalar's own value");
 }
 
 /// **`alloc_type_composed`'s correlation, exercised through the actual door.** A mixed operand
@@ -1175,9 +1147,8 @@ fn alloc_type_composed_operand_order_is_positional() {
     assert!(v_is_number, "Pure operand now at position 1 lands in v");
 }
 
-/// An all-`Pure` operand list folds no dep — reach = own region only, the same exact-reach result
-/// [`alloc_type_of`](StepAllocator::alloc_type_of)'s scalar gate produces elsewhere, here
-/// without needing a gate at all: `Pure` operands simply add nothing to `deps`.
+/// An all-`Pure` operand list folds no dep — reach = own region only, an exact-reach result
+/// reached here without needing a scalar gate at all: `Pure` operands simply add nothing to `deps`.
 #[test]
 fn alloc_type_composed_all_pure_seals_empty_reach() {
     let root = run_root_storage();
