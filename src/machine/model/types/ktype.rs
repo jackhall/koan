@@ -65,6 +65,14 @@ impl<'a> SigSource<'a> {
         }
     }
 
+    /// Whether this source names the empty interface — the module-lattice top. True for `Empty`
+    /// and, by content, for any `Declared`/`SelfOf` whose schema has no members: an empty interface
+    /// is an empty interface regardless of how it was minted. Keyed off the content digest so it
+    /// tracks the identity relation, letting the specificity walk place the top by content.
+    pub(crate) fn is_empty_interface(&self) -> bool {
+        self.content_digest() == type_digest::empty_schema_digest()
+    }
+
     /// Diagnostic path label. `Empty` renders as the `Module` surface keyword it lowers from.
     pub fn path(&self) -> String {
         match self {

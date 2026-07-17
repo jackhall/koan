@@ -70,7 +70,6 @@ const TAG_CONSTRUCTOR_APPLY: u8 = 0x1A;
 const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;
 const TAG_SIG_SELF_REF: u8 = 0x1D;
-const TAG_SIG_EMPTY: u8 = 0x1E;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -292,12 +291,17 @@ pub(crate) fn schema_content_digest(schema: &SigSchema) -> TypeDigest {
 }
 
 /// The digest `SigSource::Empty` folds in — the module-lattice top (`:Module`), the type a
-/// module-accepting slot lowers to. A fixed sentinel: distinct from every real schema's content
-/// digest (those open with `TAG_SIG_CONTENT`) and carrying no scope id, so the top keeps a stable
-/// identity of its own — it is a wildcard admitting every module, not a user's zero-member `SIG`,
-/// and the specificity walk branches on the `Empty` source variant to place it at the top.
+/// module-accepting slot lowers to. It is the content digest of a zero-member schema, byte-for-byte
+/// what [`schema_content_digest`] produces for an empty [`SigSchema`] (empty abstract count, then
+/// two empty `feed_named_types` headers). So `:Module` and a user's zero-member `SIG E = ()` share
+/// one content identity — an empty interface is an empty interface — and the specificity walk places
+/// the top by empty content, not by source variant.
 pub(crate) fn empty_schema_digest() -> TypeDigest {
-    DigestHasher::new(TAG_SIG_EMPTY).finish()
+    let mut h = DigestHasher::new(TAG_SIG_CONTENT);
+    h.count(0); // abstract_members
+    h.count(0); // manifest_members (feed_named_types header)
+    h.count(0); // value_slots (feed_named_types header)
+    h.finish()
 }
 
 /// Feed a `name -> type` member map into `h` in name-sorted order (the map is unordered), each

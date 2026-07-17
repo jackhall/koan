@@ -930,32 +930,38 @@ fn matches_value_admits_module_object_via_signature_slot() {
 }
 
 /// Specificity over the module lattice: a module's `SelfOf` self-sig refines a `Declared`
-/// signature it satisfies, and any non-empty signature refines the `Empty` top.
+/// signature it satisfies, and any non-empty signature refines the `Empty` top. The signature
+/// and module carry real members: under content identity a member-less signature *is* the
+/// `:Module` top ([`empty_signature`](KType::empty_signature)), so degenerate empty points would
+/// collapse into one type and there would be no ordering to test.
 #[test]
 fn specificity_self_sig_refines_declared_and_empty() {
-    use crate::builtins::default_scope;
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::{Module, ModuleSignature};
-    use crate::machine::Scope;
+    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let scope = run_root_silent(&region);
 
-    let sig_scope = region
-        .brand()
-        .alloc_scope(Scope::child_under_sig(scope, "S".into()));
-    let sig = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("S".into(), sig_scope));
-    let child = region
-        .brand()
-        .alloc_scope(Scope::child_under_module(scope, "M".into()));
-    let m: &Module = region.brand().alloc_module(Module::new("M".into(), child));
+    // `Ordered` requires a `compare` slot; `int_ord` supplies it plus an extra member, so its
+    // self-sig strictly satisfies `Ordered`.
+    run(
+        scope,
+        "SIG Ordered = ((VAL compare :Number))\n\
+         MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
+    );
+    let sig = match scope.resolve_type("Ordered") {
+        Some(KType::Signature {
+            sig: SigSource::Declared(sig),
+            ..
+        }) => *sig,
+        _ => panic!("Ordered must bind a Signature KType"),
+    };
+    let m = lookup_module(scope, "int_ord");
 
     let self_of = KType::signature(SigSource::SelfOf(m), Vec::new());
     let declared = KType::signature(SigSource::Declared(sig), Vec::new());
     let empty = KType::empty_signature();
 
-    // `SelfOf(m) ≺ Declared(sig)` because `m` satisfies the (empty) signature.
+    // `SelfOf(m) ≺ Declared(sig)` because `m`'s self-sig satisfies `Ordered`.
     assert!(self_of.is_more_specific_than(&declared));
     // Any non-empty signature `≺ Empty`; `Empty` refines nothing narrower.
     assert!(declared.is_more_specific_than(&empty));

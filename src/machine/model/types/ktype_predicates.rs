@@ -142,14 +142,26 @@ impl<'a> KType<'a> {
                     ..
                 },
             ) => m.structurally_satisfies(s) && (pb.is_empty() || m.satisfies_pins(pb)),
-            // Any non-empty signature refines the empty signature (the lattice top).
+            // Any non-empty signature refines the empty interface (the lattice top). Keyed on
+            // empty *content*, not the `Empty` source variant, so a zero-member `SIG E = ()` is the
+            // same top as `:Module` — and pins must agree (an empty interface pins nothing).
             (
-                Signature { sig: sa, .. },
                 Signature {
-                    sig: SigSource::Empty,
+                    sig: sa,
+                    pinned_slots: pa,
                     ..
                 },
-            ) if !matches!(sa, SigSource::Empty) => true,
+                Signature {
+                    sig: sb,
+                    pinned_slots: pb,
+                    ..
+                },
+            ) if sb.is_empty_interface()
+                && pb.is_empty()
+                && !(sa.is_empty_interface() && pa.is_empty()) =>
+            {
+                true
+            }
             // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
