@@ -123,7 +123,7 @@ fn union_of_flattens_nested_union() {
     );
 }
 
-fn function(params: Vec<(&str, KType<'static>)>, ret: KType<'static>) -> KType<'static> {
+fn function(params: Vec<(&str, KType)>, ret: KType) -> KType {
     KType::function_type(
         Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
         Box::new(ret),

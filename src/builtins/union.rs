@@ -6,18 +6,17 @@ use crate::machine::model::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
 };
 use crate::machine::FinishCtx;
-use crate::machine::{seal_type_operand, StepCarried};
+use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 use crate::machine::{NameLookup, ScopeId};
 
 use super::{arg, kw, sig};
-use crate::machine::DeliveredCarried;
 
 /// What `finalize_union` recovers from `bindings.types[name]` before sealing.
-enum UnionRecovery<'a> {
+enum UnionRecovery {
     /// A parallel finalize already sealed this union (its members are filled) — return the
     /// bound union type unchanged (the idempotency net).
-    Sealed(KType<'a>),
+    Sealed(KType),
     /// No matching sealed identity — mint a fresh set of `n` pending members.
     Fresh,
 }
@@ -27,12 +26,7 @@ enum UnionRecovery<'a> {
 /// is never reused in place: under content-addressed identity its transient digest no longer
 /// stands in for the sealed result, so a partially-filled match re-mints Fresh rather than
 /// upserting the placeholder.
-fn recover_union<'a>(
-    scope: &Scope<'a>,
-    name: &str,
-    scope_id: ScopeId,
-    n: usize,
-) -> UnionRecovery<'a> {
+fn recover_union(scope: &Scope<'_>, name: &str, scope_id: ScopeId, n: usize) -> UnionRecovery {
     let bound = scope
         .bindings()
         .lookup_type(name, None)
@@ -65,9 +59,8 @@ fn recover_union<'a>(
 fn finalize_union<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
-    fields: Vec<(String, KType<'a>)>,
+    fields: Vec<(String, KType)>,
     bind_index: BindingIndex,
-    carriers: &[&DeliveredCarried],
 ) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -79,19 +72,12 @@ fn finalize_union<'a>(
     let n = fields.len();
 
     let set = match recover_union(scope, &name, scope_id, n) {
-        // Idempotent re-finalize: the union is already bound. Cross its identity as a declared
-        // operand — move the recovered union's reference into this region under a checked audit that
-        // derives its stored reach, and fold the carriers' reach onto the placement, the same
-        // coverage the register-success path produces.
+        // Idempotent re-finalize: the union is already bound. Allocate the recovered union into this
+        // scope's own region and cross it as a declared operand, folding the carriers' reach onto the
+        // placement — the same coverage the register-success path produces.
         UnionRecovery::Sealed(kt) => {
-            let (kt_ref, stored) = scope.alloc_ktype_checked_stored(kt)?;
-            return Ok(seal_type_operand(
-                scope,
-                fctx.ctx.frame(),
-                kt_ref,
-                stored,
-                carriers,
-            ));
+            let kt_ref = scope.brand().alloc_ktype(kt);
+            return Ok(seal_type_identity(scope, kt_ref));
         }
         UnionRecovery::Fresh => Rc::new(RecursiveSet::new(
             fields
@@ -105,7 +91,7 @@ fn finalize_union<'a>(
     // one-variant union to that member. Variant-sibling references seal via `index_of`.
     let binder_union = KType::union_of((0..n).map(KType::SetLocal).collect());
     let missing = std::cell::RefCell::new(Vec::new());
-    let sealed: Vec<(usize, KType<'a>)> = fields
+    let sealed: Vec<(usize, KType)> = fields
         .into_iter()
         .enumerate()
         .map(|(index, (_tag, payload))| {
@@ -136,13 +122,7 @@ fn finalize_union<'a>(
         // `register_type_upsert` hands back the region-allocated `&KType`. Cross it as a declared
         // operand and fold the variant carriers' reach onto the placement's witness, rather than
         // capturing the union type into a fold closure.
-        Ok(kt_ref) => Ok(seal_type_operand(
-            scope,
-            fctx.ctx.frame(),
-            kt_ref,
-            scope.checked_reach_of_type(kt_ref),
-            carriers,
-        )),
+        Ok(kt_ref) => Ok(seal_type_identity(scope, kt_ref)),
         Err(e) => Err(e),
     }
 }
@@ -208,7 +188,7 @@ mod tests {
 
     /// The projected (`SetLocal`s resolved) newtype repr of union `name`'s `variant` member —
     /// each variant is a per-tag newtype under the dissolved model.
-    fn variant_repr<'a>(scope: &'a Scope<'a>, name: &str, variant: &str) -> KType<'a> {
+    fn variant_repr<'a>(scope: &'a Scope<'a>, name: &str, variant: &str) -> KType {
         let members = match scope.resolve_type(name) {
             Some(KType::Union { members, .. }) => members,
             other => panic!("expected {name} to be a Union in types, got {other:?}"),
@@ -343,15 +323,13 @@ mod tests {
         };
         // First finalize: no prior binding, so a fresh set of pending members is minted, sealed,
         // and registered.
-        let first =
-            super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
+        let first = super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0));
         assert!(first.is_ok());
         assert_eq!(variant_repr(scope, "Maybe", "Some"), KType::Number);
         assert_eq!(variant_repr(scope, "Maybe", "None"), KType::Null);
         // Second finalize: every member is filled, so `recover_union` short-circuits, returning
         // the bound union type unchanged.
-        let second =
-            super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0), &[]);
+        let second = super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0));
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(
                 &crate::machine::FrameSet::empty(),

@@ -352,12 +352,7 @@ fn register_function_coexists_with_same_name_value() {
 fn register_function_coexists_with_same_name_type() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
-        "Foo".to_string(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     let f = region.brand().alloc_function(KFunction::new(
         unit_signature(),
         Body::Builtin(body_no_op),
@@ -399,12 +394,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
             StoredReach::empty(),
         )
         .unwrap();
-    scope.register_type(
-        "Ty".to_string(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Ty".to_string(), KType::Number, BindingIndex::BUILTIN);
     let bindings = scope.bindings();
     assert!(matches!(
         bindings.lookup_member("val", None),
@@ -622,12 +612,7 @@ fn visibility_type_side_gate_mirrors_value_side() {
     use std::rc::Rc;
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
-        "TyLate".to_string(),
-        KType::Number,
-        BindingIndex::value(5),
-        StoredReach::empty(),
-    );
+    scope.register_type("TyLate".to_string(), KType::Number, BindingIndex::value(5));
     let consumer_before: Rc<LexicalFrame> = LexicalFrame::root(scope.id, 3);
     assert!(scope
         .resolve_type_with_chain("TyLate", Some(&consumer_before))
@@ -649,12 +634,10 @@ fn sig_scope_bindings_reject_value_token_type_write() {
         .brand()
         .alloc_scope(Scope::child_under_sig(outer, "S".to_string()));
     let kt: &KType = region.brand().alloc_ktype(KType::Number);
-    let error = match sig_scope.bindings().try_register_type(
-        "compare",
-        kt,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    ) {
+    let error = match sig_scope
+        .bindings()
+        .try_register_type("compare", kt, BindingIndex::BUILTIN)
+    {
         Err(e) => e,
         Ok(_) => panic!("a value-token key must never enter `types`, even on a SIG decl scope"),
     };

@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena/residence.rs: 5
+src/machine/core/arena/residence.rs: 4
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -188,7 +188,7 @@ envelope for dep delivery bit-copies the reference-only carrier and clones exact
 retained host) — the reach set itself rides by reference, never re-minted, so a regression shows as
 per-member refcount traffic or a leak. The `unsafe` routed is the shared `retype` in
 `witnessed.rs` plus `Carrier`'s own `with_reach` pinned re-anchor; the anchor file
-[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the six
+[`arena/residence.rs`](../src/machine/core/arena/residence.rs) additionally houses the four
 `unsafe impl AuditedStored` family audits — the soundness markers gating every checked
 cross-region store this seam and its siblings exercise.
 

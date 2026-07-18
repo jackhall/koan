@@ -5,7 +5,7 @@
 
 use super::Scope;
 use crate::machine::core::bindings::{Bindings, NameLookup};
-use crate::machine::core::{KFunction, LexicalFrame, StoredReach};
+use crate::machine::core::{KFunction, LexicalFrame};
 use crate::machine::model::{CarriedFamily, KObject, KType, OperatorGroup};
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::Witnessed;
@@ -161,7 +161,7 @@ impl<'a> Scope<'a> {
     /// [`Self::resolve_type_with_chain`]: an in-flight [`NameLookup::Parked`]
     /// collapses to `None` here, so callers that must park on the producer use
     /// `resolve_type_with_chain` and match its `Parked` arm.
-    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::KType<'a>> {
+    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::KType> {
         self.resolve_type_with_chain(name, None)
             .and_then(NameLookup::bound)
     }
@@ -176,7 +176,7 @@ impl<'a> Scope<'a> {
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<&'a KType<'a>>> {
+    ) -> Option<NameLookup<&'a KType>> {
         self.resolve_builtin_first(
             |root| root.has_builtin_type(name),
             |root| root.lookup_type(name, None),
@@ -186,47 +186,6 @@ impl<'a> Scope<'a> {
                     .lookup_type(name, scope.binding_cutoff(chain))
             },
         )
-    }
-
-    /// The whole stored token the `types` binding `name` resolves to under `chain` — the token a
-    /// bare-type-leaf read replays onto its carrier, projected off the row with its home-borrow bit
-    /// intact. Shares
-    /// [`Self::resolve_type_with_chain`]'s builtin-first walk via [`Self::resolve_builtin_first`],
-    /// probing the reach-carrying [`Bindings::lookup_type_carrier`]. `None` when the name resolves
-    /// nowhere on the chain; a builtin, a `from_name` / `RecursiveRef` fallback naming no binding,
-    /// or a placeholder yields the empty token.
-    pub(in crate::machine::core) fn resolve_type_stored(
-        &self,
-        name: &str,
-        chain: Option<&LexicalFrame>,
-    ) -> Option<StoredReach<'a>> {
-        self.resolve_builtin_first(
-            |root| root.has_builtin_type(name),
-            |_root| Some(StoredReach::empty()),
-            |scope| {
-                scope
-                    .bindings()
-                    .lookup_type_carrier(name, scope.binding_cutoff(chain))
-                    .map(|hit| match hit {
-                        NameLookup::Bound(bound) => bound.stored,
-                        NameLookup::Parked(_) => StoredReach::empty(),
-                    })
-            },
-        )
-    }
-
-    /// The reach a type read under `name` replays onto its carrier: the `types` binding's stored
-    /// token, or the empty token when the name names no binding on the chain (a builtin, a
-    /// `from_name` / `RecursiveRef` fallback, a placeholder).
-    ///
-    /// This door — not [`Self::resolve_type_stored`] — is what code outside `core` calls, and it
-    /// hands back a `StoredReach` rather than an `Option<StoredReach>` on purpose. Collapsing the
-    /// miss to [`StoredReach::empty`] is a *derivation*, and it belongs on this side of the wall: a
-    /// caller handed an `Option` has to conjure the empty token itself, which is precisely the
-    /// forgery the token's restricted constructor exists to prevent.
-    pub(crate) fn type_reach(&self, name: &str, chain: Option<&LexicalFrame>) -> StoredReach<'a> {
-        self.resolve_type_stored(name, chain)
-            .unwrap_or_else(StoredReach::empty)
     }
 
     /// Resolve a chain's operator-group probe against this scope and the `outer` chain:

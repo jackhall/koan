@@ -37,13 +37,13 @@ pub struct Module<'a> {
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is region-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
-    pub type_members: RefCell<HashMap<String, KType<'a>>>,
+    pub type_members: RefCell<HashMap<String, KType>>,
     /// VAL-slot name → the per-call abstract `KType` an opaque ascription minted for the
     /// slot's SIG-declared type. ATTR re-tags a value-side slot read with this identity so
     /// `(int_ord.zero)` reads as the abstract `Type`, not the underlying concrete value.
     /// Empty for unascribed and transparently-ascribed (`:!`) modules. `RefCell` for the same
     /// reason as `type_members`.
-    pub slot_type_tags: RefCell<HashMap<String, KType<'a>>>,
+    pub slot_type_tags: RefCell<HashMap<String, KType>>,
     /// The module's principal signature (self-sig), owned and wrapped in an `Rc` — the same
     /// bundle a `KType::Signature { content, .. }` over this module shares by `Rc::clone`.
     /// Sealed exactly once at the end of construction ([`Module::seal_self_sig`]) and immutable
@@ -51,7 +51,7 @@ pub struct Module<'a> {
     /// ([`SigSchema::raw_self_sig`]). The signature-subtyping relation reads it to answer "does
     /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
     /// installed after the surrounding value is alloc'd.
-    self_sig: OnceCell<Rc<SigContent<'a>>>,
+    self_sig: OnceCell<Rc<SigContent>>,
 }
 
 impl<'a> Module<'a> {
@@ -68,7 +68,7 @@ impl<'a> Module<'a> {
     /// Install the module's self-sig. Runs exactly once, at the end of construction (after the
     /// `type_members` / `slot_type_tags` writes that feed the derivation) — a double-seal is a
     /// construction bug. Wraps `schema` into an `Rc<SigContent>`, computing its digest.
-    pub fn seal_self_sig(&self, schema: SigSchema<'a>) {
+    pub fn seal_self_sig(&self, schema: SigSchema) {
         let content = Rc::new(SigContent::new(self.path.clone(), self.scope_id(), schema));
         if self.self_sig.set(content).is_err() {
             panic!("self-sig sealed twice on module `{}`", self.path);
@@ -78,7 +78,7 @@ impl<'a> Module<'a> {
     /// The module's self-sig content — the identity a `Signature { content: self.self_sig_content(),
     /// .. }` carries. Returns the sealed content, or lazily derives + wraps it from the body for a
     /// bare [`Module::new`] that was never sealed (e.g. a direct construction in a test).
-    pub fn self_sig_content(&self) -> &Rc<SigContent<'a>> {
+    pub fn self_sig_content(&self) -> &Rc<SigContent> {
         self.self_sig.get_or_init(|| {
             let schema = SigSchema::raw_self_sig(self);
             Rc::new(SigContent::new(self.path.clone(), self.scope_id(), schema))
@@ -86,7 +86,7 @@ impl<'a> Module<'a> {
     }
 
     /// The module's self-sig schema (see [`Self::self_sig_content`]).
-    pub fn self_sig(&self) -> &SigSchema<'a> {
+    pub fn self_sig(&self) -> &SigSchema {
         &self.self_sig_content().schema
     }
 
@@ -100,7 +100,7 @@ impl<'a> Module<'a> {
     /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
     /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
     /// applies to a pinned schema's residue.
-    pub fn satisfies_pins<'p>(&self, pins: &[(String, KType<'p>)]) -> bool {
+    pub fn satisfies_pins(&self, pins: &[(String, KType)]) -> bool {
         let sig = self.self_sig();
         pins.iter().all(|(name, expected)| {
             sig.manifest_members

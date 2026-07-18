@@ -14,7 +14,6 @@
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KKind, KObject, KType};
-use crate::machine::DeliveredCarried;
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
@@ -22,7 +21,7 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
-fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
+fn typeexpr_from_carrier(kt: &KType) -> CarrierForm {
     match kt {
         KType::Unresolved(te) => CarrierForm::Raw(te.clone()),
         KType::Number
@@ -47,13 +46,13 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
     }
 }
 
-enum CarrierForm<'a> {
+enum CarrierForm {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
     Leaf(TypeIdentifier),
     Raw(TypeIdentifier),
     /// Structural carrier accepted as-is; inner names are not re-bound.
-    Direct(KType<'a>),
+    Direct(KType),
 }
 
 /// SIG-body-only value-slot declarator. Same SIG-body guard and carrier-shape split: reads its
@@ -110,12 +109,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
 
     let te = match carrier {
-        CarrierForm::Direct(kt) => {
-            // A bind-time `ty` argument: any caller-supplied carrier (a `:(...)` sub-dispatch
-            // spliced in before this call), so `arg_carrier` names its own foreign reach if it
-            // has one.
-            return finalize_val(&ctx.finish_ctx(), name, kt, ctx.arg_carrier("ty"));
-        }
+        CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), name, kt),
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
         // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
         // holds a bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
@@ -124,8 +118,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te))]);
-    dispatch_type_then(expr, "VAL type slot", move |fctx, kt, carrier| {
-        finalize_val(fctx, name, kt, Some(carrier))
+    dispatch_type_then(expr, "VAL type slot", move |fctx, kt| {
+        finalize_val(fctx, name, kt)
     })
 }
 
@@ -133,29 +127,23 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// the slot's carrier as `Action::Done`, uniform with `type_decl::bind_abstract_member` and the
 /// `LET` type route.
 ///
-/// `declared_kt` can embed a borrow into `carrier`'s producer region (a declared `Signature`, a
-/// nominal `SetRef`, ...) whether it arrived as a bind-time `ty` argument or a leaf re-dispatch's
-/// dep terminal. [`Scope::register_sig_slot_delivered`] derives the slot's stored reach off
-/// `carrier` (the empty token when `carrier` is `None`), installs a region-resident copy of the
-/// type into the collector, and hands back that resident `&KType` paired with its reach — which
-/// [`Scope::resident_type_carrier`] seals into the terminal, born co-located with the stored slot
-/// rather than rebuilt from a second allocation.
+/// `declared_kt` arrives as owned data — a bind-time `ty` argument or a leaf re-dispatch's dep
+/// terminal. [`Scope::register_sig_slot_delivered`] allocates it into the SIG decl scope's own
+/// region through the single storage door and installs it in the collector, handing back that
+/// resident `&KType` — which [`Scope::resident_type_carrier`] seals into the terminal, born
+/// co-located with the stored slot rather than rebuilt from a second allocation.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
-    declared_kt: KType<'a>,
-    carrier: Option<&DeliveredCarried>,
+    declared_kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let (kt_ref, stored) = match fctx
-        .scope
-        .register_sig_slot_delivered(name, declared_kt, carrier)
-    {
-        Ok(pair) => pair,
+    let kt_ref = match fctx.scope.register_sig_slot_delivered(name, declared_kt) {
+        Ok(kt_ref) => kt_ref,
         Err(e) => return Action::Done(Err(e)),
     };
     Action::Done(Ok(StepCarried::born(
-        fctx.scope.resident_type_carrier(kt_ref, stored),
+        fctx.scope.resident_type_carrier(kt_ref),
     )))
 }
 

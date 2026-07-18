@@ -18,7 +18,6 @@
 use std::rc::Rc;
 
 use crate::machine::core::KFunction;
-use crate::machine::core::StoredReach;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
@@ -35,14 +34,8 @@ use super::{
 /// branches on the body surface and launches.
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
-    /// `TypeConstructor`). `reach` is the identity's stored per-binding type token (home-omitted
-    /// foreign reach + home-borrow bit), threaded to the construction finish so the built value's
-    /// operand names the identity's own region — empty while `RecursiveSet` is heap-`Rc`'d, the set's
-    /// region once it is region-allocated.
-    Constructor {
-        identity: &'step KType<'step>,
-        reach: StoredReach<'step>,
-    },
+    /// `TypeConstructor`).
+    Constructor { identity: &'step KType },
     /// Call a `KFunction` by name.
     Function(&'step KFunction<'step>),
 }
@@ -60,9 +53,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
         // admits; the newtype arm in particular takes the trailing parts directly (so
         // `(Point r)` works), so body extraction lives per-arm inside `apply_constructor`
         // rather than here.
-        ResolvedCallable::Constructor { identity, reach } => {
-            apply_constructor(ctx, identity, reach, expr)
-        }
+        ResolvedCallable::Constructor { identity } => apply_constructor(ctx, identity, expr),
         ResolvedCallable::Function(f) => {
             let body = match extract_call_body(expr) {
                 Ok(b) => b,
@@ -80,14 +71,13 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 /// (named is a loud `DispatchFailed`); a non-constructible identity is a `TypeMismatch`.
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
-    identity: &'step KType<'step>,
-    reach: StoredReach<'step>,
+    identity: &'step KType,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // A user `UNION` binds an anonymous union of per-variant newtype `SetRef`s. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
     if let KType::Union { members, .. } = identity {
-        return apply_union_construct(ctx, members, reach, expr);
+        return apply_union_construct(ctx, members, expr);
     }
     let KType::SetRef { set, index } = identity else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
@@ -105,10 +95,8 @@ fn apply_constructor<'step>(
                     value: ExpressionPart::RecordLiteral(fields),
                     ..
                 }],
-            ) => constructors::dispatch_construct_record_newtype(identity, reach, fields.clone()),
-            _ => {
-                constructors::dispatch_construct_newtype(identity, reach, expr.parts[1..].to_vec())
-            }
+            ) => constructors::dispatch_construct_record_newtype(identity, fields.clone()),
+            _ => constructors::dispatch_construct_newtype(identity, expr.parts[1..].to_vec()),
         },
         // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
         // empty schema is a user-declared constructor family (`NEWTYPE (Type AS Wrapper)`); it
@@ -120,7 +108,6 @@ fn apply_constructor<'step>(
                     Rc::clone(set),
                     *index,
                     Rc::new(schema),
-                    reach,
                     parts,
                 ),
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -137,7 +124,7 @@ fn apply_constructor<'step>(
             }
             match extract_call_body(expr) {
                 Ok(CallBody::Positional(parts)) => {
-                    constructors::dispatch_construct_apply(Rc::clone(set), *index, reach, parts)
+                    constructors::dispatch_construct_apply(Rc::clone(set), *index, parts)
                 }
                 Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
                 Err(e) => Outcome::Done(Err(e)),
@@ -153,8 +140,7 @@ fn apply_constructor<'step>(
 /// either form is a schema error listing the union's members.
 fn apply_union_construct<'step>(
     ctx: &SchedulerView<'step, '_>,
-    members: &'step [KType<'step>],
-    reach: StoredReach<'step>,
+    members: &'step [KType],
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
@@ -166,19 +152,7 @@ fn apply_union_construct<'step>(
     {
         let name = t.render();
         return match union_member(members, &name) {
-            Some(member) => {
-                let step_ctx = ctx.step_ctx();
-                // A region-free union member takes the compile-enforced `'static` tier; a member
-                // that borrows a region (a `SetRef` variant) takes the runtime-checked seal.
-                let sealed = match member.to_static() {
-                    Some(owned) => Ok(step_ctx.alloc_type(owned)),
-                    None => step_ctx.alloc_type_checked(member.clone()),
-                };
-                match sealed {
-                    Ok(sealed) => Outcome::Done(Ok(sealed)),
-                    Err(e) => Outcome::Done(Err(e)),
-                }
-            }
+            Some(member) => Outcome::Done(Ok(ctx.step_ctx().alloc_type(member.clone()))),
             None => Outcome::Done(Err(unknown_variant_error(members, &name))),
         };
     }
@@ -192,7 +166,6 @@ fn apply_union_construct<'step>(
             match union_member(members, &tag) {
                 Some(member) => constructors::dispatch_construct_newtype(
                     member,
-                    reach,
                     vec![Spanned::bare(value_part)],
                 ),
                 None => Outcome::Done(Err(unknown_variant_error(members, &tag))),
@@ -204,14 +177,14 @@ fn apply_union_construct<'step>(
 }
 
 /// The union member whose newtype `SetRef` is named `name`, if any.
-fn union_member<'step>(members: &'step [KType<'step>], name: &str) -> Option<&'step KType<'step>> {
+fn union_member<'step>(members: &'step [KType], name: &str) -> Option<&'step KType> {
     members
         .iter()
         .find(|m| matches!(m, KType::SetRef { set, index } if set.member(*index).name == name))
 }
 
 /// A schema error for a name that is not one of the union's variants, listing the members.
-fn unknown_variant_error(members: &[KType<'_>], name: &str) -> KError {
+fn unknown_variant_error(members: &[KType], name: &str) -> KError {
     KError::new(KErrorKind::ShapeError(format!(
         "`{name}` is not a variant of the union (variants: {})",
         union_member_names(members),
@@ -219,7 +192,7 @@ fn unknown_variant_error(members: &[KType<'_>], name: &str) -> KError {
 }
 
 /// Sorted, comma-joined member names of an anonymous union of newtype `SetRef`s.
-fn union_member_names(members: &[KType<'_>]) -> String {
+fn union_member_names(members: &[KType]) -> String {
     let mut names: Vec<&str> = members
         .iter()
         .filter_map(|m| match m {

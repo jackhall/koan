@@ -49,13 +49,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
         _ => panic!("Result must be registered before CATCH"),
     };
-    // The `Result` identity's stored per-binding type token, captured at body time so the
-    // construction operand's witness names its own region. Empty while `RecursiveSet` is heap-`Rc`'d.
-    let reach = ctx.scope.type_reach("Result", None);
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
         // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.
-        fn build_result<'x>(tag: &str, identity: &KType<'x>, payload: KObject<'x>) -> KObject<'x> {
+        fn build_result<'x>(tag: &str, identity: &KType, payload: KObject<'x>) -> KObject<'x> {
             let (set, index) = match identity {
                 KType::SetRef { set, index } => (Rc::clone(set), *index),
                 _ => unreachable!("the prelude Result identity is always a SetRef"),
@@ -69,16 +66,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
-        // wrapped value reaches. The `Result` `SetRef` identity — freshly minted in the scope region —
-        // crosses the build brand as a [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke
-        // plus its stored reach rather than paired with an asserted singleton.
+        // wrapped value reaches. The `Result` `SetRef` identity — owned data allocated into the scope
+        // region — crosses the build brand as a [`RegionTypeFamily`] operand, `merge`d in under the
+        // scope's yoke rather than paired with an asserted singleton.
         let region = fctx.scope.brand();
         let frame = fctx.ctx.frame();
-        let identity: &KType<'a> = crate::try_action!(region.alloc_ktype_checked(KType::SetRef {
+        let identity: &KType = region.alloc_ktype(KType::SetRef {
             set: Rc::clone(&result_set),
             index: result_index,
-        }));
-        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity, reach);
+        });
+        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity);
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.

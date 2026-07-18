@@ -117,11 +117,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
     let field_name = crate::try_action!(read_field_name(ctx.args));
     match s_kt {
         KType::Unresolved(te) => match ctx.scope.resolve_type_identifier(te, None) {
-            // The lhs type's own reach is irrelevant here — the member's carrier is built from the
-            // *member's* stored reach inside `access_type_member`.
-            TypeResolution::Done(resolved) => {
-                route(access_type_member(ctx.scope, resolved.kt, &field_name))
-            }
+            TypeResolution::Done(kt) => route(access_type_member(ctx.scope, kt, &field_name)),
             TypeResolution::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -196,14 +192,13 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 /// static struct field access produces.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
-    kt: &KType<'a>,
+    kt: &KType,
     field: &str,
 ) -> Result<StepCarried<'a>, KError> {
     match kt {
         // ATTR over a first-class signature value — answered from the owned schema. The
-        // projected member is a clone out of that schema (region-pure — the schema holds only
-        // owned content), allocated fresh into the read-site scope's region and sealed under the
-        // checked audit's own witness.
+        // projected member is a clone out of that schema, allocated fresh into the read-site
+        // scope's own region.
         KType::Signature { content, .. } => {
             let member = content
                 .schema
@@ -212,7 +207,7 @@ fn access_type_member<'a>(
                 .or_else(|| content.schema.abstract_members.get(field).map(|(kt, _)| kt))
                 .or_else(|| content.schema.value_slots.get(field));
             match member {
-                Some(kt) => Ok(StepCarried::born(scope.seal_fresh_ktype(kt.clone())?)),
+                Some(kt) => Ok(StepCarried::born(scope.seal_fresh_ktype(kt.clone()))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     content.path, field
@@ -297,28 +292,9 @@ fn access_field<'a>(
                 }
             }))
         }
-        Held::Type(kt) => {
-            // A region-free scalar type references no region, so it seals with an empty reach
-            // through the no-fold door, mirroring the shallow-scalar object arm above.
-            if kt.is_region_free_scalar() {
-                return Ok(step.alloc_type(
-                    kt.to_static()
-                        .expect("is_region_free_scalar implies to_static() is Some"),
-                ));
-            }
-            Ok(step.alloc_carried_with(&[lhs], |b, views| {
-                let target = match views[0] {
-                    Carried::Object(o) => o,
-                    Carried::Type(_) => unreachable!("probed ambient: lhs is a value"),
-                };
-                match wrapped_field(target, field)
-                    .expect("probed ambient: field exists on this value")
-                {
-                    Held::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
-                    Held::Object(_) => unreachable!("probed ambient: member is a type"),
-                }
-            }))
-        }
+        // A type member is owned data: it clones out of the lhs and allocates into the read
+        // site's own region, so the read carries no dependence on the lhs carrier.
+        Held::Type(kt) => Ok(step.alloc_type(kt.clone())),
     }
 }
 
@@ -344,16 +320,13 @@ fn access_field<'a>(
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
-        // Prefer the child scope's own binding — witness its `&KType` in place from the stored
-        // reach. A member present only in the mirror is an `:|`-minted abstract type; it is alloc'd
-        // fresh and sealed under the bit the checked audit derives from its own walk (`true` iff the
-        // minted identity embeds a pointer into the module region).
+        // Prefer the child scope's own binding — witness its `&KType` in place. A member present
+        // only in the mirror is an `:|`-minted abstract type, allocated fresh into the module's
+        // own region.
         return Ok(StepCarried::born(
-            match module_scope.bindings().lookup_type_carrier(field, None) {
-                Some(NameLookup::Bound(hit)) => {
-                    module_scope.resident_type_carrier(hit.kt, hit.stored)
-                }
-                _ => module_scope.seal_fresh_ktype(minted)?,
+            match module_scope.bindings().lookup_type(field, None) {
+                Some(NameLookup::Bound(kt)) => module_scope.resident_type_carrier(kt),
+                _ => module_scope.seal_fresh_ktype(minted),
             },
         ));
     }
@@ -369,18 +342,15 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
                 // is a pre-existing reference into the module region, sealed resident with the
-                // member's own `reach`; `tag` allocates once into the module region via
-                // `seal_fresh_ktype`'s runtime-checked audit (an `:|`-minted `SetRef` or an owned
-                // abstract identity, either way borrowing at most the module's own region, so the
-                // audit passes) and is sealed resident — the same region as the built `Wrapped`'s
-                // placement (the `StepContext` targets the module's frame), so the built value is
-                // unchanged. Both carriers union into the wrapped result's witness via
-                // `alloc_carried_with`. The tag's home-borrow bit is derived from the checked alloc's
-                // own walk.
+                // member's own `reach`; `tag` is owned data allocated once into the module region
+                // via `seal_fresh_ktype` and sealed resident — the same region as the built
+                // `Wrapped`'s placement (the `StepContext` targets the module's frame), so the
+                // built value is unchanged. Both carriers union into the wrapped result's witness
+                // via `alloc_carried_with`.
                 let obj_carrier = module_scope
                     .seal_resident_delivered(module_scope.resident_value_carrier(obj, stored));
                 let tag_carrier =
-                    module_scope.seal_resident_delivered(module_scope.seal_fresh_ktype(tag)?);
+                    module_scope.seal_resident_delivered(module_scope.seal_fresh_ktype(tag));
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],
@@ -399,9 +369,9 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 module_scope.resident_value_carrier(obj, stored),
             ))
         }
-        Some(MemberResolution::Type { kt, stored }) => Ok(StepCarried::born(
-            module_scope.resident_type_carrier(kt, stored),
-        )),
+        Some(MemberResolution::Type { kt }) => {
+            Ok(StepCarried::born(module_scope.resident_type_carrier(kt)))
+        }
         None => Err(KError::new(KErrorKind::ShapeError(format!(
             "module `{}` has no member `{}`",
             m.path, field

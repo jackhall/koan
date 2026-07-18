@@ -8,17 +8,13 @@ use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Record, RecursiveSet,
 };
 
-fn record(pairs: Vec<(&str, KType<'static>)>) -> KType<'static> {
+fn record(pairs: Vec<(&str, KType)>) -> KType {
     KType::record(Box::new(Record::from_pairs(
         pairs.into_iter().map(|(n, t)| (n.to_string(), t)),
     )))
 }
 
-fn newtype_singleton(
-    name: &str,
-    scope: ScopeId,
-    repr: KType<'static>,
-) -> std::rc::Rc<RecursiveSet<'static>> {
+fn newtype_singleton(name: &str, scope: ScopeId, repr: KType) -> std::rc::Rc<RecursiveSet> {
     RecursiveSet::singleton(name.into(), scope, NominalSchema::NewType(Box::new(repr)))
 }
 

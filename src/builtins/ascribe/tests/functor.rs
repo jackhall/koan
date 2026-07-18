@@ -394,7 +394,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let b = lookup_module(scope, "second");
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
-    let is_type_constructor = |kt: &Option<KType<'_>>| {
+    let is_type_constructor = |kt: &Option<KType>| {
         matches!(
             kt,
             Some(KType::SetRef { set, index }) if set.member(*index).kind == KKind::TypeConstructor

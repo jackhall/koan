@@ -10,15 +10,9 @@ use std::rc::{Rc, Weak};
 use super::NodeFinalize;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_root_silent};
-use crate::machine::core::KFunction;
-use crate::machine::core::{
-    run_root_storage, CarrierWitness, FrameSet, FrameStorage, FrameStorageExt, Scope,
-};
+use crate::machine::core::{run_root_storage, CarrierWitness, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
-use crate::machine::core::{Body, ReturnContract};
-use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::Module;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::CallFrame;
@@ -318,79 +312,4 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         }
         Carried::Type(other) => panic!("expected the passed-through Number, got {}", other.name()),
     });
-}
-
-/// A declared-return re-stamp whose carrier holds a **type** value passes through un-relocated on
-/// the type channel: the check runs at a shared brand under the producer ∪ home-owner pin, and the
-/// carrier returns verbatim — nothing is minted into the home region for a value that never moves
-/// there.
-#[test]
-fn type_passthrough_declared_return_mints_nothing_into_home() {
-    let foreign_storage = run_root_storage();
-    let foreign_scope = run_root_bare(&foreign_storage);
-    let foreign_child = foreign_storage
-        .brand()
-        .alloc_scope(Scope::child_under(foreign_scope));
-    let module = foreign_storage
-        .brand()
-        .alloc_module(Module::new("M".to_string(), foreign_child));
-
-    let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new(scope);
-    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
-    // `borrows_into_home = true` marks the value as home-borrowing; the type channel must pass the
-    // carrier through with the bit and the reach untouched either way.
-    let carrier = producer.with_scope(|child| {
-        let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), true);
-        let kt_ref = child
-            .alloc_ktype_reaching(
-                KType::signature(Rc::clone(module.self_sig_content()), Vec::new()),
-                &evidence,
-            )
-            .expect("module is covered by foreign_reach");
-        child.resident_type_carrier(kt_ref, evidence)
-    });
-
-    // A declared return of `Any` matches any carried type, so the merge takes the no-mismatch path;
-    // the home owner (`home_storage`) resolves via the FN's captured scope, so `home_owner.is_some()`.
-    let home_storage = run_root_storage();
-    let home_scope = run_root_bare(&home_storage);
-    let signature = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
-        elements: vec![],
-    };
-    let kfunc = KFunction::new(signature, Body::Builtin(probe_body), home_scope, None, None);
-    let kf_ref = home_storage.brand().alloc_function(kfunc);
-    let obligation = ReturnObligation::seal(ReturnContract::Function(kf_ref));
-
-    let foreign_count_before = Rc::strong_count(&foreign_storage);
-
-    let mut runtime = KoanRuntime::new();
-    // The type registry the declared-return check reads hangs off the run frame, which production
-    // establishes before any step.
-    runtime.ensure_run_frame(scope);
-    let checked = runtime
-        .finalize_terminal(
-            Delivered::seal(carrier, producer.storage_rc()),
-            Some(&obligation),
-        )
-        .expect("declared type Any matches the carried Module -- no mismatch");
-
-    assert_eq!(
-        Rc::strong_count(&foreign_storage),
-        foreign_count_before,
-        "the type channel passes the carrier through un-relocated -- no mint bumps the foreign \
-         frame's refcount, and no set holds it until the home region dies"
-    );
-    assert!(
-        checked
-            .witness()
-            .reach_covers(None, foreign_storage.region()),
-        "the checked carrier still names the foreign region its reach always named"
-    );
-    assert!(
-        checked.witness().borrows_host(),
-        "the home-borrow bit passes through the type channel verbatim"
-    );
 }

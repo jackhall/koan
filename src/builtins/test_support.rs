@@ -51,11 +51,9 @@ pub(crate) fn extract_terminal<'a>(
                     .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach))
                     .expect("terminal object must be covered by its own stored reach"),
             ),
-            Carried::Type(kt) => Carried::Type(
-                scope
-                    .alloc_ktype_reaching(kt.clone(), &reach)
-                    .expect("terminal type must be covered by its own stored reach"),
-            ),
+            // A type is owned data: it crosses into `scope`'s region by clone through the single
+            // storage door, naming no reach.
+            Carried::Type(kt) => Carried::Type(scope.brand().alloc_ktype(kt.clone())),
         })
         .expect("terminal should be a value, not an error")
 }
@@ -116,7 +114,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 
 /// Like [`run_one`] but for a type-producing expression: narrows the result's carrier to
 /// its [`Carried::Type`] arm. Panics if the expression produced a runtime value instead.
-pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType<'a> {
+pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KType {
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(expr, scope);
     runtime.execute().expect("scheduler should succeed");
@@ -266,7 +264,7 @@ pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) ->
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`.
-pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType<'a>) -> ExpressionSignature<'a> {
+pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Argument(Argument {

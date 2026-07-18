@@ -69,8 +69,8 @@ impl Hash for KKey {
     }
 }
 
-impl<'a> Parseable<'a> for KKey {
-    fn ktype(&self) -> KType<'a> {
+impl Parseable for KKey {
+    fn ktype(&self) -> KType {
         match self {
             KKey::String(_) => KType::Str,
             KKey::Number(_) => KType::Number,

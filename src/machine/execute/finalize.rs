@@ -15,11 +15,11 @@ use super::runtime::KoanRuntime;
 /// [`finalize_terminal`](NodeFinalize::finalize_terminal) re-homes the checked value through the
 /// delivery envelope's [`transfer_into`](crate::witnessed::Delivered::transfer_into) — minting the value's reach (and,
 /// for a home-borrowing value, its producer frame) into that region's arena so the re-homed value's
-/// carrier names everything it reaches. Layout-invariant: `(RegionHandle<'r, _>, &'r KType<'r>)` is
+/// carrier names everything it reaches. Layout-invariant: `(RegionHandle<'r, _>, &'r KType)` is
 /// two thin pointers whose representation never depends on `'r`.
 struct ContractHomeFamily;
 
-reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
+reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType));
 
 /// Seal a finished node's **value** terminal against its declared return contract, returning the
 /// slot's final terminal. This hook receives the value already sealed into a delivery envelope
@@ -190,7 +190,7 @@ pub(in crate::machine::execute) fn finalize_error(
 /// nothing is declared — a `Function` whose signature return is non-`Resolved` (a `Deferred` carrier
 /// still in its FN-def signature). The diagnostic label rides the [`ReturnObligation`] instead, read
 /// via [`ReturnObligation::label`].
-fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType<'o>, bool)> {
+fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType, bool)> {
     match contract {
         ReturnContract::Function(f) => match &f.signature.return_type {
             crate::machine::model::ReturnType::Resolved(d) => Some((d, false)),
@@ -212,7 +212,7 @@ fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType<'
 fn match_declared_return<'c>(
     value_cell: SealedExtern<CarriedFamily>,
     home_handle: RegionHandle<'c, KoanStorageProfile>,
-    declared: &'c KType<'c>,
+    declared: &'c KType,
     pin: &FrameSet,
     per_call: bool,
     label: &str,
@@ -288,7 +288,7 @@ mod tests;
 
 /// The labelled `TypeMismatch` a failed declared-return check raises. `expected` names the declared
 /// type (tagged "per-call return type" for a `PerCall`); `got` names the produced carrier.
-fn return_type_mismatch(declared: &KType<'_>, per_call: bool, label: &str, got: String) -> KError {
+fn return_type_mismatch(declared: &KType, per_call: bool, label: &str, got: String) -> KError {
     let expected = if per_call {
         format!("{} (per-call return type)", declared.name())
     } else {

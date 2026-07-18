@@ -31,7 +31,7 @@ use crate::machine::model::values::Module;
 /// `SetRef`), a manifest member fixes a concrete type. A module self-sig never has abstract
 /// members — `TYPE` is a SIG-body-only construct.
 #[derive(Clone)]
-pub struct SigSchema<'a> {
+pub struct SigSchema {
     /// `Some(sig_id)` when derived from a SIG declaration — `Sig`-sourced abstract refs in
     /// value-slot types substitute against this id. `None` for a module self-sig (whose slot
     /// types name no SIG-decl-sourced refs).
@@ -39,20 +39,20 @@ pub struct SigSchema<'a> {
     /// Abstract type members: name → (the bound representation as found in the decl scope —
     /// the `AbstractType` or the sentinel constructor `SetRef` — and the constructor
     /// arity: `None` = first-order, `Some(n)` = higher-kinded taking `n` parameters).
-    pub abstract_members: HashMap<String, (KType<'a>, Option<usize>)>,
+    pub abstract_members: HashMap<String, (KType, Option<usize>)>,
     /// Manifest type members: name → the fixed type.
-    pub manifest_members: HashMap<String, KType<'a>>,
+    pub manifest_members: HashMap<String, KType>,
     /// Value slots: name → declared (SIG) or derived (self-sig) type.
-    pub value_slots: HashMap<String, KType<'a>>,
+    pub value_slots: HashMap<String, KType>,
 }
 
-impl<'a> SigSchema<'a> {
+impl SigSchema {
     /// Project a SIG decl scope into its schema, at SIG finish. Every type-table entry is a
     /// genuine type member (the token-class partition holds — value slots live in the scope's
     /// slot collector, not in `types`), classified abstract/manifest by representation; the
     /// value slots come from the scope's own slot collector. The only place this
     /// classification runs — once per SIG.
-    pub(crate) fn project_decl(decl_scope: &Scope<'a>) -> SigSchema<'a> {
+    pub(crate) fn project_decl(decl_scope: &Scope<'_>) -> SigSchema {
         let mut abstract_members = HashMap::new();
         let mut manifest_members = HashMap::new();
         for (name, kt) in decl_scope.bindings().iter_types() {
@@ -79,7 +79,7 @@ impl<'a> SigSchema<'a> {
     /// it — unreachable through `WITH`, which normalizes equal pins away and errors on unequal
     /// ones). A no-op clone when `pins` is empty (a self-sig or `:Module`, which carry no
     /// abstract members to fold).
-    pub fn with_pins(&self, pins: &[(String, KType<'a>)]) -> SigSchema<'a> {
+    pub fn with_pins(&self, pins: &[(String, KType)]) -> SigSchema {
         let mut schema = self.clone();
         for (name, kt) in pins {
             schema.abstract_members.remove(name);
@@ -99,16 +99,16 @@ impl<'a> SigSchema<'a> {
     /// `slot_type_tags` map overriding by name (an opaque view's abstract slot identities).
     ///
     /// [`KObject::ktype`]: crate::machine::model::values::KObject::ktype
-    pub fn raw_self_sig(module: &Module<'a>) -> SigSchema<'a> {
+    pub fn raw_self_sig(module: &Module<'_>) -> SigSchema {
         let child = module.child_scope();
-        let mut manifest_members: HashMap<String, KType<'a>> = HashMap::new();
+        let mut manifest_members: HashMap<String, KType> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
             manifest_members.insert(name, kt.clone());
         }
         for (name, kt) in module.type_members.borrow().iter() {
             manifest_members.insert(name.clone(), kt.clone());
         }
-        let mut value_slots: HashMap<String, KType<'a>> = HashMap::new();
+        let mut value_slots: HashMap<String, KType> = HashMap::new();
         for (name, obj) in child.bindings().iter_data() {
             value_slots.insert(name, obj.ktype());
         }
@@ -126,19 +126,19 @@ impl<'a> SigSchema<'a> {
 
 /// Owned content of a `KType::Signature` — everything the type carries about the interface it
 /// names. Shared by `Rc` until interning replaces the transport.
-pub struct SigContent<'a> {
+pub struct SigContent {
     /// Diagnostic-only path label ("Ordered", "int_ord", "Module").
     pub path: String,
     /// Same-declaration key for WITH-pin specificity refinement; [`ScopeId::SENTINEL`] for the
     /// scopeless `:Module` mint. Never part of identity.
     pub sig_id: ScopeId,
-    pub schema: SigSchema<'a>,
+    pub schema: SigSchema,
     /// [`schema_content_digest`] of `schema`, computed once at construction.
     pub schema_digest: TypeDigest,
 }
 
-impl<'a> SigContent<'a> {
-    pub fn new(path: String, sig_id: ScopeId, schema: SigSchema<'a>) -> Self {
+impl SigContent {
+    pub fn new(path: String, sig_id: ScopeId, schema: SigSchema) -> Self {
         let schema_digest = schema_content_digest(&schema);
         SigContent {
             path,
@@ -175,7 +175,7 @@ impl<'a> SigContent<'a> {
 /// `Some(param count)` iff `kt` is a `TypeConstructor`-kind `SetRef` (sentinel or real); `None`
 /// for a first-order type. The arity is the length of the projected constructor's parameter
 /// list.
-pub(crate) fn constructor_arity(kt: &KType<'_>) -> Option<usize> {
+pub(crate) fn constructor_arity(kt: &KType) -> Option<usize> {
     match kt {
         KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             match RecursiveSet::projected_schema(set, *index) {
@@ -194,11 +194,11 @@ pub(crate) fn constructor_arity(kt: &KType<'_>) -> Option<usize> {
 /// slot type, and a sentinel type-constructor `SetRef` naming a higher-kinded member (e.g. the
 /// ctor position of a `ConstructorApply`). Compound types recurse; every other variant is a
 /// clone.
-pub fn substitute_sig_members<'a>(
-    kt: &KType<'a>,
+pub fn substitute_sig_members(
+    kt: &KType,
     sig_id: ScopeId,
-    members: &HashMap<String, KType<'a>>,
-) -> KType<'a> {
+    members: &HashMap<String, KType>,
+) -> KType {
     match kt {
         KType::AbstractType { source, name } if *source == sig_id => {
             members.get(name).cloned().unwrap_or_else(|| kt.clone())
@@ -240,10 +240,9 @@ pub fn substitute_sig_members<'a>(
 }
 
 /// Why a [`sig_subtype`] check failed — one of the five per-member rules, carrying the offending
-/// member name and the *rendered* types that disagreed. The disagreeing types come from the `sub`
-/// and `sup` schemas, which carry independent lifetimes; rendering them to `String` at the failure
-/// site (the only thing [`Self::render_fragment`] ever does with them) keeps this type lifetime-free
-/// so the heterogeneous [`sig_subtype`] can return it without unifying the two lifetimes.
+/// member name and the *rendered* types that disagreed. Rendering to `String` at the failure
+/// site (the only thing [`Self::render_fragment`] ever does with them) keeps this type free of
+/// any `KType` reference, so it travels as plain diagnostic data.
 pub enum SigSubtypeFailure {
     MissingTypeMember {
         name: String,
@@ -319,9 +318,9 @@ impl SigSubtypeFailure {
 ///
 /// The failure is boxed: `SigSubtypeFailure` carries `KType`s and is large relative to the
 /// common `Ok` path.
-pub fn sig_subtype<'s, 'p>(
-    sub: &SigSchema<'s>,
-    sup: &SigSchema<'p>,
+pub fn sig_subtype(
+    sub: &SigSchema,
+    sup: &SigSchema,
     types: &TypeRegistry,
 ) -> Result<(), Box<SigSubtypeFailure>> {
     // 1. Abstract members: present at the matching kind/arity (manifest or abstract in `sub`).
@@ -373,13 +372,12 @@ pub fn sig_subtype<'s, 'p>(
 
     // 3. Value slots: present and covariantly compatible after abstract-member substitution.
     // The substitution binds every `sub` type-member name to its representation, so a `sup` slot
-    // referencing one of `sup`'s abstract members reads through `sub`'s binding for it. `sub` and
-    // `sup` carry independent lifetimes, so the substituted type would mix `'s` and `'p` content —
-    // unrepresentable. `slot_satisfied_by` computes the same verdict as
+    // referencing one of `sup`'s abstract members reads through `sub`'s binding for it.
+    // `slot_satisfied_by` computes the same verdict as
     // `substitute_sig_members(declared, id, sub_member_map).satisfied_by(sub_type)` by comparing
     // structurally and swapping in `sub`'s binding on reaching a self-abstract reference, so no
-    // mixed type is ever built.
-    let mut sub_member_map: HashMap<String, KType<'s>> = HashMap::new();
+    // substituted type is ever built.
+    let mut sub_member_map: HashMap<String, KType> = HashMap::new();
     for (name, kt) in &sub.manifest_members {
         sub_member_map.insert(name.clone(), kt.clone());
     }
@@ -411,11 +409,11 @@ pub fn sig_subtype<'s, 'p>(
 /// True iff `declared` contains a reference to one of `sig_id`'s abstract members that
 /// [`substitute_sig_members`] would rewrite (a first-order `AbstractType`, or a sentinel
 /// type-constructor `SetRef`, whose name `members` binds). When false, substitution is the
-/// identity and a plain heterogeneous compare on `declared` is exact.
-fn references_sig_member<'p, 's>(
-    declared: &KType<'p>,
+/// identity and a plain compare on `declared` is exact.
+fn references_sig_member(
+    declared: &KType,
     sig_id: ScopeId,
-    members: &HashMap<String, KType<'s>>,
+    members: &HashMap<String, KType>,
 ) -> bool {
     match declared {
         KType::AbstractType { source, name } => *source == sig_id && members.contains_key(name),
@@ -454,11 +452,11 @@ fn references_sig_member<'p, 's>(
 
 /// The `sub`-side binding a substitution point in `declared` resolves to, if any — the type
 /// `substitute_sig_members` would splice in for this node.
-fn substitution_binding<'p, 's, 'm>(
-    declared: &KType<'p>,
+fn substitution_binding<'m>(
+    declared: &KType,
     sig_id: ScopeId,
-    members: &'m HashMap<String, KType<'s>>,
-) -> Option<&'m KType<'s>> {
+    members: &'m HashMap<String, KType>,
+) -> Option<&'m KType> {
     match declared {
         KType::AbstractType { source, name } if *source == sig_id => members.get(name),
         KType::SetRef { set, index } => {
@@ -475,15 +473,14 @@ fn substitution_binding<'p, 's, 'm>(
 
 /// Verdict of `substitute_sig_members(declared, sig_id, members).satisfied_by(sub_type)` — does the
 /// `sub` value slot fill the substituted `sup` slot? — computed without materializing the
-/// mixed-lifetime substituted type. `declared` (the `sup` slot) rides `'p`; `sub_type` and the
-/// member bindings ride `'s`. On reaching a self-abstract reference the walk switches to a pure-`'s`
-/// compare against `sub`'s binding; on a member-free node it falls to the heterogeneous
+/// substituted type. On reaching a self-abstract reference the walk switches to a direct
+/// compare against `sub`'s binding; on a member-free node it falls to plain
 /// `satisfied_by`; otherwise it descends the shared container structure with the same covariance
 /// [`KType::satisfied_by`] applies (`Dict`/`Record`/`KFunction` component rules included).
-fn slot_satisfied_by<'p, 's>(
-    declared: &KType<'p>,
-    sub_type: &KType<'s>,
-    members: &HashMap<String, KType<'s>>,
+fn slot_satisfied_by(
+    declared: &KType,
+    sub_type: &KType,
+    members: &HashMap<String, KType>,
     sig_id: ScopeId,
     types: &TypeRegistry,
 ) -> bool {
@@ -557,7 +554,7 @@ fn slot_satisfied_by<'p, 's>(
         (KType::Union { members: ud, .. }, _) => {
             // A value satisfies a substituted union slot iff it (each of its members, if it is
             // itself a union) refines some slot member — the union-membership rule of `satisfied_by`.
-            let ys: Vec<&KType<'s>> = match sub_type {
+            let ys: Vec<&KType> = match sub_type {
                 KType::Union { members: us, .. } => us.iter().collect(),
                 other => vec![other],
             };
@@ -574,10 +571,10 @@ fn slot_satisfied_by<'p, 's>(
 /// || substitute_sig_members(declared, ...).is_more_specific_than(target)` — the contravariant
 /// direction [`slot_satisfied_by`] needs for a function parameter, computed without building the
 /// substituted type.
-fn slot_more_specific_or_equal<'p, 's>(
-    declared: &KType<'p>,
-    target: &KType<'s>,
-    members: &HashMap<String, KType<'s>>,
+fn slot_more_specific_or_equal(
+    declared: &KType,
+    target: &KType,
+    members: &HashMap<String, KType>,
     sig_id: ScopeId,
     types: &TypeRegistry,
 ) -> bool {
@@ -666,10 +663,10 @@ fn slot_more_specific_or_equal<'p, 's>(
 /// Verdict of `substitute_sig_members(declared, ...) == other` — structural equality with `sub`'s
 /// bindings spliced in. Only the constructor identity of a `ConstructorApply` needs this (a
 /// constructor is a leaf `SetRef`, so the recursion bottoms out immediately in practice).
-fn slot_types_equal<'p, 's>(
-    declared: &KType<'p>,
-    other: &KType<'s>,
-    members: &HashMap<String, KType<'s>>,
+fn slot_types_equal(
+    declared: &KType,
+    other: &KType,
+    members: &HashMap<String, KType>,
     sig_id: ScopeId,
 ) -> bool {
     if let Some(binding) = substitution_binding(declared, sig_id, members) {
@@ -748,7 +745,7 @@ fn slot_types_equal<'p, 's>(
 /// higher-kinded `TYPE (Type AS Wrap)` slot, `ScopeId::SENTINEL` marking it "awaiting per-call
 /// mint"). Everything else — a manifest `LET Tag = Number` binding a concrete type, a real
 /// minted constructor — is manifest.
-pub(crate) fn is_abstract_sig_member(kt: &KType<'_>) -> bool {
+pub(crate) fn is_abstract_sig_member(kt: &KType) -> bool {
     match kt {
         KType::AbstractType { .. } => true,
         KType::SetRef { set, index } => {

@@ -2,12 +2,11 @@ use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::{Module, SigContent, SigSchema};
-use crate::machine::Scope;
+use crate::machine::model::Module;
 
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
-fn record_newtype_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+fn record_newtype_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -110,8 +109,8 @@ fn nominal_of_kind_name_renders_family_keyword() {
 /// `:Signature` is the `OfKind` wildcard and renders as its own keyword.
 #[test]
 fn any_module_and_any_signature_render_surface_keywords() {
-    let am: KType<'_> = KType::empty_signature();
-    let asg: KType<'_> = KType::OfKind(KKind::Signature);
+    let am: KType = KType::empty_signature();
+    let asg: KType = KType::OfKind(KKind::Signature);
     assert_eq!(am.name(), "Module");
     assert_eq!(asg.name(), "Signature");
 }
@@ -157,17 +156,7 @@ fn union_hash_order_blind() {
     assert_eq!(hash_of(&ab), hash_of(&ba));
 }
 
-/// A region-free union rebuilds at `'static` member-wise.
-#[test]
-fn to_static_rebuilds_union() {
-    let u = KType::union_of(vec![KType::Number, KType::Str]);
-    assert_eq!(
-        u.to_static().expect("union of owned members rebuilds"),
-        KType::union_of(vec![KType::Number, KType::Str])
-    );
-}
-
-fn hash_of(t: &KType<'_>) -> u64 {
+fn hash_of(t: &KType) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     t.hash(&mut h);
@@ -179,7 +168,7 @@ fn hash_of(t: &KType<'_>) -> u64 {
 #[test]
 fn hash_agrees_with_eq_for_region_free_variants() {
     let sid = ScopeId::from_raw(0, 0xBEEF);
-    let pairs: Vec<(KType<'_>, KType<'_>)> = vec![
+    let pairs: Vec<(KType, KType)> = vec![
         (KType::Number, KType::Number),
         (KType::Str, KType::Str),
         (KType::Bool, KType::Bool),
@@ -232,7 +221,7 @@ fn hash_agrees_with_eq_for_region_free_variants() {
         set: Rc::clone(&shared),
         index: 0,
     };
-    let pairs: Vec<(KType<'_>, KType<'_>)> = pairs
+    let pairs: Vec<(KType, KType)> = pairs
         .into_iter()
         .chain(std::iter::once((set_ref_a, set_ref_b)))
         .collect();
@@ -285,30 +274,6 @@ fn set_ref_identity_unifies_by_content_digest() {
     assert_ne!(a, d);
 }
 
-#[test]
-fn equality_compares_across_distinct_lifetimes() {
-    // `PartialEq<KType<'b>> for KType<'a>` compares content digests, which are lifetime-free.
-    // Build one operand in a nested (shorter) scope and compare it to a `'static` one, so the
-    // two lifetimes genuinely differ.
-    let sid = ScopeId::from_raw(0, 0x5151);
-    let outer: KType<'static> = KType::SetRef {
-        set: record_newtype_set("Point", sid),
-        index: 0,
-    };
-    let region = run_root_storage();
-    {
-        let inner: KType<'_> = KType::SetRef {
-            set: record_newtype_set("Point", sid),
-            index: 0,
-        };
-        // Same content across lifetimes → equal; a list wrapper distinguishes structure.
-        assert!(outer == inner);
-        assert!(KType::list(Box::new(outer.clone())) == KType::list(Box::new(inner.clone())));
-        assert!(KType::Number != inner);
-    }
-    drop(region);
-}
-
 /// The two-phase window: before a set seals it has no digest, so `SetRef` identity falls to
 /// the set pointer (the only path that answers "equal" pre-seal); once `fill_member` seals it,
 /// the content-digest rule takes over and same-content sets in different allocations unify.
@@ -323,7 +288,7 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
             NominalMember::pending("Bb".into(), ScopeId::from_raw(session, 2), KKind::NewType),
         ]))
     };
-    let seal = |set: &Rc<RecursiveSet<'static>>| {
+    let seal = |set: &Rc<RecursiveSet>| {
         set.fill_member(0, NominalSchema::NewType(Box::new(KType::Number)));
         set.fill_member(1, NominalSchema::NewType(Box::new(KType::Str)));
     };
@@ -386,160 +351,6 @@ fn set_ref_name_renders_member_name() {
     assert_eq!(t.name(), "Point");
 }
 
-// --- KType::to_static -------------------------------------------------------------
-
-/// Every owned leaf (no boxed/nested payload) rebuilds at `'static` by clone/copy,
-/// round-tripping through the same surface rendering.
-#[test]
-fn to_static_rebuilds_owned_leaves() {
-    let leaves: Vec<KType<'_>> = vec![
-        KType::Number,
-        KType::Str,
-        KType::Bool,
-        KType::Null,
-        KType::Identifier,
-        KType::KExpression,
-        KType::SigiledTypeExpr,
-        KType::RecordType,
-        KType::Any,
-        KType::SetLocal(3),
-        KType::RecursiveRef("Tree".into()),
-        KType::Unresolved(TypeIdentifier::leaf("Foo".into())),
-        KType::OfKind(KKind::NewType),
-        KType::DeferredReturn(DeferredReturnSurface::Expression("expr".into())),
-    ];
-    for leaf in &leaves {
-        let rebuilt = leaf.to_static().expect("owned leaf rebuilds at 'static");
-        assert_eq!(rebuilt.name(), leaf.name());
-    }
-}
-
-/// `AbstractType` is owned data — a `ScopeId` plus a name — so it rebuilds at `'static`.
-#[test]
-fn to_static_rebuilds_abstract_type() {
-    let t = KType::AbstractType {
-        source: ScopeId::from_raw(0, 42),
-        name: "Carrier".into(),
-    };
-    let rebuilt = t.to_static().expect("AbstractType holds no region pointer");
-    assert_eq!(
-        rebuilt,
-        KType::AbstractType {
-            source: ScopeId::from_raw(0, 42),
-            name: "Carrier".into(),
-        }
-    );
-}
-
-/// Nested container variants (`List`, `Dict`, `Record`) recurse into their owned
-/// children and propagate the rebuild.
-#[test]
-fn to_static_rebuilds_nested_containers() {
-    let list = KType::list(Box::new(KType::dict(
-        Box::new(KType::Str),
-        Box::new(KType::Number),
-    )));
-    assert_eq!(
-        list.to_static().expect("nested owned containers rebuild"),
-        KType::list(Box::new(KType::dict(
-            Box::new(KType::Str),
-            Box::new(KType::Number)
-        )))
-    );
-
-    let record = KType::record(Box::new(Record::from_pairs(vec![(
-        "x".into(),
-        KType::Number,
-    )])));
-    assert_eq!(
-        record.to_static().expect("record-type fields rebuild"),
-        KType::record(Box::new(Record::from_pairs(vec![(
-            "x".into(),
-            KType::Number
-        )])))
-    );
-}
-
-/// `KFunction` (always owned) recurses `params`/`ret`.
-#[test]
-fn to_static_rebuilds_function() {
-    let f = KType::function_type(
-        Record::from_pairs(vec![("x".into(), KType::Number)]),
-        Box::new(KType::Bool),
-    );
-    assert_eq!(
-        f.to_static().expect("KFunction is owned"),
-        KType::function_type(
-            Record::from_pairs(vec![("x".into(), KType::Number)]),
-            Box::new(KType::Bool),
-        )
-    );
-}
-
-/// `ConstructorApply` recurses `ctor` and every element of `args`.
-#[test]
-fn to_static_rebuilds_constructor_apply() {
-    let t = KType::constructor_apply(Box::new(KType::Any), vec![KType::Number, KType::Str]);
-    assert_eq!(
-        t.to_static()
-            .expect("ConstructorApply over owned args rebuilds"),
-        KType::constructor_apply(Box::new(KType::Any), vec![KType::Number, KType::Str])
-    );
-}
-
-/// A module's self-sig is a non-empty-interface `Signature` (a named module, not the `:Module`
-/// mint) -> `None`: `to_static` only rebuilds the scopeless `:Module` mint, since an
-/// `Rc<SigContent<'a>>` cannot cross to `'static` without a rebuild. `Module` is region-pinned
-/// (`Scope<'a>`'s fields make it self-referential), so — matching every other fixture in this
-/// crate that needs one (e.g. `ktype_predicates/tests.rs`, `kfunction/tests.rs`) — it is built
-/// through the region brand rather than as a bare stack local.
-#[test]
-fn to_static_none_for_self_sig_module_borrow() {
-    let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let module = storage
-        .brand()
-        .alloc_module(Module::new("Test".into(), scope));
-    let t = KType::signature(Rc::clone(module.self_sig_content()), Vec::new());
-    assert!(t.to_static().is_none());
-}
-
-/// A SIG-declared `Signature { content, .. }` is likewise non-empty-interface -> `None`, even
-/// with an otherwise-owned (empty) `pinned_slots` — the same `Rc<SigContent<'a>>` rebuild
-/// declination.
-#[test]
-fn to_static_none_for_signature_borrow() {
-    let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let sig_scope = storage
-        .brand()
-        .alloc_scope(Scope::child_under_sig(scope, "Sig".into()));
-    let schema = SigSchema::project_decl(sig_scope);
-    let content = Rc::new(SigContent::new("Sig".into(), sig_scope.id, schema));
-    let t = KType::signature(content, Vec::new());
-    assert!(t.to_static().is_none());
-}
-
-/// An `AbstractType` minted against an opaque-ascription module keys on the module's `ScopeId`,
-/// not a `&Module`, so it survives `to_static` — and the rebuilt identity still compares equal to
-/// the region-lifetime one it came from.
-#[test]
-fn to_static_rebuilds_module_minted_abstract_type() {
-    let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let module = storage
-        .brand()
-        .alloc_module(Module::new("Test".into(), scope));
-    let t = KType::AbstractType {
-        source: module.scope_id(),
-        name: "Carrier".into(),
-    };
-    let rebuilt = t
-        .to_static()
-        .expect("a module-minted AbstractType holds no region pointer");
-    assert_eq!(rebuilt, t);
-}
-
 /// `AbstractType` identity is `(source, name)`: two mints naming the same module and the same
 /// abstract member compare (and hash) equal, while a mint against another module — what a second
 /// `:|` application of the same SIG produces, since each ascription allocates a fresh child scope —
@@ -570,39 +381,4 @@ fn abstract_type_identity_keys_on_source_and_name() {
     );
     assert_ne!(mint(first, "Carrier"), mint(second, "Carrier"));
     assert_ne!(mint(first, "Carrier"), mint(first, "Elem"));
-}
-
-/// `SetRef` shares its schema by `Rc`, compared by `Rc::ptr_eq` — rebuilding it would
-/// mint a distinct allocation and silently break nominal identity, so `to_static`
-/// declines unconditionally (even though every member here is otherwise pure).
-#[test]
-fn to_static_none_for_set_ref_rc_shared() {
-    let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x9999));
-    let t = KType::SetRef { set, index: 0 };
-    assert!(t.to_static().is_none());
-}
-
-// --- KType::resident_in / resident_in_reach --------------------------------------
-
-/// A self-sig `Signature`'s `content` is owned data — no region pointer to audit — so it is
-/// resident in every `dest`, including the module's own home region.
-#[test]
-fn resident_in_true_for_same_region_module() {
-    let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let module = storage
-        .brand()
-        .alloc_module(Module::new("Test".into(), scope));
-    let t = KType::signature(Rc::clone(module.self_sig_content()), Vec::new());
-    assert!(t.resident_in(storage.region()));
-}
-
-/// An `Rc`-shared `SetRef` whose every member schema is owned data is resident in any `dest` —
-/// the checked path's whole reason to exist for the identity-preserving set family.
-#[test]
-fn resident_in_true_for_pure_set_ref() {
-    let set = record_newtype_set("Point", ScopeId::from_raw(0, 0xA1));
-    let t = KType::SetRef { set, index: 0 };
-    let dest = run_root_storage();
-    assert!(t.resident_in(dest.region()));
 }

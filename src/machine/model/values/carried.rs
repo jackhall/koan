@@ -15,7 +15,7 @@ use super::KObject;
 #[derive(Clone, Copy)]
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),
-    Type(&'a KType<'a>),
+    Type(&'a KType),
 }
 
 /// `Reattachable` family for [`Carried`] — the value channel's erase/reattach owner and the
@@ -59,7 +59,7 @@ impl<'a> Carried<'a> {
 
     /// The shallow type tag of the carried value: an object's `ktype()`, or a type arm's
     /// own `OfKind` classification.
-    pub fn ktype(&self) -> KType<'a> {
+    pub fn ktype(&self) -> KType {
         match self {
             Carried::Object(o) => o.ktype(),
             Carried::Type(t) => KType::OfKind(t.kind_of()),
@@ -72,7 +72,7 @@ impl<'a> Carried<'a> {
 /// (`Record<Held>`) holds.
 pub enum Held<'a> {
     Object(KObject<'a>),
-    Type(KType<'a>),
+    Type(KType),
 }
 
 impl<'a> Held<'a> {
@@ -93,7 +93,7 @@ impl<'a> Held<'a> {
     }
 
     /// The `Type` arm, if this is one.
-    pub fn as_type(&self) -> Option<&KType<'a>> {
+    pub fn as_type(&self) -> Option<&KType> {
         match self {
             Held::Type(t) => Some(t),
             Held::Object(_) => None,
@@ -119,7 +119,7 @@ impl<'a> Held<'a> {
 
     /// The cell's shallow type tag: an object's `ktype()`, or a type arm's own `OfKind`
     /// classification (mirrors [`Carried::ktype`]).
-    pub fn ktype(&self) -> KType<'a> {
+    pub fn ktype(&self) -> KType {
         match self {
             Held::Object(o) => o.ktype(),
             Held::Type(t) => KType::OfKind(t.kind_of()),

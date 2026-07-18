@@ -20,7 +20,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Some(v) => v,
         None => return done_err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
-    let mut type_for_types_map: Option<KType<'a>> = None;
+    let mut type_for_types_map: Option<KType> = None;
     // Whether the binder name is Type-classified (`LET <Name> = …`) — the SIG-body VAL guard below
     // keys on it, independent of which map the RHS lands in.
     let mut type_classified_name = false;
@@ -99,22 +99,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ))));
     }
     if let Some(kt) = type_for_types_map {
-        // Fused mint + alloc + register: the delivered RHS carrier's reach is minted into this scope's
-        // arena (kept mode — a `KType` clone is shallow, so a module alias inherits the module's
-        // child-scope reach and a region-pure / owned type reaches nothing), the identity is allocated
-        // under it, and it is registered — one call returns the resident `&KType` plus the same token.
-        let (kt_ref, stored) = match ctx.scope.register_user_type_delivered(
-            name,
-            kt,
-            ctx.arg_carrier("value"),
-            bind_index,
-        ) {
-            Ok(pair) => pair,
+        // Fused alloc + register: the RHS type crosses into this scope as owned data, is allocated
+        // into this scope's own region through the single storage door, and is registered — one call
+        // returns the resident `&KType`.
+        let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
+            Ok(kt_ref) => kt_ref,
             Err(e) => return done_err(e),
         };
-        // The terminal witnesses the aliased type in place from that same stored reach — the
-        // reach-aware wrapper a later read uses.
-        let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
+        // The terminal witnesses the aliased type in place — the wrapper a later read uses.
+        let carrier = ctx.scope.resident_type_carrier(kt_ref);
         Action::Done(Ok(StepCarried::born(carrier)))
     } else {
         let value = rhs

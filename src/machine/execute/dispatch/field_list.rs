@@ -5,19 +5,19 @@
 //! One dep-finish waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
 //! list through [`parse_typed_field_list_via_elaborator`], feeding the resolved
 //! sub-Dispatch carriers back through that walker's `results` channel in DFS order. Two
-//! composition surfaces consume the sealed `(name, KType)` pairs:
+//! composition surfaces consume the resulting `(name, KType)` pairs:
 //!
-//! - the record-type sigil and the FN carrier compose at the store's own fold brand
-//!   via [`fold_fields_at_brand`] and a [`BrandCompose`] closure, so the pairs and every extra
-//!   operand cross as brand-delivered views rather than ambient captures;
+//! - the record-type sigil and the FN carrier compose through [`compose_field_list`] and a
+//!   [`BrandCompose`] closure, which assembles one owned `KType` and allocates it into the
+//!   consumer's own region;
 //! - the UNION schema and the NEWTYPE record repr hand the pairs to a caller-supplied
 //!   [`FieldListFinalizeAction`], which seals them into a heap `RecursiveSet` and crosses the
-//!   nominal identity through [`seal_type_operand`](super::constructors::seal_type_operand).
+//!   nominal identity through [`seal_type_identity`](super::constructors::seal_type_identity).
 
 use std::rc::Rc;
 
 use crate::machine::core::{DepPlacement, FinishCtx};
-use crate::machine::core::{FoldingBrand, LexicalFrame, PendingBinderGuard, StepAllocator};
+use crate::machine::core::{LexicalFrame, PendingBinderGuard, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{
@@ -34,20 +34,11 @@ use super::DepRequest;
 use super::SchedulerView;
 use crate::machine::DeliveredCarried;
 
-/// Composes the final `KType` at the fold brand from the elaborated pairs and any extra operand
-/// views (e.g. the FN return type's carrier view). Runs inside the fold closure of
-/// [`fold_fields_at_brand`]; everything it builds from is a declared operand of that fold — the
-/// pairs cloned out of brand-delivered views, plus the `extras` views. The composed `KType<'b>` can
-/// only inhabit the brand from those views or owned data, since the fold's sink
-/// ([`FoldingBrand::alloc_ktype_folded`]) ties its input to the brand lifetime.
-pub(crate) type BrandCompose<'step> = Box<
-    dyn for<'b> FnOnce(
-            FoldingBrand<'b>,
-            Vec<(String, KType<'b>)>,
-            &[Carried<'b>],
-        ) -> Result<KType<'b>, KError>
-        + 'step,
->;
+/// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
+/// caller closed over (e.g. the FN return type). Runs in [`compose_field_list`], which allocates
+/// the composed value into the consumer's own region through the single type door.
+pub(crate) type BrandCompose<'step> =
+    Box<dyn FnOnce(Vec<(String, KType)>) -> Result<KType, KError> + 'step>;
 
 /// `Action`-path finalize, returning a witnessed carrier — used by
 /// [`defer_field_list_action`], whose finish lifts the result straight into
@@ -56,7 +47,7 @@ pub(crate) type BrandCompose<'step> = Box<
 pub(crate) type FieldListFinalizeAction<'a> = Box<
     dyn FnOnce(
             &FinishCtx<'a>,
-            Vec<(String, KType<'a>)>,
+            Vec<(String, KType)>,
             &[&DeliveredCarried],
         ) -> Result<StepCarried<'a>, KError>
         + 'a,
@@ -97,17 +88,17 @@ struct FieldListRewalk<'step> {
 }
 
 impl<'step> FieldListRewalk<'step> {
-    /// Re-walk the field list at the fold brand `'b`: the sub-Dispatch carriers arrive as brand
-    /// views in `feed`, and each elaborated field type is cloned out at `'b`. The expression stays
-    /// at `'step` (only walked, never embedded), while the output pairs are `KType<'b>`; the parser
-    /// carries these two lifetimes separately so they can diverge. `ResultFeed` is always installed: a
+    /// Re-walk the field list: the sub-Dispatch results arrive as `feed`, and each elaborated field
+    /// type is cloned out as owned data. The expression stays at `'step` (only walked, never
+    /// embedded), while the output pairs are owned `KType`s; the parser carries the two lifetimes
+    /// separately so they can diverge. `ResultFeed` is always installed: a
     /// `Done`-shaped walk never pops it, and a popped-dry feed hits the loud "fewer resolved
     /// sub-dispatches" error inside the walker.
     fn run<'b>(
         self,
         scope: &Scope<'b>,
         feed: &[Carried<'b>],
-    ) -> Result<Vec<(String, KType<'b>)>, KError> {
+    ) -> Result<Vec<(String, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
@@ -135,80 +126,22 @@ impl<'step> FieldListRewalk<'step> {
     }
 }
 
-/// The ONE at-brand construction site both deferral currencies call: fold `[carriers ++ extras]`
-/// and the consumer scope through [`StepAllocator::alloc_carried_with_scope`], then — inside
-/// the fold closure, at the store's
-/// own brand `'b` — re-walk the field list against the brand-delivered feed views, compose the
-/// result `KType`, and store it folded.
+/// The ONE construction site both deferral currencies call: re-walk the field list against the
+/// resolved sub-Dispatch results, compose the result `KType` from the owned pairs, and allocate it
+/// into the consumer's own region through [`StepAllocator::alloc_type`].
 ///
-/// Dep ORDER contract: `deps` is `[parks.., owned.., extras..]`. `carriers` is `[parks.., owned..]`
-/// in terminal order, `park_count` splits its park prefix from its owned suffix, and `extras` are
-/// compose-only operands (e.g. the FN return type's carrier). Inside the fold the walk feed
-/// is `views[park_count..carriers.len()]` (the owned suffix), and the extras are
-/// `views[carriers.len()..]`. Every operand's reach and residence host fold into the result's
-/// witness, so a field or return type reaching a producer region carries that reach forward.
-fn fold_fields_at_brand<'step>(
+/// `feed` is the owned suffix of the dep terminals in DFS order — the parks are notify-only waits
+/// on a forward reference, so they never reach the walk. Every field type the walk produces is
+/// owned data, so the composed type embeds no borrow of a producer region.
+fn compose_field_list<'step>(
     step_ctx: &StepAllocator<'step>,
     scope: &'step Scope<'step>,
     rewalk: FieldListRewalk<'step>,
-    carriers: &[&DeliveredCarried],
-    park_count: usize,
-    extras: &[&DeliveredCarried],
+    feed: &[Carried<'step>],
     compose: BrandCompose<'step>,
 ) -> Result<StepCarried<'step>, KError> {
-    let deps: Vec<&DeliveredCarried> = carriers.iter().chain(extras).copied().collect();
-    let walk_len = carriers.len();
-    // The fold closure must return a `Carried`, so a walk/compose error is stashed here and
-    // surfaced after the alloc, storing a throwaway placeholder in its place.
-    let mut error: Option<KError> = None;
-    let sealed = step_ctx.alloc_carried_with_scope(&deps, scope, |brand, views, scope| {
-        let feed_views = &views[park_count..walk_len];
-        let extra_views = &views[walk_len..];
-        match rewalk
-            .run(scope, feed_views)
-            .and_then(|fields| compose(brand, fields, extra_views))
-        {
-            Ok(kt) => Carried::Type(brand.alloc_ktype_folded(kt)),
-            Err(e) => {
-                error = Some(e);
-                Carried::Type(brand.alloc_ktype_folded(KType::Any))
-            }
-        }
-    });
-    match error {
-        Some(e) => Err(e),
-        None => Ok(sealed),
-    }
-}
-
-/// Synchronous twin of the deferred composers: re-walk `expr` at the store's own fold brand (the
-/// consumer scope crossed as a delivered envelope, no dep carriers) and compose the result `KType`
-/// there. For a sync-resolved field list whose composed type cannot rebuild at `'static` (a reaching
-/// field type), so the ambient pairs are discarded and the walk is redone at the brand where the
-/// scope reads are declared operands. `extras` are compose-only operand views; `compose` folds the
-/// re-walked pairs plus those views into the result inside the fold closure.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn fold_field_list_sync<'a>(
-    step_ctx: &StepAllocator<'a>,
-    scope: &'a Scope<'a>,
-    expr: KExpression<'a>,
-    context: &'static str,
-    name_kind: FieldNameKind,
-    threaded: Vec<String>,
-    chain: Option<Rc<LexicalFrame>>,
-    error_frame: Option<TraceFrame>,
-    extras: &[&DeliveredCarried],
-    compose: BrandCompose<'a>,
-) -> Result<StepCarried<'a>, KError> {
-    let rewalk = FieldListRewalk {
-        expr,
-        context,
-        name_kind,
-        threaded,
-        chain,
-        error_frame,
-    };
-    fold_fields_at_brand(step_ctx, scope, rewalk, &[], 0, extras, compose)
+    let fields = rewalk.run(scope, feed)?;
+    Ok(step_ctx.alloc_type(compose(fields)?))
 }
 
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
@@ -227,7 +160,6 @@ pub(crate) fn defer_field_list<'step>(
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'step>>,
     error_frame: Option<TraceFrame>,
-    extras: Vec<DeliveredCarried>,
     compose: BrandCompose<'step>,
 ) -> Outcome<'step> {
     let rewalk = FieldListRewalk {
@@ -241,22 +173,15 @@ pub(crate) fn defer_field_list<'step>(
     let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // Every terminal's carrier — parks then owned — folds into the result at the store's own
-        // brand, so a field type that embeds a park's forward-referenced type or an owned
-        // sub-Dispatch's type carries that producer's reach forward. The owned suffix is the walk's
-        // feed; the parks are notify-only. `fold_fields_at_brand` re-walks against the brand views
-        // rather than the ambient step lifetime.
-        let carriers: Vec<&DeliveredCarried> =
-            terminals.all().iter().map(|t| &t.delivered).collect();
-        let park_count = carriers.len() - terminals.owned_slice().len();
-        let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
-        match fold_fields_at_brand(
+        // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
+        // walk's feed; the parks are notify-only waits on a forward reference. Each field type the
+        // walk yields is cloned out as owned data, so the composed type needs no operand fold.
+        let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
+        match compose_field_list(
             &view.step_ctx(),
             view.current_scope(),
             rewalk,
-            &carriers,
-            park_count,
-            &extra_refs,
+            &owned,
             compose,
         ) {
             Ok(sealed) => Outcome::Done(Ok(sealed)),
@@ -325,11 +250,11 @@ pub(crate) fn defer_field_list_action<'a>(
 }
 
 /// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] vector,
-/// but its finish runs the re-walk at the store's own fold brand through [`fold_fields_at_brand`]
-/// rather than folding an ambient `finalize`. `extras` are compose-only operand carriers (e.g. the
-/// FN return type's carrier), and `compose` folds the elaborated pairs plus those extra
-/// brand views into the result `KType` inside the fold closure. Used by `build_carrier`
-/// (`src/builtins/parameterized_types.rs`); `nominal_schema` keeps the ambient-`finalize` twin.
+/// but its finish runs the re-walk through [`compose_field_list`] rather than a caller-supplied
+/// `finalize` over the dep carriers. `compose` assembles the elaborated pairs — plus whatever owned
+/// type content it closed over, such as the FN return type — into the result `KType`. Used by
+/// `build_carrier` (`src/builtins/parameterized_types.rs`); `nominal_schema` keeps the
+/// `finalize` twin.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn defer_field_list_action_composed<'a>(
     expr: KExpression<'a>,
@@ -341,7 +266,6 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard<'a>>,
     error_frame: Option<TraceFrame>,
-    extras: Vec<DeliveredCarried>,
     compose: BrandCompose<'a>,
 ) -> crate::machine::core::Action<'a> {
     use crate::machine::core::{Action, AwaitContinue};
@@ -359,20 +283,12 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         // The guard's Drop clears the in-flight `pending_types` entry on every arm.
         let _pending_guard = pending_guard;
-        // Every terminal's carrier — parks then owned — folds into the result at the store's own
-        // brand; the owned suffix is the walk feed, the parks are notify-only, and `extras` are
-        // compose-only operands. `fold_fields_at_brand` re-walks against the brand views.
-        let carriers: Vec<&DeliveredCarried> = results.all().iter().map(|t| &t.delivered).collect();
-        let park_count = carriers.len() - results.owned_slice().len();
-        let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
-        Action::Done(fold_fields_at_brand(
-            &fctx.ctx,
-            fctx.scope,
-            rewalk,
-            &carriers,
-            park_count,
-            &extra_refs,
-            compose,
+        // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
+        // walk feed; the parks are notify-only waits on a forward reference. Each field type the
+        // walk yields is cloned out as owned data, so the composed type needs no operand fold.
+        let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
+        Action::Done(compose_field_list(
+            &fctx.ctx, fctx.scope, rewalk, &owned, compose,
         ))
     });
     Action::AwaitDeps { deps, finish }
@@ -398,27 +314,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     ) {
         FieldListOutcome::Done(pairs) => {
             let kt = KType::record(Box::new(Record::from_pairs(pairs)));
-            match kt.to_static() {
-                // Region-free record: the compile-enforced `'static` tier.
-                Some(owned) => Outcome::Done(Ok(view.step_ctx().alloc_type(owned))),
-                // A field type that cannot rebuild at `'static` (a `SetRef` alias, a `Signature`):
-                // discard the ambient pairs and re-walk at the fold brand, where the scope reads are
-                // declared operands.
-                None => Outcome::Done(fold_field_list_sync(
-                    &view.step_ctx(),
-                    view.current_scope(),
-                    fields,
-                    "record fields",
-                    FieldNameKind::Identifier,
-                    Vec::new(),
-                    chain,
-                    None,
-                    &[],
-                    Box::new(|_brand, pairs, _extras| {
-                        Ok(KType::record(Box::new(Record::from_pairs(pairs))))
-                    }),
-                )),
-            }
+            Outcome::Done(Ok(view.step_ctx().alloc_type(kt)))
         }
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -434,10 +330,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             chain,
             None,
             None,
-            Vec::new(),
-            Box::new(|_brand, pairs, _extras| {
-                Ok(KType::record(Box::new(Record::from_pairs(pairs))))
-            }),
+            Box::new(|pairs| Ok(KType::record(Box::new(Record::from_pairs(pairs))))),
         ),
     }
 }

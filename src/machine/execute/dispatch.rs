@@ -57,10 +57,10 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
-pub(crate) use constructors::{build_type_operand, seal_type_operand};
+pub(crate) use constructors::{build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::{
-    defer_field_list_action, defer_field_list_action_composed, fold_field_list_sync, BrandCompose,
+    defer_field_list_action, defer_field_list_action_composed, BrandCompose,
 };
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
@@ -105,9 +105,9 @@ pub(super) fn resolve_name_part<'step>(
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
         Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
-            // The `&KType` rides the type channel; its stored token is recomputed at the read site
-            // (`literal.rs`) via `resolve_type_stored`, since `NameOutcome` carries only the value.
-            TypeResolution::Done(resolved) => NameOutcome::Resolved(Carried::Type(resolved.kt)),
+            // The `&KType` rides the type channel; it is owned data stored in the resolving
+            // scope's own region, so the read site needs nothing beyond the reference.
+            TypeResolution::Done(kt) => NameOutcome::Resolved(Carried::Type(kt)),
             TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
             TypeResolution::Park(producers) => match producers.first() {
                 Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),

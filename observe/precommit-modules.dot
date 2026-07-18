@@ -394,12 +394,10 @@ digraph {
     "koan::builtins::val_decl" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::val_decl" -> "koan::source" [label="uses", style="dashed"];
-    "koan::fold_fixture" -> "koan" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::fold_fixture" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::fold_fixture" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::core" -> "koan::machine" [label="uses", style="dashed"];
@@ -727,7 +725,6 @@ digraph {
     "koan::machine::model::operators" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktraits" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::builtins" [label="uses", style="dashed"];
-    "koan::machine::model::types::ktype" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::ast" [label="uses", style="dashed"];

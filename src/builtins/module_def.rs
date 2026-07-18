@@ -123,7 +123,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let module_sig = |name_kt: KType<'a>| {
+    let module_sig = |name_kt: KType| {
         sig(
             KType::empty_signature(),
             vec![

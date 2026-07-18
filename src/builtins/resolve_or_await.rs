@@ -6,8 +6,6 @@
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KType};
-use crate::machine::DeliveredCarried;
-use crate::machine::TypeHit;
 use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
 use crate::scheduler::DepResults;
@@ -32,10 +30,10 @@ fn non_type_result_error(slot: &str, got_kind: String) -> KError {
 }
 
 /// Classify a plain type-table lookup (`Scope::resolve_type_with_chain`).
-pub(crate) fn classify_name_lookup<'a>(
-    lookup: Option<NameLookup<&'a KType<'a>>>,
+pub(crate) fn classify_name_lookup(
+    lookup: Option<NameLookup<&KType>>,
     name: &str,
-) -> TypeResolution<KType<'a>> {
+) -> TypeResolution<KType> {
     match lookup {
         Some(NameLookup::Bound(kt)) => TypeResolution::Done(kt.clone()),
         Some(NameLookup::Parked(producer)) => TypeResolution::Park(vec![producer]),
@@ -43,12 +41,10 @@ pub(crate) fn classify_name_lookup<'a>(
     }
 }
 
-/// Drop a `TypeHit`'s reach, keeping the resolved `KType` — adapts
-/// `Scope::resolve_type_identifier`'s outcome into the combinator currency.
-pub(crate) fn classify_type_hit<'a>(
-    resolution: TypeResolution<TypeHit<'a>>,
-) -> TypeResolution<KType<'a>> {
-    resolution.and_then_done(|hit| TypeResolution::Done(hit.kt.clone()))
+/// Clone the stored type out of `Scope::resolve_type_identifier`'s outcome, adapting it into
+/// the combinator currency: the combinators carry an owned `KType`, not a region borrow.
+pub(crate) fn classify_resolved_type(resolution: TypeResolution<&KType>) -> TypeResolution<KType> {
+    resolution.and_then_done(|kt| TypeResolution::Done(kt.clone()))
 }
 
 /// Re-run `resolve` after the parked producers finished. `Done` yields the type; `Park` is the
@@ -56,8 +52,8 @@ pub(crate) fn classify_type_hit<'a>(
 pub(crate) fn resolve_at_wake<'a>(
     scope: &Scope<'a>,
     slot: &str,
-    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType<'a>>,
-) -> Result<KType<'a>, KError> {
+    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType>,
+) -> Result<KType, KError> {
     match resolve(scope) {
         TypeResolution::Done(kt) => Ok(kt),
         TypeResolution::Park(_) => Err(parked_after_wake_error(slot)),
@@ -71,8 +67,8 @@ pub(crate) fn resolve_at_wake<'a>(
 pub(crate) fn resolve_or_await<'a>(
     scope: &'a Scope<'a>,
     slot: &'static str,
-    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType<'a>> + 'a,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>) -> Action<'a> + 'a,
+    resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType> + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType) -> Action<'a> + 'a,
 ) -> Action<'a> {
     match resolve(scope) {
         // The synchronous arm hands the continuation the same `FinishCtx` a wake-time finish
@@ -93,37 +89,32 @@ pub(crate) fn resolve_or_await<'a>(
     }
 }
 
-/// Read the type a sub-dispatch resolved to out of a dep-finish's owned results, paired with the
-/// terminal's own dep carrier — a non-type result is the slot's canonical shape error. The
-/// resolved `KType` can embed a borrow into the terminal's producer region (a declared
-/// `Signature`, a nominal `SetRef`, ...), so a caller that seals the type into a result must fold the carrier
-/// in (`StepContext::alloc_carried_with`) or mint it into a scope's arena (`Scope::host_reach_of`)
-/// before the type crosses into stored state.
+/// Read the type a sub-dispatch resolved to out of a dep-finish's owned results — a non-type
+/// result is the slot's canonical shape error. The resolved `KType` is owned data cloned out of
+/// the terminal, so a caller that seals it into a result allocates it into its own region through
+/// `alloc_ktype`.
 pub(crate) fn expect_type_terminal<'a, 'd>(
     results: &DepResults<'_, &'d DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
-) -> Result<(KType<'a>, &'d DeliveredCarried), KError> {
-    // The sub-dispatch's resolved type read live at the step brand (un-relocated); the caller
-    // re-allocates it into the destination region when it constructs, folding `carrier` in.
+) -> Result<KType, KError> {
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
     match terminal.value {
-        Carried::Type(kt) => Ok((kt.clone(), &terminal.delivered)),
+        Carried::Type(kt) => Ok(kt.clone()),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
     }
 }
 
-/// Sub-dispatch `expr` in the slot's own scope and hand the resolved type, plus its dep carrier,
-/// to `on_resolved` at dep-finish — `on_resolved` folds the carrier into whatever it seals so the
-/// type's own reach travels with it.
+/// Sub-dispatch `expr` in the slot's own scope and hand the resolved type to `on_resolved` at
+/// dep-finish. The resolved `KType` is owned data, so the dep carrier stays behind.
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType<'a>, &DeliveredCarried) -> Action<'a> + 'a,
+    on_resolved: impl FnOnce(&FinishCtx<'a>, KType) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let (kt, carrier) = crate::try_action!(expect_type_terminal(&results, 0, slot));
-        on_resolved(fctx, kt, carrier)
+        let kt = crate::try_action!(expect_type_terminal(&results, 0, slot));
+        on_resolved(fctx, kt)
     });
     Action::AwaitDeps {
         deps: vec![DepRequest::Dispatch {

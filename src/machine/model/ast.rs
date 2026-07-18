@@ -228,7 +228,7 @@ impl<'a> ExpressionPart<'a> {
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
         &self,
-        slot: &crate::machine::model::KType<'a>,
+        slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
@@ -243,8 +243,8 @@ impl<'a> ExpressionPart<'a> {
             KType::OfKind(KKind::ProperType) | KType::OfKind(KKind::AnyType),
         ) = (self, slot)
         {
-            let kt = KType::<'a>::from_type_identifier(t)
-                .unwrap_or_else(|_| KType::Unresolved(t.clone()));
+            let kt =
+                KType::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
             return Held::Type(kt);
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
@@ -713,8 +713,8 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
     }
 }
 
-impl<'a> Parseable<'a> for KExpression<'a> {
-    fn ktype(&self) -> crate::machine::model::KType<'a> {
+impl<'a> Parseable for KExpression<'a> {
+    fn ktype(&self) -> crate::machine::model::KType {
         crate::machine::model::KType::KExpression
     }
     fn summarize(&self) -> String {

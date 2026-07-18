@@ -28,6 +28,6 @@ pub use step_carried::{drive_step_allocator, StepCarried};
 
 pub(crate) use dispatch::{
     build_type_operand, defer_field_list_action, defer_field_list_action_composed,
-    fold_field_list_sync, seal_type_operand, BrandCompose,
+    seal_type_identity, BrandCompose,
 };
 pub(crate) use dispatch::{DispatchOutcome, NameOutcome};

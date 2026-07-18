@@ -10,7 +10,7 @@ use std::rc::Rc;
 /// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
 /// (empty record repr is fine — the predicates key on the nominal `(set digest, index)` +
 /// `kind`, never a schema descent).
-fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
+fn record_newtype_setref(name: &str, scope_id: ScopeId) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -20,7 +20,7 @@ fn record_newtype_setref<'a>(name: &str, scope_id: ScopeId) -> KType<'a> {
 }
 
 /// A singleton-set `KType::SetRef` for a newtype named `name` over `repr`.
-fn newtype_setref<'a>(name: &str, scope_id: ScopeId, repr: KType<'a>) -> KType<'a> {
+fn newtype_setref(name: &str, scope_id: ScopeId, repr: KType) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -135,7 +135,7 @@ fn is_more_specific_function_return_covariant() {
     assert!(!any_ret.is_more_specific_than(&number_ret, &types));
 }
 
-fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
+fn record_ty(fields: Vec<(&str, KType)>) -> KType {
     KType::record(Box::new(Record::from_pairs(
         fields.into_iter().map(|(n, t)| (n.to_string(), t)),
     )))
@@ -173,7 +173,7 @@ fn record_disjoint_fields_incomparable() {
     assert!(!xz.is_more_specific_than(&xy, &types));
 }
 
-/// `accepts_carried` is the lifetime-heterogeneous classifier `accepts_part`'s `Spliced` arm
+/// `accepts_carried` is the classifier `accepts_part`'s `Spliced` arm
 /// delegates to: a resolved value classifies identically whether reached as a spliced part or opened
 /// directly. Also pins the value-shaped arms (object type-tag, type-channel `OfKind`) it owns.
 #[test]
@@ -208,7 +208,7 @@ fn accepts_carried_matches_spliced_delegation() {
 }
 
 /// A spliced **cell** classifies through `accepts_part` by opening at its own brand and handing the
-/// value to the lifetime-heterogeneous `accepts_carried` (no re-anchoring): a `7.0` value is admitted
+/// value to `accepts_carried` (no re-anchoring): a `7.0` value is admitted
 /// by `:Number` / `:Any` and refused by `:Str`, matching a direct `accepts_carried`. Built through
 /// the scope's own carrier surface (`resident_value_carrier` + `Sealed::seal`) — the exact
 /// construction a real splice rests on the working expression. Also pins the cell's `is_splice_free`
@@ -301,10 +301,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::AnyType);
-    let kt_number: &KType<'_> = region.brand().alloc_ktype(KType::Number);
-    let kt_str: &KType<'_> = region.brand().alloc_ktype(KType::Str);
-    let kt_bool: &KType<'_> = region.brand().alloc_ktype(KType::Bool);
-    let kt_null: &KType<'_> = region.brand().alloc_ktype(KType::Null);
+    let kt_number: &KType = region.brand().alloc_ktype(KType::Number);
+    let kt_str: &KType = region.brand().alloc_ktype(KType::Str);
+    let kt_bool: &KType = region.brand().alloc_ktype(KType::Bool);
+    let kt_null: &KType = region.brand().alloc_ktype(KType::Null);
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_number)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool)), &types));
@@ -316,11 +316,11 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         ScopeId::SENTINEL,
         NominalSchema::NewType(Box::new(KType::Number)),
     );
-    let newtype_token: &KType<'_> = region.brand().alloc_ktype(KType::SetRef {
+    let newtype_token: &KType = region.brand().alloc_ktype(KType::SetRef {
         set: newtype_set,
         index: 0,
     });
-    let struct_token: &KType<'_> = region
+    let struct_token: &KType = region
         .brand()
         .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
     assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token)), &types));
@@ -348,10 +348,9 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         ));
     let schema = SigSchema::project_decl(sig_scope);
     let content = Rc::new(SigContent::new("Ordered".into(), sig_scope.id, schema));
-    let kt_sig: &KType<'_> = region
+    let kt_sig: &KType = region
         .brand()
-        .alloc_ktype_checked(KType::signature(content, Vec::new()))
-        .expect("sig was just allocated into region's own region");
+        .alloc_ktype(KType::signature(content, Vec::new()));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     assert!(!KType::OfKind(KKind::ProperType)
@@ -407,9 +406,7 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = region
-        .alloc_ktype_checked(newtype_tv.clone())
-        .expect("a freshly-cloned SetRef is always resident-in-self");
+    let type_id: &KType = region.alloc_ktype(newtype_tv.clone());
     let w: &KObject<'_> = region
         .alloc_object_checked(KObject::Wrapped {
             inner: crate::machine::model::values::WrappedPayload::peel(inner),
@@ -522,7 +519,7 @@ fn is_more_specific_for_pinned_signature_bound() {
 /// A shared `Result` `TypeConstructor` set. Identity is now `(set ptr, index)`, so a
 /// `ConstructorApply` ctor and a `Tagged` carrier only match when they reference the *same*
 /// `Rc` — every test below threads this one set through both the slot ctor and the value.
-fn result_set<'a>(result_sid: ScopeId) -> Rc<RecursiveSet<'a>> {
+fn result_set(result_sid: ScopeId) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         "Result".into(),
         result_sid,
@@ -536,7 +533,7 @@ fn result_set<'a>(result_sid: ScopeId) -> Rc<RecursiveSet<'a>> {
 /// Build a `Result`-carrier `Tagged` value occupying `tag` with `payload`, referencing
 /// `set` (the shared `Result` allocation). The inner `payload` is itself a `Tagged` carrier
 /// whose set is the error type's nominal identity.
-fn result_value<'a>(set: &Rc<RecursiveSet<'a>>, tag: &str, payload: KObject<'a>) -> KObject<'a> {
+fn result_value<'a>(set: &Rc<RecursiveSet>, tag: &str, payload: KObject<'a>) -> KObject<'a> {
     KObject::Tagged {
         tag: tag.into(),
         value: std::rc::Rc::new(payload),
@@ -547,7 +544,7 @@ fn result_value<'a>(set: &Rc<RecursiveSet<'a>>, tag: &str, payload: KObject<'a>)
 }
 
 /// A bare error carrier (`Tagged` over `set`) standing in for a caught error value.
-fn error_carrier<'a>(set: &Rc<RecursiveSet<'a>>) -> KObject<'a> {
+fn error_carrier<'a>(set: &Rc<RecursiveSet>) -> KObject<'a> {
     KObject::Tagged {
         tag: "_".into(),
         value: std::rc::Rc::new(KObject::Number(0.0)),
@@ -558,7 +555,7 @@ fn error_carrier<'a>(set: &Rc<RecursiveSet<'a>>) -> KObject<'a> {
 }
 
 /// A singleton `TypeConstructor`-kind set named `name`, for an error-type identity.
-fn error_type_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
+fn error_type_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -745,7 +742,7 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
     // `KType` carries interior mutability, so it can't key a `HashSet` (clippy
     // `mutable_key_type`). Hash each directly: the deferred-return shadow participates
     // in `KType`'s hash, so the two function types hash apart.
-    let hash = |k: &KType<'_>| {
+    let hash = |k: &KType| {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         k.hash(&mut h);
         h.finish()

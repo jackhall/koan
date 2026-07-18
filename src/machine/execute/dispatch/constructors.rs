@@ -11,17 +11,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::DepPlacement;
-use crate::machine::core::{
-    FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope, StoredReach,
-};
+use crate::machine::core::{FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
-use crate::machine::{
-    CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily,
-};
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, RegionTypeFamily};
 use crate::source::Spanned;
 use crate::witnessed::Residence;
 use crate::witnessed::{reattachable, RegionHandle, Witnessed};
@@ -81,8 +77,7 @@ mod tests;
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
-    identity: &'step KType<'step>,
-    reach: StoredReach<'step>,
+    identity: &'step KType,
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     if let [Spanned {
@@ -106,7 +101,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(vec![value_cell], CtorKind::NewType { identity, reach })
+    launch(vec![value_cell], CtorKind::NewType { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
@@ -114,8 +109,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
-    identity: &'step KType<'step>,
-    reach: StoredReach<'step>,
+    identity: &'step KType,
     record_fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
@@ -126,7 +120,6 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
         CtorKind::RecordNewType {
             identity,
             field_names,
-            reach,
         },
     )
 }
@@ -139,7 +132,7 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
 /// *member* of the union, whose identity differs from the union repr, so it preserves the nested
 /// payload — the recursion the dissolved-union model needs.
 fn check_newtype_repr<'a>(
-    identity: &KType<'a>,
+    identity: &KType,
     value: &KObject<'a>,
     types: &TypeRegistry,
 ) -> Result<bool, KError> {
@@ -169,9 +162,8 @@ fn check_newtype_repr<'a>(
 /// finish ([`finish_witnessed`]'s `ApplyConstructor` arm) stamps the value's type as the applied
 /// arg and wraps it with a `ConstructorApply(<ctor SetRef>, [arg])` identity.
 pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
-    set: Rc<RecursiveSet<'step>>,
+    set: Rc<RecursiveSet>,
     index: usize,
-    reach: StoredReach<'step>,
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     if let [Spanned {
@@ -192,21 +184,16 @@ pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
     };
-    launch(
-        vec![value_cell],
-        CtorKind::ApplyConstructor { set, index, reach },
-    )
+    launch(vec![value_cell], CtorKind::ApplyConstructor { set, index })
 }
 
 /// Direct-construct a tagged-union value from the projected schema of its sealed
 /// `RecursiveSet` member. Shared by named UNIONs (`Tagged` kind) and the builtin `Result`
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
-    set: Rc<RecursiveSet<'step>>,
+    set: Rc<RecursiveSet>,
     index: usize,
-    schema: Rc<HashMap<String, KType<'step>>>,
-    reach: StoredReach<'step>,
+    schema: Rc<HashMap<String, KType>>,
     args_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     let (tag, value_part) = match prepare_args(args_parts) {
@@ -220,7 +207,6 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'step>(
             set,
             index,
             tag,
-            reach,
         },
     )
 }
@@ -259,11 +245,10 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 pub(crate) fn build_type_operand<'step>(
     scope: &'step Scope<'step>,
     dest_frame: Rc<FrameStorage>,
-    identity: &'step KType<'step>,
-    stored: StoredReach<'step>,
+    identity: &'step KType,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(Rc::clone(&dest_frame));
-    let identity_carrier = scope.resident_type_carrier(identity, stored);
+    let identity_carrier = scope.resident_type_carrier(identity);
     // The dest brand is the *destination* operand (its `DestHandleFamily` live form is the
     // `HasRegionHandle` mint target the pinned merge's composition seam needs), so it rides as
     // `other` — `identity_carrier`'s own reach is what gets minted into the dest frame's arena.
@@ -286,44 +271,13 @@ pub(crate) fn build_type_operand<'step>(
     )
 }
 
-/// Seal a declaration's nominal identity as a `Carried::Type` terminal, folding each carrier dep's
-/// reach — and its residence host, at [`Residence::Kept`] — onto the placement's witness. The
-/// finalize-path twin of [`finish_witnessed`]'s construction fold: the identity crosses the build
-/// brand as a [`RegionTypeFamily`] operand ([`build_type_operand`]) rather than captured into a fold
-/// closure, so the placement's witness folds the identity's own reach as a declared operand. Reach =
-/// the dest region ∪ the identity's own reach ∪ every carrier's reach-and-host — the coverage
-/// [`alloc_carried_with`](crate::machine::core::StepAllocator::alloc_carried_with) produces for
-/// the same `(identity, carriers)`, with the identity operand-crossed rather than closure-captured.
-///
-/// `stored` is the identity's own token (its home-omitted foreign reach is empty while a
-/// `RecursiveSet` is heap-`Rc`'d and its members reach no region); `dest_frame` owns the destination
-/// scope's region and pins the operand's backing for the synchronous re-anchor.
-pub(crate) fn seal_type_operand<'a>(
-    scope: &'a Scope<'a>,
-    dest_frame: Rc<FrameStorage>,
-    identity: &'a KType<'a>,
-    stored: StoredReach<'a>,
-    carriers: &[&DeliveredCarried],
-) -> StepCarried<'a> {
-    let operand = build_type_operand(scope, Rc::clone(&dest_frame), identity, stored);
-    // Fold each carrier's reach onto the identity operand at `Residence::Kept` — the dep keeps living
-    // in its producer region, so its host materializes as a member — the per-dep envelope fold
-    // `alloc_carried_with` runs. The relocate closure discards the carrier's value and threads the
-    // identity operand through unchanged; only its reach folds onto the composed witness.
-    let operand = carriers.iter().fold(operand, |operand, carrier| {
-        carrier.transfer_into::<RegionTypeFamily, RegionTypeFamily, KoanStorageProfile>(
-            operand,
-            Residence::Kept,
-            |_value, operand, _brand| operand,
-        )
-    });
-    // Drop the destination handle and re-seal the identity as a `Carried::Type` under the composed
-    // witness; `dest_frame` pins the operand's backing for the transient re-anchor.
-    StepCarried::born(
-        operand.map_pinned::<CarriedFamily, _>(&dest_frame, |(_region, identity_ty), _brand| {
-            Carried::Type(identity_ty)
-        }),
-    )
+/// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is owned data
+/// allocated into the declaring scope's own region, so the identity reaches no region beyond its
+/// home and the carrier seals under the empty witness — the read travels under the home-frame pin
+/// alone. The type channel mints no reach; [`finish_witnessed`]'s construction fold is the
+/// value-side counterpart, where the wrapped object genuinely reaches its deps' regions.
+pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: &'a KType) -> StepCarried<'a> {
+    StepCarried::born(scope.resident_type_carrier(identity))
 }
 
 /// All value subs have resolved. Build the wrapped value **inside the witness closure**, folding the
@@ -343,10 +297,10 @@ fn finish_witnessed<'step>(
     let scope = view.current_scope();
     let region = scope.brand();
     match kind {
-        CtorKind::NewType { identity, reach } => {
+        CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
             let collapse = check_newtype_repr(identity, terminals[0].value.object(), view.types())?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity);
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -369,7 +323,6 @@ fn finish_witnessed<'step>(
         CtorKind::RecordNewType {
             identity,
             field_names,
-            reach,
         } => {
             // Check the assembled record against the newtype repr first (read out of the carriers),
             // then fold the field carriers into the witnessed record and wrap it.
@@ -403,7 +356,7 @@ fn finish_witnessed<'step>(
                             },
                         )
                 });
-            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
+            let home = build_type_operand(scope, view.dest_frame(), identity);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
             Ok(fields
@@ -425,7 +378,6 @@ fn finish_witnessed<'step>(
             set,
             index,
             tag,
-            reach,
         } => {
             debug_assert_eq!(terminals.len(), 1);
             let expected = schema.get(tag).ok_or_else(|| {
@@ -445,11 +397,11 @@ fn finish_witnessed<'step>(
             // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
             // its set/index at the brand. Freshly minted in the dest region, so `reach` is empty
             // today; the operand `merge`s it under the dest frame's yoke plus that reach.
-            let identity: &KType<'step> = region.alloc_ktype_checked(KType::SetRef {
+            let identity: &KType = region.alloc_ktype(KType::SetRef {
                 set: Rc::clone(set),
                 index: *index,
-            })?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
+            });
+            let home = build_type_operand(scope, view.dest_frame(), identity);
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered
@@ -472,17 +424,17 @@ fn finish_witnessed<'step>(
                     },
                 ))
         }
-        CtorKind::ApplyConstructor { set, index, reach } => {
+        CtorKind::ApplyConstructor { set, index } => {
             debug_assert_eq!(terminals.len(), 1);
             // The ctor `SetRef` identity crosses the brand as a `&KType` so the built value's
             // `ConstructorApply` type id names the ctor's set/index at the brand. Freshly minted
             // in the dest region, so `reach` is empty today; the operand `merge`s it under the
             // dest frame's yoke plus that reach.
-            let identity: &KType<'step> = region.alloc_ktype_checked(KType::SetRef {
+            let identity: &KType = region.alloc_ktype(KType::SetRef {
                 set: Rc::clone(set),
                 index: *index,
-            })?;
-            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
+            });
+            let home = build_type_operand(scope, view.dest_frame(), identity);
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -503,7 +455,7 @@ fn finish_witnessed<'step>(
                         };
                         // The type id is a fresh `ConstructorApply(<ctor SetRef>, [arg])`, allocated
                         // at the fold brand — `arg` may borrow the value's region, folded in here.
-                        let type_id = region.alloc_ktype_folded(KType::constructor_apply(
+                        let type_id = region.alloc_ktype(KType::constructor_apply(
                             Box::new(identity_ty.clone()),
                             vec![arg],
                         ));

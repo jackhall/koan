@@ -8,12 +8,12 @@ fn resolve_type_expr_builtin_leaf_caches() {
     let scope = run_root_silent(&region);
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None) {
-        TypeResolution::Done(resolved) => resolved.kt,
+        TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
     assert_eq!(*first, KType::Number);
     let second = match scope.resolve_type_identifier(&te, None) {
-        TypeResolution::Done(resolved) => resolved.kt,
+        TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
     assert!(
@@ -43,7 +43,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let te = TypeIdentifier::leaf("Point".into());
     let kt = match scope.resolve_type_identifier(&te, None) {
-        TypeResolution::Done(resolved) => resolved.kt,
+        TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after STRUCT declaration"),
     };
     match kt {
@@ -51,14 +51,14 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         _ => panic!("expected SetRef for Point"),
     }
     let kt2 = match scope.resolve_type_identifier(&te, None) {
-        TypeResolution::Done(resolved) => resolved.kt,
+        TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on memo hit"),
     };
     assert!(std::ptr::eq(kt, kt2));
 }
 
 /// A singleton record-repr newtype `SetRef` named `name` at `scope_id`.
-fn struct_setref<'step>(name: &str, scope_id: ScopeId) -> KType<'step> {
+fn struct_setref(name: &str, scope_id: ScopeId) -> KType {
     use crate::machine::model::Record;
     use crate::machine::model::{NominalSchema, RecursiveSet};
     let set = RecursiveSet::singleton(
@@ -117,8 +117,6 @@ mod bare_leaf_resolution {
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::run_root_storage;
     use crate::machine::core::BindingIndex;
-    use crate::machine::core::StoredReach;
-    use crate::machine::core::TypeHit;
     use crate::machine::model::KType;
     use crate::machine::model::TypeIdentifier;
     use crate::machine::model::TypeResolution;
@@ -127,15 +125,10 @@ mod bare_leaf_resolution {
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        scope.register_type(
-            "Number".into(),
-            KType::Number,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        );
+        scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None) {
-            TypeResolution::Done(resolved) if *resolved.kt == KType::Number => {}
+            TypeResolution::Done(resolved) if *resolved == KType::Number => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
     }
@@ -226,7 +219,7 @@ mod bare_leaf_resolution {
         drop(pending_guard);
 
         match scope.resolve_type_identifier(&leaf, None) {
-            TypeResolution::Done(resolved) => match resolved.kt {
+            TypeResolution::Done(resolved) => match resolved {
                 KType::SetRef { set: s, index } => {
                     assert_eq!(s.member(*index).name, "Node");
                 }
@@ -241,7 +234,7 @@ mod bare_leaf_resolution {
         }
     }
 
-    fn outcome_tag(c: &TypeResolution<TypeHit<'_>>) -> &'static str {
+    fn outcome_tag(c: &TypeResolution<&KType>) -> &'static str {
         match c {
             TypeResolution::Done(_) => "Done",
             TypeResolution::Park(_) => "Park",

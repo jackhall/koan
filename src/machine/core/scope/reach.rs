@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use super::Scope;
-use crate::machine::core::{FrameSet, FrameStorage, KoanRegion, ScopeRefFamily, StoredReach};
+use crate::machine::core::{FrameSet, FrameStorage, KoanRegion, StoredReach};
 use crate::machine::model::{Carried, CarriedFamily, KObject};
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
@@ -28,7 +28,7 @@ impl<'a> Scope<'a> {
     /// materialize no member for a region it covers, because re-pinning one, paired with a sibling
     /// bind of a call's result, would close a `frame → region → scope → frame` cycle — and
     /// therefore also the evidence-tier audits' ambient coverage
-    /// ([`Scope::alloc_ktype_reaching`] and siblings): evidence this scope minted is complete
+    /// ([`Scope::alloc_object_reaching`] and siblings): evidence this scope minted is complete
     /// exactly relative to "destination ∪ evidence members ∪ this predicate", so mint and audit
     /// stay complements by sharing it.
     pub(crate) fn covers_region_ambiently(&self, region: &KoanRegion) -> bool {
@@ -38,7 +38,7 @@ impl<'a> Scope<'a> {
 
     /// Mint a delivered value's reach into this scope's own arena and package it as the binding
     /// entry's stored reach, for a value that **keeps living** in its producer's region (the
-    /// copy-free re-anchor — [`Self::adopt_sealed`]'s type-channel adoption): the envelope's host —
+    /// copy-free re-anchor — [`Self::adopt_sealed`]'s object channel): the envelope's host —
     /// the value's producer frame owner — materializes as a reach member unconditionally, so the
     /// residence stays pinned for the scope's life. The minted set is held by the arena for the
     /// region's life — the same schedule the scope itself is held on — and its `&'a` reference is
@@ -146,49 +146,46 @@ impl<'a> Scope<'a> {
         Delivered::seal(witnessed, home)
     }
 
-    /// The [`ScopeRefFamily`] twin of [`Self::seal_resident_delivered`]: seal a `&'a Scope<'a>`
-    /// reference to this scope into a [`Delivered`] envelope pinned by its own region owner, so the
-    /// scope crosses a fold brand as a declared operand rather than an ambient capture. Takes
-    /// `&'a self` — the `At<'a> = &'a Scope<'a>` form [`Witnessed::resident`] seals (a single unified
-    /// lifetime), the same shape [`Self::resident_type_carrier`]'s `&'a KType<'a>` argument carries.
-    /// The witness is the empty (resident) default; the host pin comes from [`Delivered::seal`],
-    /// exactly as the resident-value twin.
-    pub(crate) fn seal_scope_ref_delivered(
-        &'a self,
-    ) -> Delivered<ScopeRefFamily, CarrierWitness, FrameStorage> {
-        let home = self.region_owner().upgrade().expect(
-            "the sealed scope's region owner is held while it is sealed for a brand crossing",
-        );
-        Delivered::seal(Witnessed::resident(self), home)
-    }
-
-    /// Adopt a sealed dep carrier into this scope, copy-free: [`Delivered::adopt_into`] mints its
-    /// reach — with its residence host materialized as a member ([`Residence::Kept`]) — into the
-    /// scope's own arena for liveness, so every region the value reaches, its own home included,
-    /// stays alive for the scope's life; then re-anchors the sealed value at the scope's own brand.
-    /// Where [`resident_value_carrier`] seals a value already living **in** this region, adoption is
-    /// the consumption verb for a carrier produced **elsewhere**: the value stays put in its
-    /// producer's region and the mint is what pins that region, so the dep survives past its
-    /// resolving step as its carrier rather than as a relocated copy (the head-deferred callable, an
-    /// FN signature type slot, a spliced argument).
+    /// Adopt a sealed dep carrier into this scope. The two channels adopt differently:
+    ///
+    /// - **Object**: copy-free. [`Delivered::adopt_into`] mints the carrier's reach — with its
+    ///   residence host materialized as a member ([`Residence::Kept`]) — into this scope's own arena
+    ///   for liveness, so every region the value reaches, its own home included, stays alive for the
+    ///   scope's life; then re-anchors the sealed value at this scope's brand. The value stays put in
+    ///   its producer's region and the mint is what pins that region, so the dep survives past its
+    ///   resolving step as its carrier rather than as a relocated copy (the head-deferred callable, a
+    ///   spliced argument).
+    /// - **Type**: clone at the door. A `KType` is fully owned data, so the envelope is opened, the
+    ///   type cloned out, and the clone allocated into this scope's own region through the single
+    ///   storage door. The result borrows only this region, so no reach is minted and the producer's
+    ///   region is not pinned.
+    ///
+    /// Where [`resident_value_carrier`](Self::resident_value_carrier) seals a value already living
+    /// **in** this region, adoption is the consumption verb for a carrier produced **elsewhere**.
     pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
-        cell.adopt_into(self.brand().handle(), |region| {
-            self.covers_region_ambiently(region)
-        })
+        let cloned_type = cell.open(|live| match live {
+            Carried::Type(kt) => Some(kt.clone()),
+            Carried::Object(_) => None,
+        });
+        match cloned_type {
+            Some(owned) => Carried::Type(self.brand().alloc_ktype(owned)),
+            None => cell.adopt_into(self.brand().handle(), |region| {
+                self.covers_region_ambiently(region)
+            }),
+        }
     }
 
     /// Adopt a sealed dep carrier's **object** into this scope by structural copy — the
-    /// value-channel twin of [`Self::adopt_sealed`] for a consumer that re-homes the value anyway (a
-    /// call's argument delivery). The top node is `deep_clone`d into this scope's own arena, so the
-    /// producer's region is *not* part of the copy's residence: the mint stores the copy's reach
-    /// ([`Self::adopted_reach_of`] — reach members plus the host only when the value's borrows
-    /// genuinely cover it), never a residence-only host pin. This is what frees a tail loop's
-    /// retiring region once its delivered carrier drops (the working expression at step end),
-    /// instead of chaining it into every successor region's arena.
+    /// value-channel twin of [`Self::adopt_sealed`]'s copy-free object arm, for a consumer that
+    /// re-homes the value anyway (a call's argument delivery). The top node is `deep_clone`d into
+    /// this scope's own arena, so the producer's region is *not* part of the copy's residence: the
+    /// mint stores the copy's reach ([`Self::adopted_reach_of`] — reach members plus the host only
+    /// when the value's borrows genuinely cover it), never a residence-only host pin. This is what
+    /// frees a tail loop's retiring region once its delivered carrier drops (the working expression
+    /// at step end), instead of chaining it into every successor region's arena.
     ///
-    /// The **type** channel stays on [`Self::adopt_sealed`]: a `KType` clone is shallow (interior
-    /// borrows into the host region survive it), so a type adoption genuinely needs the host
-    /// materialized as reach.
+    /// The **type** channel forwards to [`Self::adopt_sealed`], whose type arm already copies: an
+    /// owned `KType` clone lands region-locally with nothing left pointing at the producer.
     ///
     /// The value copy reads the producer under the envelope's own pin — the retained frame owner
     /// ([`Delivered::open`]) — so the source backing stays live for the read; a resident-sealed
@@ -216,20 +213,18 @@ impl<'a> Scope<'a> {
         })
     }
 
-    /// Build the terminal carrier for a type living **in this scope's region** from its binding's
-    /// stored reach — the type-channel twin of [`Self::resident_value_carrier`]. Witness = this
-    /// scope's home frame ∪ `foreign` (the type's home-omitted foreign reach: empty for owned data, a
-    /// module's child-scope reach folded at construction). The home frame is fetched fresh (never
-    /// stored) and the bundle runs on the confined arena surface ([`RegionBrand::seal_resident`]), so
-    /// a type read witnesses the existing `&'a KType` in place — no re-clone into the region, no
-    /// `child_scope()` walk to rebuild the reach.
-    pub(crate) fn resident_type_carrier<'r>(
+    /// Build the terminal carrier for a type living **in this scope's region** — the type-channel
+    /// twin of [`Self::resident_value_carrier`]. The witness is empty: a `KType` is owned data, so
+    /// the read pins no foreign region and travels under the home-frame pin alone (the envelope host
+    /// [`Self::seal_resident_delivered`] pairs). The bundle runs on the confined arena surface
+    /// ([`RegionBrand::seal_resident`]), so a type read witnesses the existing `&'a KType` in place —
+    /// no re-clone into the region.
+    pub(crate) fn resident_type_carrier(
         &self,
-        kt: &'a crate::machine::model::KType<'a>,
-        stored: StoredReach<'r>,
+        kt: &'a crate::machine::model::KType,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.brand()
-            .seal_resident(Carried::Type(kt), self.resident_witness(stored))
+            .seal_resident(Carried::Type(kt), CarrierWitness::new(false, None))
     }
 
     /// The full stored token for a module minted in **this** scope from its `child` scope — the

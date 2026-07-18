@@ -13,7 +13,7 @@
 //! [memory-model.md § Region lifetime erasure](../../../design/memory-model.md#region-lifetime-erasure)
 //! for the heap-pinning / drop-order invariants.
 
-use crate::machine::{CarrierWitness, DeliveredCarried, KError, KErrorKind};
+use crate::machine::{CarrierWitness, KError, KErrorKind};
 use std::rc::Rc;
 
 use crate::machine::execute::StepCarried;
@@ -52,10 +52,7 @@ impl StorageProfile for KoanStorageProfile {
             KFunction<'static>,
             (
                 Scope<'static>,
-                (
-                    Module<'static>,
-                    (KType<'static>, (OperatorGroup, (FrameSet, ()))),
-                ),
+                (Module<'static>, (KType, (OperatorGroup, (FrameSet, ())))),
             ),
         ),
     );
@@ -109,41 +106,21 @@ impl<'a> RegionBrand<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
     }
 
-    /// Store an owned, region-pure [`KType`] into the region. A `t` that borrows another region
-    /// (a module-family pointer, or an `Rc`-shared set — see [`KType::to_static`]) cannot satisfy
-    /// this bound; it takes [`Self::alloc_ktype_checked`] instead.
-    pub fn alloc_ktype(self, t: KType<'static>) -> &'a KType<'a> {
-        self.0.alloc_resident::<KType<'static>>(t)
-    }
-
-    /// Runtime-checked twin of [`Self::alloc_ktype`] for a `t` that cannot rebuild at `'static`
-    /// (a module-family region pointer, a signature pointer, or an `Rc`-shared set — see
-    /// [`KType::to_static`]): [`KType::resident_in`] audits every region borrow `t` carries against
-    /// this brand's own region before anything is stored, so a foreign-region dangle errors loudly
-    /// instead of landing unvetted. Storing nothing on a failed audit.
-    ///
-    /// Confined to identity-preserving stores: a caller reaches here to store a value that cannot
-    /// rebuild at `'static` (a module-family pointer, a signature pointer, an `Rc`-shared set). A
-    /// site assembling a new composite [`KType`] from ambiently-read parts takes a brand door
-    /// instead ([`StepAllocator::alloc_type_composed`], [`StepAllocator::alloc_carried_with`], or
-    /// the field-list fold), so no from-scratch composite rides the runtime audit.
-    pub fn alloc_ktype_checked(self, t: KType<'_>) -> Result<&'a KType<'a>, KError> {
-        let name = t.name();
-        self.0
-            .alloc_resident_checked::<KType<'static>>(t, ResidenceEvidence::dest_only())
-            .ok_or_else(|| {
-                KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination"
-                )))
-            })
+    /// The single storage door for a [`KType`]. A `KType` is fully owned data — no variant borrows
+    /// region content — so the store is safe and unchecked: an owned value cannot dangle, and the
+    /// `&'a` resident it hands back points into this brand's own region. A type that crosses a
+    /// region boundary crosses by clone, allocated locally through this same door
+    /// ([`Scope::adopt_sealed`](super::scope::Scope::adopt_sealed)'s type channel).
+    pub fn alloc_ktype(self, t: KType) -> &'a KType {
+        self.0.alloc_resident::<KType>(t)
     }
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
-    /// `'static` (`KObject` has no general `'static` rebuild — see [`KType::to_static`]'s doc):
-    /// [`KObject::resident_in`] audits every answerable region borrow `o` carries against this
-    /// brand's own region. Honest-partial — see [`KObject::resident_in`]'s doc for the walk's one
-    /// blind spot (`Wrapped { type_id }`, un-answerable because `KType` opts out of the residence
-    /// side-table).
+    /// `'static` (`KObject` has no general `'static` rebuild):
+    /// [`KObject::resident_in`] audits every region borrow `o` carries against this brand's own
+    /// region. A `Wrapped { type_id }` tag needs no walk: the `&KType` points at owned data
+    /// allocated region-locally through [`Self::alloc_ktype`], so it reaches nothing the audit
+    /// could reject.
     pub fn alloc_object_checked(self, o: KObject<'_>) -> Result<&'a KObject<'a>, KError> {
         let name = o.ktype().name();
         self.0
@@ -318,40 +295,25 @@ impl<'a> FoldingBrand<'a> {
 
     /// Store a value built at this fold's own brand. Sound without a per-value audit: the input is
     /// typed at the brand lifetime, and inside a `for<'b>` fold closure the only inhabitants of
-    /// `KType<'b>` are values derived from the fold's declared operand views, the brand's own
+    /// `KObject<'b>` are values derived from the fold's declared operand views, the brand's own
     /// allocations, and owned/`'static` data — all named by the witness the enclosing combinator
-    /// composes. An ambient-lifetime capture is a compile error at this signature (a `KType<'ambient>`
-    /// cannot coerce to `KType<'b>`, since `'b` has no outlives relation to any enclosing lifetime),
-    /// so the store is discharged at compile time by the placement capability, with no runtime audit
-    /// at all.
-    pub(crate) fn alloc_ktype_folded(self, t: KType<'a>) -> &'a KType<'a> {
-        self.placement.alloc_resident_folded::<KType<'static>>(t)
-    }
-
-    /// Object twin of [`Self::alloc_ktype_folded`].
+    /// composes. An ambient-lifetime capture is a compile error at this signature (a
+    /// `KObject<'ambient>` cannot coerce to `KObject<'b>`, since `'b` has no outlives relation to any
+    /// enclosing lifetime), so the store is discharged at compile time by the placement capability,
+    /// with no runtime audit at all.
     pub(crate) fn alloc_object_folded(self, o: KObject<'a>) -> &'a KObject<'a> {
         self.placement.alloc_resident_folded::<KObject<'static>>(o)
     }
 }
 
-/// One positional operand of a brand-composed type build: the total, embedding-ordered form of
-/// the sparse `deps` list [`StepAllocator::alloc_type_composed`] partitions. `Reaching` folds the
-/// carrier's reach + host into the result's witness and surfaces as a view; `Pure` is a
-/// region-free type rebuilt at the brand through the region's own `'static` door, contributing no
-/// reach.
-pub(crate) enum TypeOperand<'x> {
-    Reaching(&'x DeliveredCarried),
-    Pure(KType<'static>),
-}
-
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `OperatorGroup` is lifetime-free, trivially invariant. The shared
+// choice of that lifetime; `KType` and `OperatorGroup` are lifetime-free, trivially invariant. The shared
 // `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its docs).
 reattachable! {
     KObject<'static> => KObject<'r>,
-    KType<'static> => KType<'r>,
+    KType => KType,
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
@@ -366,21 +328,7 @@ reattachable! {
 /// (ancestor) region. Used by the newtype / tagged-union constructors and the `CATCH` `Result`
 /// build. Layout-invariant: two thin pointers, representation independent of `'r`.
 pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType<'r>));
-
-/// [`StepAllocator::alloc_carried_with_scope`]'s dep-fold accumulator: the destination region
-/// handle paired with the dep views folded in so far. The handle heads the tuple so the library
-/// [`HasRegionHandle`](crate::witnessed::HasRegionHandle) blanket for `(RegionHandle<'b, P>, T)`
-/// discharges each fold's composition seam. Layout-invariant in `'r`: a thin handle and a `Vec` of
-/// the layout-invariant [`CarriedFamily`] are each layout-invariant, so the pair is too.
-struct ScopeFoldViews;
-reattachable!(ScopeFoldViews => (RegionHandle<'r, KoanStorageProfile>, Vec<Carried<'r>>));
-
-/// [`StepAllocator::alloc_carried_with_scope`]'s final accumulator: the [`ScopeFoldViews`] pair
-/// with the crossed scope envelope re-anchored at the brand nested alongside. Same handle-first
-/// nesting so the `(RegionHandle<'b, P>, T)` blanket still applies.
-struct ScopeFoldOperands;
-reattachable!(ScopeFoldOperands => (RegionHandle<'r, KoanStorageProfile>, (Vec<Carried<'r>>, &'r Scope<'r>)));
+reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType));
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
@@ -421,7 +369,7 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     }
 }
 
-impl Stored<KoanStorageProfile> for KType<'static> {
+impl Stored<KoanStorageProfile> for KType {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .1 .1 .1 .0
     }
@@ -565,7 +513,7 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<KFunction<'static>>()
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
-            + self.family_len::<KType<'static>>()
+            + self.family_len::<KType>()
             + self.family_len::<OperatorGroup>()
             + self.family_len::<FrameSet>()
     }

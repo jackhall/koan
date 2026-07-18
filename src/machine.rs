@@ -20,7 +20,7 @@ pub(crate) use core::{
     ActionFn, AwaitContinue, BinderBucketFn, BinderNameFn, BlockEntry, BodyCtx, CatchContinue,
     DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
     FrameStorageExt, KoanRegionExt, KoanStorageProfile, PendingTypeEntry, ReturnContract,
-    StepAllocator, StoredReach, TailContract, TypeHit, TypeOperand,
+    StepAllocator, StoredReach, TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
@@ -31,7 +31,6 @@ pub(crate) use core::{
 };
 pub(crate) use execute::{
     build_type_operand, defer_field_list_action, defer_field_list_action_composed,
-    fold_field_list_sync, seal_type_operand, BrandCompose, DispatchOutcome, NameOutcome,
-    StepCarried,
+    seal_type_identity, BrandCompose, DispatchOutcome, NameOutcome, StepCarried,
 };
 pub use execute::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};

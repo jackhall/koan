@@ -193,16 +193,11 @@ impl KError {
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs));
-        // A freshly-minted synthetic `Rc` every call — no external identity to preserve, but a
-        // `SetRef` never rebuilds at `'static` regardless, so it takes the checked path; its
-        // members are always owned (`synthetic_singleton` never embeds a region pointer), so the
-        // audit can never actually reject.
-        let type_id: &'a KType<'a> = region
-            .alloc_ktype_checked(KType::SetRef {
-                set: synthetic_singleton(name.clone(), KKind::NewType),
-                index: 0,
-            })
-            .expect("a freshly synthesized KError SetRef is always region-pure");
+        // A freshly-minted synthetic `Rc` every call — no external identity to preserve.
+        let type_id: &'a KType = region.alloc_ktype(KType::SetRef {
+            set: synthetic_singleton(name.clone(), KKind::NewType),
+            index: 0,
+        });
         let payload = KObject::Wrapped {
             inner: WrappedPayload::peel(&record),
             type_id,
@@ -221,7 +216,7 @@ impl KError {
 /// to-tagged payload `type_id` and union `set`). Its one member carries an empty schema —
 /// these carriers are read directly by the TRY branch walker, never dispatched on, so the
 /// schema is never consulted.
-fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
+fn synthetic_singleton(name: String, kind: KKind) -> Rc<RecursiveSet> {
     let schema = match kind {
         KKind::NewType => NominalSchema::NewType(Box::new(KType::Any)),
         _ => NominalSchema::TypeConstructor {
@@ -236,7 +231,7 @@ fn synthetic_singleton<'a>(name: String, kind: KKind) -> Rc<RecursiveSet<'a>> {
 /// its family from. Used as the `Error` arm of `CATCH`'s declared `:(Result Any KError)` return
 /// (a documentary contract — `KError` is not a registered prelude type, and the synthetic set
 /// is identity-throwaway, but `CATCH`'s return is never validated against the runtime value).
-pub(crate) fn kerror_ktype<'a>() -> KType<'a> {
+pub(crate) fn kerror_ktype() -> KType {
     KType::SetRef {
         set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
         index: 0,

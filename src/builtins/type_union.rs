@@ -14,7 +14,6 @@ use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
-use crate::machine::TypeOperand;
 use crate::machine::{arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
@@ -25,32 +24,21 @@ use super::{arg, kw, sig};
 const MEMBERS_SLOT: &str = "`|` members";
 
 /// The two-member keyworded form `A | B`: both operands ride resolved-type slots (the shared
-/// parameterized-type slot shape), so the body builds its composite `KType` at the fold brand
-/// from a total, embedding-ordered operand list — mirroring `parameterized_types::body_map`. Each
-/// member crosses via [`crate::machine::BodyCtx::type_operand`]: a
-/// carrier-bearing member folds its reach into the result's witness, a region-free member
-/// rebuilds at the brand with no reach contribution.
+/// parameterized-type slot shape), so the body reads each member as owned data and composes the
+/// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
+/// step's own region through the single type door.
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let left = crate::try_action!(require_ktype(ctx.args, "left"));
     let right = crate::try_action!(require_ktype(ctx.args, "right"));
-    let operands = vec![
-        crate::try_action!(ctx.type_operand("left", &left)),
-        crate::try_action!(ctx.type_operand("right", &right)),
-    ];
-    Action::Done(Ok(ctx
-        .ctx
-        .alloc_type_composed(operands, |_brand, parts| {
-            KType::union_of(vec![parts[0].clone(), parts[1].clone()])
-        })))
+    Action::Done(Ok(ctx.ctx.alloc_type(KType::union_of(vec![left, right]))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
 /// raw as a one-per-part `KExpression` (the `:KExpression` slot captures it unevaluated). Each
 /// member part is sub-dispatched on its own — a bare type leaf resolves against scope and parks on
 /// a forward reference, a `:(...)` member sub-dispatches to its `KType` — so every member-part kind
-/// rides the ordinary type-resolution machinery. `expect_type_terminal` yields a carrier for every
-/// member, so each crosses the fold as a [`TypeOperand::Reaching`] operand and the composite union
-/// builds at the brand through [`KType::union_of`].
+/// rides the ordinary type-resolution machinery. `expect_type_terminal` clones each resolved member
+/// out of its terminal as owned data, and the composite union builds through [`KType::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let members = match arg_object(ctx.args, "members") {
         Some(KObject::KExpression(e)) => e.clone(),
@@ -75,24 +63,19 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
         })
         .collect();
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let mut operands: Vec<TypeOperand> = Vec::with_capacity(count);
+        let mut members: Vec<KType> = Vec::with_capacity(count);
         for position in 0..count {
-            let (_kt, carrier) =
-                crate::try_action!(expect_type_terminal(&results, position, MEMBERS_SLOT));
-            operands.push(TypeOperand::Reaching(carrier));
+            let kt = crate::try_action!(expect_type_terminal(&results, position, MEMBERS_SLOT));
+            members.push(kt);
         }
-        Action::Done(Ok(fctx
-            .ctx
-            .alloc_type_composed(operands, |_brand, parts| {
-                KType::union_of(parts.iter().map(|part| (*part).clone()).collect())
-            })))
+        Action::Done(Ok(fctx.ctx.alloc_type(KType::union_of(members))))
     });
     Action::AwaitDeps { deps, finish }
 }
 
 /// `|` seeds its triple — the reduced `Unary` form `| [members...]`, the two-member keyworded form
 /// `A | B`, and its own single-member `Unary` operator group — through the shared unary-operator
-/// door in [`super::op_def`]. The bodies are native: a `KType` composed at the fold brand, not a
+/// door in [`super::op_def`]. The bodies are native: a `KType` composed from owned members, not a
 /// synthesized koan AST. A single-member group must never share a group with another operator.
 pub fn register<'a>(scope: &'a Scope<'a>) {
     super::op_def::register_unary_operator(

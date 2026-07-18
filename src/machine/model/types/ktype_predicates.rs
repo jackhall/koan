@@ -18,14 +18,13 @@ use crate::machine::DeliveredCarried;
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
 /// slot: the ctor nominal `(set, index)` matches via [`same_nominal`], the arities agree, and
 /// each arg matches pairwise (`Any` slot admits anything, else structural equality). Both ctors
-/// must be `SetRef`s. Cross-lifetime — the value's `'v` is independent of the slot's `'a`, so
-/// this drives both the same-lifetime [`KType::matches_value`] `Wrapped` arm and the
-/// heterogeneous [`KType::accepts_carried`] dispatch arm.
-fn constructor_apply_admits<'a, 'v>(
-    slot_ctor: &KType<'a>,
-    slot_args: &[KType<'a>],
-    value_ctor: &KType<'v>,
-    value_args: &[KType<'v>],
+/// must be `SetRef`s. Drives both [`KType::matches_value`]'s `Wrapped` arm and
+/// [`KType::accepts_carried`]'s dispatch arm.
+fn constructor_apply_admits(
+    slot_ctor: &KType,
+    slot_args: &[KType],
+    value_ctor: &KType,
+    value_args: &[KType],
 ) -> bool {
     let ctor_matches = matches!(
         (slot_ctor, value_ctor),
@@ -42,7 +41,7 @@ fn constructor_apply_admits<'a, 'v>(
             .all(|(value_arg, slot_arg)| matches!(slot_arg, KType::Any) || value_arg == slot_arg)
 }
 
-impl<'a> KType<'a> {
+impl KType {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
     /// per-call binding must be dual-written into the types-side scope. Only the
@@ -50,15 +49,11 @@ impl<'a> KType<'a> {
     /// `TypeConstructor`) classifies a type value but is not itself used as a binding-side
     /// slot, so it stays out (an `OfKind` is type-channel-only and never binds a runtime
     /// instance).
-    /// Whether this type is a **region-free scalar leaf** — a primitive (`Number`, `Str`, `Bool`,
-    /// `Null`, `Identifier`) that embeds neither a `&'a` region pointer (the `Module` / `Signature` /
-    /// `AbstractType` variants do) nor a nested `KType` box (`List` / `Dict` /
-    /// `Record` / `KFunction` might carry one transitively). Such a type references no dep the
-    /// construction fold was handed, so a seal that consults this predicate can route it to the
-    /// no-fold [`to_static`](Self::to_static) path and store it with an empty reach. Conservative by design: a
-    /// composite whose parameters happen to be region-free still keeps the fold rather than risk a
-    /// deep walk (its reach is exact regardless, so the residual is only lost precision, never a
-    /// dropped pin).
+    /// Whether this type is a **scalar leaf** — a primitive (`Number`, `Str`, `Bool`, `Null`,
+    /// `Identifier`) with no nested `KType` at all (`List` / `Dict` / `Record` / `KFunction`
+    /// carry one; `Module` / `Signature` / `AbstractType` carry owned schema content). Every
+    /// `KType` is owned data, so a scalar leaf and a composite differ only in whether a
+    /// construction needs to recurse into children, never in ownership.
     pub fn is_region_free_scalar(&self) -> bool {
         matches!(
             self,
@@ -73,7 +68,7 @@ impl<'a> KType<'a> {
     /// OfKind(Proper)`), and a sealed `SetRef` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
     /// inner slots. Returns `false` for equal types.
-    pub fn is_more_specific_than<'b>(&self, other: &KType<'b>, types: &TypeRegistry) -> bool {
+    pub fn is_more_specific_than(&self, other: &KType, types: &TypeRegistry) -> bool {
         if self.is_stored_digest_variant() && other.is_stored_digest_variant() {
             let (subject, candidate) = (self.digest(), other.digest());
             if let Some(verdict) = types.verdict(subject, candidate, Relation::MoreSpecific) {
@@ -108,7 +103,7 @@ impl<'a> KType<'a> {
         )
     }
 
-    fn more_specific_walk<'b>(&self, other: &KType<'b>, types: &TypeRegistry) -> bool {
+    fn more_specific_walk(&self, other: &KType, types: &TypeRegistry) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
@@ -269,7 +264,7 @@ impl<'a> KType<'a> {
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
     /// refinement. A `List<Any>` value (the join an empty or heterogeneous literal
     /// memoizes) does not satisfy `:(LIST OF Number)`.
-    pub fn satisfied_by<'v>(&self, carried: &KType<'v>, types: &TypeRegistry) -> bool {
+    pub fn satisfied_by(&self, carried: &KType, types: &TypeRegistry) -> bool {
         *self == *carried || carried.is_more_specific_than(self, types)
     }
 
@@ -278,7 +273,7 @@ impl<'a> KType<'a> {
     /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
     /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
     /// identity.
-    pub fn matches_held(&self, cell: &Held<'a>, types: &TypeRegistry) -> bool {
+    pub fn matches_held(&self, cell: &Held<'_>, types: &TypeRegistry) -> bool {
         match cell {
             Held::Object(o) => self.matches_value(o, types),
             Held::Type(t) => match self {
@@ -289,7 +284,7 @@ impl<'a> KType<'a> {
         }
     }
 
-    pub fn matches_value(&self, obj: &KObject<'a>, types: &TypeRegistry) -> bool {
+    pub fn matches_value(&self, obj: &KObject<'_>, types: &TypeRegistry) -> bool {
         match self {
             KType::Any => true,
             KType::List { element: elem, .. } => match obj {
@@ -413,7 +408,7 @@ impl<'a> KType<'a> {
     /// module surfaces on the Object channel, matched by [`matches_value`]. Other concrete slots
     /// compare against the `OfKind(Proper)` dispatch identity a non-signature type carrier reports,
     /// so they admit no bare type value.
-    pub fn matches_type(&self, t: &KType<'a>) -> bool {
+    pub fn matches_type(&self, t: &KType) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a signature carries its
         // identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
@@ -435,11 +430,10 @@ impl<'a> KType<'a> {
 
     /// Per-value admissibility for a resolved [`Carried`] argument — the classifier the spliced
     /// arms of [`accepts_part`] delegate to, and what a spliced cell opens against at its own brand.
-    /// The slot (`'a`) and the value (`'v`) carry independent lifetimes: every comparison is a
-    /// verdict-only structural check (`== self`, heterogeneous `satisfied_by`, `same_nominal`), none
-    /// of which relates the two lifetimes, so no re-anchoring is needed. "Dispatch trusts the
-    /// carried element type": a container's memoized carried `KType` is read via `satisfied_by`,
-    /// never by walking its contents.
+    /// The slot is owned data and the value (`'v`) is a region borrow, so every comparison is a
+    /// verdict-only structural check (`== self`, `satisfied_by`, `same_nominal`), none of which
+    /// needs the value's own lifetime. "Dispatch trusts the carried element type": a container's
+    /// memoized carried `KType` is read via `satisfied_by`, never by walking its contents.
     pub fn accepts_carried<'v>(&self, c: Carried<'v>, types: &TypeRegistry) -> bool {
         match self {
             KType::Any => true,
@@ -525,8 +519,7 @@ impl<'a> KType<'a> {
             // Two carriers satisfy a `ConstructorApply` slot: a first-class meta-type value with a
             // structurally-equal inner `KType`, and an identity-wrapper `Wrapped` object whose
             // `ktype()` is itself a `ConstructorApply` (a `NEWTYPE (Type AS Wrapper)`-constructed
-            // value) — admitted by the same ctor-nominal + per-arg rule the `matches_value` arm uses,
-            // taken cross-lifetime.
+            // value) — admitted by the same ctor-nominal + per-arg rule the `matches_value` arm uses.
             KType::ConstructorApply {
                 ctor: slot_ctor,
                 args: slot_args,
@@ -546,10 +539,11 @@ impl<'a> KType<'a> {
     }
 
     /// Classify a spliced **cell** against this slot without adopting it — opens the delivery
-    /// envelope at a fresh brand under its retained host pin and routes the opened value through the
-    /// lifetime-heterogeneous [`accepts_carried`](Self::accepts_carried) at that brand. No cast: the
-    /// slot's `'a` and the opened value's brand stay independent through a verdict-only walk. The
-    /// picker may reject the candidate, so this deliberately does not adopt.
+    /// envelope at a fresh brand under its retained host pin and routes the opened value through
+    /// [`accepts_carried`](Self::accepts_carried) at that brand. No cast: the slot is owned data,
+    /// so it carries no brand of its own for the opened value's brand to relate to — a
+    /// verdict-only walk needs no re-anchoring. The picker may reject the candidate, so this
+    /// deliberately does not adopt.
     pub(crate) fn accepts_cell(&self, cell: &DeliveredCarried, types: &TypeRegistry) -> bool {
         cell.open(|c| self.accepts_carried(c, types))
     }
@@ -561,8 +555,8 @@ impl<'a> KType<'a> {
     /// rather than failing the bind.
     pub fn accepts_part(&self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
         // A spliced cell opens at its own brand through `accepts_cell`, which routes the opened
-        // value through the lifetime-heterogeneous `accepts_carried` — no cast. Every remaining arm
-        // is a lifetime-agnostic shape check on the parser part, so no coercion of `part` is needed.
+        // value through `accepts_carried` — no cast. Every remaining arm is a shape check on the
+        // parser part, so no coercion of `part` is needed.
         if let ExpressionPart::Spliced { cell } = part {
             return self.accepts_cell(cell, types);
         }
@@ -628,12 +622,12 @@ impl<'a> KType<'a> {
 /// must fail, or the two are mutually-satisfying (structurally equal) and neither strictly refines.
 /// Both directions record a verdict under `SigSatisfies`, keyed by the two signature digests (which
 /// fold their pins, so the key is exact).
-fn sig_content_more_specific<'a, 'b>(
-    a: &SigContent<'a>,
-    pins_a: &[(String, KType<'a>)],
+fn sig_content_more_specific(
+    a: &SigContent,
+    pins_a: &[(String, KType)],
     digest_a: TypeDigest,
-    b: &SigContent<'b>,
-    pins_b: &[(String, KType<'b>)],
+    b: &SigContent,
+    pins_b: &[(String, KType)],
     digest_b: TypeDigest,
     types: &TypeRegistry,
 ) -> bool {
@@ -679,11 +673,11 @@ fn sig_content_more_specific<'a, 'b>(
 /// - covariant return: `ra == rb || ra ≺ rb`;
 /// - at least one strict edge (narrower width, a strictly-more-general param, or a
 ///   strictly-more-specific return).
-fn param_record_more_specific<'a, 'b>(
-    pa: &Record<KType<'a>>,
-    ra: &KType<'a>,
-    pb: &Record<KType<'b>>,
-    rb: &KType<'b>,
+fn param_record_more_specific(
+    pa: &Record<KType>,
+    ra: &KType,
+    pb: &Record<KType>,
+    rb: &KType,
     types: &TypeRegistry,
 ) -> bool {
     if !pa.keys().all(|k| pb.get(k).is_some()) {
@@ -717,11 +711,7 @@ fn param_record_more_specific<'a, 'b>(
 /// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
 /// call-by-name function parameters. Records and function params share the `Record`
 /// substrate but order opposite ways — do **not** unify the two helpers.
-fn record_value_more_specific<'a, 'b>(
-    a: &Record<KType<'a>>,
-    b: &Record<KType<'b>>,
-    types: &TypeRegistry,
-) -> bool {
+fn record_value_more_specific(a: &Record<KType>, b: &Record<KType>, types: &TypeRegistry) -> bool {
     if !b.keys().all(|k| a.get(k).is_some()) {
         return false;
     }
@@ -769,10 +759,10 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 ///   specific than the value's (`slot_pt == &a.ktype || slot_pt ≺ &a.ktype`). Extra
 ///   slot params the value doesn't declare are fine — under call-by-name they arrive
 ///   unbound (width drop), so there is no exhaustiveness check.
-pub(super) fn function_compat<'a, 'v>(
+pub(super) fn function_compat<'v>(
     sig: &ExpressionSignature<'v>,
-    params: &Record<KType<'a>>,
-    ret: &KType<'a>,
+    params: &Record<KType>,
+    ret: &KType,
     types: &TypeRegistry,
 ) -> bool {
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};

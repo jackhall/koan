@@ -39,29 +39,29 @@ use super::type_digest::{set_digest, TypeDigest};
 /// A member's schema, owned by value inside the set. Sibling references inside these
 /// `KType`s are [`KType::SetLocal`] indices into the enclosing [`RecursiveSet`].
 #[derive(Debug)]
-pub enum NominalSchema<'a> {
+pub enum NominalSchema {
     /// Fresh nominal over a transparent representation; `repr` is not part of identity.
-    NewType(Box<KType<'a>>),
+    NewType(Box<KType>),
     /// Higher-kinded constructor: erased-parameter variant schema plus parameter names.
     TypeConstructor {
-        schema: HashMap<String, KType<'a>>,
+        schema: HashMap<String, KType>,
         param_names: Vec<String>,
     },
 }
 
 /// One nominal type within a [`RecursiveSet`]. `kind` is known when the set is created;
 /// `schema` is filled at the member's own finalize (two-phase), so it rides a [`RefCell`].
-pub struct NominalMember<'a> {
+pub struct NominalMember {
     /// Diagnostics / rendering only — never identity.
     pub name: String,
     /// Origin scope, diagnostics only — never identity.
     pub scope_id: ScopeId,
     /// Always one of the three nominal families `Tagged` / `NewType` / `TypeConstructor`.
     pub kind: KKind,
-    schema: RefCell<Option<NominalSchema<'a>>>,
+    schema: RefCell<Option<NominalSchema>>,
 }
 
-impl<'a> NominalMember<'a> {
+impl NominalMember {
     /// A member whose schema is not yet filled — created before its declaration finalizes.
     pub fn pending(name: String, scope_id: ScopeId, kind: KKind) -> Self {
         Self {
@@ -76,7 +76,7 @@ impl<'a> NominalMember<'a> {
     /// [`RecursiveSet::fill_member`], which seals the set's digest once the last member
     /// fills. Idempotent on a re-fill with equal shape is the caller's concern; a double-fill
     /// is a sealing bug.
-    fn fill(&self, schema: NominalSchema<'a>) {
+    fn fill(&self, schema: NominalSchema) {
         *self.schema.borrow_mut() = Some(schema);
     }
 
@@ -86,7 +86,7 @@ impl<'a> NominalMember<'a> {
     }
 
     /// Borrow the filled schema for deep traversal. `None` until the member finalizes.
-    pub fn schema(&self) -> Ref<'_, Option<NominalSchema<'a>>> {
+    pub fn schema(&self) -> Ref<'_, Option<NominalSchema>> {
         self.schema.borrow()
     }
 }
@@ -94,8 +94,8 @@ impl<'a> NominalMember<'a> {
 /// A sealed strongly-connected component of nominal types — a singleton for a non-recursive
 /// or self-recursive type, or the whole group declared in a `RECURSIVE TYPES` block. Created
 /// with the membership fixed; members fill their schemas as they finalize.
-pub struct RecursiveSet<'a> {
-    members: Vec<NominalMember<'a>>,
+pub struct RecursiveSet {
+    members: Vec<NominalMember>,
     /// `name → index` for sealing a member's transient `RecursiveRef(name)` to
     /// `SetLocal(index)`.
     index_of: HashMap<String, usize>,
@@ -108,10 +108,10 @@ pub struct RecursiveSet<'a> {
     generative_nonce: Option<ScopeId>,
 }
 
-impl<'a> RecursiveSet<'a> {
+impl RecursiveSet {
     /// Seal a set over the given members (declaration order). The `index_of` map keys each
     /// member's name to its slot so schema sealing can resolve sibling references.
-    pub fn new(members: Vec<NominalMember<'a>>) -> Self {
+    pub fn new(members: Vec<NominalMember>) -> Self {
         let index_of = members
             .iter()
             .enumerate()
@@ -128,7 +128,7 @@ impl<'a> RecursiveSet<'a> {
     /// A generative set: opaque ascription's per-application mint. `nonce` (the minted
     /// module's `scope_id`) folds into the digest, so two `:|` applications of the same
     /// signature member over the same representation stay distinct types.
-    pub fn new_generative(members: Vec<NominalMember<'a>>, nonce: ScopeId) -> Self {
+    pub fn new_generative(members: Vec<NominalMember>, nonce: ScopeId) -> Self {
         let mut set = Self::new(members);
         set.generative_nonce = Some(nonce);
         set
@@ -148,18 +148,18 @@ impl<'a> RecursiveSet<'a> {
     /// Fill member `index`'s schema and, if that was the last unfilled member, seal the set's
     /// content digest. The single sealing seam — [`NominalMember::fill`] is private so no
     /// site can install a schema without reaching this digest computation.
-    pub fn fill_member(&self, index: usize, schema: NominalSchema<'a>) {
+    pub fn fill_member(&self, index: usize, schema: NominalSchema) {
         self.members[index].fill(schema);
         if self.digest.get().is_none() && self.members.iter().all(NominalMember::is_filled) {
             let _ = self.digest.set(set_digest(self));
         }
     }
 
-    pub fn member(&self, index: usize) -> &NominalMember<'a> {
+    pub fn member(&self, index: usize) -> &NominalMember {
         &self.members[index]
     }
 
-    pub fn members(&self) -> &[NominalMember<'a>] {
+    pub fn members(&self) -> &[NominalMember] {
         &self.members
     }
 
@@ -178,7 +178,7 @@ impl<'a> RecursiveSet<'a> {
     }
 
     /// A singleton set whose one member carries `schema`. The common non-recursive case.
-    pub fn singleton(name: String, scope_id: ScopeId, schema: NominalSchema<'a>) -> Rc<Self> {
+    pub fn singleton(name: String, scope_id: ScopeId, schema: NominalSchema) -> Rc<Self> {
         let member = NominalMember::pending(name, scope_id, schema.kind());
         let set = RecursiveSet::new(vec![member]);
         set.fill_member(0, schema);
@@ -198,16 +198,14 @@ impl<'a> RecursiveSet<'a> {
 /// escapes its declaring elaboration, so this can only fire on a mid-declaration
 /// self-comparison, which the pointer path has already settled. There is no structural
 /// fallback — the digest is the truth.
-pub(crate) fn same_nominal<'a, 'b>(
-    s1: &Rc<RecursiveSet<'a>>,
+pub(crate) fn same_nominal(
+    s1: &Rc<RecursiveSet>,
     i1: usize,
-    s2: &Rc<RecursiveSet<'b>>,
+    s2: &Rc<RecursiveSet>,
     i2: usize,
 ) -> bool {
-    // Address compare (not `Rc::ptr_eq`, which requires both sides at one lifetime): the shared-set
-    // fast path when a set was lifted by `Rc::clone`. Different lifetimes are fine — a data-pointer
-    // match means the same allocation regardless of how each side's `'_` was inferred.
-    if Rc::as_ptr(s1) as *const () == Rc::as_ptr(s2) as *const () {
+    // The shared-set fast path when a set was lifted by `Rc::clone`.
+    if Rc::ptr_eq(s1, s2) {
         return i1 == i2;
     }
     match (s1.digest(), s2.digest()) {
@@ -229,11 +227,11 @@ pub(crate) fn same_nominal<'a, 'b>(
 /// A `RecursiveRef` naming no member is a sealing bug; its name is pushed into `missing` so
 /// the caller can surface a shape error. References to *other* sets pass through unchanged.
 /// Uses interior mutability so the `Fn`-bound [`Record::map`] sub-walks can record misses.
-pub fn seal_recursive_refs<'a>(
-    set: &Rc<RecursiveSet<'a>>,
-    kt: &KType<'a>,
+pub fn seal_recursive_refs(
+    set: &Rc<RecursiveSet>,
+    kt: &KType,
     missing: &RefCell<Vec<String>>,
-) -> KType<'a> {
+) -> KType {
     seal_refs_inner(set, None, kt, missing)
 }
 
@@ -242,26 +240,26 @@ pub fn seal_recursive_refs<'a>(
 /// `binder.1`. A `UNION` uses this so a variant payload referencing the union's own name
 /// (`Node :Tree` in `UNION Tree = (Leaf … Node :Tree)`) seals to the union of the set's
 /// variant members (ruling F2), while variant-sibling references keep the `index_of` mapping.
-pub fn seal_union_refs<'a>(
-    set: &Rc<RecursiveSet<'a>>,
+pub fn seal_union_refs(
+    set: &Rc<RecursiveSet>,
     binder_name: &str,
-    binder_union: &KType<'a>,
-    kt: &KType<'a>,
+    binder_union: &KType,
+    kt: &KType,
     missing: &RefCell<Vec<String>>,
-) -> KType<'a> {
+) -> KType {
     seal_refs_inner(set, Some((binder_name, binder_union)), kt, missing)
 }
 
 /// Deep-seal core shared by [`seal_recursive_refs`] and [`seal_union_refs`]. `binder`, when
 /// present, maps the declaring name to a replacement `KType` before the `index_of` lookup —
 /// the name→`KType` widening ruling F2 needs.
-fn seal_refs_inner<'a>(
-    set: &Rc<RecursiveSet<'a>>,
-    binder: Option<(&str, &KType<'a>)>,
-    kt: &KType<'a>,
+fn seal_refs_inner(
+    set: &Rc<RecursiveSet>,
+    binder: Option<(&str, &KType)>,
+    kt: &KType,
     missing: &RefCell<Vec<String>>,
-) -> KType<'a> {
-    let recurse = |inner: &KType<'a>| seal_refs_inner(set, binder, inner, missing);
+) -> KType {
+    let recurse = |inner: &KType| seal_refs_inner(set, binder, inner, missing);
     match kt {
         KType::RecursiveRef(name) => {
             if let Some((binder_name, binder_union)) = binder {
@@ -309,7 +307,7 @@ fn seal_refs_inner<'a>(
 /// construction / matching, where a sibling reference must become a real handle. Other
 /// leaves pass through unchanged; nested `SetRef`s (references to *other* sets) are left
 /// alone — only the ambient set's own `SetLocal`s are bound.
-pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KType<'a> {
+pub fn resolve_set_locals(set: &Rc<RecursiveSet>, kt: &KType) -> KType {
     match kt {
         KType::SetLocal(i) => KType::SetRef {
             set: Rc::clone(set),
@@ -340,7 +338,7 @@ pub fn resolve_set_locals<'a>(set: &Rc<RecursiveSet<'a>>, kt: &KType<'a>) -> KTy
     }
 }
 
-impl<'a> NominalSchema<'a> {
+impl NominalSchema {
     pub fn kind(&self) -> KKind {
         match self {
             NominalSchema::NewType(_) => KKind::NewType,
@@ -352,19 +350,19 @@ impl<'a> NominalSchema<'a> {
 /// Projected, navigable schema of one set member: its `SetLocal` sibling references are
 /// resolved to external [`KType::SetRef`] handles, so each field/variant type matches and
 /// navigates directly. Produced by [`RecursiveSet::projected_schema`].
-pub enum ProjectedSchema<'a> {
-    NewType(KType<'a>),
+pub enum ProjectedSchema {
+    NewType(KType),
     TypeConstructor {
-        schema: HashMap<String, KType<'a>>,
+        schema: HashMap<String, KType>,
         param_names: Vec<String>,
     },
 }
 
-impl<'a> RecursiveSet<'a> {
+impl RecursiveSet {
     /// Project member `index`'s filled schema with sibling `SetLocal`s resolved to external
     /// `SetRef`s into `set`. Panics if the member's schema is not yet filled — every
     /// construction / navigation site runs after the member finalized.
-    pub fn projected_schema(set: &Rc<Self>, index: usize) -> ProjectedSchema<'a> {
+    pub fn projected_schema(set: &Rc<Self>, index: usize) -> ProjectedSchema {
         let member = set.member(index);
         let borrow = member.schema();
         let schema = borrow

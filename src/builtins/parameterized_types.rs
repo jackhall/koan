@@ -9,16 +9,15 @@
 //! narrow candidate buckets so user-defined overloads of short connector words
 //! like `OF` don't pay a bucket-walk cost on every dispatched parameterized type.
 
-use crate::machine::model::Carried;
 use crate::machine::model::KKind;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
 use crate::machine::model::{KType, Record};
-use crate::machine::{DeliveredCarried, KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::{defer_field_list_action_composed, fold_field_list_sync, BrandCompose};
+use crate::machine::{defer_field_list_action_composed, BrandCompose};
 
 /// Diagnostic context string for the shared field-list parser when it walks an `:(FN …)`
 /// parameter list.
@@ -30,13 +29,13 @@ const FN_PARAM_NAME_KIND: FieldNameKind = FieldNameKind::IdentifierOrType;
 
 /// Fold the elaborated `(name, type)` pairs into the parameter record and wrap the
 /// `KFunction` identity. Shared by the synchronous and dep-finish paths.
-fn finalize_carrier<'a>(fields: Vec<(String, KType<'a>)>, ret: KType<'a>) -> KType<'a> {
+fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType) -> KType {
     KType::function_type(Record::from_pairs(fields), Box::new(ret))
 }
 
-/// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS fold resolved type args
-/// directly (`Done`); FN routes the parameter list through [`build_carrier`], which
-/// either folds synchronously or defers via [`defer_field_list_action`].
+/// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS compose from resolved type
+/// args directly (`Done`); FN routes the parameter list through [`build_carrier`], which either
+/// resolves synchronously or defers via `defer_field_list_action_composed`.
 mod action_bodies {
     use super::build_carrier;
     use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
@@ -45,35 +44,20 @@ mod action_bodies {
     use crate::machine::model::KType;
     use crate::machine::{KError, KErrorKind};
 
-    /// LIST / MAP / AS build their composite `KType` at the fold brand from a total,
-    /// embedding-ordered operand list: one operand per embedded arg (`elem` / `k` / `v` /
-    /// `applied` / `ctor`), each produced by [`BodyCtx::type_operand`]. An arg that resolved to
-    /// a carrier-bearing value crosses the fold as that carrier's view, folding its reach into
-    /// the result's witness; a region-free arg (a scalar-literal type token) rebuilds at the
-    /// brand with no reach contribution. The `compose` function receives one `&KType` per
-    /// operand, positionally, and assembles the composite type from those parts alone.
+    /// LIST / MAP / AS read each embedded arg (`elem` / `k` / `v` / `applied` / `ctor`) as an
+    /// owned `KType` and assemble the composite from those values, then allocate it into the
+    /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        let operands = vec![crate::try_action!(ctx.type_operand("elem", &elem))];
-        Action::Done(Ok(ctx
-            .ctx
-            .alloc_type_composed(operands, |_brand, parts| {
-                KType::list(Box::new(parts[0].clone()))
-            })))
+        Action::Done(Ok(ctx.ctx.alloc_type(KType::list(Box::new(elem)))))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        let operands = vec![
-            crate::try_action!(ctx.type_operand("k", &k)),
-            crate::try_action!(ctx.type_operand("v", &v)),
-        ];
         Action::Done(Ok(ctx
             .ctx
-            .alloc_type_composed(operands, |_brand, parts| {
-                KType::dict(Box::new(parts[0].clone()), Box::new(parts[1].clone()))
-            })))
+            .alloc_type(KType::dict(Box::new(k), Box::new(v)))))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -102,16 +86,9 @@ mod action_bodies {
                 ctor.name(),
             )))));
         }
-        let operands = vec![
-            crate::try_action!(ctx.type_operand("applied", &applied)),
-            crate::try_action!(ctx.type_operand("ctor", &ctor)),
-        ];
-        Action::Done(Ok(ctx.ctx.alloc_type_composed(
-            operands,
-            |_brand, parts| {
-                KType::constructor_apply(Box::new(parts[1].clone()), vec![parts[0].clone()])
-            },
-        )))
+        Action::Done(Ok(ctx
+            .ctx
+            .alloc_type(KType::constructor_apply(Box::new(ctor), vec![applied]))))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -119,52 +96,17 @@ mod action_bodies {
     }
 }
 
-/// The return-type operand crossing shared by [`build_carrier`]'s sync and deferred arms: the ret
-/// crosses the fold as a carrier view when it has one, rebuilds at the brand from its `'static`
-/// value when region-free, and errors loudly when it reaches a region carrier-less. The composed
-/// carrier folds its params and the crossed return type into a `KFunction` at the brand.
-fn ret_extras_and_compose<'a>(
-    ctx: &crate::machine::BodyCtx<'a, '_>,
-    ret_slot: &str,
-    ret: KType<'a>,
-) -> Result<(Vec<DeliveredCarried>, BrandCompose<'a>), KError> {
-    // A ret that arrived as a resolved value carries a reach carrier (duplicated so the producer
-    // keeps its terminal); a region-free token like `Bool` has none and rebuilds from its `'static`
-    // value at the brand. A ret that reaches a region but arrived carrier-less cannot be crossed as
-    // an operand, so it errors loudly.
-    let ret_carrier: Option<DeliveredCarried> = ctx.arg_carrier(ret_slot).map(|d| d.duplicate());
-    let ret_static: Option<KType<'static>> = ret.to_static();
-    if ret_carrier.is_none() && ret_static.is_none() {
-        return Err(KError::new(KErrorKind::ShapeError(
-            "FN return type reaches a region but arrived without a carrier".into(),
-        )));
-    }
-    let extras: Vec<DeliveredCarried> = ret_carrier.into_iter().collect();
-    let compose: BrandCompose<'a> = Box::new(move |brand, fields, extra_views| {
-        let ret = match extra_views.first().copied() {
-            // The ret crossed as a dep view: its type is already at the brand, and its reach/host
-            // fold into the result's witness.
-            Some(Carried::Type(kt)) => kt.clone(),
-            Some(other @ Carried::Object(_)) => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FN return slot resolved to non-type value `{}`",
-                    other.summarize(),
-                ))))
-            }
-            // Region-free ret with no carrier (a builtin type token like `Bool`): rebuild it at the
-            // brand through the region's own `'static` alloc door and clone it back out at the fold
-            // lifetime.
-            None => brand.alloc_ktype(ret_static.expect("gated above")).clone(),
-        };
-        Ok(finalize_carrier(fields, ret))
-    });
-    Ok((extras, compose))
+/// The composer [`build_carrier`]'s deferred arm hands to the field-list deferral. The return type
+/// is owned data, so it rides the closure directly and pairs with the re-walked parameter list to
+/// finish the `KFunction`.
+fn ret_compose<'a>(ret: KType) -> BrandCompose<'a> {
+    Box::new(move |fields| Ok(finalize_carrier(fields, ret)))
 }
 
 /// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
 /// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
-/// param names like `Ty` are accepted. Folds synchronously or defers via
-/// [`defer_field_list_action`] (no self-reference binder, no pending guard).
+/// param names like `Ty` are accepted. Resolves synchronously or defers via
+/// [`defer_field_list_action_composed`] (no self-reference binder, no pending guard).
 fn build_carrier<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     sig_slot: &str,
@@ -182,52 +124,24 @@ fn build_carrier<'a>(
         None,
     ) {
         FieldListOutcome::Done(fields) => {
-            let kt = finalize_carrier(fields, ret.clone());
-            match kt.to_static() {
-                // Region-free carrier: the compile-enforced `'static` tier.
-                Some(owned) => Action::Done(Ok(ctx.ctx.alloc_type(owned))),
-                // A param or return type that cannot rebuild at `'static`: discard the ambient walk
-                // and re-fold at the brand, where the scope reads are declared operands and the
-                // return type crosses as an extras operand.
-                None => {
-                    let (extras, compose) =
-                        crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret));
-                    let extra_refs: Vec<&DeliveredCarried> = extras.iter().collect();
-                    Action::Done(fold_field_list_sync(
-                        &ctx.ctx,
-                        ctx.scope,
-                        sig_expr,
-                        FN_PARAMS_CONTEXT,
-                        FN_PARAM_NAME_KIND,
-                        Vec::new(),
-                        None,
-                        None,
-                        &extra_refs,
-                        compose,
-                    ))
-                }
-            }
+            Action::Done(Ok(ctx.ctx.alloc_type(finalize_carrier(fields, ret))))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => {
-            let (extras, compose) = crate::try_action!(ret_extras_and_compose(ctx, ret_slot, ret));
-            defer_field_list_action_composed(
-                sig_expr,
-                park_producers,
-                sub_dispatches,
-                FN_PARAMS_CONTEXT,
-                FN_PARAM_NAME_KIND,
-                Vec::new(),
-                None,
-                None,
-                None,
-                extras,
-                compose,
-            )
-        }
+        } => defer_field_list_action_composed(
+            sig_expr,
+            park_producers,
+            sub_dispatches,
+            FN_PARAMS_CONTEXT,
+            FN_PARAM_NAME_KIND,
+            Vec::new(),
+            None,
+            None,
+            None,
+            ret_compose(ret),
+        ),
     }
 }
 
@@ -471,8 +385,8 @@ mod tests {
     }
 
     /// A deferred record field whose sigil sub-Dispatch resolves to a non-type value (`:(1)` → the
-    /// number `1`) surfaces the walker's shape error through `fold_fields_at_brand`'s side-channel:
-    /// the fold closure stores a placeholder type and re-raises the stashed error after the alloc.
+    /// number `1`) surfaces the walker's shape error directly: `compose_field_list` propagates the
+    /// rewalk's `Err` before any allocation runs.
     #[test]
     fn record_field_sub_dispatch_to_non_type_value_errors() {
         let region = run_root_storage();
@@ -487,7 +401,7 @@ mod tests {
     /// `t.name()` round-trips: rendering `expected` and re-running its surface form yields
     /// a type carrier equal to `expected`. The expected value is built at each call site so
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
-    fn assert_round_trips<'a>(scope: &'a Scope<'a>, expected: KType<'a>) {
+    fn assert_round_trips<'a>(scope: &'a Scope<'a>, expected: KType) {
         let rendered = expected.name();
         let result = run_one_type(scope, parse_one(&rendered));
         assert_eq!(
@@ -592,10 +506,9 @@ mod tests {
         }
     }
 
-    /// A sync record type whose field names a `NEWTYPE` alias (`:Wrapped`, a `SetRef` that never
-    /// rebuilds at `'static`) resolves in one ambient walk — no sigil field forces deferral — so its
-    /// `KType::Record` composes through the sync `to_static`-declines path: the ambient pairs are
-    /// discarded and the record is re-folded at the brand, where the reaching field survives.
+    /// A sync record type whose field names a `NEWTYPE` alias (`:Wrapped`, a `SetRef`) resolves in
+    /// one ambient walk — no sigil field forces deferral — so its `KType::Record` composes directly
+    /// from the elaborated pairs, where the `SetRef` field survives as owned data.
     #[test]
     fn record_sync_reaching_field_folds_at_brand() {
         let region = run_root_storage();
@@ -615,9 +528,9 @@ mod tests {
         }
     }
 
-    /// A sync FN whose parameter type reaches a region (`x :Wrapped`, a `NEWTYPE` `SetRef`) resolves
-    /// in one ambient walk, so its `KType::KFunction` composes through the sync brand re-fold: the
-    /// reaching param survives and the region-free `Bool` return type rebuilds at the brand.
+    /// A sync FN whose parameter type names a `NEWTYPE` alias (`x :Wrapped`, a `SetRef`) resolves
+    /// in one ambient walk, so its `KType::KFunction` composes directly from the elaborated pairs:
+    /// the `SetRef` param survives as owned data alongside the plain `Bool` return type.
     #[test]
     fn fn_sync_reaching_param_folds_at_brand() {
         let region = run_root_storage();
@@ -629,7 +542,7 @@ mod tests {
                 assert_eq!(
                     params.get("x").map(|kt| kt.name()),
                     Some("Wrapped".to_string()),
-                    "the reaching param must survive the sync brand re-fold",
+                    "the SetRef param must survive the sync compose",
                 );
                 assert_eq!(
                     **ret,
@@ -641,9 +554,9 @@ mod tests {
         }
     }
 
-    /// A sync FN whose return type reaches a region (`-> Wrapped`) resolves in one ambient walk, so
-    /// its `KType::KFunction` composes through the sync brand re-fold: the reaching return type
-    /// crosses as an extras operand (its carrier view) and survives.
+    /// A sync FN whose return type names a `NEWTYPE` alias (`-> Wrapped`) resolves in one ambient
+    /// walk, so its `KType::KFunction` composes directly from the elaborated pairs: the `ret`
+    /// argument the caller closed over crosses into the composed carrier as owned data.
     #[test]
     fn fn_sync_reaching_ret_folds_at_brand() {
         let region = run_root_storage();
@@ -660,7 +573,7 @@ mod tests {
                 assert_eq!(
                     ret.name(),
                     "Wrapped",
-                    "the reaching return type must survive the extras-operand crossing",
+                    "the SetRef return type must survive the carrier-view crossing",
                 );
             }
             other => panic!("expected a KFunction, got {other:?}"),

@@ -6,11 +6,7 @@ use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 /// A singleton newtype-set `Rc` named `name` over `repr`.
-fn newtype_singleton<'a>(
-    name: &str,
-    scope_id: ScopeId,
-    repr: KType<'a>,
-) -> std::rc::Rc<RecursiveSet<'a>> {
+fn newtype_singleton(name: &str, scope_id: ScopeId, repr: KType) -> std::rc::Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
         scope_id,

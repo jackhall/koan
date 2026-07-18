@@ -40,12 +40,12 @@ mod val_decl;
 pub(crate) mod test_support;
 
 /// Signature-element constructor for a keyword slot.
-pub(crate) fn kw<'a>(s: &str) -> SignatureElement<'a> {
+pub(crate) fn kw(s: &str) -> SignatureElement {
     SignatureElement::Keyword(s.into())
 }
 
 /// Signature-element constructor for an argument slot.
-pub(crate) fn arg<'a>(name: &str, ktype: KType<'a>) -> SignatureElement<'a> {
+pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement {
     SignatureElement::Argument(Argument {
         name: name.into(),
         ktype,
@@ -55,8 +55,8 @@ pub(crate) fn arg<'a>(name: &str, ktype: KType<'a>) -> SignatureElement<'a> {
 /// Assemble an `ExpressionSignature` with `Resolved(return_type)`. Builtins needing
 /// `Deferred(...)` build the `ExpressionSignature` directly.
 pub(crate) fn sig<'a>(
-    return_type: KType<'a>,
-    elements: Vec<SignatureElement<'a>>,
+    return_type: KType,
+    elements: Vec<SignatureElement>,
 ) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(return_type),

@@ -13,7 +13,7 @@ use crate::machine::{KErrorKind, Scope};
 fn struct_set_and_fields<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-) -> (std::rc::Rc<RecursiveSet<'a>>, Vec<(String, KType<'a>)>) {
+) -> (std::rc::Rc<RecursiveSet>, Vec<(String, KType)>) {
     match scope.resolve_type(name) {
         Some(KType::SetRef { set, index }) => {
             let member = set.member(*index);

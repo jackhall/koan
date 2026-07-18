@@ -51,7 +51,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
             {
-                Ok(kt_ref) => Action::Done(fctx.ctx.alloc_type_checked(kt_ref.clone())),
+                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<signature>",
                     format!("SIG {} body", name_for_finish),

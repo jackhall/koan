@@ -1,7 +1,7 @@
 use super::*;
 use crate::source::Spanned;
 
-fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
+fn one_slot<'a>(kt: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Argument(Argument {

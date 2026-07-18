@@ -29,7 +29,7 @@ pub(crate) fn resolve_arm_contract<'a>(
     let ret_kt = match arg_type(ctx.args, "return_type") {
         Some(KType::Unresolved(te)) => {
             match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
-                TypeResolution::Done(resolved) => resolved.kt.clone(),
+                TypeResolution::Done(kt) => kt.clone(),
                 // The builtin fallback is already tried inside `resolve_type_identifier`; a
                 // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
                 _ => {
@@ -48,13 +48,7 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        // A region-free return type takes the compile-enforced `'static` tier; one embedding a
-        // scope borrow (a `Signature`) or an `Rc`-shared set (a `SetRef`) cannot rebuild at
-        // `'static` and takes the runtime-checked seal.
-        ret: match ret_kt.to_static() {
-            Some(owned) => ctx.scope.brand().alloc_ktype(owned),
-            None => ctx.scope.brand().alloc_ktype_checked(ret_kt)?,
-        },
+        ret: ctx.scope.brand().alloc_ktype(ret_kt),
         kind,
         scope: ctx.scope,
     })
@@ -221,13 +215,13 @@ pub(crate) struct SelectedArm<'a> {
 }
 
 /// How a `MATCH` scrutinee resolves its type-name arm heads.
-enum HeadMode<'a> {
+enum HeadMode {
     /// A union-variant value (`KObject::Wrapped` over a member `SetRef`): a head naming one of
     /// the scrutinee's own set members resolves to that member `SetRef`, which admits only a
     /// `Wrapped` of that exact identity — the value is a specific variant, so only its own member
     /// name matches — and `it` binds the wrapped payload (`inner`, F3). A head that is not a member
     /// name falls back to scope resolution.
-    WrappedMember { set: Rc<RecursiveSet<'a>> },
+    WrappedMember { set: Rc<RecursiveSet> },
     /// A `TypeConstructor` value (`Result`): a head admits by tag-name equality against the
     /// value's own tag, and `it` binds the wrapped payload (F3).
     TaggedByTag { value_tag: String },
@@ -243,9 +237,9 @@ fn resolve_head_type<'a>(
     scope: &Scope<'a>,
     token: &TypeIdentifier,
     chain: Option<Rc<LexicalFrame>>,
-) -> Result<KType<'a>, String> {
+) -> Result<KType, String> {
     match scope.resolve_type_identifier(token, chain) {
-        TypeResolution::Done(hit) => Ok(hit.kt.clone()),
+        TypeResolution::Done(kt) => Ok(kt.clone()),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
             token.render()
@@ -310,7 +304,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // `matches_value` and ranks admitted arms by `most_specific`.
     struct TypedArm<'a> {
         head_label: String,
-        ktype: KType<'a>,
+        ktype: KType,
         body: KExpression<'a>,
         binds_payload: bool,
     }

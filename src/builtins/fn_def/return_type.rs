@@ -2,7 +2,7 @@
 //! dep-finish boundary → resolution at finish time.
 
 use crate::builtins::resolve_or_await::{
-    classify_type_hit, expect_type_terminal, resolve_at_wake, unbound_error,
+    classify_resolved_type, expect_type_terminal, resolve_at_wake, unbound_error,
 };
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
@@ -19,7 +19,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// `ExprCarrier` is captured raw rather than sub-dispatched in the outer scope because a
 /// `:(…)` / dotted return's inner expression may reference a parameter unbound there.
 pub(crate) enum ReturnTypeRaw<'a> {
-    Resolved(KType<'a>),
+    Resolved(KType),
     TypeExprCarrier(TypeIdentifier),
     ExprCarrier(KExpression<'a>),
 }
@@ -28,7 +28,7 @@ pub(crate) enum ReturnTypeRaw<'a> {
 /// `Unbound` because the referenced parameter is not in the FN's lexical scope.
 /// Per-call elaboration runs at the dispatch boundary instead.
 pub(crate) enum ReturnTypeState<'a> {
-    Done(KType<'a>),
+    Done(KType),
     Pending {
         te: TypeIdentifier,
         producers: Vec<NodeId>,
@@ -42,7 +42,7 @@ pub(crate) enum ReturnTypeState<'a> {
 }
 
 pub(crate) enum ReturnTypeCapture<'a> {
-    Resolved(KType<'a>),
+    Resolved(KType),
     Unresolved(String),
     Deferred(DeferredReturn<'a>),
     /// `owned_pos` is the return-type sub's index within the dep-finish's owned results — it is
@@ -101,7 +101,7 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match classify_type_hit(scope.resolve_type_identifier(&te, chain)) {
+            match classify_resolved_type(scope.resolve_type_identifier(&te, chain)) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
@@ -136,21 +136,16 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeIdentifier::leaf(name);
             resolve_at_wake(scope, "FN return-type slot", |s| {
-                classify_type_hit(s.resolve_type_identifier(&te, None))
+                classify_resolved_type(s.resolve_type_identifier(&te, None))
             })
             .map(ReturnType::Resolved)
         }
         ReturnTypeCapture::Deferred(d) => Ok(ReturnType::Deferred(d)),
         ReturnTypeCapture::ReturnTypeExpr { owned_pos } => {
-            let (kt, carrier) = expect_type_terminal(&results, owned_pos, "FN return-type slot")?;
-            // The resolved return type can embed a borrow into the sub-dispatch's producer region (a
-            // declared `Signature`, a nominal `SetRef`, ...); it is folded straight into the `KFunction`
-            // `finalize_fn_with_kind` builds (via `user_sig`), whose own terminal carrier seals with an
-            // empty foreign reach — sound only because the captured scope's reach-set transitively pins
-            // everything its bindings reach. The parameter-type slots already fold this way via
-            // `adopt_sealed` at signature elaboration; this fold gives the return-type slot the same
-            // property before `finalize_fn_with_kind` runs.
-            let _ = scope.host_reach_of(carrier);
+            // The resolved return type is owned content, cloned out of the sub-dispatch's terminal,
+            // and is folded straight into the `KFunction` `finalize_fn_with_kind` builds (via
+            // `user_sig`).
+            let kt = expect_type_terminal(&results, owned_pos, "FN return-type slot")?;
             Ok(ReturnType::Resolved(kt))
         }
     }

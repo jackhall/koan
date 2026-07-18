@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use std::rc::Rc;
 
-use crate::machine::model::{Carried, Held, KObject, KType};
+use crate::machine::model::{Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
@@ -61,9 +61,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // Validation only: every pin must name a known slot and hold a type. A pin equal to a
     // manifest member's fixed type is normalized away (added to `dropped`, never recorded), so
     // `S WITH {Tag = Number}` keeps `S`'s signature identity; an unequal manifest pin is a type
-    // error. The composed `Signature` is built inside the fold closure from the crossed views,
-    // never from an ambient `pinned` vec — the compiler rejects smuggling an `'a` `KType` into
-    // the fresh brand — so `dropped` (a `String`-only set) is threaded in for the fold to skip.
+    // error. `dropped` names the pins the composed `Signature` skips.
     let mut dropped: HashSet<String> = HashSet::new();
     for (name, value) in fields.iter() {
         let is_abstract = abstract_slots.contains(name);
@@ -98,80 +96,19 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         }
     }
 
-    // A `Signature` type always borrows its decl scope's region (`to_static` declines it), so the
-    // sig operand must cross as a carrier.
-    let sig_carrier = match ctx.arg_carrier("sig") {
-        Some(carrier) => carrier.duplicate(),
-        None => {
-            return done_err(KError::new(KErrorKind::ShapeError(
-                "WITH signature operand reaches a region but arrived without a carrier".to_string(),
-            )))
-        }
-    };
-    match ctx.arg_carrier("bindings") {
-        // Both operands cross the build brand as dep views: the sig arm supplies the signature
-        // pointer, the pins are cloned out of the record view at the brand, and both carriers'
-        // reach unions into the result's witness.
-        Some(bindings) => {
-            let bindings_carrier = bindings.duplicate();
-            let sealed = ctx.ctx.alloc_carried_with(
-                &[&sig_carrier, &bindings_carrier],
-                move |brand, views| {
-                    let sig = match views[0] {
-                        Carried::Type(KType::Signature { content, .. }) => Rc::clone(content),
-                        _ => unreachable!("validated above: the sig arg is a Signature type"),
-                    };
-                    let pinned: Vec<(String, KType)> = match views[1] {
-                        Carried::Object(KObject::Record(record, _)) => record
-                            .iter()
-                            .filter(|(name, _)| !dropped.contains(name.as_str()))
-                            .map(|(name, value)| match value {
-                                Held::Type(kt) => (name.clone(), kt.clone()),
-                                Held::Object(_) => {
-                                    unreachable!("validated above: every pin value is a type")
-                                }
-                            })
-                            .collect(),
-                        _ => unreachable!("validated above: bindings is a record"),
-                    };
-                    Carried::Type(brand.alloc_ktype_folded(KType::signature(sig, pinned)))
-                },
-            );
-            Action::Done(Ok(sealed))
-        }
-        // Carrier-less bindings: every pin must be region-free; rebuild the pin list at the brand
-        // from its `'static` plan. A pin type that reaches a region without a carrier errors loudly.
-        None => {
-            let plan: Option<Vec<(String, KType<'static>)>> = fields
-                .iter()
-                .filter(|(name, _)| !dropped.contains(name.as_str()))
-                .map(|(name, value)| match value {
-                    Held::Type(kt) => kt.to_static().map(|owned| (name.clone(), owned)),
-                    Held::Object(_) => unreachable!("validated above: every pin value is a type"),
-                })
-                .collect();
-            match plan {
-                Some(plan) => {
-                    let sealed = ctx.ctx.alloc_carried_with(&[&sig_carrier], move |brand, views| {
-                        let sig = match views[0] {
-                            Carried::Type(KType::Signature { content, .. }) => Rc::clone(content),
-                            _ => unreachable!("validated above: the sig arg is a Signature type"),
-                        };
-                        let pinned: Vec<(String, KType)> = plan
-                            .into_iter()
-                            .map(|(name, kt)| (name, brand.alloc_ktype(kt).clone()))
-                            .collect();
-                        Carried::Type(brand.alloc_ktype_folded(KType::signature(sig, pinned)))
-                    });
-                    Action::Done(Ok(sealed))
-                }
-                None => done_err(KError::new(KErrorKind::ShapeError(
-                    "WITH pin type reaches a region but the bindings record arrived without a carrier"
-                        .to_string(),
-                ))),
-            }
-        }
-    }
+    // The pins and the signature content are owned data, so the specialized `Signature` composes
+    // directly and allocates into this step's own region through the single type door.
+    let pinned: Vec<(String, KType)> = fields
+        .iter()
+        .filter(|(name, _)| !dropped.contains(name.as_str()))
+        .map(|(name, value)| match value {
+            Held::Type(kt) => (name.clone(), kt.clone()),
+            Held::Object(_) => unreachable!("validated above: every pin value is a type"),
+        })
+        .collect();
+    Action::Done(Ok(ctx
+        .ctx
+        .alloc_type(KType::signature(Rc::clone(s), pinned))))
 }
 
 #[cfg(test)]

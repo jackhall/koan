@@ -115,9 +115,9 @@ fn binary_union_with_reaching_member_correlates() {
     }
 }
 
-/// The reduced n-ary form `:(Wrapped | Number | Str)` folds all three members — each crossing as
-/// a `TypeOperand::Reaching` operand, since `expect_type_terminal` yields a carrier for every
-/// sub-dispatched member — into a flat three-member union.
+/// The reduced n-ary form `:(Wrapped | Number | Str)` composes all three members — each cloned
+/// out of its own carrier, since `expect_type_terminal` yields a carrier for every sub-dispatched
+/// member — into a flat three-member union.
 #[test]
 fn nary_union_with_reaching_member_correlates() {
     let region = run_root_storage();

@@ -111,7 +111,7 @@ impl TypeRegistry {
 /// `AbstractType`), and a `SetRef`/`RecursiveGroup` over a *sealed* set — carry content digests.
 /// The guard runs only on record; a lookup needs no guard, since an unsafe verdict is never
 /// recorded in the first place.
-pub(crate) fn digest_is_content(kt: &KType<'_>) -> bool {
+pub(crate) fn digest_is_content(kt: &KType) -> bool {
     match kt {
         // The one hazard: a pre-seal set digests by `Rc` pointer address, which can be reused
         // once freed. A sealed set's digest is content-derived and safe.

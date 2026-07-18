@@ -14,8 +14,8 @@ pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
-pub enum FieldListOutcome<'e, 'a> {
-    Done(Vec<(String, KType<'a>)>),
+pub enum FieldListOutcome<'e> {
+    Done(Vec<(String, KType)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
     /// order. The caller schedules them in that order and, on the dep-finish re-walk,
     /// feeds the resolved `Carried::Type`s back through a [`ResultFeed`] — the walk
@@ -69,7 +69,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'a>>,
-) -> FieldListOutcome<'e, 'a> {
+) -> FieldListOutcome<'e> {
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<KExpression<'e>> = Vec::new();
     let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
@@ -203,15 +203,10 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                 ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
                     // Minted fresh in this scope's region and spliced into a sub-dispatched
                     // expression (it crosses into another node), so it travels as a cell: a
-                    // region-resident type carrier reaching nothing foreign. A `RecursiveRef(String)`
-                    // borrows no region, so the checked seal derives the empty (bit-unset) token. The
-                    // delivery envelope's pin is this scope's own region owner (the seal-resident
-                    // veneer), not a separate producer frame.
-                    let carrier = scope
-                        .seal_fresh_ktype(KType::RecursiveRef(t.render()))
-                        .expect(
-                            "a RecursiveRef borrows no region, so its checked seal cannot fail",
-                        );
+                    // region-resident type carrier reaching nothing foreign. The delivery
+                    // envelope's pin is this scope's own region owner (the seal-resident veneer),
+                    // not a separate producer frame.
+                    let carrier = scope.seal_fresh_ktype(KType::RecursiveRef(t.render()));
                     ExpressionPart::Spliced {
                         cell: scope.seal_resident_delivered(carrier),
                     }

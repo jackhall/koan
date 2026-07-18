@@ -10,16 +10,13 @@
 //! [`ExecOutcome`] carries two because the AST and the produced value genuinely differ: dispatchable
 //! expressions are borrowed from the long-lived AST (`'ast`), while a deferred-`Type` return's
 //! resolved type is re-homed into the captured-scope region but capped at the call's `'step` — the
-//! contract lifetime the lift boundary consumes it within. The cap keeps a `ret` reference from
-//! out-claiming the caller region a resolved parameter type borrows into. `KExpression`'s invariance
-//! blocks collapsing the two.
+//! contract lifetime the lift boundary consumes it within. `KExpression`'s invariance blocks
+//! collapsing the two.
 
 use crate::machine::{DeliveredCarried, KErrorKind};
 use std::rc::Rc;
 
-use crate::machine::core::{
-    BindingIndex, CallFrame, KError, RegionBrand, Scope, StoredReach, TypeHit,
-};
+use crate::machine::core::{BindingIndex, CallFrame, KError, RegionBrand, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
@@ -65,87 +62,31 @@ pub enum ExecOutcome<'ast, 'step> {
 /// signature (`FromSignature` → `ReturnContract::Function`); a deferred-`Type` return whose type
 /// resolved synchronously carries it already re-homed into the captured-scope region (`Resolved` →
 /// `ReturnContract::PerCall`), so the lift boundary checks + stamps against it — no dep-finish, TCO
-/// preserved. The re-home (via [`home_resolved_return_type`]) lets the elaboration read the param-bound child
+/// preserved. The re-home (via [`home_return_type`]) lets the elaboration read the param-bound child
 /// scope at the frame brand yet hand back a `ret` reference at the call's `'step`.
 pub enum PerCallReturn<'step> {
     FromSignature,
-    Resolved(&'step KType<'step>),
+    Resolved(&'step KType),
 }
 
 /// Home a deferred FN's resolved return *type* into `captured`'s region (a live ancestor of the
 /// call), capped at the caller-supplied `'a`. The elaboration reads the param-bound child scope at
-/// the frame brand, so `kt`'s lifetime is the short brand; the re-anchor lifts the clone to `'a`.
+/// the frame brand, so `kt`'s borrow is the short brand; the clone lands owned in the captured
+/// region and comes back at `'a`.
 ///
 /// The cap is load-bearing: callers pass the **contract** lifetime (`'step`), not the captured
-/// region's full lifetime. A return type can carry an `Rc`-shared identity `to_static` declines to
-/// re-mint (a [`KType::SetRef`] / `RecursiveGroup`'s recursive-type set, minted in some earlier
-/// call's region), so the clone's reach borrows out of the destination — valid for `'step` (the
-/// caller awaits the callee and the reach-set fold pins the argument), but it must not lengthen to
-/// the captured region's lifetime, which can outlive that pin.
-///
-/// The evidence is the [`TypeHit`]'s own stored reach — the reach of the binding `hit.kt` was
-/// resolved through, which names exactly the foreign regions that binding pins. The door takes the
-/// hit whole rather than a type and a reach side by side, so the reach audited can only be the one
-/// the resolver derived for that very type. Homing under it ([`Scope::alloc_ktype_reaching`]) is
-/// what lets a return type name a module living outside the captured region — the audit still
-/// refuses a borrow no evidence member, ambient coverage, or the destination itself covers.
-///
-/// A return naming a module's signature (`-> :(TYPE OF er)`) takes the delivered-carrier door below;
-/// this one serves a return that names a *type binding* (`-> er.Carrier`, `-> Er` for a
-/// signature-valued parameter), whose reach is the binding's own.
-pub(crate) fn home_resolved_return_type<'captured: 'a, 'a>(
-    hit: &TypeHit<'_>,
+/// region's full lifetime. That is return-contract discipline — a `ret` reference must not outlive
+/// the window the lift boundary consumes it in — and it holds independently of residence, which a
+/// `KType` has none of: the clone is owned data stored through the single door, so it borrows only
+/// the destination region.
+pub(crate) fn home_return_type<'captured: 'a, 'a>(
+    kt: &KType,
     captured: &Scope<'captured>,
-) -> Result<&'a KType<'a>, KError> {
-    home(hit.kt, captured, &hit.stored)
-}
-
-/// Home a return type that no name resolution produced and no carrier accompanies. There is no
-/// evidence to derive a reach from, so the type homes under the captured scope's ambient coverage
-/// alone: a borrow of a region that scope does not already pin is refused.
-pub(crate) fn home_ambient_return_type<'captured: 'a, 'a>(
-    kt: &KType<'_>,
-    captured: &Scope<'captured>,
-) -> Result<&'a KType<'a>, KError> {
-    home(kt, captured, &StoredReach::empty())
-}
-
-/// Home the `Expression` form's sub-dispatch result (`-> :(TYPE OF er)`, `-> :(sig WITH {…})`). The
-/// type is a resolved terminal rather than a named binding's resolution, so the evidence is its own
-/// **delivered carrier**, which names every region the produced type borrows: `TYPE OF er` folds the
-/// argument module's reach into its witness, and that module can live in a region neither the call
-/// nor the captured scope owns (a module-returning FN mints its module in its own per-call region).
-///
-/// The reach mints in `call_scope` — the per-call scope, which dies with the call — so the evidence
-/// is not retained by the captured region, whose life is the function's, not the call's. As in
-/// [`home_resolved_return_type`], the result is capped at the caller's contract lifetime, and the
-/// audit still refuses a borrow no evidence member, ambient coverage, or the destination covers.
-pub(crate) fn home_delivered_return_type<'captured: 'a, 'a>(
-    kt: &KType<'_>,
-    delivered: &DeliveredCarried,
-    call_scope: &Scope<'_>,
-    captured: &Scope<'captured>,
-) -> Result<&'a KType<'a>, KError> {
-    home(kt, captured, &call_scope.adopted_reach_of(delivered))
-}
-
-/// A region-free return type takes the compile-enforced `'static` tier. One carrying an `Rc`-shared
-/// identity `to_static` declines to re-mint (a `SetRef` / `RecursiveGroup`, or a non-`:Module`
-/// `Signature`) re-anchors into the captured scope's region at the caller's contract lifetime `'a`
-/// through the reaching tier, audited against `reach`. Private so a reach reaches the audit only
-/// from one of the two doors above, each of which derives it — never as a reach a caller asserts.
-fn home<'captured: 'a, 'a>(
-    kt: &KType<'_>,
-    captured: &Scope<'captured>,
-    reach: &StoredReach<'_>,
-) -> Result<&'a KType<'a>, KError> {
-    match kt.to_static() {
-        Some(owned) => {
-            let brand: RegionBrand<'a> = captured.brand();
-            Ok(brand.alloc_ktype(owned))
-        }
-        None => captured.alloc_ktype_reaching(kt.clone(), reach),
-    }
+) -> &'a KType {
+    // Shorten the brand (covariant) before the store, so the resident reference comes back at the
+    // contract lifetime rather than the captured region's own.
+    let brand: RegionBrand<'a> = captured.brand();
+    brand.alloc_ktype(kt.clone())
 }
 
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
@@ -167,14 +108,12 @@ pub fn run_user_fn<'ast, 'step>(
 where
     'ast: 'step,
 {
-    // Bind each parameter into the frame's own scope through the fused value/type doors. Each door
-    // derives the binding's stored reach off its own delivered arg carrier — copied mode for an
-    // object (`bind_delivered` deep-copies the value into the frame region under it), kept mode for a
-    // type (`register_type_delivered`; a `KType` clone is shallow, so it still points at its
-    // carrier's home) — and moves the value in under that reach, pinning it into the frame region:
-    // one mint per parameter, no hand-asserted reach. A region-pure argument has no carrier and
-    // takes the checked tier. Built at the frame brand so nothing fabricates a free `&'a`; each
-    // binding pins its own foreign reach, so no separate frame-wide record is materialized.
+    // Bind each parameter into the frame's own scope through the value/type doors. An object is
+    // deep-copied into the frame region under the reach its own delivered arg carrier mints
+    // (`bind_delivered`); a region-pure object argument has no carrier and takes the checked tier. A
+    // type is owned data, so it crosses by clone and lands in the frame region through the single
+    // storage door (`register_type_delivered`), pinning nothing. Built at the frame brand so nothing
+    // fabricates a free `&'a`.
     let bind = ctx.region.with_scope(|child| -> Result<(), KError> {
         for (name, carried) in args.iter() {
             let carrier = arg_carriers.get(name).copied();
@@ -197,14 +136,12 @@ where
                     }
                 },
                 // Type-denoting params (a `:Signature`-kind slot, a type alias) register a type, not a
-                // value binding. The arg is already a resolved type; the fused door derives its reach
-                // off the carrier and registers it directly. A *module* argument is a value and takes
-                // the Object arm above.
+                // value binding. The arg is already a resolved type; the door clones it into the
+                // frame region. A *module* argument is a value and takes the Object arm above.
                 Carried::Type(kt) => {
                     child.register_type_delivered(
                         name.clone(),
                         kt.clone(),
-                        carrier,
                         BindingIndex::value(0),
                     )?;
                 }
@@ -250,29 +187,24 @@ where
                 // frame brand, then re-home the resolved type into the captured-scope region so it is
                 // freed from the brand and rides the tail-replace as a `'step` reference.
                 DeferredReturn::Type(type_expr) => {
-                    // Resolve against the param-bound child scope through the reach-carrying door, so
-                    // the hit carries the stored reach of the binding the identifier names — for a
-                    // module-valued param that is the module's own region, which need be neither the
-                    // frame's nor the captured scope's (a module-returning FN mints its module in
-                    // its own per-call region). Homing under that reach is what admits such a
-                    // module; the home is capped at `'step` so the contract `ret` can't out-claim
-                    // the pin — see `home_resolved_return_type`.
+                    // Resolve against the param-bound child scope, then clone the resolved type
+                    // into the captured region. The home is capped at `'step` so the contract `ret`
+                    // can't out-claim the window the lift boundary consumes it in — see
+                    // `home_return_type`.
                     let homed = ctx.region.with_scope(|child| {
                         let captured = func.captured_scope();
-                        let homed: Result<&'step KType<'step>, KError> = match child
+                        let homed: Result<&'step KType, KError> = match child
                             .resolve_type_identifier(type_expr, None)
                         {
-                            TypeResolution::Done(hit) => home_resolved_return_type(&hit, captured),
-                            // A park at this point cannot be honored — the body is about to run —
-                            // so fall back to Any and let the body's own dispatch surface any real
-                            // error. Any is region-free, so it needs no evidence.
-                            TypeResolution::Park(_) => {
-                                home_ambient_return_type(&KType::Any, captured)
-                            }
-                            // A miss is a real error: the return names no type. Surfacing it here
-                            // rather than widening to Any is what makes `-> some_value` (a return
-                            // slot naming a value — a module included) a diagnostic instead of a
-                            // silently unconstrained return.
+                            TypeResolution::Done(kt) => Ok(home_return_type(kt, captured)),
+                            // A park at this point cannot be honored — the body is about to
+                            // run — so fall back to Any and let the body's own dispatch surface
+                            // any real error.
+                            TypeResolution::Park(_) => Ok(home_return_type(&KType::Any, captured)),
+                            // A miss is a real error: the return names no type. Surfacing it
+                            // here rather than widening to Any is what makes `-> some_value` (a
+                            // return slot naming a value — a module included) a diagnostic
+                            // instead of a silently unconstrained return.
                             TypeResolution::Unbound(message) => {
                                 Err(KError::new(KErrorKind::ShapeError(message)))
                             }

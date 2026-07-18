@@ -49,7 +49,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Type AS Wrap)`) mints a fresh
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
-    let mut minted: Vec<(String, KType<'a>)> = Vec::new();
+    let mut minted: Vec<(String, KType)> = Vec::new();
     for (name, (kt, _arity)) in &s.schema.abstract_members {
         let minted_kt = match kt {
             KType::SetRef { set, index }
@@ -93,7 +93,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // A manifest member reads concretely through the opaque view: the view scope carries no
     // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
     // is mirrored into `type_members` alongside the per-call abstract mints.
-    let manifest: Vec<(String, KType<'a>)> = s
+    let manifest: Vec<(String, KType)> = s
         .schema
         .manifest_members
         .iter()
@@ -111,7 +111,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 
     {
         let tm = new_module.type_members.borrow();
-        let mut tags: Vec<(String, KType<'a>)> = Vec::new();
+        let mut tags: Vec<(String, KType)> = Vec::new();
         for (slot_name, kt) in &s.schema.value_slots {
             if let KType::AbstractType { name: member, .. } = kt {
                 if let Some(per_call) = tm.get(member) {
@@ -195,9 +195,9 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
 /// per-call abstract mints, a transparent view's concrete source types). Without this a slot
 /// typed against an abstract member would read concrete off the underlying value and the view
 /// would not structurally satisfy its own signature.
-fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent<'a>) {
+fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent) {
     let mut view_sig = SigSchema::raw_self_sig(module);
-    let member_map: std::collections::HashMap<String, KType<'a>> = view_sig
+    let member_map: std::collections::HashMap<String, KType> = view_sig
         .manifest_members
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
@@ -216,7 +216,7 @@ fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent<'a>) {
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
-) -> Result<(&'a crate::machine::model::Module<'a>, Rc<SigContent<'a>>), KError> {
+) -> Result<(&'a crate::machine::model::Module<'a>, Rc<SigContent>), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
@@ -251,11 +251,7 @@ fn resolve_module_and_signature<'a>(
 /// after abstract-member substitution). The decision (and its memoization) lives in
 /// [`Module::satisfies_sig_content`], the shared entry point dispatch also routes through; this
 /// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
-fn check_satisfies<'a>(
-    m: &Module<'a>,
-    c: &SigContent<'a>,
-    types: &TypeRegistry,
-) -> Result<(), KError> {
+fn check_satisfies<'a>(m: &Module<'a>, c: &SigContent, types: &TypeRegistry) -> Result<(), KError> {
     if m.satisfies_sig_content(c, types) {
         return Ok(());
     }

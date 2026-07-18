@@ -43,7 +43,7 @@ use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
 use super::fn_def::return_type::{classify_return_type, extract_type_slot_raw, ReturnTypeState};
-use super::resolve_or_await::{classify_type_hit, expect_type_terminal, resolve_at_wake};
+use super::resolve_or_await::{classify_resolved_type, expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 
 /// The two operand names a binary operator body binds. A pairwise group's combiner is itself an
@@ -155,8 +155,8 @@ fn binder_bucket(expr: &KExpression<'_>) -> Option<Vec<UntypedKey>> {
 /// A type slot's state across the (possible) dep-finish boundary: resolved outright, parked on a
 /// still-finalizing type binder, or sub-dispatched as a `:(…)` expression at owned position
 /// `owned_pos`.
-enum TypeCapture<'a> {
-    Done(KType<'a>),
+enum TypeCapture {
+    Done(KType),
     Park(TypeIdentifier),
     Sub { owned_pos: usize },
 }
@@ -167,7 +167,7 @@ fn capture_type_slot<'a>(
     state: ReturnTypeState<'a>,
     parks: &mut Vec<NodeId>,
     subs: &mut Vec<KExpression<'a>>,
-) -> Result<TypeCapture<'a>, KError> {
+) -> Result<TypeCapture, KError> {
     match state {
         ReturnTypeState::Done(kt) => Ok(TypeCapture::Done(kt)),
         ReturnTypeState::Pending { te, producers } => {
@@ -191,7 +191,7 @@ fn capture_type_slot<'a>(
 
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
-fn done_type<'a>(capture: TypeCapture<'a>, label: &str) -> Result<KType<'a>, KError> {
+fn done_type(capture: TypeCapture, label: &str) -> Result<KType, KError> {
     match capture {
         TypeCapture::Done(kt) => Ok(kt),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
@@ -201,23 +201,21 @@ fn done_type<'a>(capture: TypeCapture<'a>, label: &str) -> Result<KType<'a>, KEr
 }
 
 /// Read a capture back at dep-finish: a parked name re-resolves against the wake-side scope, a
-/// sub-dispatched expression reads its terminal's type. That type can embed a borrow into its
-/// producer's region, so its carrier's reach is minted into the declaring scope before the type is
-/// sealed into the operator's `KFunction` — the same fold `fn_def`'s return-type finish performs.
+/// sub-dispatched expression reads its terminal's type. The type is owned data, cloned out of the
+/// terminal, so it crosses into the declaring scope by value.
 fn resolve_capture<'a>(
-    capture: TypeCapture<'a>,
+    capture: TypeCapture,
     fctx: &FinishCtx<'a>,
     results: &DepResults<'_, &DepTerminal<'a>>,
     label: &str,
-) -> Result<KType<'a>, KError> {
+) -> Result<KType, KError> {
     match capture {
         TypeCapture::Done(kt) => Ok(kt),
         TypeCapture::Park(te) => resolve_at_wake(fctx.scope, label, |s| {
-            classify_type_hit(s.resolve_type_identifier(&te, None))
+            classify_resolved_type(s.resolve_type_identifier(&te, None))
         }),
         TypeCapture::Sub { owned_pos } => {
-            let (kt, carrier) = expect_type_terminal(results, owned_pos, label)?;
-            let _ = fctx.scope.host_reach_of(carrier);
+            let kt = expect_type_terminal(results, owned_pos, label)?;
             Ok(kt)
         }
     }
@@ -365,8 +363,8 @@ impl<'a> OpPlan<'a> {
     fn finalize(
         self,
         scope: &'a Scope<'a>,
-        operand: KType<'a>,
-        result: Option<KType<'a>>,
+        operand: KType,
+        result: Option<KType>,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let OpPlan {
             sym,
@@ -587,7 +585,7 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// so the body sub-dispatches it rather than resolving a name that may not be one. Every
 /// operand × result combination of the two is registered, mirroring how `fn_def` splits its return
 /// slot.
-fn type_carriers<'a>() -> [KType<'a>; 2] {
+fn type_carriers() -> [KType; 2] {
     [KType::OfKind(KKind::ProperType), KType::SigiledTypeExpr]
 }
 
@@ -596,7 +594,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
     // Declared return is `KType::Any`: an operator declaration evaluates to the function it
     // synthesizes, whose structural type only exists once its signature is known.
-    let binary = |operand: KType<'a>| {
+    let binary = |operand: KType| {
         sig(
             KType::Any,
             vec![
@@ -609,7 +607,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    let binary_with_result = |operand: KType<'a>, result: KType<'a>| {
+    let binary_with_result = |operand: KType, result: KType| {
         sig(
             KType::Any,
             vec![
@@ -624,7 +622,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    let unary = |operand: KType<'a>, result: KType<'a>| {
+    let unary = |operand: KType, result: KType| {
         sig(
             KType::Any,
             vec![
@@ -640,7 +638,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    let unary_missing_result = |operand: KType<'a>| {
+    let unary_missing_result = |operand: KType| {
         sig(
             KType::Any,
             vec![

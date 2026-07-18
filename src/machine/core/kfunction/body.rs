@@ -35,7 +35,7 @@ pub enum ReturnContract<'a> {
     /// walk. `scope` is `&'a`, so the contract stays `Copy`; [`Self::home_owner`] resolves the owning
     /// `Rc<FrameStorage>` off it for the contract's carried witness.
     Arm {
-        ret: &'a KType<'a>,
+        ret: &'a KType,
         kind: &'static str,
         scope: &'a Scope<'a>,
     },
@@ -46,7 +46,7 @@ pub enum ReturnContract<'a> {
     /// the frame). `ret` is region-borrowed like `Arm`'s, so the contract stays `Copy`.
     PerCall {
         func: &'a KFunction<'a>,
-        ret: &'a KType<'a>,
+        ret: &'a KType,
     },
 }
 

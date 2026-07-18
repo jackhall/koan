@@ -9,9 +9,7 @@ use std::rc::Rc;
 
 use super::body::ReturnContract;
 use super::KFunction;
-use crate::machine::core::{
-    CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator, TypeOperand,
-};
+use crate::machine::core::{CallFrame, FrameStorage, LexicalFrame, Scope, StepAllocator};
 use crate::machine::execute::StepCarried;
 use crate::machine::model::Held;
 use crate::machine::model::TypeRegistry;
@@ -64,7 +62,7 @@ pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObje
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
-pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType<'a>> {
+pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType> {
     match args {
         KObject::Record(fields, _) => fields.get(name).and_then(Held::as_type),
         _ => None,
@@ -82,7 +80,7 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
 /// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
-pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType<'a>, KError> {
+pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(kt.clone()),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
@@ -134,7 +132,7 @@ pub fn require_bare_type_name<'a>(
 /// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
 /// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
 /// embedded in the message.
-fn bare_type_name<'a>(t: &KType<'a>, name: &str, surface: &str) -> Result<String, KError> {
+fn bare_type_name(t: &KType, name: &str, surface: &str) -> Result<String, KError> {
     match t {
         KType::Number
         | KType::Str
@@ -232,26 +230,6 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     /// value-embedding body can fold / merge it), `None` for a scalar-literal (region-pure) argument.
     pub fn arg_carrier(&self, name: &str) -> Option<&'c DeliveredCarried> {
         self.arg_carriers.get(name).copied()
-    }
-
-    /// The total-operand form of argument `name` for
-    /// [`StepAllocator::alloc_type_composed`](crate::machine::core::StepAllocator::alloc_type_composed):
-    /// its reach carrier when it arrived as a resolved value, else the region-free type rebuilt
-    /// from its `'static` form. A type that reaches a region but arrived carrier-less cannot cross
-    /// the fold as an operand, so it errors loudly.
-    pub(crate) fn type_operand(
-        &self,
-        name: &str,
-        kt: &KType<'_>,
-    ) -> Result<TypeOperand<'c>, KError> {
-        if let Some(carrier) = self.arg_carrier(name) {
-            return Ok(TypeOperand::Reaching(carrier));
-        }
-        kt.to_static().map(TypeOperand::Pure).ok_or_else(|| {
-            KError::new(KErrorKind::ShapeError(format!(
-                "type argument `{name}` reaches a region but arrived without a carrier",
-            )))
-        })
     }
 
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its

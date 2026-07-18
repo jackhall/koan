@@ -51,9 +51,12 @@ pub enum Specificity {
     Incomparable,
 }
 
+/// `'a` threads through to `return_type`'s `Deferred` arm, which captures a live
+/// [`KExpression`] for per-call re-elaboration — `elements` is owned data (`KType` carries
+/// no lifetime of its own).
 pub struct ExpressionSignature<'a> {
     pub return_type: ReturnType<'a>,
-    pub elements: Vec<SignatureElement<'a>>,
+    pub elements: Vec<SignatureElement>,
 }
 
 /// Carrier for an FN's declared return type. The surface admits parameter-name references
@@ -61,8 +64,11 @@ pub struct ExpressionSignature<'a> {
 /// captured surface form for per-call re-elaboration against the per-call scope where the
 /// parameter's type-language identity is registered. See
 /// [functors.md](../../../../design/typing/functors.md).
+///
+/// `'a` threads only through the `Deferred` arm's captured [`KExpression`] — `Resolved`'s
+/// `KType` is owned and carries no lifetime of its own.
 pub enum ReturnType<'a> {
-    Resolved(KType<'a>),
+    Resolved(KType),
     Deferred(DeferredReturn<'a>),
 }
 
@@ -312,20 +318,19 @@ impl<'a> ExpressionSignature<'a> {
     }
 }
 
-pub enum SignatureElement<'a> {
+pub enum SignatureElement {
     Keyword(String),
-    Argument(Argument<'a>),
+    Argument(Argument),
 }
 
 /// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
-/// accepts. `'a` threads through the declared `KType`'s own container/signature-content
-/// lifetime (vestigial — no variant borrows region data).
-pub struct Argument<'a> {
+/// accepts.
+pub struct Argument {
     pub name: String,
-    pub ktype: KType<'a>,
+    pub ktype: KType,
 }
 
-impl<'a> Argument<'a> {
+impl Argument {
     pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
         self.ktype.accepts_part(part, types)
     }

@@ -22,12 +22,10 @@ pub use arena::{
     run_root_storage, CallFrame, FoldingBrand, FrameSet, FrameStorage, KoanRegion, RegionBrand,
     RegionTypeFamily, StepAllocator,
 };
-pub(crate) use arena::{
-    FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence, TypeOperand,
-};
+pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
     BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
-    PendingBinderGuard, PendingTypeEntry, StoredReach, TypeHit,
+    PendingBinderGuard, PendingTypeEntry, StoredReach,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
@@ -42,8 +40,7 @@ pub(crate) use kfunction::body::{
     body_statement_refs, split_body_statements, ReturnContract, SealedContract,
 };
 pub(crate) use kfunction::exec::{
-    home_ambient_return_type, home_delivered_return_type, run_user_fn, ExecFrame, ExecOutcome,
-    PerCallReturn,
+    home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
 };
 pub(crate) use kfunction::{
     ActionFn, BinderBucketFn, BinderNameFn, Body, ClassifiedSlots, KFunction, NodeId,

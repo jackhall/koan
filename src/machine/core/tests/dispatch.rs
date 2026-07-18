@@ -18,7 +18,7 @@ fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     Action::done_resident(Carried::Object(marker(ctx.scope, "b")))
 }
 
-fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
+fn two_slot_sig<'a>(a: KType, b: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![

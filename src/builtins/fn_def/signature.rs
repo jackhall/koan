@@ -41,7 +41,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 }
 
 pub(crate) enum ParamListOutcome<'a> {
-    Done(Vec<SignatureElement<'a>>),
+    Done(Vec<SignatureElement>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
     /// a `AwaitDeps` over `park_producers` and any sub-Dispatches; the closure splices each
     /// sub-Dispatch's `Carried::Type` result into the corresponding slot of
@@ -64,7 +64,7 @@ pub(crate) fn parse_fn_param_list<'a>(
     elaborator: &mut Elaborator<'_, 'a>,
 ) -> ParamListOutcome<'a> {
     let parts = &signature.parts;
-    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
+    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
@@ -128,23 +128,26 @@ pub(crate) fn parse_fn_param_list<'a>(
                         i += 2;
                     }
                     Some(ExpressionPart::Spliced { cell }) => {
-                        // The resolved type slot arrives as a carrier cell; adopt it into the
-                        // elaborating scope (folding its reach) and read it at that brand where the
-                        // signature is assembled, then route it through type/non-type handling.
-                        match elaborator.scope.adopt_sealed(cell) {
-                            Carried::Type(kt) => {
+                        // The resolved type slot arrives as a carrier cell. A type is owned data, so
+                        // it is read straight out of the envelope and cloned into the signature's
+                        // own `Argument` — no adoption, no allocation.
+                        let cloned = cell.open(|live| match live {
+                            Carried::Type(kt) => Ok(kt.clone()),
+                            other => Err(other.summarize()),
+                        });
+                        match cloned {
+                            Ok(ktype) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: name.clone(),
-                                    ktype: kt.clone(),
+                                    ktype,
                                 }));
                                 i += 2;
                             }
-                            other => {
+                            Err(summary) => {
                                 return ParamListOutcome::Err(format!(
                                     "FN signature parameter `{name}` type slot resolved to a \
-                                     non-type value `{}` (expected a type expression like \
+                                     non-type value `{summary}` (expected a type expression like \
                                      `:Number` or `:(LIST OF Str)`)",
-                                    other.summarize(),
                                 ));
                             }
                         }

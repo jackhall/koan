@@ -15,7 +15,6 @@
 //! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::DepPlacement;
-use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -60,17 +59,11 @@ fn park_on_head<'step>(
     type_only: bool,
 ) -> Outcome<'step> {
     let finish: TerminalDepFinish<'step> = Box::new(move |ctx, terminals| {
-        // `reach` names the regions the resolved identity points into: a `SetRef` constructor threads
-        // it to the construction finish (the operand names the identity's own region); a callable
-        // ignores it and rides the `adopt_sealed` below. Derived from the head envelope's own witness
-        // under the same `Residence::Kept` mint `adopt_sealed` uses, so the token's foreign reach and
-        // home-borrow bit are the identity's, minted into the consumer scope's own arena.
         let head_terminal = terminals.owned(0);
-        let reach = ctx.current_scope().host_reach_of(&head_terminal.delivered);
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
         let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
-        let callable = match classify_head(head, type_only, reach) {
+        let callable = match classify_head(head, type_only) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -90,7 +83,6 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
-    reach: StoredReach<'step>,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         // A function value is the pruned arm under `type_only` — the type-only lane admits no
@@ -110,10 +102,7 @@ fn classify_head<'step>(
         // A `SetRef` is a constructor — the only invocable type identity. Every other type is
         // type-shaped but not invocable.
         Carried::Type(kt) => match kt {
-            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor {
-                identity: kt,
-                reach,
-            }),
+            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor { identity: kt }),
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),

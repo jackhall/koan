@@ -13,7 +13,7 @@
 //! cache, so a half-built identity cannot leak into a later memo hit.
 
 use crate::machine::core::NodeId;
-use crate::machine::core::{LexicalFrame, Scope, ScopeId, TypeHit};
+use crate::machine::core::{LexicalFrame, Scope, ScopeId};
 use crate::machine::model::TypeIdentifier;
 use crate::machine::model::{KType, TypeResolution};
 
@@ -26,34 +26,25 @@ impl<'step> Scope<'step> {
         &self,
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
-    ) -> TypeResolution<TypeHit<'step>> {
+    ) -> TypeResolution<&'step KType> {
         use crate::machine::model::{elaborate_type_identifier, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
         let cutoff = chain.as_ref().and_then(|c| c.index_for(self.id));
-        if let Some((kt, reach)) = self.type_identifier_memo_get(te, cutoff) {
-            return TypeResolution::Done(TypeHit { kt, stored: reach });
+        if let Some(kt) = self.type_identifier_memo_get(te, cutoff) {
+            return TypeResolution::Done(kt);
         }
-        let chain_for_reach = chain.clone();
         let mut elaborator = Elaborator::new(self).with_chain(chain);
         // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
         // `Unbound` forward unchanged.
         elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self }.pending_producers(&kt);
             if pending.is_empty() {
-                // A bare `TypeIdentifier` resolves to at most one binding, so its token is that
-                // binding's stored token (empty for a builtin / owned type) — replayed whole with its
-                // home-borrow bit, and minted *before* the alloc below so `kt`'s own residence audit
-                // can see it. Cached alongside `kt` so a hit rebuilds the read carrier. A type
-                // identifier names a *type* binding, so the token always comes off the `types` entry:
-                // a type that borrows a module's region (`LET Ty = (TYPE OF int_ord)`) carries that
-                // reach on its own type entry, minted from the RHS carrier at the bind.
-                let stored = self.type_reach(te.as_str(), chain_for_reach.as_deref());
-                let kt_ref: &'step KType<'step> = self
-                    .alloc_ktype_reaching(kt, &stored)
-                    .expect("resolve_type_identifier: kt must be covered by its own stored reach");
-                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref, stored);
-                TypeResolution::Done(TypeHit { kt: kt_ref, stored })
+                // The elaborated type is owned data; it stores into this scope's own region
+                // through the single door and is cached there so a hit rebuilds the read carrier.
+                let kt_ref: &'step KType = self.brand().alloc_ktype(kt);
+                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref);
+                TypeResolution::Done(kt_ref)
             } else {
                 TypeResolution::Park(pending)
             }
@@ -73,7 +64,7 @@ struct FinalizeGate<'view, 'step> {
 
 impl<'view, 'step> FinalizeGate<'view, 'step> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
-    fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
+    fn pending_producers(&self, kt: &KType) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
         for (scope_id, name) in KTypeUserRefs::of(kt) {
             let Some(owner) = self.scope.ancestors().find(|s| s.id == scope_id) else {
@@ -102,17 +93,17 @@ impl<'view, 'step> FinalizeGate<'view, 'step> {
 /// referenced member's schema, whose identity is `(set ptr, index)` and which may be
 /// cyclic. The dependency a consumer parks on is the named binder itself; its schema's own
 /// references are that binder's concern, resolved when it finalizes.
-struct KTypeUserRefs<'b, 'step> {
-    stack: Vec<&'b KType<'step>>,
+struct KTypeUserRefs<'b> {
+    stack: Vec<&'b KType>,
 }
 
-impl<'b, 'step> KTypeUserRefs<'b, 'step> {
-    fn of(kt: &'b KType<'step>) -> Self {
+impl<'b> KTypeUserRefs<'b> {
+    fn of(kt: &'b KType) -> Self {
         Self { stack: vec![kt] }
     }
 }
 
-impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
+impl<'b> Iterator for KTypeUserRefs<'b> {
     type Item = (ScopeId, &'b str);
 
     fn next(&mut self) -> Option<Self::Item> {

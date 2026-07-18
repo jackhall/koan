@@ -422,11 +422,9 @@ fn part_walk<'step>(
                                 .current_scope()
                                 .resolve_type_identifier(t, ctx.active_chain())
                             {
-                                TypeResolution::Done(hit) => {
+                                TypeResolution::Done(kt) => {
                                     let scope = ctx.current_scope();
-                                    scope.seal_resident_delivered(
-                                        scope.resident_type_carrier(hit.kt, hit.stored),
-                                    )
+                                    scope.seal_resident_delivered(scope.resident_type_carrier(kt))
                                 }
                                 _ => {
                                     return Err(KError::new(KErrorKind::ShapeError(format!(

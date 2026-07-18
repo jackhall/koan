@@ -4,9 +4,7 @@ use super::ktype::KType;
 /// functions all carry a canonical string `summarize`, and — for container values — a
 /// `ktype` that walks elements to project the parameterized type. Structural equality is not
 /// here: values compare via [`KObject::value_equal`](super::super::values::KObject::value_equal).
-///
-/// `'a` matches the region lifetime carried by `KType<'a>`.
-pub trait Parseable<'a> {
+pub trait Parseable {
     fn summarize(&self) -> String;
-    fn ktype(&self) -> KType<'a>;
+    fn ktype(&self) -> KType;
 }

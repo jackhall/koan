@@ -35,11 +35,11 @@ use super::{arg, kw, sig};
 /// slot (the "declared abstract, awaiting per-call mint" member a real constructor never
 /// carries), while a real declaring scope's id brands a NEWTYPE-declared constructor family.
 /// Opaque ascription re-mints a fresh per-call singleton off the sentinel shape.
-pub(crate) fn mint_type_constructor<'a>(
+pub(crate) fn mint_type_constructor(
     member_name: String,
     param_names: Vec<String>,
     scope_id: ScopeId,
-) -> KType<'a> {
+) -> KType {
     let set = RecursiveSet::singleton(
         member_name,
         scope_id,
@@ -59,25 +59,21 @@ fn not_in_sig_body() -> KError {
     ))
 }
 
-/// Bind `kt` under `name` through the fused mint + alloc + register path, returning the bound
-/// type's resident carrier. `kt` is region-pure (an `AbstractType`) or an owned
-/// sentinel `SetRef`, so no delivered carrier folds in — the fused door picks the tier the
-/// type's own shape needs.
+/// Bind `kt` under `name` through the fused alloc + register path, returning the bound type's
+/// resident carrier. `kt` is owned data (an `AbstractType` or a sentinel `SetRef`) allocated into
+/// this scope's own region.
 fn bind_abstract_member<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     name: String,
-    kt: KType<'a>,
+    kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     let bind_index = ctx.bind_index();
-    let (kt_ref, stored) = match ctx
-        .scope
-        .register_user_type_delivered(name, kt, None, bind_index)
-    {
-        Ok(pair) => pair,
+    let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
+        Ok(kt_ref) => kt_ref,
         Err(e) => return Action::Done(Err(e)),
     };
-    let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
+    let carrier = ctx.scope.resident_type_carrier(kt_ref);
     Action::Done(Ok(StepCarried::born(carrier)))
 }
 

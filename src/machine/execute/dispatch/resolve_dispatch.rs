@@ -421,7 +421,7 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) ->
 /// [`signature_admits_strict`] and the per-slot gate the relaxed pass leans on
 /// when it rejects.
 fn slot_admits_strict<'e>(
-    el: &SignatureElement<'_>,
+    el: &SignatureElement,
     part_value: &ExpressionPart<'e>,
     i: usize,
     has_lazy_kexpr_slot: bool,

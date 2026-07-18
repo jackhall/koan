@@ -238,20 +238,17 @@ fn run_action_builtin<'step>(
     use crate::machine::model::KObject;
 
     let scope = view.current_scope();
-    // Evidence for the args record's own placement: every arg carrier's reach, minted into the
-    // call scope's region up front — the record's leaves may still embed a foreign borrow from
-    // whichever carrier they came from. Mode matches each cell's own kind: an `Object` cell is a
-    // deep copy (`Copied`/`adopted_reach_of`), a `Type` cell is a shallow clone that still points
-    // at its carrier's home (`Kept`/`host_reach_of`), so a Copied-only evidence set would
-    // under-cover a module/signature-typed argument.
+    // Evidence for the args record's own placement: every object arg carrier's reach, minted into
+    // the call scope's region up front as a deep copy (`Copied`/`adopted_reach_of`) — an object
+    // leaf may still embed a foreign borrow from whichever carrier it came from. A `Type` cell is
+    // owned data and contributes no evidence.
     let evidence: Vec<crate::machine::core::StoredReach> = args
         .iter()
-        .filter_map(|(name, cell)| {
-            let carrier = arg_carriers.get(name)?;
-            Some(match cell {
-                crate::machine::model::Held::Object(_) => scope.adopted_reach_of(carrier),
-                crate::machine::model::Held::Type(_) => scope.host_reach_of(carrier),
-            })
+        .filter_map(|(name, cell)| match cell {
+            crate::machine::model::Held::Object(_) => {
+                Some(scope.adopted_reach_of(arg_carriers.get(name)?))
+            }
+            crate::machine::model::Held::Type(_) => None,
         })
         .collect();
     let args_obj: &'step KObject<'step> =

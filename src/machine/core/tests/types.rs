@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use super::super::Scope;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare};
-use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
@@ -15,12 +14,7 @@ use crate::machine::BindingIndex;
 fn register_type_inserts_into_types_map_not_data() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
-        "Foo".into(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
     assert!(scope.bindings().types().get("Foo").is_some());
     assert!(
         scope.bindings().data().get("Foo").is_none(),
@@ -32,12 +26,7 @@ fn register_type_inserts_into_types_map_not_data() {
 fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    root.register_type(
-        "Foo".into(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    root.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
     let child = region.brand().alloc_scope(Scope::child_under(root));
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Number)));
     assert!(
@@ -52,19 +41,9 @@ fn resolve_type_inner_scope_shadows_outer() {
     let root = run_root_bare(&region);
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
-    root.register_type(
-        "Foo".into(),
-        KType::Number,
-        BindingIndex::value(1),
-        StoredReach::empty(),
-    );
+    root.register_type("Foo".into(), KType::Number, BindingIndex::value(1));
     let child = region.brand().alloc_scope(Scope::child_under(root));
-    child.register_type(
-        "Foo".into(),
-        KType::Str,
-        BindingIndex::value(1),
-        StoredReach::empty(),
-    );
+    child.register_type("Foo".into(), KType::Str, BindingIndex::value(1));
     assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
     assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));
 }

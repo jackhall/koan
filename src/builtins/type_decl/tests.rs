@@ -9,11 +9,7 @@ use crate::machine::{BindingIndex, ScopeId};
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
 /// representation at SIG finish.
-fn member_type<'a>(
-    scope: &'a crate::machine::Scope<'a>,
-    sig_name: &str,
-    member: &str,
-) -> KType<'a> {
+fn member_type<'a>(scope: &'a crate::machine::Scope<'a>, sig_name: &str, member: &str) -> KType {
     let content = match scope.resolve_type(sig_name) {
         Some(KType::Signature { content, .. }) => content,
         other => panic!("{sig_name} must bind a Signature, got {other:?}"),
@@ -159,7 +155,7 @@ fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> Scope
 
 /// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
 /// `expected`; returns the member's name.
-fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
+fn assert_type_constructor(kt: &KType, expected: &[&str]) -> String {
     match kt {
         KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             match RecursiveSet::projected_schema(set, *index) {
@@ -176,7 +172,7 @@ fn assert_type_constructor(kt: &KType<'_>, expected: &[&str]) -> String {
 }
 
 /// A root-scope-bound `Wrap` TypeConstructor `SetRef` with the given origin scope id.
-fn wrap_type_constructor<'a>(scope_id: ScopeId) -> KType<'a> {
+fn wrap_type_constructor(scope_id: ScopeId) -> KType {
     let set = RecursiveSet::singleton(
         "Wrap".into(),
         scope_id,

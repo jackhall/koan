@@ -125,7 +125,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
             ))))
         }
     };
-    let elements: Vec<SignatureElement<'a>> = schema
+    let elements: Vec<SignatureElement> = schema
         .iter()
         .map(|(name, ktype)| {
             SignatureElement::Argument(Argument {

@@ -92,12 +92,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
-        "Tee".into(),
-        KType::Number,
-        BindingIndex::value(99),
-        StoredReach::empty(),
-    );
+    scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
         Some(NameLookup::Bound(KType::Number)),
@@ -108,12 +103,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type(
-        "TyLate".into(),
-        KType::Number,
-        BindingIndex::value(5),
-        StoredReach::empty(),
-    );
+    scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
 }

@@ -69,7 +69,7 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
 /// run-root scope's type side (`resolve_type`) to grab the Signature carrier, then reads the
 /// Signature's stored schema (`value_slots`) — where VAL value slots record their declared type
 /// under their value-class name.
-fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
+fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType {
     let content = match scope.resolve_type(sig_name) {
         Some(KType::Signature { content, .. }) => content,
         other => panic!(

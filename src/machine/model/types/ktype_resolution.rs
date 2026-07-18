@@ -6,14 +6,10 @@ use super::ktype::KType;
 use super::record::Record;
 use crate::machine::model::ast::TypeIdentifier;
 
-impl<'a> KType<'a> {
+impl KType {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
     /// `List`).
-    ///
-    /// Built at the caller's `'a` directly because `KType<'a>` is invariant in `'a`
-    /// (the `Module.type_members: RefCell<HashMap<_, KType<'a>>>` field puts `'a` in
-    /// invariant position), so covariant coercion from `'static` is unavailable.
-    pub fn from_name(name: &str) -> Option<KType<'a>> {
+    pub fn from_name(name: &str) -> Option<KType> {
         match name {
             "Number" => Some(KType::Number),
             "Str" => Some(KType::Str),
@@ -35,7 +31,7 @@ impl<'a> KType<'a> {
     /// builtin-table fallback: both the bind-time scopeless caller and the scope-aware
     /// [`elaborate_type_identifier`](crate::machine::model::types::elaborate_type_identifier)
     /// route their builtin fallback through here. Unknown names surface as `Err(_)`.
-    pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType<'a>, String> {
+    pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType, String> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 
@@ -43,10 +39,10 @@ impl<'a> KType<'a> {
     /// union. Flattens any nested `Union` member into its members, deduplicates by `PartialEq`
     /// (O(n²) scan; member counts are small), and collapses a single surviving member to that
     /// member (`:(A | A)` is `:A`). Callers guarantee at least one member.
-    pub fn union_of(members: Vec<KType<'a>>) -> KType<'a> {
+    pub fn union_of(members: Vec<KType>) -> KType {
         debug_assert!(!members.is_empty(), "union_of requires at least one member");
-        let mut flat: Vec<KType<'a>> = Vec::with_capacity(members.len());
-        let push_unique = |m: KType<'a>, flat: &mut Vec<KType<'a>>| {
+        let mut flat: Vec<KType> = Vec::with_capacity(members.len());
+        let push_unique = |m: KType, flat: &mut Vec<KType>| {
             if !flat.contains(&m) {
                 flat.push(m);
             }
@@ -73,7 +69,7 @@ impl<'a> KType<'a> {
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
     /// `List<Any>`; nested containers join element-wise.
-    pub fn join(a: &KType<'a>, b: &KType<'a>) -> KType<'a> {
+    pub fn join(a: &KType, b: &KType) -> KType {
         if a == b {
             return a.clone();
         }
@@ -109,7 +105,7 @@ impl<'a> KType<'a> {
     }
 
     /// Reduce an iterator of types to their least upper bound. Empty iterator → `Any`.
-    pub fn join_iter<I: IntoIterator<Item = KType<'a>>>(iter: I) -> KType<'a> {
+    pub fn join_iter<I: IntoIterator<Item = KType>>(iter: I) -> KType {
         iter.into_iter()
             .reduce(|a, b| KType::join(&a, &b))
             .unwrap_or(KType::Any)
@@ -119,10 +115,7 @@ impl<'a> KType<'a> {
 /// Name-keyed join of two parameter records. `Some(joined)` when the records have equal
 /// length and the same key set; `None` on differing key sets, which callers coarsen to
 /// `KType::Any`.
-fn join_param_record<'a>(
-    xa: &Record<KType<'a>>,
-    ya: &Record<KType<'a>>,
-) -> Option<Record<KType<'a>>> {
+fn join_param_record(xa: &Record<KType>, ya: &Record<KType>) -> Option<Record<KType>> {
     if xa.len() != ya.len() || !xa.keys().all(|k| ya.get(k).is_some()) {
         return None;
     }

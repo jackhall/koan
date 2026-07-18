@@ -74,34 +74,6 @@ fn value_binding_carrier_read_copies_the_reach_pointer_not_a_clone() {
     );
 }
 
-/// The type-channel mirror: a type binding round-trips its stored foreign reach (a module's
-/// child-scope reach in production) through the carrier-oriented read.
-#[test]
-fn type_binding_round_trips_stored_reach() {
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
-    let foreign = run_root_storage();
-    let reach_set = FrameSet::singleton(foreign.clone());
-    let reach = StoredReach::for_test(Some(&reach_set), false);
-    bindings
-        .try_register_type("Ty", kt, BindingIndex::BUILTIN, reach)
-        .expect("type register should succeed");
-    match bindings.lookup_type_carrier("Ty", None) {
-        Some(NameLookup::Bound(hit)) => {
-            assert!(std::ptr::eq(hit.kt, kt));
-            assert!(
-                hit.stored.foreign.is_some_and(
-                    |f| matches!(f.members(), [only] if std::rc::Rc::ptr_eq(only, &foreign))
-                ),
-                "stored type reach should round-trip the foreign frame",
-            );
-        }
-        _ => panic!("expected a bound type carrier hit"),
-    }
-}
-
 #[test]
 fn try_register_type_inserts_into_types_map() {
     let storage = run_root_storage();
@@ -109,12 +81,7 @@ fn try_register_type_inserts_into_types_map() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
     let outcome = bindings
-        .try_register_type(
-            "Foo",
-            kt,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        )
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
     let stored = bindings
@@ -134,19 +101,9 @@ fn try_register_type_rejects_collision_with_rebind() {
     let kt1: &KType = region.alloc_ktype(KType::Number);
     let kt2: &KType = region.alloc_ktype(KType::Str);
     bindings
-        .try_register_type(
-            "Foo",
-            kt1,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        )
+        .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
         .expect("first register should succeed");
-    let err = match bindings.try_register_type(
-        "Foo",
-        kt2,
-        BindingIndex::BUILTIN,
-        StoredReach::for_test(None, false),
-    ) {
+    let err = match bindings.try_register_type("Foo", kt2, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
@@ -167,12 +124,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
     let kt: &KType = region.alloc_ktype(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
-        .try_register_type(
-            "Foo",
-            kt,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        )
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
     assert!(_r.get("Foo").is_none());
@@ -194,12 +146,7 @@ fn try_register_type_clears_matching_placeholder() {
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type(
-            "Bar",
-            kt,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        )
+        .try_register_type("Bar", kt, BindingIndex::BUILTIN)
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
@@ -211,12 +158,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
     bindings
-        .try_register_type(
-            "Foo",
-            kt,
-            BindingIndex::BUILTIN,
-            StoredReach::for_test(None, false),
-        )
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
@@ -287,12 +229,7 @@ fn value_token_may_not_bind_type_side() {
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = region.alloc_ktype(KType::Number);
-    let error = match bindings.try_register_type(
-        "int_ord",
-        kt,
-        BindingIndex::BUILTIN,
-        StoredReach::for_test(None, false),
-    ) {
+    let error = match bindings.try_register_type("int_ord", kt, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),
     };

@@ -23,7 +23,6 @@ use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome};
-use crate::machine::core::StoredReach;
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Residence;
@@ -35,45 +34,28 @@ use crate::witnessed::Residence;
 pub(in crate::machine::execute) enum CtorKind<'step> {
     /// NewType construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
-    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`. `reach` is the
-    /// identity's stored per-binding type reach, folded into the construction operand's witness so
-    /// it names the identity's own region.
-    NewType {
-        identity: &'step KType<'step>,
-        reach: StoredReach<'step>,
-    },
+    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
+    NewType { identity: &'step KType },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
     /// instead of deferring the whole record literal; the
-    /// finish builds the `KObject::Record` and wraps it with `identity`. `reach` carries the
-    /// identity's stored per-binding type reach for the construction operand's witness.
+    /// finish builds the `KObject::Record` and wraps it with `identity`.
     RecordNewType {
-        identity: &'step KType<'step>,
+        identity: &'step KType,
         field_names: Vec<String>,
-        reach: StoredReach<'step>,
     },
     Tagged {
-        schema: Rc<HashMap<String, KType<'step>>>,
-        set: Rc<RecursiveSet<'step>>,
+        schema: Rc<HashMap<String, KType>>,
+        set: Rc<RecursiveSet>,
         index: usize,
         tag: String,
-        /// The identity's stored per-binding type token, folded into the construction operand's
-        /// witness. The `Tagged` identity is a fresh dest-region `SetRef`, so `reach` is empty
-        /// today; it names the set's region once `RecursiveSet` is region-allocated.
-        reach: StoredReach<'step>,
     },
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
     /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
     /// expression; the finish stamps the value's full type as the sole applied arg, peels any
     /// `Wrapped` layer, and wraps the payload with a fresh `ConstructorApply(Wrapper, [<arg>])`
-    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`. `reach` is the ctor
-    /// `SetRef` identity's stored per-binding type token, folded into the construction operand's
-    /// witness so it names the set's region once `RecursiveSet` is region-allocated.
-    ApplyConstructor {
-        set: Rc<RecursiveSet<'step>>,
-        index: usize,
-        reach: StoredReach<'step>,
-    },
+    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
+    ApplyConstructor { set: Rc<RecursiveSet>, index: usize },
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -99,13 +81,12 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match s.resolve_type_identifier(t, ctx.active_chain()) {
-        // A resolved type leaf is witnessed in place under `s` (the scope it was resolved against) from
-        // its binding's stored `reach`: `s`'s home frame pins the type's own / ancestor region, and
-        // `reach` names any genuinely-foreign region (a module's child scope) — no `alloc_ktype`
-        // re-home, no `child_scope()` walk.
-        TypeResolution::Done(resolved) => Outcome::Done(Ok(StepCarried::born(
-            s.resident_type_carrier(resolved.kt, resolved.stored),
-        ))),
+        // A resolved type leaf is witnessed in place under `s` (the scope it was resolved
+        // against): a `KType` is owned data, so the read travels under `s`'s home-frame pin
+        // alone — no reach to name, no `alloc_ktype` re-home, no `child_scope()` walk.
+        TypeResolution::Done(kt) => {
+            Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt))))
+        }
         TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
         // A still-finalizing referent. A visible type alias has already resolved its RHS
         // through the bridge, so a bare leaf parks on exactly one producer; park on it and
@@ -302,15 +283,5 @@ pub(super) fn type_call<'step>(
             return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head_t.render()))));
         }
     };
-    // The identity's stored per-binding type token (home-omitted foreign reach + home-borrow
-    // bit), resolved through the same lexical chain as the identity: threaded to the
-    // construction finish so its operand names the identity's own region rather than relying
-    // on the dest frame's storage `outer` chain, which omits lexical ancestors under TCO.
-    // Empty while `RecursiveSet` is heap-`Rc`'d.
-    let reach = scope.type_reach(head_t.as_str(), chain);
-    apply_callable(
-        ctx,
-        ResolvedCallable::Constructor { identity, reach },
-        &expr,
-    )
+    apply_callable(ctx, ResolvedCallable::Constructor { identity }, &expr)
 }

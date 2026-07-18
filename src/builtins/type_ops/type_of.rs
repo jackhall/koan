@@ -5,7 +5,7 @@
 //! names no type on its own (see
 //! [design/typing/modules.md](../../../design/typing/modules.md)).
 
-use crate::machine::model::{Carried, Held};
+use crate::machine::model::Held;
 use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind};
 
@@ -29,28 +29,9 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
                 .into(),
         ))));
     }
-    // A region-free type rebuilds owned at `'static` and seals with an empty reach — the scalar
-    // gate, which also covers a literal argument (region-pure, so it carries no reach carrier).
-    if let Some(owned) = value.ktype().to_static() {
-        return Action::Done(Ok(ctx.ctx.alloc_type(owned)));
-    }
-    match ctx.arg_carrier("value") {
-        // The type borrows the value's own region — a module's self-sig borrows the module — so it
-        // is built at the fold brand from the argument's own view, folding that carrier's reach into
-        // the result's witness. Reading `ktype()` off the ambient value instead would produce a type
-        // whose region borrow no evidence covers.
-        Some(dep) => Action::Done(Ok(ctx.ctx.alloc_carried_with(
-            &[dep],
-            |brand, views| match views[0] {
-                Carried::Object(o) => Carried::Type(brand.alloc_ktype_folded(o.ktype())),
-                Carried::Type(_) => unreachable!("the `value` slot's carrier is an object"),
-            },
-        ))),
-        None => Action::Done(Err(KError::new(KErrorKind::ShapeError(
-            "`TYPE OF`: the value's type reaches a region but the value arrived without a carrier"
-                .into(),
-        )))),
-    }
+    // The type a value reports for itself is owned data — a module's self-sig included — so it
+    // seals with an empty reach and allocates into this step's own region.
+    Action::Done(Ok(ctx.ctx.alloc_type(value.ktype())))
 }
 
 #[cfg(test)]

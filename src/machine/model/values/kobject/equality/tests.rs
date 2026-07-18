@@ -18,7 +18,7 @@ fn part(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
     Spanned::bare(p)
 }
 
-fn newtype_singleton<'a>(name: &str, repr: KType<'a>) -> Rc<RecursiveSet<'a>> {
+fn newtype_singleton(name: &str, repr: KType) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
         ScopeId::from_raw(0, 0xAA),
@@ -205,7 +205,7 @@ fn record_field_value_differs() {
 
 // --- tagged -----------------------------------------------------------------------
 
-fn two_member_set() -> Rc<RecursiveSet<'static>> {
+fn two_member_set() -> Rc<RecursiveSet> {
     // A two-member set so distinct indices exist for the `same_nominal` identity check.
     let members = vec![
         NominalMember::pending("None".into(), ScopeId::from_raw(0, 0xBB), KKind::NewType),

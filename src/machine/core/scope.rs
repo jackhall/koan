@@ -8,7 +8,7 @@ use crate::machine::model::OperatorGroup;
 use crate::machine::model::RecursiveSet;
 
 use super::arena::{FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
-use super::bindings::{Bindings, StoredReach};
+use super::bindings::Bindings;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 
@@ -65,14 +65,14 @@ pub struct Scope<'a> {
     /// leaf naming one of its members to a transient `RecursiveRef` back-edge, so
     /// cross-references inside the block resolve regardless of lexical order — the block is
     /// the one cross-order resolution that survives strict source-order type-name lookup.
-    recursive_set: Option<Rc<RecursiveSet<'a>>>,
+    recursive_set: Option<Rc<RecursiveSet>>,
     /// Set iff this is a `GROUP` body's child scope: the one shared [`OperatorGroup`] record its
     /// member `OP` declarations belong to, read through [`Scope::nearest_group_context`]. The record
     /// is lifetime-free (member set + mode + combiner *name*), so holding it costs the scope no
     /// region borrow.
     group: Option<&'a OperatorGroup>,
-    /// SIG-decl-scope slot collector: `VAL <name> :Type` records `name → (declared type,
-    /// stored reach)` here — a schema in progress, not a binding universe (nothing resolves
+    /// SIG-decl-scope slot collector: `VAL <name> :Type` records `name → declared type`
+    /// here — a schema in progress, not a binding universe (nothing resolves
     /// names in it; no visibility index). `Some` only for scopes minted by
     /// [`Self::child_under_sig`]; the SIG finish projects it into the signature's stored
     /// [`SigSchema`], and ATTR over the signature reads a slot's declared type back out of it.
@@ -119,9 +119,9 @@ impl<'a> ScopeBindings<'a> {
     }
 }
 
-/// name → (region-resident declared type, its stored reach). Plain `borrow_mut` inside the
-/// single write door is fine: the cell is never held across calls.
-type SigSlots<'a> = RefCell<HashMap<String, (&'a KType<'a>, StoredReach<'a>)>>;
+/// name → region-resident declared type. Plain `borrow_mut` inside the single write door is fine:
+/// the cell is never held across calls.
+type SigSlots<'a> = RefCell<HashMap<String, &'a KType>>;
 
 /// Lexical classification for a [`Scope`]. The SIG-body gate walks outward and
 /// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
@@ -237,7 +237,7 @@ impl<'a> Scope<'a> {
         outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
         kind: ScopeKind,
-        recursive_set: Option<Rc<RecursiveSet<'a>>>,
+        recursive_set: Option<Rc<RecursiveSet>>,
     ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -345,7 +345,7 @@ impl<'a> Scope<'a> {
     /// whose members are co-declared. Members dispatch against this scope, so the elaborator
     /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
     /// parent; the sealed members are mirrored up into it at the block's dep-finish.
-    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet<'a>>) -> Scope<'a> {
+    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet>) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
@@ -359,7 +359,7 @@ impl<'a> Scope<'a> {
     /// only the *nearest* group is considered, so a reference to an outer block's member
     /// falls through to ordinary resolution (an external `SetRef`), not a back-edge into the
     /// inner set.
-    pub fn nearest_recursive_set(&self) -> Option<Rc<RecursiveSet<'a>>> {
+    pub fn nearest_recursive_set(&self) -> Option<Rc<RecursiveSet>> {
         self.ancestors().find_map(|s| s.recursive_set.clone())
     }
 
@@ -388,7 +388,7 @@ impl<'a> Scope<'a> {
         &self,
         te: &crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<(&'a crate::machine::model::KType<'a>, StoredReach<'a>)> {
+    ) -> Option<&'a crate::machine::model::KType> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -396,21 +396,19 @@ impl<'a> Scope<'a> {
     }
 
     /// Memo write — no-op on a transparent `USING` window (see
-    /// [`Self::type_identifier_memo_get`]). `reach` is the resolved type binding's stored reach,
-    /// cached alongside the `&KType` so a memo hit rebuilds the read carrier.
+    /// [`Self::type_identifier_memo_get`]).
     pub(crate) fn type_identifier_memo_insert(
         &self,
         te: crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-        kt: &'a crate::machine::model::KType<'a>,
-        reach: StoredReach<'a>,
+        kt: &'a crate::machine::model::KType,
     ) {
         if self.bindings.is_borrowed() {
             return;
         }
         self.bindings
             .get()
-            .type_identifier_memo_insert(te, cutoff, kt, reach);
+            .type_identifier_memo_insert(te, cutoff, kt);
     }
 
     /// The lexical parent — a bare field read of the stored `&'a Scope<'a>`, already at `'a` because
@@ -466,12 +464,12 @@ impl<'a> Scope<'a> {
     }
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read.
-    pub(crate) fn sig_value_slots(&self) -> Vec<(String, &'a KType<'a>)> {
+    pub(crate) fn sig_value_slots(&self) -> Vec<(String, &'a KType)> {
         match &self.sig_slots {
             Some(slots) => slots
                 .borrow()
                 .iter()
-                .map(|(name, (kt, _))| (name.clone(), *kt))
+                .map(|(name, kt)| (name.clone(), *kt))
                 .collect(),
             None => Vec::new(),
         }

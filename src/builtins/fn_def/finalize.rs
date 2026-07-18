@@ -40,7 +40,7 @@ pub(crate) enum FnKind {
 /// (short-circuited before [`classify`] runs) and with `Pending`'s payload
 /// kept by-value so the planning match stays readable.
 pub(crate) enum ParamListResult<'a> {
-    Done(Vec<SignatureElement<'a>>),
+    Done(Vec<SignatureElement>),
     Pending {
         park_producers: Vec<NodeId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
@@ -50,7 +50,7 @@ pub(crate) enum ParamListResult<'a> {
 /// Terminal shape of FN-def's planning step.
 pub(crate) enum FnPlan<'a> {
     Synchronous {
-        elements: Vec<SignatureElement<'a>>,
+        elements: Vec<SignatureElement>,
         return_type: ReturnType<'a>,
     },
     Deferred(DeferredInputs<'a>),
@@ -75,7 +75,7 @@ pub(crate) struct DeferredInputs<'a> {
     /// verbatim instead of re-parsing `signature_expr` (which the anonymous path
     /// has no keyword/arg form of). `None` for the keyworded FN path, which
     /// re-elaborates the spliced signature.
-    pub prebuilt_elements: Option<Vec<SignatureElement<'a>>>,
+    pub prebuilt_elements: Option<Vec<SignatureElement>>,
 }
 
 /// Decide between the synchronous build path and the deferred path.
@@ -186,7 +186,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 /// function's only handle.
 pub(crate) fn finalize_fn_with_kind<'a>(
     scope: &'a Scope<'a>,
-    elements: Vec<SignatureElement<'a>>,
+    elements: Vec<SignatureElement>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
     kind: FnKind,

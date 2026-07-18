@@ -19,7 +19,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::{home_ambient_return_type, home_delivered_return_type};
+use crate::machine::core::home_return_type;
 use crate::machine::core::{split_body_statements, ReturnContract};
 use crate::machine::core::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
@@ -307,29 +307,10 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 ))))
                             }
                         };
-                        // The type is a sub-dispatch's result, so its evidence is its own delivered
-                        // carrier — which names every region it borrows, including one the captured
-                        // scope does not cover (`-> :(TYPE OF er)` over a module minted in a
-                        // module-returning FN's per-call region). The reach mints in the FN's own
-                        // per-call scope, so it dies with the call. Without a frame block there is
-                        // no such scope, and the type takes the evidence-free ambient door.
-                        let homed = match &block_entry {
-                            BlockEntry::FrameScope(frame) => frame.with_scope(|call| {
-                                home_delivered_return_type(
-                                    kt,
-                                    &terminal.delivered,
-                                    call,
-                                    func.captured_scope(),
-                                )
-                            }),
-                            BlockEntry::None | BlockEntry::Overlay(_) => {
-                                home_ambient_return_type(kt, func.captured_scope())
-                            }
-                        };
-                        let ret = match homed {
-                            Ok(ret) => ret,
-                            Err(error) => return Outcome::Done(Err(error)),
-                        };
+                        // The resolved type is owned data: it clones into the captured scope's own
+                        // region at the contract lifetime, so the contract outlives the
+                        // sub-dispatch's terminal without naming its region.
+                        let ret = home_return_type(kt, func.captured_scope());
                         Some(ReturnContract::PerCall { func, ret })
                     }
                 };

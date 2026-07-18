@@ -39,7 +39,7 @@ pub enum ValueEqualityError {
 /// Comparability gate for container type parameters: the two are compared iff one `satisfied_by` the
 /// other in either direction (an unrelated pair short-circuits the container to `Ok(false)`).
 /// Cross-lifetime — the slot and value type parameters carry independent lifetimes.
-fn types_related<'a, 'b>(a: &KType<'a>, b: &KType<'b>, types: &TypeRegistry) -> bool {
+fn types_related(a: &KType, b: &KType, types: &TypeRegistry) -> bool {
     a.satisfied_by(b, types) || b.satisfied_by(a, types)
 }
 

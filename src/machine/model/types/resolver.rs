@@ -91,10 +91,10 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 /// [`KType::from_type_identifier`] so fixture scopes that skip builtin registration still
 /// resolve builtin names. Parameterized shapes sub-Dispatch through the standalone dispatcher,
 /// not this walk.
-pub fn elaborate_type_identifier<'a>(
-    el: &mut Elaborator<'_, 'a>,
+pub fn elaborate_type_identifier(
+    el: &mut Elaborator<'_, '_>,
     t: &TypeIdentifier,
-) -> TypeResolution<KType<'a>> {
+) -> TypeResolution<KType> {
     let name = t.as_str();
     if el.threaded.contains(name) {
         // Self / forward-sibling reference inside a type-definition body: a transient
@@ -124,7 +124,7 @@ pub fn elaborate_type_identifier<'a>(
     // type universe, so a name reaching here can hold no value to layer a sharper miss over. What
     // remains is the builtin table — tried last so a fixture scope that skips builtin registration
     // still resolves builtin names — and then an unknown-name failure.
-    match KType::<'a>::from_type_identifier(t) {
+    match KType::from_type_identifier(t) {
         Ok(kt) => TypeResolution::Done(kt),
         Err(msg) => TypeResolution::Unbound(msg),
     }
@@ -134,7 +134,7 @@ pub fn elaborate_type_identifier<'a>(
 pub enum SealOutcome<'a> {
     /// The member sealed (or was already sealed); the region reference is its `SetRef`
     /// identity, ready to wrap in a `Carried::Type`.
-    Sealed(&'a KType<'a>),
+    Sealed(&'a KType),
     /// A transient `RecursiveRef(name)` named no set member — a sealing bug surfaced as a
     /// shape error rather than a dangling reference.
     DanglingRef(String),
@@ -162,7 +162,7 @@ pub fn finalize_nominal_member<'a>(
     name: &str,
     scope_id: ScopeId,
     kind: KKind,
-    build_schema: impl FnOnce(&Rc<RecursiveSet<'a>>) -> SchemaSealResult<'a>,
+    build_schema: impl FnOnce(&Rc<RecursiveSet>) -> SchemaSealResult,
     bind_index: crate::machine::core::BindingIndex,
 ) -> SealOutcome<'a> {
     // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type:
@@ -220,9 +220,9 @@ pub fn finalize_nominal_member<'a>(
 }
 
 /// Outcome of the `build_schema` closure passed to [`finalize_nominal_member`].
-pub enum SchemaSealResult<'a> {
+pub enum SchemaSealResult {
     /// The schema sealed cleanly.
-    Ok(super::recursive_set::NominalSchema<'a>),
+    Ok(super::recursive_set::NominalSchema),
     /// A transient `RecursiveRef` named no set member — a sealing bug.
     Dangling(String),
 }

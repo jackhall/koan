@@ -194,12 +194,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
     let scope = run_root_bare(&region);
 
     let snapshot = scope.bindings().types();
-    scope.register_type(
-        "Foo".to_string(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     scope.drain_pending();
     assert!(!snapshot.contains_key("Foo"));
     drop(snapshot);
@@ -260,18 +255,8 @@ fn drain_debug_asserts_on_type_arm_invariant_violation() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let snapshot = scope.bindings().types();
-    scope.register_type(
-        "Foo".to_string(),
-        KType::Number,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     drop(snapshot);
-    scope.register_type(
-        "Foo".to_string(),
-        KType::Str,
-        BindingIndex::BUILTIN,
-        StoredReach::empty(),
-    );
+    scope.register_type("Foo".to_string(), KType::Str, BindingIndex::BUILTIN);
     scope.drain_pending();
 }

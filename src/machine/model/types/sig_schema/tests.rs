@@ -1,6 +1,6 @@
 //! Unit tests for the signature-subtyping relation, its schema, and abstract-member
-//! substitution. Schemas are built both directly (region-free `KType`s in `'static`) and by
-//! projecting parsed SIG declarations, pinned via [`SigSchema::with_pins`].
+//! substitution. Schemas are built both directly (owned `KType`s) and by projecting parsed SIG
+//! declarations, pinned via [`SigSchema::with_pins`].
 
 use std::collections::HashMap;
 
@@ -11,10 +11,8 @@ use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
 // --- region-free builders -------------------------------------------------------------
 
 /// A `TypeConstructor`-kind `SetRef` of the given arity. `ScopeId::SENTINEL` marks a SIG's
-/// higher-kinded abstract slot; any other id marks a real constructor. Lifetime-generic (the
-/// value is region-free) so each call site infers the lifetime it needs — `KType<'a>` is
-/// invariant, so a `'static` value cannot be reused where a region lifetime is expected.
-fn ctor<'a>(name: &str, arity: usize, scope_id: ScopeId) -> KType<'a> {
+/// higher-kinded abstract slot; any other id marks a real constructor.
+fn ctor(name: &str, arity: usize, scope_id: ScopeId) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
@@ -26,26 +24,26 @@ fn ctor<'a>(name: &str, arity: usize, scope_id: ScopeId) -> KType<'a> {
     KType::SetRef { set, index: 0 }
 }
 
-fn sig_abstract<'a>(id: ScopeId, name: &str) -> KType<'a> {
+fn sig_abstract(id: ScopeId, name: &str) -> KType {
     KType::AbstractType {
         source: id,
         name: name.into(),
     }
 }
 
-fn fn_type<'a>(params: Vec<(&str, KType<'a>)>, ret: KType<'a>) -> KType<'a> {
+fn fn_type(params: Vec<(&str, KType)>, ret: KType) -> KType {
     KType::function_type(
         Record::from_pairs(params.into_iter().map(|(n, t)| (n.to_string(), t))),
         Box::new(ret),
     )
 }
 
-fn schema<'a>(
+fn schema(
     sig_id: Option<ScopeId>,
-    abstract_members: Vec<(&str, KType<'a>, Option<usize>)>,
-    manifest_members: Vec<(&str, KType<'a>)>,
-    value_slots: Vec<(&str, KType<'a>)>,
-) -> SigSchema<'a> {
+    abstract_members: Vec<(&str, KType, Option<usize>)>,
+    manifest_members: Vec<(&str, KType)>,
+    value_slots: Vec<(&str, KType)>,
+) -> SigSchema {
     SigSchema {
         sig_id,
         abstract_members: abstract_members
@@ -70,7 +68,7 @@ use super::sig_subtype as relation;
 
 /// Run the relation and unbox the failure so `matches!` can name the variant directly.
 #[allow(clippy::result_large_err)] // test ergonomics: unbox so assertions name the variant
-fn check<'s, 'p>(sub: &SigSchema<'s>, sup: &SigSchema<'p>) -> Result<(), SigSubtypeFailure> {
+fn check(sub: &SigSchema, sup: &SigSchema) -> Result<(), SigSubtypeFailure> {
     let types = TypeRegistry::new();
     relation(sub, sup, &types).map_err(|e| *e)
 }
@@ -372,30 +370,6 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
     ));
 }
 
-#[test]
-fn sig_subtype_runs_across_distinct_lifetimes() {
-    let types = TypeRegistry::new();
-    // The relation takes `sub` and `sup` at independent lifetimes. Build one in a fresh
-    // shorter-lived scope and the other in `'static` to prove the heterogeneous signature
-    // is exercised (not just same-lifetime `check`).
-    let sup: SigSchema<'static> = schema(
-        Some(SUP_ID),
-        vec![("Type", sig_abstract(SUP_ID, "Type"), None)],
-        vec![],
-        vec![("v", sig_abstract(SUP_ID, "Type"))],
-    );
-    let name = String::from("v");
-    {
-        let sub = schema(
-            None,
-            vec![],
-            vec![("Type", KType::Number)],
-            vec![(name.as_str(), KType::Number)],
-        );
-        assert!(sig_subtype(&sub, &sup, &types).is_ok());
-    }
-}
-
 // --- pins via with_pins ----------------------------------------------------------------
 
 #[test]
@@ -464,7 +438,7 @@ fn sig_to_sig_entailment_over_shared_abstract() {
 
 #[test]
 fn substitute_top_level_and_nested() {
-    let mut map: HashMap<String, KType<'static>> = HashMap::new();
+    let mut map: HashMap<String, KType> = HashMap::new();
     map.insert("Type".into(), KType::Number);
 
     // Top level.
@@ -510,7 +484,7 @@ fn substitute_top_level_and_nested() {
 
 #[test]
 fn substitute_constructor_apply_sentinel_ctor_position() {
-    let mut map: HashMap<String, KType<'static>> = HashMap::new();
+    let mut map: HashMap<String, KType> = HashMap::new();
     let real = ctor("MyWrap", 1, REAL_ID);
     map.insert("Wrap".into(), real.clone());
     let applied = KType::constructor_apply(
@@ -525,12 +499,12 @@ fn substitute_constructor_apply_sentinel_ctor_position() {
 
 #[test]
 fn substitute_leaves_non_matching_sig_id_and_unknown_names() {
-    let map: HashMap<String, KType<'static>> = HashMap::new();
+    let map: HashMap<String, KType> = HashMap::new();
     // Unknown name — untouched even at the matching sig_id.
     let unknown = sig_abstract(SUP_ID, "Other");
     assert_eq!(substitute_sig_members(&unknown, SUP_ID, &map), unknown);
     // Non-matching sig_id — untouched.
-    let mut with_type: HashMap<String, KType<'static>> = HashMap::new();
+    let mut with_type: HashMap<String, KType> = HashMap::new();
     with_type.insert("Type".into(), KType::Number);
     let other_sig = sig_abstract(SUP_ID, "Type");
     assert_eq!(

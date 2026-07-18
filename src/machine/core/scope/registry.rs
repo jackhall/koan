@@ -200,41 +200,25 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as an
+    /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as a
     /// region-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
     /// conditional-defer shape as [`Self::bind_value`]. Infallible: a name collision
     /// at builtin registration is a programming error, so the [`KError`] is dropped.
-    ///
-    /// The crate-internal tail [`Self::register_builtin_type`] derives its empty token onto: it
-    /// takes the reach as a parameter, so every production type registration routes through a fused
-    /// door ([`Self::register_type_delivered`] and siblings) that derives the token rather than
-    /// asserting it here.
     pub(crate) fn register_type(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'a>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
-        reach: StoredReach<'a>,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target().register_type(name, ktype, index, reach);
+            self.write_target().register_type(name, ktype, index);
             return;
         }
         self.assert_open(&name);
-        // `reach` is this call's own reach evidence for `ktype`, minted by the caller into this
-        // same scope's region — dest-relative by construction, so the audit only ever rejects a
-        // caller that mis-minted its evidence (a programming error, matching this fn's infallible
-        // contract).
-        let kt_ref: &'a crate::machine::model::KType<'a> = self
-            .alloc_ktype_reaching(ktype, &reach)
-            .expect("register_type: reach must cover ktype's borrows (mis-minted evidence)");
-        match self
-            .bindings
-            .get()
-            .try_register_type(&name, kt_ref, index, reach)
-        {
+        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
+        match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index, reach),
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
             Err(_) => {}
         }
     }
@@ -250,30 +234,25 @@ impl<'a> Scope<'a> {
     /// is a programming error, so it panics rather than deferring (deferring would risk
     /// a window where the type resolves with the pre-install's empty payload).
     ///
-    /// The region-pure nominal finalizes (STRUCT / named UNION / Result / recursive-types / SIG)
-    /// call this directly with the empty token — their identity reaches nothing foreign — and consume
-    /// the returned `&KType`.
+    /// The nominal finalizes (STRUCT / named UNION / Result / recursive-types / SIG) call this
+    /// directly and consume the returned `&KType`.
     pub(crate) fn register_type_upsert(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'a>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
-        reach: StoredReach<'a>,
-    ) -> Result<&'a crate::machine::model::KType<'a>, KError> {
+    ) -> Result<&'a crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
-            return self
-                .write_target()
-                .register_type_upsert(name, ktype, index, reach);
+            return self.write_target().register_type_upsert(name, ktype, index);
         }
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::KType<'a> =
-            self.alloc_ktype_reaching(ktype, &reach)?;
+        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
         match self
             .bindings
             .get()
-            .try_register_type_upsert(&name, kt_ref, index, reach)?
+            .try_register_type_upsert(&name, kt_ref, index)?
         {
             ApplyOutcome::Applied => Ok(kt_ref),
             ApplyOutcome::Conflict => panic!(
@@ -283,67 +262,58 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Region-pure nominal upsert: install a nominal `SetRef` identity (STRUCT/UNION/NEWTYPE/RECURSIVE
-    /// member) whose identity is region-pure by construction — a heap-`Rc` set index carrying no region
-    /// pointer — so the stored reach is the empty token, minted here rather than asserted at the call
-    /// site. The upsert twin of [`Self::register_builtin_type`] for the nominal-finalize sites.
+    /// Nominal upsert: install a nominal `SetRef` identity (STRUCT/UNION/NEWTYPE/RECURSIVE member)
+    /// — a heap-`Rc` set index. The nominal-finalize sites' name for
+    /// [`Self::register_type_upsert`].
     pub(crate) fn register_nominal_upsert(
         &self,
         name: String,
-        identity: crate::machine::model::KType<'a>,
+        identity: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::KType<'a>, KError> {
-        self.register_type_upsert(name, identity, index, StoredReach::empty())
+    ) -> Result<&'a crate::machine::model::KType, KError> {
+        self.register_type_upsert(name, identity, index)
     }
 
-    /// Fused delivered type registration: derive the type's stored reach off the RHS envelope
-    /// (`Residence::Kept` — a `KType` clone is shallow, so its interior borrows survive and the
-    /// producer host materializes unconditionally), alloc the identity into this scope's region
-    /// under that evidence, register it (strict insert-if-absent, conditional-defer), and return the
-    /// resident `&KType` paired with the same token so the caller seals its terminal from it.
-    /// `carrier: None` is a region-pure RHS — the empty token, derived internally.
+    /// Delivered type registration: allocate the RHS type into this scope's own region through the
+    /// single storage door and register it (strict insert-if-absent, conditional-defer), returning
+    /// the resident `&KType` so the caller seals its terminal from it. The type crosses the region
+    /// boundary as owned data — `ktype` is already the caller's clone out of the RHS envelope — so
+    /// no reach is derived and the RHS carrier pins nothing here.
     pub(crate) fn register_type_delivered(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'_>,
-        carrier: Option<&DeliveredCarried>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
+    ) -> Result<&'a crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
-                .register_type_delivered(name, ktype, carrier, index);
+                .register_type_delivered(name, ktype, index);
         }
         self.assert_open(&name);
-        let stored = match carrier {
-            Some(cell) => self.host_reach_of(cell),
-            None => StoredReach::empty(),
-        };
-        let kt_ref = self.alloc_ktype_reaching(ktype, &stored)?;
+        let kt_ref = self.brand().alloc_ktype(ktype);
         match self
             .bindings
             .get()
-            .try_register_type(&name, kt_ref, index, stored)?
+            .try_register_type(&name, kt_ref, index)?
         {
-            ApplyOutcome::Applied => Ok((kt_ref, stored)),
+            ApplyOutcome::Applied => Ok(kt_ref),
             ApplyOutcome::Conflict => {
-                self.pending.defer_type(name, kt_ref, index, stored);
-                Ok((kt_ref, stored))
+                self.pending.defer_type(name, kt_ref, index);
+                Ok(kt_ref)
             }
         }
     }
 
-    /// Record a SIG value slot: derive the declared type's stored reach off the delivered
-    /// carrier (`None` ⇒ the empty token), allocate the type into this region under that
-    /// evidence, and insert it into the nearest enclosing SIG decl scope's slot collector.
+    /// Record a SIG value slot: allocate the declared type into this region through the single
+    /// storage door and insert it into the nearest enclosing SIG decl scope's slot collector.
     /// Duplicate slot name is a `Rebind`. The slot is a schema entry, not a binding — it takes
     /// no `BindingIndex` (no lexical read can see it) and touches no binding map.
     pub(crate) fn register_sig_slot_delivered(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'_>,
-        carrier: Option<&DeliveredCarried>,
-    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
+        ktype: crate::machine::model::KType,
+    ) -> Result<&'a crate::machine::model::KType, KError> {
         // Mirrors `is_in_sig_body`'s walk exactly: a scope with `sig_slots: Some` wins; a
         // `Module` scope short-circuits (no SIG body encloses); `Root`/`Anonymous`/`Sig`
         // (a `Sig` scope always carries `sig_slots: Some` by construction, so it never
@@ -362,11 +332,7 @@ impl<'a> Scope<'a> {
                 ))
             })?;
         target.assert_open(&name);
-        let stored = match carrier {
-            Some(cell) => self.host_reach_of(cell),
-            None => StoredReach::empty(),
-        };
-        let kt_ref = self.alloc_ktype_reaching(ktype, &stored)?;
+        let kt_ref = self.brand().alloc_ktype(ktype);
         let slots = target
             .sig_slots
             .as_ref()
@@ -374,8 +340,8 @@ impl<'a> Scope<'a> {
         if slots.borrow().contains_key(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        slots.borrow_mut().insert(name, (kt_ref, stored));
-        Ok((kt_ref, stored))
+        slots.borrow_mut().insert(name, kt_ref);
+        Ok(kt_ref)
     }
 
     /// User-facing twin of [`Self::register_type_delivered`] for `LET <TypeIdentifier> = …` / `VAL`:
@@ -386,14 +352,13 @@ impl<'a> Scope<'a> {
     pub(crate) fn register_user_type_delivered(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'_>,
-        carrier: Option<&DeliveredCarried>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<(&'a crate::machine::model::KType<'a>, StoredReach<'a>), KError> {
+    ) -> Result<&'a crate::machine::model::KType, KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        self.register_type_delivered(name, ktype, carrier, index)
+        self.register_type_delivered(name, ktype, index)
     }
 
     /// Fused MODULE-finish value bind: derive the module's stored reach off its `child` scope
@@ -416,16 +381,15 @@ impl<'a> Scope<'a> {
         Ok((obj, stored))
     }
 
-    /// Builtin type registration: no reach parameter — builtins are region-pure by the pure/checked
-    /// alloc tiers, so the token is empty internally. Same infallible contract as
-    /// [`Self::register_type`] at [`BindingIndex::BUILTIN`].
+    /// Builtin type registration: [`Self::register_type`] at [`BindingIndex::BUILTIN`], same
+    /// infallible contract.
     pub(crate) fn register_builtin_type(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'a>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
     ) {
-        self.register_type(name, ktype, index, StoredReach::empty());
+        self.register_type(name, ktype, index);
     }
 
     /// Synchronous pre-install of a nominal type's identity — `name` → `ktype` (a
@@ -441,24 +405,15 @@ impl<'a> Scope<'a> {
     pub fn preinstall_identity(
         &self,
         name: String,
-        ktype: crate::machine::model::KType<'a>,
+        ktype: crate::machine::model::KType,
         index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
             self.write_target().preinstall_identity(name, ktype, index);
             return;
         }
-        // A pre-installed nominal identity is a `KType::SetRef` into the declaring set — owned data
-        // reaching no foreign region — so its stored reach is empty (the reaching-tier evidence
-        // degrades to the dest-only checked audit, which its pure members always pass).
-        let kt_ref: &'a crate::machine::model::KType<'a> = self
-            .alloc_ktype_reaching(ktype, &StoredReach::empty())
-            .expect("preinstall_identity: a pre-installed SetRef's members are always owned");
-        match self
-            .bindings
-            .get()
-            .try_register_type(&name, kt_ref, index, StoredReach::empty())
-        {
+        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
+        match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
                 "preinstall_identity borrow conflict on `{name}` — runs with no outer \

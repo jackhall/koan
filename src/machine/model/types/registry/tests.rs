@@ -106,7 +106,7 @@ fn a_fresh_registry_shares_nothing_with_another() {
 /// An unsealed set: created with pending members but never filled, so `digest()` stays `None`
 /// — the pointer-transient window `digest_is_content` must refuse. Mirrors the fixture shape in
 /// `type_digest/tests.rs::multi_member_set_seals_digest_on_last_fill`.
-fn unsealed_set() -> std::rc::Rc<RecursiveSet<'static>> {
+fn unsealed_set() -> std::rc::Rc<RecursiveSet> {
     std::rc::Rc::new(RecursiveSet::new(vec![NominalMember::pending(
         "Pending".into(),
         ScopeId::SENTINEL,
@@ -114,7 +114,7 @@ fn unsealed_set() -> std::rc::Rc<RecursiveSet<'static>> {
     )]))
 }
 
-fn sealed_set() -> std::rc::Rc<RecursiveSet<'static>> {
+fn sealed_set() -> std::rc::Rc<RecursiveSet> {
     RecursiveSet::singleton(
         "Sealed".into(),
         ScopeId::SENTINEL,

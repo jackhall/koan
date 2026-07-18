@@ -26,31 +26,24 @@ use crate::machine::model::{
 };
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::FinishCtx;
-use crate::machine::{seal_type_operand, StepCarried};
+use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
-use crate::machine::DeliveredCarried;
 
 /// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
 /// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
 /// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
 /// identity never descends `repr`.
 ///
-/// `repr` embeds `carrier`'s reach when `carrier` is `Some` — a bind-time `repr` argument (a
-/// caller-supplied structural type) or a sigil repr's dep terminal (`defer_resolved_sigil`) can
-/// both carry a borrow into a foreign region (a declared `Signature`, a nominal `SetRef`, ...).
-/// `carrier` is `None` for a bare-leaf name resolved against scope bindings; the sealed identity
-/// there is a fresh `SetRef` over its own set (never `'static`), so it takes
-/// [`StepAllocator::alloc_type_checked`]'s runtime-audited seal, which passes because the identity
-/// borrows at most its own region.
+/// The identity is owned data allocated into this scope's own region, so it seals as a resident
+/// type carrier regardless of where `repr` was resolved from.
 fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
-    repr: KType<'a>,
+    repr: KType,
     bind_index: BindingIndex,
-    carrier: Option<&DeliveredCarried>,
 ) -> Result<StepCarried<'a>, KError> {
     let scope = fctx.scope;
     let scope_id = scope.id;
@@ -60,23 +53,10 @@ fn finalize_newtype<'a>(
         NominalSchema::NewType(Box::new(repr)),
     );
     let identity = KType::SetRef { set, index: 0 };
-    // Fused mint + alloc + register: the RHS carrier's reach is minted into this scope's arena (kept
-    // mode) so `identity`'s SetRef (never `'static`, and possibly embedding `repr`'s foreign borrow —
-    // see this fn's doc) is audited against it, the identity is allocated under it, and it is
-    // registered — one call returns the resident `&KType` plus the same token. The token names no
-    // foreign reach when `carrier` is `None`, which degrades the reaching check to the dest-only case.
-    let (kt_ref, stored) = scope.register_type_delivered(name, identity, carrier, bind_index)?;
-    let sealed = match carrier {
-        // Cross the identity across the build brand as a declared operand, folding the carrier's
-        // reach onto the placement's witness — rather than capturing `kt_ref` into a fold closure.
-        // `stored` is the identity's own token (the carrier's host reach `kt_ref` was audited
-        // against), replayed whole so the operand's witness carries the derived home-borrow bit.
-        Some(c) => seal_type_operand(fctx.scope, fctx.ctx.frame(), kt_ref, stored, &[c]),
-        // A bare-leaf name reaches no foreign region: `kt_ref` is region-pure over its own set, so it
-        // seals with no carrier to fold and no capture to cross.
-        None => fctx.ctx.alloc_type_checked(kt_ref.clone())?,
-    };
-    Ok(sealed)
+    // Fused alloc + register: the identity is allocated into this scope's own region through the
+    // single storage door and registered — one call returns the resident `&KType`.
+    let kt_ref = scope.register_type_delivered(name, identity, bind_index)?;
+    Ok(seal_type_identity(fctx.scope, kt_ref))
 }
 
 /// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
@@ -87,9 +67,8 @@ fn finalize_newtype<'a>(
 fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a>,
     name: String,
-    fields: Vec<(String, KType<'a>)>,
+    fields: Vec<(String, KType)>,
     bind_index: BindingIndex,
-    carriers: &[&DeliveredCarried],
 ) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -105,7 +84,7 @@ fn finalize_record_newtype<'a>(
         KKind::NewType,
         |set| {
             let missing = RefCell::new(Vec::new());
-            let sealed_pairs: Vec<(String, KType<'a>)> = fields
+            let sealed_pairs: Vec<(String, KType)> = fields
                 .into_iter()
                 .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing)))
                 .collect();
@@ -120,16 +99,7 @@ fn finalize_record_newtype<'a>(
         bind_index,
     );
     match outcome {
-        // Cross the sealed identity as a declared operand and fold the field carriers' reach onto
-        // the placement's witness — `kt_ref` seals over its own set (empty foreign reach), the
-        // carriers supply whatever the record fields reach.
-        SealOutcome::Sealed(kt_ref) => Ok(seal_type_operand(
-            scope,
-            fctx.ctx.frame(),
-            kt_ref,
-            scope.checked_reach_of_type(kt_ref),
-            carriers,
-        )),
+        SealOutcome::Sealed(kt_ref) => Ok(seal_type_identity(scope, kt_ref)),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
             "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
         )))),
@@ -161,19 +131,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                         )
                     },
                     // A bare-leaf name resolved against scope bindings, not a dep terminal.
-                    move |fctx, kt| {
-                        Action::Done(finalize_newtype(fctx, name, kt, bind_index, None))
-                    },
+                    move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
                 )
             }
-            // A bind-time `repr` argument: any caller-supplied structural carrier, so
-            // `arg_carrier` names its own foreign reach if it has one.
             other => Action::Done(finalize_newtype(
                 &ctx.finish_ctx(),
                 name,
                 other.clone(),
                 bind_index,
-                ctx.arg_carrier("repr"),
             )),
         }
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
@@ -197,8 +162,8 @@ fn defer_resolved_sigil<'a>(
     let wrapped = KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(
         Box::new(inner),
     ))]);
-    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt, carrier| {
-        Action::Done(finalize_newtype(fctx, name, kt, bind_index, Some(carrier)))
+    dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
+        Action::Done(finalize_newtype(fctx, name, kt, bind_index))
     })
 }
 
@@ -255,19 +220,16 @@ pub fn body_constructor_family<'a>(
         vec![param_name],
         ctx.scope.id,
     );
-    // Bind through the fused mint + alloc + register path, mirroring
-    // `type_decl::bind_abstract_member`. The minted `SetRef` is owned/region-pure (an `Rc` set
-    // with no foreign borrow), so the `None` carrier is correct.
+    // Bind through the fused alloc + register path, mirroring `type_decl::bind_abstract_member`.
     let bind_index = ctx.bind_index();
-    let (kt_ref, stored) =
-        match ctx
-            .scope
-            .register_user_type_delivered(member_name, kt, None, bind_index)
-        {
-            Ok(pair) => pair,
-            Err(e) => return Action::Done(Err(e)),
-        };
-    let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
+    let kt_ref = match ctx
+        .scope
+        .register_user_type_delivered(member_name, kt, bind_index)
+    {
+        Ok(kt_ref) => kt_ref,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let carrier = ctx.scope.resident_type_carrier(kt_ref);
     Action::Done(Ok(StepCarried::born(carrier)))
 }
 
@@ -375,7 +337,7 @@ mod tests {
     fn record_fields<'a>(
         scope: &'a Scope<'a>,
         name: &str,
-    ) -> (Rc<RecursiveSet<'a>>, Vec<(String, KType<'a>)>) {
+    ) -> (Rc<RecursiveSet>, Vec<(String, KType)>) {
         match scope.resolve_type(name) {
             Some(KType::SetRef { set, index }) => {
                 let member = set.member(*index);
@@ -404,7 +366,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE Distance = Number");
         let types = scope.bindings().types();
-        let (kt, _, _) = types
+        let (kt, _) = types
             .get("Distance")
             .expect("Distance should be in bindings.types");
         match **kt {
@@ -769,7 +731,7 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "NEWTYPE (Type AS Wrapper)");
         let types = scope.bindings().types();
-        let (kt, _, _) = types
+        let (kt, _) = types
             .get("Wrapper")
             .expect("Wrapper should be in bindings.types");
         match **kt {
