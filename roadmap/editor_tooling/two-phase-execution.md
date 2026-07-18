@@ -30,7 +30,12 @@ Two consequences follow:
   and resuming from it at run-time would not.
 
 Both fall out of the same mechanism — there is no separate "checker phase"
-to build first and "JIT phase" to build second.
+to build first and "JIT phase" to build second. A third consequence is
+that nothing can consume the build phase's results for code generation:
+[design/compilation.md](../../design/compilation.md) describes the
+compilation model that treats the stalled DAG state as its intermediate
+representation, and it has no build phase to consume until this item
+ships.
 
 **Acceptance criteria.**
 
@@ -56,6 +61,17 @@ to build first and "JIT phase" to build second.
   separate bytecode IR; not a native object file; not an inline-cache
   sidecar. Run-time consumes the snapshot directly, supplies the pegged
   inputs and effects, and the scheduler resumes.
+- *Residual code generation — open.*
+  [design/compilation.md](../../design/compilation.md) describes a second
+  consumer of the same stalled state: a code generator emitting
+  ahead-of-time code for the residual, with direct calls where the build
+  phase resolved dispatch, table dispatch through the runtime library
+  where it didn't, and an embedded evaluator for runtime-`EVAL` regions.
+  This does not reopen the snapshot-format decision — the stalled DAG
+  stays the sole intermediate representation; codegen is a back end over
+  it. Open: whether the generator lands inside this item or as a
+  follow-up item once the build phase exists, and what the first target
+  is (transpiled Rust vs native).
 - *Permissive vs strict build-time errors — open.* The user-facing choice
   is whether the build-time phase permits unresolved type bindings — the
   [dispatch-time name placeholder](../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)
@@ -71,8 +87,9 @@ to build first and "JIT phase" to build second.
   program before committing to a snapshot format.
 - *Whether to commit at all — open.* Koan may stay single-phase indefinitely
   and surface build-time errors as a tooling-only mode, or commit to the
-  snapshot-and-resume path. Keep upstream design choices from closing off
-  either path.
+  snapshot-and-resume path. The residual-code-generation path rides on the
+  build phase, so staying single-phase forfeits it too. Keep upstream
+  design choices from closing off either path.
 
 ## Dependencies
 

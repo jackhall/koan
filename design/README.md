@@ -86,6 +86,13 @@ Root concerns:
   (`Random`, `IO`, `Time`) ascribing it, and the dispatch story for
   bind/return. Tracked in
   [roadmap/libraries/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md).
+- [compilation.md](compilation.md) — the compilation model: build-time
+  free execution to the stalled fixed point, residual code generation
+  with the stalled DAG as the intermediate representation, the
+  direct / table-dispatch / interpreted call tiers, the `EVAL`
+  dynamism partition, and the build/run serialization boundary.
+  Tracked in
+  [roadmap/editor_tooling/two-phase-execution.md](../roadmap/editor_tooling/two-phase-execution.md).
 
 Type and module system ([typing/](typing/README.md)):
 
