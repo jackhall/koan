@@ -225,16 +225,16 @@ otherwise routes the shared `retype` in `witnessed.rs`.
 **`alloc_carried_with` finish-surface reach fold** ([src/machine/core/arena.rs](../src/machine/core/arena.rs))
 — `KoanStepContextExt::alloc_carried_with` routes a finish's result through the
 library combinator `StepContext::alloc_with`, folding each listed dep's sealed reach into the
-result's witness by construction before the caller's `build` closure ever clones a dep-derived
-value in. This test seals a `KType` resident in a producer frame's region — the arena reference is
-the borrow at stake (the stand-in for a dep terminal's `t.value`/`t.carrier`) — as a *different*
-consumer frame's own carrier via `alloc_carried_with`, rebuilt at the fold brand from the dep's
-view; it then drops the dep envelope and every producer-frame handle and reads the sealed type
-back — a use-after-free under tree borrows if the fold is skipped (as
-`alloc_type`, its unfolded sibling, would leave it). The only `unsafe` routed is the shared
-`retype` in `witnessed.rs` (through `alloc_with`'s `yoke`/`merge`).
+result's witness by construction before the caller's `build` closure ever holds a dep-derived
+borrow. This test seals a closure resident in a producer frame's region — its captured-scope
+borrow is the pointee at stake (the stand-in for a dep terminal's `t.value`/`t.carrier`) — into a
+*different* consumer frame's own carrier via `alloc_carried_with`, the dep's view riding in as a
+`Held` cell rebuilt at the fold brand; it then drops the dep envelope and every producer-frame
+handle and reads the captured scope back — a use-after-free under tree borrows if the fold is
+skipped. The only `unsafe` routed is the shared `retype` in `witnessed.rs` (through `alloc_with`'s
+`yoke`/`merge`).
 
-- `type_field_reach_fold_survives_producer_frame_free`
+- `object_field_reach_fold_survives_producer_frame_free`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
@@ -515,9 +515,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-18: 614s — 36 tests, 0 leaks, 0 UB
 - 2026-07-18: 722s — 36 tests, 0 leaks, 0 UB
 - 2026-07-17: 633s — 38 tests, 0 leaks, 0 UB
 - 2026-07-17: 625s — 40 tests, 0 leaks, 0 UB
 - 2026-07-17: 638s — 40 tests, 0 leaks, 0 UB
-- 2026-07-14: 1108s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

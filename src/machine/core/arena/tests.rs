@@ -967,6 +967,66 @@ fn multi_region_record_of_closures_survives_frame_free() {
     );
 }
 
+/// **`alloc_carried_with`'s single-dep reach fold, exercised through the actual finish-surface
+/// combinator.** A dep terminal's object — the stand-in for `t.value`/`t.carrier` — is sealed as
+/// the step's own carrier by rebuilding it at the fold brand from the dep's view in a *different*
+/// frame's region. The fold unions the producer's reach into the result's witness; every
+/// producer-frame handle then drops, and reading the sealed object back through the arena
+/// reference must not dangle. Fails on UB, not values — the closing case for the reach hole an
+/// unfolded allocation leaves open.
+#[test]
+fn object_field_reach_fold_survives_producer_frame_free() {
+    let root = run_root_storage();
+    let scope = default_scope(&root, Box::new(std::io::sink()));
+
+    // Producer: a closure resident in its own frame's region. A `KFunction` borrows its captured
+    // scope, so the pointee is a genuine region borrow — the dangle the fold has to prevent.
+    let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let obj: &KObject<'_> = alloc_home_closure(&producer_frame);
+    let expected_id = match obj {
+        KObject::KFunction(f) => f.captured_scope().id,
+        other => panic!("expected a KFunction, got {}", other.ktype().name()),
+    };
+    let dep: DeliveredCarried = Delivered::seal(
+        Witnessed::from_erased(Erased::erase(Carried::Object(obj)), CarrierWitness::default()),
+        producer_frame.storage_rc(),
+    );
+
+    // Consumer: a StepAllocator over a *different* frame — the finish surface's own region.
+    // `alloc_carried_with` rebuilds the object at the fold brand from the dep's view and folds the
+    // producer's reach into the sealed carrier's witness.
+    let consumer_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
+    // The dep's object rides into the result as a `Held` cell — a borrow into the producer's
+    // region, which is exactly what the fold has to keep alive.
+    let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| {
+        let cells = vec![Held::from_carried(views[0])];
+        Carried::Object(b.alloc_object_folded(KObject::list_of_held(cells)))
+    });
+
+    // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
+    // producer's region alive, through the set minted into the consumer arena — itself pinned by
+    // the retained consumer storage (the retention stand-in the read names).
+    let consumer_storage = consumer_frame.storage_rc();
+    drop(dep);
+    drop(producer_frame);
+    drop(consumer_frame);
+
+    // Read back through the sealed carrier's arena reference — the captured-scope read is what
+    // dangles if the producer region was freed.
+    let read = sealed.inspect_pinned(&consumer_storage, |c| match c.object() {
+        KObject::List(items, _) => match items[0].object() {
+            KObject::KFunction(f) => f.captured_scope().id,
+            other => panic!("expected a KFunction element, got {}", other.ktype().name()),
+        },
+        other => panic!("expected a List, got {}", other.ktype().name()),
+    });
+    assert_eq!(
+        read, expected_id,
+        "captured scope read back after producer frame freed"
+    );
+}
+
 // `RegionSet::mint` — the witness-set hosting substrate (design/witness-hosting.md § Composition).
 // Each test below pins one rule of the mint's composition (home-omission, borrows-host
 // materialization, outer-chain subsumption, precise reads, teardown release).
