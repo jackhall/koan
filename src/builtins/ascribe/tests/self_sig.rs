@@ -5,7 +5,7 @@
 
 use crate::builtins::test_support::{
     binds_module, lookup_module, parse_one, run, run_one_err, run_probe_returning_registry,
-    run_returning_registry, run_root_silent,
+    run_root_silent,
 };
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
@@ -166,19 +166,31 @@ fn satisfying_module_ascribes_and_repeat_hits_verdict() {
     let scope = run_root_silent(&region);
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
     // succeeds too — the run's registry records the first verdict and the repeat check hits it.
-    let registry = run_returning_registry(
+    // The miss counter is the discriminating one: flat misses across the repeat mean every lookup
+    // it made hit, so nothing re-walked `sig_subtype`; the hit delta guards against a vacuously
+    // lookup-free probe.
+    let (registry, hits_before, misses_before) = run_probe_returning_registry(
         scope,
         "NEWTYPE (Type AS Wrapper)\n\
          SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
          MODULE implementation = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
-         LET first_view = (implementation :| Complete)\n\
-         LET second_view = (implementation :| Complete)",
+         LET first_view = (implementation :| Complete)",
+        "LET second_view = (implementation :| Complete)",
     );
     assert!(binds_module(scope, "first_view"));
     assert!(binds_module(scope, "second_view"));
+    assert_eq!(
+        registry.miss_count(),
+        misses_before,
+        "the repeat ascription should miss nothing — its checks share the first one's verdicts, \
+         got {misses_before} misses before it and {} hits / {} misses after",
+        registry.hit_count(),
+        registry.miss_count(),
+    );
     assert!(
-        registry.hit_count() > 0,
-        "the repeat ascription should hit the verdict the first one recorded, got {} hits / {} misses",
+        registry.hit_count() > hits_before,
+        "the repeat ascription should consult the registry at all, got {hits_before} hits before \
+         it and {} hits / {} misses after",
         registry.hit_count(),
         registry.miss_count(),
     );
@@ -226,16 +238,19 @@ fn opaque_views_have_distinct_type_of() {
 }
 
 /// The `SigSatisfies` verdict keys the subject on the module's self-sig content digest, so two
-/// modules with an identical interface share one verdict. Sampling the hit counter between the
-/// takes pins that specifically: `TAKE b` — a second, distinct module — raises the count on its
-/// own, so its satisfaction check hits the verdict `TAKE a` recorded rather than re-walking
-/// `sig_subtype`. Verdicts are scoped to the run, so both takes run against the one registry of a
-/// single retained runtime.
+/// modules with an identical interface share one verdict. The discriminating counter is the
+/// **miss** delta: `TAKE b` — a second, distinct module — leaves misses flat, so every lookup it
+/// made (its satisfaction check included) hit a verdict the prelude recorded rather than
+/// re-walking `sig_subtype`. A hit delta alone would pass even with sharing broken, since `TAKE b`
+/// re-hits verdicts unrelated to the sharing (see the differing-interface companion below). The
+/// hit assertion stays as the vacuity guard: it proves the probe consulted the registry at all.
+/// Verdicts are scoped to the run, so both takes run against the one registry of a single
+/// retained runtime.
 #[test]
 fn identical_modules_share_satisfaction_verdict() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    let (registry, hits_before) = run_probe_returning_registry(
+    let (registry, hits_before, misses_before) = run_probe_returning_registry(
         scope,
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\
@@ -244,10 +259,43 @@ fn identical_modules_share_satisfaction_verdict() {
          TAKE a",
         "TAKE b",
     );
+    assert_eq!(
+        registry.miss_count(),
+        misses_before,
+        "`TAKE b` should miss nothing — its satisfaction check shares `TAKE a`'s verdict, \
+         got {misses_before} misses before it and {} hits / {} misses after",
+        registry.hit_count(),
+        registry.miss_count(),
+    );
     assert!(
         registry.hit_count() > hits_before,
-        "`TAKE b` should hit the verdict `TAKE a` recorded, got {hits_before} hits before it \
+        "`TAKE b` should consult the registry at all, got {hits_before} hits before it \
          and {} hits / {} misses after",
+        registry.hit_count(),
+        registry.miss_count(),
+    );
+}
+
+/// Negative control pinning that the miss counter discriminates: a second module whose interface
+/// *differs* has a different self-sig digest, so its satisfaction check cannot share `TAKE a`'s
+/// verdict and the miss count rises across `TAKE c`.
+#[test]
+fn differing_module_interface_misses_the_shared_verdict() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let (registry, _, misses_before) = run_probe_returning_registry(
+        scope,
+        "SIG Ord = ((VAL x :Number))\n\
+         MODULE a = ((LET x = 1))\n\
+         MODULE c = ((LET x = 1) (LET extra = \"tag\"))\n\
+         FN (TAKE m :Ord) -> Number = (m.x)\n\
+         TAKE a",
+        "TAKE c",
+    );
+    assert!(
+        registry.miss_count() > misses_before,
+        "`TAKE c`'s differing interface should miss `TAKE a`'s verdict, got {misses_before} \
+         misses before it and {} hits / {} misses after",
         registry.hit_count(),
         registry.miss_count(),
     );

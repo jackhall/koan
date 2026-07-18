@@ -88,6 +88,9 @@ record's field substrate in the region; this item owns every type-side clone.
 
 - [KType without a lifetime parameter](lifetime-free-ktype.md) — a `Copy` digest
   handle requires a lifetime-free `KType`.
+- [Run registry through bind doors and builtin seeding](registry-through-bind-doors.md) —
+  builtin seeding constructs types, so interning them needs the run frame's registry
+  established and threaded first.
 
 **Unblocks:**
 

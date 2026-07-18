@@ -158,35 +158,26 @@ fn dispatch_phase<'a>(runtime: &mut KoanRuntime<'a>, scope: &'a Scope<'a>, sourc
     runtime.execute().expect("scheduler should succeed");
 }
 
-/// Like [`run`], but hands back the run's [`TypeRegistry`] so a test can read its verdict
-/// counters. The registry is owned by the run frame and dies with the runtime, so the `Rc` is
-/// cloned out before the runtime drops.
-pub(crate) fn run_returning_registry<'a>(scope: &'a Scope<'a>, source: &str) -> Rc<TypeRegistry> {
-    let mut runtime = KoanRuntime::new();
-    dispatch_phase(&mut runtime, scope, source);
-    runtime
-        .type_registry()
-        .expect("a dispatched run establishes the run frame and its registry")
-}
-
-/// Like [`run_returning_registry`], but splits the source in two phases run against one retained
-/// runtime: `prelude` first, then `probe`. Returns the run's registry together with its hit count
-/// as of the end of `prelude`, so a test can measure the counter's movement across `probe` alone
-/// rather than over the whole run. Verdicts are run-scoped, so a single runtime is what makes the
-/// two phases share a registry at all.
+/// Like [`run`], but splits the source in two phases run against one retained
+/// runtime: `prelude` first, then `probe`. Returns the run's [`TypeRegistry`] together with its
+/// hit and miss counts as of the end of `prelude`, so a test can measure each counter's movement
+/// across `probe` alone rather than over the whole run. Verdicts are run-scoped, so a single
+/// runtime is what makes the two phases share a registry at all; the registry dies with the
+/// runtime, so the `Rc` is cloned out before the runtime drops.
 pub(crate) fn run_probe_returning_registry<'a>(
     scope: &'a Scope<'a>,
     prelude: &str,
     probe: &str,
-) -> (Rc<TypeRegistry>, usize) {
+) -> (Rc<TypeRegistry>, usize, usize) {
     let mut runtime = KoanRuntime::new();
     dispatch_phase(&mut runtime, scope, prelude);
     let registry = runtime
         .type_registry()
         .expect("a dispatched run establishes the run frame and its registry");
     let hits_before_probe = registry.hit_count();
+    let misses_before_probe = registry.miss_count();
     dispatch_phase(&mut runtime, scope, probe);
-    (registry, hits_before_probe)
+    (registry, hits_before_probe, misses_before_probe)
 }
 
 /// The module `name` binds to. Modules are values, so the binding lives on the value channel
