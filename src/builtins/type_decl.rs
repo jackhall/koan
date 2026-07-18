@@ -28,18 +28,21 @@ use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 
 use super::{arg, kw, sig};
 
-/// Mint the abstract type-constructor representation: a singleton [`RecursiveSet`] of one
-/// [`KKind::TypeConstructor`] member with [`ScopeId::SENTINEL`] — the "declared abstract,
-/// awaiting per-call mint" brand a real constructor (NEWTYPE etc.) never carries — filled with
-/// an empty variant schema (identity ignores it) and the declared `param_names`. Opaque
-/// ascription re-mints a fresh per-call singleton off this shape.
+/// Mint the type-constructor representation: a singleton [`RecursiveSet`] of one
+/// [`KKind::TypeConstructor`] member at `scope_id`, filled with an empty variant schema
+/// (identity ignores it) and the declared `param_names`. The `scope_id` is the sole
+/// discriminant between the two shapes this mints: [`ScopeId::SENTINEL`] brands TYPE's abstract
+/// slot (the "declared abstract, awaiting per-call mint" member a real constructor never
+/// carries), while a real declaring scope's id brands a NEWTYPE-declared constructor family.
+/// Opaque ascription re-mints a fresh per-call singleton off the sentinel shape.
 pub(crate) fn mint_type_constructor<'a>(
     member_name: String,
     param_names: Vec<String>,
+    scope_id: ScopeId,
 ) -> KType<'a> {
     let set = RecursiveSet::singleton(
         member_name,
-        ScopeId::SENTINEL,
+        scope_id,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names,
@@ -113,14 +116,14 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Act
         Ok(pair) => pair,
         Err(e) => return Action::Done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name.clone(), vec![param_name]);
+    let kt = mint_type_constructor(member_name.clone(), vec![param_name], ScopeId::SENTINEL);
     bind_abstract_member(ctx, member_name, kt)
 }
 
 /// Parse `(<Param> AS <Name>)` into `(param_name, member_name)`, both bare Type-class
 /// identifiers. More than one part before `AS` is the arity-above-1 error; any other shape is a
 /// form error naming the expected surface.
-fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(String, String), KError> {
+pub(crate) fn parse_hk_decl(decl: &KExpression<'_>) -> Result<(String, String), KError> {
     let shape_error = || {
         KError::new(KErrorKind::ShapeError(
             "TYPE constructor declaration must read `TYPE (<Param> AS <Name>)`".to_string(),

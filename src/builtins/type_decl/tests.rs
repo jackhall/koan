@@ -299,13 +299,12 @@ fn monad_signature_smoke() {
 /// slot's kind/arity check.
 #[test]
 fn module_attr_access_returns_type_constructor() {
-    use crate::builtins::test_support::register_arity1_constructor;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    register_arity1_constructor(scope, "Wrapper");
     run(
         scope,
-        "SIG Monad = ((TYPE (Type AS Wrap)))\n\
+        "NEWTYPE (Type AS Wrapper)\n\
+         SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE int_list = ((LET Wrap = Wrapper))\n\
          LET mo = (int_list :| Monad)",
     );

@@ -231,6 +231,47 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     )
 }
 
+/// `NEWTYPE (<Param> AS <Name>)` — declare a type-constructor family (declaration-by-example),
+/// mirroring the application surface `:(Number AS <Name>)` with the concrete argument replaced by
+/// the parameter name. Mints a *real* (non-sentinel) [`KKind::TypeConstructor`] `SetRef` under
+/// `Name` in the declaring scope, so it satisfies a matching-arity higher-kinded slot and applies
+/// through `AS`. Reuses the shared `TYPE` declaration parser, which rejects arity above 1. Valid
+/// in any scope (top level, MODULE body) — no SIG-body gate. Arity 1 only.
+pub fn body_constructor_family<'a>(
+    ctx: &crate::machine::BodyCtx<'a, '_>,
+) -> crate::machine::Action<'a> {
+    use crate::machine::{require_kexpression, Action};
+
+    let decl = match require_kexpression(ctx.args, "NEWTYPE", "decl") {
+        Ok(decl) => decl,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let (param_name, member_name) = match crate::builtins::type_decl::parse_hk_decl(&decl) {
+        Ok(pair) => pair,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let kt = crate::builtins::type_decl::mint_type_constructor(
+        member_name.clone(),
+        vec![param_name],
+        ctx.scope.id,
+    );
+    // Bind through the fused mint + alloc + register path, mirroring
+    // `type_decl::bind_abstract_member`. The minted `SetRef` is owned/region-pure (an `Rc` set
+    // with no foreign borrow), so the `None` carrier is correct.
+    let bind_index = ctx.bind_index();
+    let (kt_ref, stored) = match ctx.scope.register_user_type_delivered(
+        member_name,
+        kt,
+        None,
+        bind_index,
+    ) {
+        Ok(pair) => pair,
+        Err(e) => return Action::Done(Err(e)),
+    };
+    let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
+    Action::Done(Ok(StepCarried::born(carrier)))
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
@@ -296,17 +337,38 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some((binder, binder_kind)),
         None,
     );
+    // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
+    // (no `=`), so it lands in its own dispatch bucket, disjoint from the three `{NEWTYPE, =}`
+    // overloads above. The `KExpression` slot captures `(Type AS Wrapper)` raw — the inner `AS`
+    // is not sub-dispatched (same as TYPE's higher-kinded overload).
+    let constructor_family_sig = sig(
+        KType::OfKind(KKind::AnyType),
+        vec![kw("NEWTYPE"), arg("decl", KType::KExpression)],
+    );
+    register_builtin_full(
+        scope,
+        "NEWTYPE",
+        constructor_family_sig,
+        body_constructor_family,
+        Some((
+            crate::builtins::type_decl::binder_name,
+            crate::machine::BindKind::Type,
+        )),
+        None,
+    );
 }
 
 #[cfg(test)]
 mod tests {
 
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{
+        binds_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
+    };
     use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType};
     use crate::machine::run_root_storage;
     use crate::machine::KoanRuntime;
-    use crate::machine::{KErrorKind, Scope};
+    use crate::machine::{KErrorKind, Scope, ScopeId};
     use std::rc::Rc;
 
     /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
@@ -697,5 +759,119 @@ mod tests {
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
+    }
+
+    /// `NEWTYPE (Type AS Wrapper)` mints a *real* (non-sentinel) `TypeConstructor` `SetRef` in the
+    /// declaring scope's type table: kind `TypeConstructor`, member `scope_id` the declaring
+    /// scope's own id, `param_names == ["Type"]`, empty schema, and no value-side entry.
+    #[test]
+    fn constructor_family_mints_real_identity() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE (Type AS Wrapper)");
+        let types = scope.bindings().types();
+        let (kt, _, _) = types
+            .get("Wrapper")
+            .expect("Wrapper should be in bindings.types");
+        match **kt {
+            KType::SetRef { ref set, index } => {
+                let member = set.member(index);
+                assert_eq!(member.name, "Wrapper");
+                assert_eq!(member.kind, KKind::TypeConstructor);
+                assert_eq!(member.scope_id, scope.id);
+                assert_ne!(member.scope_id, ScopeId::SENTINEL);
+                let borrow = member.schema();
+                match borrow.as_ref() {
+                    Some(NominalSchema::TypeConstructor {
+                        schema,
+                        param_names,
+                    }) => {
+                        assert!(schema.is_empty(), "a constructor family has an empty schema");
+                        assert_eq!(*param_names, vec!["Type".to_string()]);
+                    }
+                    other => panic!("expected a TypeConstructor schema, got {other:?}"),
+                }
+            }
+            ref other => panic!("expected a TypeConstructor SetRef identity, got {other:?}"),
+        }
+        drop(types);
+        assert!(
+            scope.bindings().data().get("Wrapper").is_none(),
+            "a constructor-family declaration writes no value-side carrier",
+        );
+    }
+
+    /// After `NEWTYPE (Type AS Wrapper)`, applying it with `:(Number AS Wrapper)` lowers to a
+    /// `ConstructorApply { ctor: <Wrapper SetRef>, args: [Number] }`.
+    #[test]
+    fn constructor_family_applies_with_as() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE (Type AS Wrapper)");
+        let result = run_one_type(scope, parse_one(":(Number AS Wrapper)"));
+        match result {
+            KType::ConstructorApply { ctor, args, .. } => {
+                match ctor.as_ref() {
+                    KType::SetRef { set, index } => {
+                        assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
+                    }
+                    other => panic!("expected a SetRef ctor, got {other:?}"),
+                }
+                assert_eq!(*args, vec![KType::Number]);
+            }
+            other => panic!("expected ConstructorApply, got {other:?}"),
+        }
+    }
+
+    /// A `NEWTYPE (Type AS Wrap)` declared inside a MODULE body supplies a matching-arity
+    /// higher-kinded `TYPE (Type AS Wrap)` SIG slot: `int_list :| Monad` ascribes.
+    #[test]
+    fn constructor_family_declared_inside_module_satisfies_hk_slot() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let src = "SIG Monad = ((TYPE (Type AS Wrap)))\n\
+                   MODULE int_list = ((NEWTYPE (Type AS Wrap)))\n\
+                   LET view = (int_list :| Monad)";
+        let exprs = crate::parse::parse(src).expect("parse should succeed");
+        let mut runtime = KoanRuntime::new();
+        let mut ids = Vec::new();
+        for expr in exprs {
+            ids.push(runtime.dispatch_in_scope(expr, scope));
+        }
+        runtime.execute().expect("scheduler should succeed");
+        for (i, id) in ids.iter().enumerate() {
+            if let Err(e) = runtime.result_error(*id) {
+                panic!("expr {i} errored: {e}");
+            }
+        }
+        assert!(
+            binds_module(scope, "view"),
+            "int_list must satisfy Monad and bind a view module",
+        );
+    }
+
+    /// `NEWTYPE (One Two AS Wrapper)` — two parameters before `AS` — hits the arity-above-1
+    /// error out of the shared `TYPE` declaration parser.
+    #[test]
+    fn constructor_family_arity_above_one_rejects() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(scope, parse_one("NEWTYPE (One Two AS Wrapper)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("arity above 1")),
+            "expected the arity-above-1 error, got {err}",
+        );
+    }
+
+    /// `NEWTYPE (Type Wrapper)` — no `AS` keyword — is a shape error from the shared parser.
+    #[test]
+    fn constructor_family_missing_as_rejects() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(scope, parse_one("NEWTYPE (Type Wrapper)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(_)),
+            "expected a shape error for a missing AS, got {err}",
+        );
     }
 }

@@ -4,8 +4,7 @@
 //! them; a transparent view records the source's concrete types.
 
 use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, register_arity1_constructor, run, run_one, run_one_err,
-    run_root_silent,
+    binds_module, lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
 };
 use crate::machine::model::KType;
 use crate::machine::model::Module;
@@ -164,14 +163,14 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
 fn satisfying_module_ascribes_and_repeat_hits_memo() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    register_arity1_constructor(scope, "Wrapper");
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
     // succeeds too — the satisfaction memo caches the first result and the repeat check is a
     // registry hit.
     memo_reset();
     run(
         scope,
-        "SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
+        "NEWTYPE (Type AS Wrapper)\n\
+         SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
          MODULE implementation = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
          LET first_view = (implementation :| Complete)\n\
          LET second_view = (implementation :| Complete)",

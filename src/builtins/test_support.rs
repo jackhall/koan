@@ -96,28 +96,6 @@ pub(crate) fn run_root_bare<'a>(run_storage: &'a Rc<FrameStorage>) -> &'a Scope<
     ))
 }
 
-/// Register a root-scope arity-1 type constructor named `name` (a real, non-sentinel
-/// `TypeConstructor`, its single parameter named `Type`), so a koan `LET <Member> = <name>`
-/// can supply a signature's higher-kinded abstract slot (`TYPE (Type AS <Member>)`). The only
-/// builtin constructor, `Result`, is arity 2, so an arity-1 slot needs a minted one.
-pub(crate) fn register_arity1_constructor<'a>(scope: &'a Scope<'a>, name: &str) {
-    use crate::machine::model::{NominalSchema, RecursiveSet};
-    use crate::machine::{BindingIndex, ScopeId};
-    let set = RecursiveSet::singleton(
-        name.into(),
-        ScopeId::from_raw(0, 0xC0DE),
-        NominalSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
-            param_names: vec!["Type".into()],
-        },
-    );
-    scope.register_builtin_type(
-        name.into(),
-        KType::SetRef { set, index: 0 },
-        BindingIndex::BUILTIN,
-    );
-}
-
 /// Parse a source string expected to contain exactly one top-level expression.
 pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
     let mut exprs = parse(src).expect("parse should succeed");
