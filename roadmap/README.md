@@ -59,6 +59,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [Verdict edges on a run-frame type registry](type_memos/registry-verdict-edges.md)
 - [Signature types own their schema](type_memos/signature-schema-ownership.md)
 

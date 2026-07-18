@@ -1,10 +1,10 @@
 # Interned type content behind Copy handles
 
 Make `KType` a `Copy` handle into a run-frame-owned graph that owns all type content.
-Final item of the four-item arc landing
-[design/typing/type-registry.md](../../design/typing/type-registry.md); it assumes
-the run-frame registry with verdict edges
-([Verdict edges on a run-frame type registry](registry-verdict-edges.md)) and a
+Final item of the arc landing
+[design/typing/type-registry.md](../../design/typing/type-registry.md); it builds on
+the shipped run-frame registry
+([`registry.rs`](../../src/machine/model/types/registry.rs)) and assumes a
 lifetime-free `KType` ([KType without a lifetime parameter](lifetime-free-ktype.md)).
 
 **Problem.** `KType` owns its structural content — `Box`/`Vec` children and
@@ -86,9 +86,6 @@ record's field substrate in the region; this item owns every type-side clone.
 
 **Requires:**
 
-- [Verdict edges on a run-frame type registry](registry-verdict-edges.md) — the
-  registry home and the `&TypeRegistry` threading this item extends with content
-  nodes.
 - [KType without a lifetime parameter](lifetime-free-ktype.md) — a `Copy` digest
   handle requires a lifetime-free `KType`.
 

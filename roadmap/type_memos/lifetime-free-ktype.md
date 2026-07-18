@@ -1,7 +1,7 @@
 # KType without a lifetime parameter
 
 Delete `KType<'a>`'s lifetime parameter and the type-side residence machinery that
-polices it. Part of the four-item arc landing
+polices it. Part of the arc landing
 [design/typing/type-registry.md](../../design/typing/type-registry.md).
 
 **Problem.** `KType<'a>`'s lifetime parameter exists solely because `Signature`

@@ -95,14 +95,11 @@ The verdict edges are a cache, never a soundness mechanism:
 
 ## Open work
 
-- [Verdict edges on a run-frame type registry](../../roadmap/type_memos/registry-verdict-edges.md)
-  — ships "The memo registry"'s verdict-edge recording, described ahead of
-  implementation (today verdicts memoize in a thread-local LRU,
-  `type_memos.rs`, with a `memo_safe` insert guard standing in for the
-  builder's pre-seal exclusion).
 - [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
   — ships the rest of the registry storage model
   ([type-registry.md](type-registry.md)): "Content lives in the registry"
-  (today content is owned by each `KType` value). The identity sections —
-  eager digests, one-compare equality, generative opaque ascription — are
-  shipped and do not depend on either item.
+  (today content is owned by each `KType` value, and the recording guard
+  `digest_is_content` stands in for the builder's pre-seal exclusion). The
+  identity sections — eager digests, one-compare equality, generative opaque
+  ascription — and "The memo registry" above are shipped and do not depend on
+  this item.

@@ -118,6 +118,19 @@ that holds the content holds the cache warm alongside it. Both relations
 structural satisfaction) live on the one graph, and both positive and negative
 verdicts are recorded.
 
+Because the key is a digest pair, verdict storage granularity is observationally
+identical: [`registry.rs`](../../src/machine/model/types/registry.rs) holds the
+verdicts of a run in one flat `(subject, candidate, relation) → bool` map behind a
+`RefCell`, reached as `&TypeRegistry` through the execution context and threaded as
+the final parameter of every memoized predicate. One key shape is not content-derived
+and so is never recorded: a `KType` reaching an *unsealed* recursive set digests by
+`Rc` pointer address, an address the allocator may reuse. The `MoreSpecific` sites and
+the cross-`SIG` specificity site take arbitrary types as keys, so they call
+`digest_is_content` to exclude such a position before recording; the module-satisfaction
+sites key on self-sig digests, which are minted from a *sealed* self-sig and are
+content-derived by construction. Either way no pointer-transient key ever enters the
+map, so a lookup needs no guard of its own.
+
 The asymmetry between the two edge kinds is a design invariant:
 
 - **Composition edges are load-bearing and never evicted.** They are the content; a
@@ -152,15 +165,14 @@ registries.
 
 ## Open work
 
-**Nothing in this doc is shipped yet**; the storage model lands through four
-roadmap items. Until they ship, type content is owned by each `KType` value
-(`Box`/`Vec` children, `Rc<RecursiveSet>` transport, `Signature` region pointers
-behind `SigSource`), `KType` carries a lifetime parameter and is `Clone` not
-`Copy`, and subtype verdicts memoize in a thread-local LRU (`type_memos.rs`)
-rather than as graph edges.
+The registry home and its verdict edges are shipped
+([`registry.rs`](../../src/machine/model/types/registry.rs)); the storage model —
+everything this doc says about nodes, handles, and composition edges — lands through
+three further roadmap items. Until they ship, type content is owned by each `KType`
+value (`Box`/`Vec` children, `Rc<RecursiveSet>` transport, `Signature` region pointers
+behind `SigSource`), and `KType` carries a lifetime parameter and is `Clone` not
+`Copy`.
 
-- [Verdict edges on a run-frame type registry](../../roadmap/type_memos/registry-verdict-edges.md)
-  — the registry substrate and its verdict edges; retires the thread-local LRU.
 - [Signature types own their schema](../../roadmap/type_memos/signature-schema-ownership.md)
   — collapses `SigSource` into owned signature content.
 - [KType without a lifetime parameter](../../roadmap/type_memos/lifetime-free-ktype.md)

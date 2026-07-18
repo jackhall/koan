@@ -143,8 +143,15 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
 /// so chained `run(scope, ...)` calls compose. Tests asserting top-level statement
 /// *ordering* (e.g. forward-ref-fails behavior) call `enter_block` directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-    let exprs = parse(source).expect("parse should succeed");
     let mut runtime = KoanRuntime::new();
+    dispatch_phase(&mut runtime, scope, source);
+}
+
+/// Parse `source` and dispatch each top-level statement against `runtime`, then drain the
+/// scheduler. Runs one phase of work on a runtime the caller retains, so successive phases share
+/// the run frame — and with it the run-scoped [`TypeRegistry`].
+fn dispatch_phase<'a>(runtime: &mut KoanRuntime<'a>, scope: &'a Scope<'a>, source: &str) {
+    let exprs = parse(source).expect("parse should succeed");
     for expr in exprs {
         runtime.dispatch_in_scope(expr, scope);
     }
@@ -155,15 +162,31 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
 /// counters. The registry is owned by the run frame and dies with the runtime, so the `Rc` is
 /// cloned out before the runtime drops.
 pub(crate) fn run_returning_registry<'a>(scope: &'a Scope<'a>, source: &str) -> Rc<TypeRegistry> {
-    let exprs = parse(source).expect("parse should succeed");
     let mut runtime = KoanRuntime::new();
-    for expr in exprs {
-        runtime.dispatch_in_scope(expr, scope);
-    }
-    runtime.execute().expect("scheduler should succeed");
+    dispatch_phase(&mut runtime, scope, source);
     runtime
         .type_registry()
         .expect("a dispatched run establishes the run frame and its registry")
+}
+
+/// Like [`run_returning_registry`], but splits the source in two phases run against one retained
+/// runtime: `prelude` first, then `probe`. Returns the run's registry together with its hit count
+/// as of the end of `prelude`, so a test can measure the counter's movement across `probe` alone
+/// rather than over the whole run. Verdicts are run-scoped, so a single runtime is what makes the
+/// two phases share a registry at all.
+pub(crate) fn run_probe_returning_registry<'a>(
+    scope: &'a Scope<'a>,
+    prelude: &str,
+    probe: &str,
+) -> (Rc<TypeRegistry>, usize) {
+    let mut runtime = KoanRuntime::new();
+    dispatch_phase(&mut runtime, scope, prelude);
+    let registry = runtime
+        .type_registry()
+        .expect("a dispatched run establishes the run frame and its registry");
+    let hits_before_probe = registry.hit_count();
+    dispatch_phase(&mut runtime, scope, probe);
+    (registry, hits_before_probe)
 }
 
 /// The module `name` binds to. Modules are values, so the binding lives on the value channel

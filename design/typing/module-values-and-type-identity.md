@@ -80,15 +80,8 @@ share one cached verdict, and a repeat admissibility check is O(1). Dispatch
 specificity between two distinct SIG slots reuses the same relation to order them (see
 [modules.md § First-class modules](modules.md#first-class-modules)). Types are immutable, so
 verdicts never invalidate; dropping an edge or a cold registry costs a re-walk, never a
-wrong answer, and no verdict is observable to a koan program. The mechanism lives in
+wrong answer, and no verdict is observable to a koan program. Verdict scope is the run:
+the registry drops with its run frame, so each run starts cold and warms itself. The
+mechanism lives in
 [type-identity.md § The memo registry](type-identity.md#the-memo-registry) and
 [type-registry.md § Verdict edges memoize subtyping](type-registry.md#verdict-edges-memoize-subtyping).
-
-## Open work
-
-- [Verdict edges on a run-frame type registry](../../roadmap/type_memos/registry-verdict-edges.md)
-  — the registry substrate § Memoized subtype matching describes ahead of
-  implementation: recording verdicts as edges on the run-frame type registry.
-  Today verdicts memoize in a thread-local LRU (`type_memos.rs`); the keying,
-  the shared-verdict property, and the never-load-bearing guarantee hold
-  either way. Every other facet of this doc is shipped.

@@ -2,7 +2,7 @@
 
 Collapse `SigSource` so a signature type is owned data — schema, sig-id, diagnostic
 path — instead of a region pointer into the declaring module or signature value.
-Part of the four-item arc landing
+Part of the arc landing
 [design/typing/type-registry.md](../../design/typing/type-registry.md).
 
 **Problem.** `KType::Signature` carries a `SigSource<'a>` —
