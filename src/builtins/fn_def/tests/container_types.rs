@@ -64,6 +64,52 @@ fn fn_with_typed_list_param_accepts_matching_list() {
     assert_eq!(bytes, b"1\n");
 }
 
+/// A signature is a type value, so it rides container type expressions: `:(LIST OF S)`
+/// elaborates, a list of modules satisfying `S` dispatches into the slot (each element's
+/// memoized self-sig digest-equals or refines `S`), and a list of non-satisfying modules
+/// falls through to the generic overload.
+#[test]
+fn fn_with_signature_element_list_param_dispatches_on_satisfaction() {
+    let bytes = capture_program_output(
+        "SIG HasLabel = (VAL label :Str)\n\
+         MODULE widget = (LET label = \"button\")\n\
+         MODULE plain = (LET count = 3)\n\
+         FN (DESCRIBE xs :(LIST OF HasLabel)) -> Str = (\"labelled\")\n\
+         FN (DESCRIBE xs :Any) -> Str = (\"generic\")\n\
+         PRINT (DESCRIBE [widget, widget])\n\
+         PRINT (DESCRIBE [plain, plain])",
+    );
+    assert_eq!(bytes, b"labelled\ngeneric\n");
+}
+
+/// `:(MAP Str -> S)` elaborates with a signature value type and admits a dict of satisfying
+/// module values.
+#[test]
+fn fn_with_signature_value_map_param_dispatches() {
+    let bytes = capture_program_output(
+        "SIG HasLabel = (VAL label :Str)\n\
+         MODULE widget = (LET label = \"button\")\n\
+         FN (LOOKUP d :(MAP Str -> HasLabel)) -> Str = (\"map-of-labelled\")\n\
+         PRINT (LOOKUP {\"a\": widget})",
+    );
+    assert_eq!(bytes, b"map-of-labelled\n");
+}
+
+/// Bound-identifier elements name-resolve, so a list built from them memoizes the resolved
+/// values' element type and dispatches into the matching typed slot — both as a LET-bound
+/// value and as an inline literal.
+#[test]
+fn fn_with_typed_list_param_accepts_bound_identifier_elements() {
+    let bytes = capture_program_output(
+        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)\n\
+         LET n = 5\n\
+         LET ns = [n, n]\n\
+         PRINT (HEAD ns)\n\
+         PRINT (HEAD [n, n])",
+    );
+    assert_eq!(bytes, b"1\n1\n");
+}
+
 #[test]
 fn fn_returning_typed_list_accepts_matching_value() {
     let bytes = capture_program_output(

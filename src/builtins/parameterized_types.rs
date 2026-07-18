@@ -282,11 +282,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 kw("FN"),
                 arg("sig", KType::KExpression),
                 kw("->"),
-                // `Any` (not `OfKind(AnyType)`) so a signature / module return type is admitted:
-                // `-> Module` lowers to the empty signature and `-> Ordered` is a signature
-                // value, both of which the `:Type` wall in `OfKind(AnyType)` would refuse.
-                // `require_ktype` still rejects a non-type in the `build_carrier` body.
-                arg("ret", KType::Any),
+                // `OfKind(AnyType)` admits every type value — a `-> Ordered` signature return
+                // and `-> Module` (which lowers to the empty signature) included.
+                arg("ret", KType::OfKind(KKind::AnyType)),
             ],
         ),
         action_bodies::body_fn,

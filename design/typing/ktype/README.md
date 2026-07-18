@@ -32,19 +32,20 @@
   signature — see the module / signature carriers below), and the two
   nominal families sit strictly below `Proper`. There is no `Module` kind: a module is a
   *value*, matched by a signature type, so it never reaches an `OfKind` slot at all.
-  `KKind::admits` is reflexive subsumption (a
-  `Proper` / `Any` slot admits any proper-subtree type value, while the signature wall
-  keeps that family to itself); `KKind::strictly_below` orders specificity, so an
-  `OfKind(Newtype)` slot out-specifies an `OfKind(Proper)` sibling. See
+  `KKind::admits` is reflexive subsumption: `Any` is the lattice top and admits every type
+  value — a signature is a type value, so `:Type` takes it — while `Proper` admits the
+  proper subtree only (the signature wall lives at the `Proper` tier: a proper-type slot
+  names what can type an ordinary value, which a signature is not). `KKind::strictly_below`
+  orders specificity, so an `OfKind(Newtype)` slot out-specifies an `OfKind(Proper)` sibling
+  and an `OfKind(Signature)` slot out-specifies an `OfKind(Any)` one. See
   [Type-position slot kinds](slots-and-signatures.md#type-position-slot-kinds).
 - First-class type values: a type flows raw as a `&KType` in the value channel's `Type`
-  arm — there is no `KObject` box. As a parameter-slot annotation, `OfKind(Proper)` (`:Type`'s
-  `OfKind(Any)` likewise) admits any *proper* type value: bare builtin type tokens (`Number`,
-  `Str`, `Bool`, `Null`), newtype and union nominal tokens, an anonymous `Union` type value, and
-  any other non-signature type. A signature value routes through the dedicated
-  `OfKind(Signature)` slot, and a module value (riding the value channel's Object arm as
-  `KObject::Module`) through a `Signature { .. }` slot, so the `:Type` vs `:Module` overload
-  distinction stays intact — see
+  arm — there is no `KObject` box. As a parameter-slot annotation, `:Type`'s `OfKind(Any)`
+  admits any type value — bare builtin type tokens (`Number`, `Str`, `Bool`, `Null`), newtype
+  and union nominal tokens, an anonymous `Union` type value, and a signature value — while
+  `OfKind(Proper)` admits the same set minus signatures. A module value (riding the value
+  channel's Object arm as `KObject::Module`) routes through a `Signature { .. }` slot, never
+  an `OfKind` slot, so the `:Type` vs `:Module` overload distinction stays intact — see
   [`KType::accepts_part`](../../../src/machine/model/types/ktype_predicates.rs)
   and the pin test
   [`type_slot_admits_bare_builtin_tokens_and_user_type_carriers`](../../../src/machine/model/types/ktype_predicates/tests.rs).

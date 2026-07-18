@@ -257,6 +257,34 @@ mod tests {
         }
     }
 
+    /// A bare module name in list-element position name-resolves like any other bound
+    /// identifier, so the list holds the module values and memoizes their self-sig element type
+    /// — the same result the parenthesized `[(m)]` form produces.
+    #[test]
+    fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
+        use crate::machine::model::Held;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "MODULE int_ord = (LET compare = 7)");
+        match run_one(scope, parse_one("[int_ord, int_ord]")) {
+            KObject::List(items, elem) => {
+                assert_eq!(
+                    elem.name(),
+                    "int_ord",
+                    "the memoized element type is the module self-sig"
+                );
+                assert_eq!(items.len(), 2);
+                assert!(
+                    items.iter().all(
+                        |i| matches!(i, Held::Object(KObject::Module(m)) if m.path == "int_ord")
+                    ),
+                    "each element is the Object-arm module value",
+                );
+            }
+            other => panic!("expected a list, got {}", other.ktype().name()),
+        }
+    }
+
     #[test]
     fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
         use crate::machine::model::Held;

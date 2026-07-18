@@ -286,10 +286,11 @@ fn record_value_admission_and_matches() {
     assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![]), &types));
 }
 
-/// Admission table for `KType::accepts_part`: bare builtin type tokens
-/// and newtype / union `Carried::Type(SetRef)` identities admit; the module value and the
-/// signature carrier reject so the `:Type` vs `:Module` / `:Signature` overload distinction
-/// stays intact; non-type-denoting carriers reject.
+/// Admission table for `KType::accepts_part`: bare builtin type tokens, newtype / union
+/// `Carried::Type(SetRef)` identities, and a signature carrier all admit — a signature is a
+/// type value, and `:Type` is the lattice top. The module value rejects (a module is a value,
+/// reaching slots on the Object channel), a `:(OfKind Proper)` slot rejects the signature
+/// (the proper tier is the non-signature tier), and non-type-denoting carriers reject.
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let types = TypeRegistry::new();
@@ -351,11 +352,25 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_ktype_checked(KType::signature(content, Vec::new()))
         .expect("sig was just allocated into region's own region");
-    assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
+    // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
+    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
+    assert!(!KType::OfKind(KKind::ProperType)
+        .accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
     assert!(!t.accepts_part(&spliced_part(Carried::Object(n)), &types));
     assert!(!t.accepts_part(&spliced_part(Carried::Object(s)), &types));
+}
+
+/// `:Signature` sits strictly below the `:Type` lattice top: a signature-slotted overload
+/// out-specifies a `:Type` sibling when both admit a signature value, and the reverse fails.
+#[test]
+fn of_kind_signature_more_specific_than_any_type() {
+    let types = TypeRegistry::new();
+    assert!(KType::OfKind(KKind::Signature)
+        .is_more_specific_than(&KType::OfKind(KKind::AnyType), &types));
+    assert!(!KType::OfKind(KKind::AnyType)
+        .is_more_specific_than(&KType::OfKind(KKind::Signature), &types));
 }
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
@@ -1002,6 +1017,102 @@ fn specificity_self_sig_refines_declared_and_empty() {
     assert!(!empty.is_more_specific_than(&declared, &types));
     // `satisfied_by` routes a memoized `SelfOf` element type through the `SelfOf ≺ Declared` arm.
     assert!(declared.satisfied_by(&self_of, &types));
+}
+
+/// A member-free declared signature and a module with the matching slot shape are ONE type: the
+/// schema digest feeds only the member/slot content — never `sig_id` or `path` — so the module's
+/// self-sig type equals the declared signature by digest, not merely by mutual satisfaction.
+#[test]
+fn self_sig_type_equals_member_free_declared_sig() {
+    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::machine::model::KObject;
+    use crate::machine::run_root_storage;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+
+    run(
+        scope,
+        "SIG HasLabel = ((VAL label :Str))\n\
+         MODULE widget = ((LET label = (\"button\")))",
+    );
+    let declared = scope
+        .resolve_type("HasLabel")
+        .expect("HasLabel must bind a type");
+    let m = lookup_module(scope, "widget");
+    assert_eq!(
+        &KObject::Module(m).ktype(),
+        declared,
+        "a module's self-sig type must digest-equal the member-free declared sig of its shape",
+    );
+}
+
+/// A fully-manifest declared signature — every type member fixed, a slot typed through one of
+/// those members — digest-equals the self-sig of a module with the identical shape. Pins the
+/// projection ruling: a self-sig's type members are **manifest** (concrete), so a module's type
+/// coincides with the concrete signature describing it, and a SIG-body slot `:Elem` resolves
+/// through the manifest member to the same slot type the module's binding derives.
+#[test]
+fn self_sig_type_equals_fully_manifest_declared_sig() {
+    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::machine::model::KObject;
+    use crate::machine::run_root_storage;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+
+    run(
+        scope,
+        "SIG Pinned = ((LET Elem = Number) (VAL x :Elem))\n\
+         MODULE pinned_mod = ((LET Elem = Number) (LET x = 5))",
+    );
+    let declared = scope
+        .resolve_type("Pinned")
+        .expect("Pinned must bind a type");
+    let m = lookup_module(scope, "pinned_mod");
+    assert_eq!(
+        &KObject::Module(m).ktype(),
+        declared,
+        "a module's self-sig type must digest-equal the fully-manifest declared sig of its shape",
+    );
+}
+
+/// The abstract variant of the same interface stays a DISTINCT type — a self-sig never projects a
+/// type member abstract — and the pair is strictly ordered, not mutually satisfying: the module's
+/// manifest `Elem` witnesses the sig's abstract slot, while the sig's abstract `Elem` cannot
+/// witness the self-sig's manifest requirement. Under an abstract projection this pair would be
+/// digest-equal yet verdict-divergent across modules, breaking digest-is-identity.
+#[test]
+fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
+    let types = TypeRegistry::new();
+    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::machine::model::KObject;
+    use crate::machine::run_root_storage;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+
+    run(
+        scope,
+        "SIG Abstracted = ((TYPE Elem) (VAL x :Elem))\n\
+         MODULE concrete = ((LET Elem = Number) (LET x = 5))",
+    );
+    let declared = scope
+        .resolve_type("Abstracted")
+        .expect("Abstracted must bind a type");
+    let m = lookup_module(scope, "concrete");
+    let self_of = KObject::Module(m).ktype();
+
+    assert_ne!(
+        &self_of, declared,
+        "an abstract declared sig is a distinct type from any self-sig",
+    );
+    assert!(
+        self_of.is_more_specific_than(declared, &types),
+        "the manifest self-sig strictly refines the abstract sig it satisfies",
+    );
+    assert!(
+        !declared.is_more_specific_than(&self_of, &types),
+        "the abstract sig must not refine the manifest self-sig back — the pair is ordered, \
+         not mutually satisfying",
+    );
 }
 
 // --- verdict-registry wiring (`is_more_specific_than` routes composite pairs through the run's

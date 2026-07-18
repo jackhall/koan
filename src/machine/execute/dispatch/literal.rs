@@ -163,6 +163,8 @@ impl<'step> KoanRuntime<'step> {
     }
 
     /// Schedule a list-literal materialization as a witnessed dep-finish over its element producers.
+    /// Bare identifier elements are name-resolved like dict values, so `[n, n]` holds `n`'s bound
+    /// value and the memoized element type joins the resolved values' types.
     pub(in crate::machine::execute) fn schedule_list_literal<'a>(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
@@ -170,8 +172,7 @@ impl<'step> KoanRuntime<'step> {
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(items.len());
         for part in items {
-            // List elements are not name-resolved; bare identifiers stay `Static`.
-            let value = self.classify_aggregate_part(part, &mut deps, false);
+            let value = self.classify_aggregate_part(part, &mut deps);
             rows.push(AggRow { key: None, value });
         }
         self.schedule_aggregate(
@@ -191,8 +192,8 @@ impl<'step> KoanRuntime<'step> {
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(pairs.len());
         for (k, v) in pairs {
-            let key = self.classify_aggregate_part(k, &mut deps, true);
-            let value = self.classify_aggregate_part(v, &mut deps, true);
+            let key = self.classify_aggregate_part(k, &mut deps);
+            let value = self.classify_aggregate_part(v, &mut deps);
             rows.push(AggRow {
                 key: Some(key),
                 value,
@@ -219,7 +220,7 @@ impl<'step> KoanRuntime<'step> {
         let mut deps = ResolvedDeps::new();
         let mut rows = Vec::with_capacity(fields.len());
         for (name, value) in fields {
-            let value = self.classify_aggregate_part(value, &mut deps, true);
+            let value = self.classify_aggregate_part(value, &mut deps);
             names.push(name);
             rows.push(AggRow { key: None, value });
         }
@@ -240,7 +241,6 @@ impl<'step> KoanRuntime<'step> {
         &mut self,
         part: ExpressionPart<'a>,
         deps: &mut ResolvedDeps,
-        wrap_identifiers: bool,
     ) -> Slot {
         match part {
             ExpressionPart::ListLiteral(inner) => {
@@ -269,14 +269,10 @@ impl<'step> KoanRuntime<'step> {
                 let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
                 Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
             }
-            ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
-                self.resolve_aggregate_bare_name(p, deps)
-            }
-            ref p @ ExpressionPart::Type(_) if wrap_identifiers => {
-                self.resolve_aggregate_bare_name(p, deps)
-            }
+            ref p @ ExpressionPart::Identifier(_) => self.resolve_aggregate_bare_name(p, deps),
+            ref p @ ExpressionPart::Type(_) => self.resolve_aggregate_bare_name(p, deps),
             other => {
-                // A static literal (keyword / bare identifier / type name / literal): region-pure owned
+                // A static literal (keyword / literal): region-pure owned
                 // data, so the cell is built **inside** the witness closure — `yoke`d into the classify
                 // scope's frame, born co-located with that frame as its reach rather than resolved at
                 // the ambient lifetime and bundled under an asserted witness. The cell is then lifetime-free

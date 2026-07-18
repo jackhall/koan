@@ -137,3 +137,26 @@ fn nary_union_with_reaching_member_correlates() {
         other => panic!("expected a Union carrier, got {other:?}"),
     }
 }
+
+/// A signature is a type value, so it can be a union member: `:(Number | S)` lowers to a
+/// union whose signature arm admits a satisfying module value and whose `Number` arm admits a
+/// number — both through one dispatch slot.
+#[test]
+fn union_with_signature_member_admits_module_and_number() {
+    use crate::builtins::test_support::run_one;
+    use crate::machine::model::KObject;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "SIG HasLabel = ((VAL label :Str))\n\
+         MODULE widget = ((LET label = (\"button\")))\n\
+         FN (EITHER x :(Number | HasLabel)) -> Str = ((\"admitted\"))",
+    );
+    for call in ["EITHER widget", "EITHER 5"] {
+        match run_one(scope, parse_one(call)) {
+            KObject::KString(s) => assert_eq!(s, "admitted", "for `{call}`"),
+            other => panic!("`{call}` should dispatch, got {}", other.ktype().name()),
+        }
+    }
+}

@@ -27,10 +27,10 @@ pub enum KKind {
     /// which is also where a module lands: a module is a *value*, matched by a signature type,
     /// and the `:Module` surface lowers to the empty signature rather than to a kind.
     Signature,
-    /// A slot accepting any (proper) type value (the `:Type` surface). Like `ProperType` it does
-    /// not admit signature values — bare `Type` denotes "any type value", and the design pins
-    /// the signature seam to the narrower `:Signature` slot. More specific than `ProperType`
-    /// for tie-breaking; subsumes the proper subtree.
+    /// A slot accepting any type value (the `:Type` surface) — the lattice top: the proper
+    /// subtree and signature values alike. A signature is a type value, so bare `Type` admits
+    /// it; the narrower `:Signature` slot out-specifies a `:Type` sibling for signature
+    /// values. More specific than `ProperType` for tie-breaking.
     AnyType,
     /// A newtype (record-repr or scalar) — the family a `NEWTYPE` or a user-`UNION` variant
     /// declares. Strictly below `ProperType`.
@@ -44,15 +44,16 @@ pub enum KKind {
 
 impl KKind {
     /// Reflexive subsumption: does a slot of kind `self` admit a type value classified as
-    /// `other`? `ProperType` / `AnyType` admit the whole proper subtree; every other kind admits
-    /// only itself — the signature wall keeps `:Type` from admitting a signature, and a
-    /// nominal-family slot admits only its own family.
+    /// `other`? `AnyType` admits every type value — a signature is a type value, so `:Type`
+    /// takes it like any other. `ProperType` admits the proper subtree only — the signature
+    /// wall lives here: a proper-type slot (a parsed type-name declarator, a nominal head)
+    /// names what can type an ordinary value, which a signature is not. Every other kind
+    /// admits only itself.
     pub fn admits(self, other: KKind) -> bool {
         use KKind::*;
         match self {
-            ProperType | AnyType => {
-                matches!(other, ProperType | NewType | TypeConstructor)
-            }
+            AnyType => true,
+            ProperType => matches!(other, ProperType | NewType | TypeConstructor),
             Signature => other == Signature,
             NewType => other == NewType,
             TypeConstructor => other == TypeConstructor,
@@ -61,10 +62,16 @@ impl KKind {
 
     /// Strict subsumption for specificity: `self` is a strictly-narrower kind than `other` in
     /// the lattice. The nominal families sit strictly below `ProperType`, so an
-    /// `OfKind(NewType)` slot out-specifies an `OfKind(ProperType)` sibling.
+    /// `OfKind(NewType)` slot out-specifies an `OfKind(ProperType)` sibling; `Signature` sits
+    /// strictly below `AnyType`, so a `:Signature` slot out-specifies a `:Type` sibling when
+    /// both admit a signature value. (`ProperType` is ordered against `AnyType` by the
+    /// unconstrained-name tier in `more_specific_walk`, not here.)
     pub fn strictly_below(self, other: KKind) -> bool {
         use KKind::*;
-        matches!((self, other), (NewType | TypeConstructor, ProperType))
+        matches!(
+            (self, other),
+            (NewType | TypeConstructor, ProperType) | (Signature, AnyType)
+        )
     }
 
     /// Surface keyword rendered in diagnostics and type-name printing.

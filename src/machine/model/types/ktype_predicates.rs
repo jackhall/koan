@@ -482,9 +482,9 @@ impl<'a> KType<'a> {
             }
             // Type-accepting slot, type-channel-only, by shallow kind via `kind_of` subsumption: a
             // first-class type value is admitted iff the slot kind subsumes the value's `kind_of`, so
-            // `Proper` / `Any` take any non-signature type, `Signature` takes only its own carrier,
-            // and a nominal-kind slot only its own family. An object value reports a non-type
-            // `kind_of` and is refused.
+            // `Any` takes every type value (signatures included), `Proper` takes any non-signature
+            // type, `Signature` takes only its own carrier, and a nominal-kind slot only its own
+            // family. An object value reports a non-type `kind_of` and is refused.
             KType::OfKind(k) => match c {
                 Carried::Type(ty) => k.admits(ty.kind_of()),
                 _ => false,
