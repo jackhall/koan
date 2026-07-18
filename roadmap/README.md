@@ -46,7 +46,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
 - [Own singleton nominal-set construction](refactor/own-singleton-nominal-set-construction.md)
-- [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
+- [Region-store record values](refactor/region-store-records.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Region debug audits](scheduler_library/region-debug-audits.md)
@@ -59,4 +59,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
+- [Verdict edges on a run-frame type registry](type_memos/registry-verdict-edges.md)
+- [Signature types own their schema](type_memos/signature-schema-ownership.md)
 

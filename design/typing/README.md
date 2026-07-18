@@ -20,8 +20,13 @@ Type-system mechanics:
   slot-specificity, and the limitations the static-typing work will close.
 - [type-identity.md](type-identity.md) — the end-state identity story: an
   eager content-hash digest on every `KType`, one-compare equality,
-  generativity confined to opaque ascription, and the thread-local memo
-  registry that caches subtype verdicts.
+  generativity confined to opaque ascription, and subtype-verdict
+  memoization on the type registry.
+- [type-registry.md](type-registry.md) — the pinned end state for type
+  *storage*: a run-frame-owned interning multigraph in which every distinct
+  type is one immutable node, `KType` is the type's `Copy` content digest
+  serving as the handle into that graph, labeled composition edges are the
+  content, and subtype verdicts ride the same graph as droppable cache edges.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that

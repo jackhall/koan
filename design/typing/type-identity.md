@@ -1,17 +1,18 @@
 # Type identity
 
 The design of koan's type identity: identity is a wide content-hash
-digest computed eagerly at construction; equality is one digest compare; a
-thread-local registry memoizes subtype verdicts and is never load-bearing.
-[ktype/README.md](ktype/README.md) is the variant-level companion.
+digest computed eagerly at construction; equality is one digest compare; the
+type registry memoizes subtype verdicts as graph edges and is never
+load-bearing. [ktype/README.md](ktype/README.md) is the variant-level
+companion; [type-registry.md](type-registry.md) is the storage story.
 
 ## Identity is an eager content digest
 
 Every `KType` carries a wide digest, computed bottom-up when the type is
 constructed — children carry theirs, so each node's digest is shallow work at
 build time. A recursive set digests at seal, over its finite SCC presentation
-(`SetLocal(i)` as the index literal); a member's identity is
-`(set digest, index)`.
+(sibling references canonicalized to their index literal); a member's identity
+is `(set digest, index)`.
 
 The digest is a pure function of type content, so it is order-independent: two
 independently built types with the same content have the same digest, with no
@@ -53,40 +54,55 @@ therefore one type. Opacity still rides `AbstractType`: the abstract-type slots
 a `:|` view mints stay id-keyed, so they flow into a self-sig's content digest
 unchanged and two opaque views stay distinct.
 
-## Content lives on the type value
+## Content lives in the registry
 
-A type's structure is owned by its `KType`: record fields in `Record`, union
-members in `Union`, function shapes in `KFunction`, and nominal-set schemas
-behind the `RecursiveSet` its `SetRef`s share. Content access — `kind_of`,
-`name`, schema projection, residence audits — reads through the value in hand,
-and the registry below holds no content, so nothing about reading a type
-depends on any table being reachable. A type riding a lifted value travels by
-ownership, and its digest travels with it.
+A type's structure — record fields, union members, function shapes, nominal
+schemas — is owned by the run-frame type registry, and a `KType` is the type's
+content digest — a `Copy` handle into the registry's digest-keyed node store.
+Content access — `kind_of`, `name`, schema projection — reads through the
+registry reference the execution context carries; the handle *is* the digest,
+so identity checks never touch content at all. [type-registry.md](type-registry.md) carries the full storage
+model: nodes, labeled composition edges, and registry ownership.
 
 ## The memo registry
 
 A subtype verdict is a pure function of a `(subject digest, candidate digest,
 relation)` key: a digest is content identity, so once a verdict is computed it
-never changes for the life of the process, and any caching granularity —
-per-frame, per-thread, whole-process — is observationally identical. koan caches
-verdicts in a **thread-local flat LRU** — one `LruCache` per OS thread
-([`type_memos.rs`](../../src/machine/model/types/type_memos.rs)), consulted
-before a structural walk and filled after one. An explicit `Relation` tag keeps
-two questions in one cache: `MoreSpecific` (the strict specificity walk) and
-`SigSatisfies` (module/signature structural satisfaction — see
+never changes for the life of the registry, and any caching granularity is
+observationally identical. The type registry records verdicts as **edges**
+between the nodes they relate — the same graph that owns the content — labeled
+by an explicit `Relation` tag that keeps two questions apart: `MoreSpecific`
+(the strict specificity walk) and `SigSatisfies` (module/signature structural
+satisfaction — see
 [module-values-and-type-identity.md § Memoized subtype matching](module-values-and-type-identity.md#memoized-subtype-matching)).
-`KType` itself carries no registry reference; the predicate call sites reach the
-thread-local directly.
+A predicate consults the graph before a structural walk and records the
+outcome after one, positive and negative alike.
 
-The registry is a cache, never a soundness mechanism:
+The verdict edges are a cache, never a soundness mechanism:
 
-- Every verdict is re-derivable by the structural walk it memoizes, so eviction
-  (the LRU bound) or a cold thread costs a re-walk, never a wrong answer — the
-  walk stays the source of truth. No verdict is observable to a koan program.
-- The one purity hazard is a pre-seal `RecursiveSet`, whose digest is a
-  pointer-derived transient rather than a content digest. An insert guard
-  (`memo_safe`) keeps any type embedding such a set out of the cache, so a stale
-  hit is impossible; lookups need no guard, since nothing unsafe was inserted.
-- Thread-local is lock-free under ready-node parallelism and every sketched
-  future concurrency primitive — a cold worker thread simply re-walks and warms
-  its own cache.
+- Every verdict is re-derivable by the structural walk it memoizes, so
+  dropping an edge — or asking in a fresh registry — costs a re-walk, never a
+  wrong answer; the walk stays the source of truth. No verdict is observable
+  to a koan program.
+- Pre-seal recursive-set state never reaches the registry (the builder interns
+  only sealed content — [type-registry.md § Recursive sets are cyclic
+  subgraphs](type-registry.md#recursive-sets-are-cyclic-subgraphs)), so every
+  recorded verdict is keyed by true content digests and no insert guard is
+  needed.
+- Each future worker thread's run frame owns its own registry, so verdict
+  memoization is lock-free under every sketched concurrency primitive — a cold
+  registry simply re-walks and warms itself.
+
+## Open work
+
+- [Verdict edges on a run-frame type registry](../../roadmap/type_memos/registry-verdict-edges.md)
+  — ships "The memo registry"'s verdict-edge recording, described ahead of
+  implementation (today verdicts memoize in a thread-local LRU,
+  `type_memos.rs`, with a `memo_safe` insert guard standing in for the
+  builder's pre-seal exclusion).
+- [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
+  — ships the rest of the registry storage model
+  ([type-registry.md](type-registry.md)): "Content lives in the registry"
+  (today content is owned by each `KType` value). The identity sections —
+  eager digests, one-compare equality, generative opaque ascription — are
+  shipped and do not depend on either item.

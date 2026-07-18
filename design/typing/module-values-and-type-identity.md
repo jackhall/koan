@@ -64,21 +64,31 @@ Type identity is a wide content-hash digest, computed eagerly bottom-up when the
 created, from the type's content alone — no raw-pointer identity in `KType`, no dependence
 on interning order, no shared interner. The digest is wide enough that equality is one
 digest compare with no repair path; opaque ascription stays generative by minting a
-per-application nonce into the digested content. The full design — including where type
-content lives and the thread-local memo registry — is [type-identity.md](type-identity.md).
+per-application nonce into the digested content. The full design is
+[type-identity.md](type-identity.md); where content lives — the run-frame type
+registry — is [type-registry.md](type-registry.md).
 
 ## Memoized subtype matching
 
 Subtype outcomes — including signature subtyping, the most frequently checked relation this
-design adds — are cached in a thread-local flat LRU keyed by `(subject digest, candidate
-digest, relation)`, positive and negative outcomes alike. A module's structural satisfaction
+design adds — are recorded as verdict edges on the run-frame type registry, keyed by
+`(subject digest, candidate digest, relation)`, positive and negative outcomes alike. A module's structural satisfaction
 check (`self_sig <: schema(sig)`) memoizes under the `SigSatisfies` relation with the module's
 self-sig content digest and the signature's content digest as the key; because the subject
 keys on interface content rather than the module mint, two modules with identical interfaces
 share one cached verdict, and a repeat admissibility check is O(1). Dispatch
 specificity between two distinct SIG slots reuses the same relation to order them (see
 [modules.md § First-class modules](modules.md#first-class-modules)). Types are immutable, so
-verdicts never invalidate; LRU eviction or a cold thread costs a re-walk, never a wrong
-answer, and no verdict is observable to a koan program. The mechanism, capacity, and the
-insert guard for pre-seal pointer transients live in
-[type-identity.md § The memo registry](type-identity.md#the-memo-registry).
+verdicts never invalidate; dropping an edge or a cold registry costs a re-walk, never a
+wrong answer, and no verdict is observable to a koan program. The mechanism lives in
+[type-identity.md § The memo registry](type-identity.md#the-memo-registry) and
+[type-registry.md § Verdict edges memoize subtyping](type-registry.md#verdict-edges-memoize-subtyping).
+
+## Open work
+
+- [Verdict edges on a run-frame type registry](../../roadmap/type_memos/registry-verdict-edges.md)
+  — the registry substrate § Memoized subtype matching describes ahead of
+  implementation: recording verdicts as edges on the run-frame type registry.
+  Today verdicts memoize in a thread-local LRU (`type_memos.rs`); the keying,
+  the shared-verdict property, and the never-load-bearing guarantee hold
+  either way. Every other facet of this doc is shipped.
