@@ -7,6 +7,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::model::Module;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, Parseable};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -148,6 +149,21 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
         runtime.dispatch_in_scope(expr, scope);
     }
     runtime.execute().expect("scheduler should succeed");
+}
+
+/// Like [`run`], but hands back the run's [`TypeRegistry`] so a test can read its verdict
+/// counters. The registry is owned by the run frame and dies with the runtime, so the `Rc` is
+/// cloned out before the runtime drops.
+pub(crate) fn run_returning_registry<'a>(scope: &'a Scope<'a>, source: &str) -> Rc<TypeRegistry> {
+    let exprs = parse(source).expect("parse should succeed");
+    let mut runtime = KoanRuntime::new();
+    for expr in exprs {
+        runtime.dispatch_in_scope(expr, scope);
+    }
+    runtime.execute().expect("scheduler should succeed");
+    runtime
+        .type_registry()
+        .expect("a dispatched run establishes the run frame and its registry")
 }
 
 /// The module `name` binds to. Modules are values, so the binding lives on the value channel

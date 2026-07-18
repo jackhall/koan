@@ -183,6 +183,19 @@ impl Drop for ActiveFrameBracket<'_, '_> {
 }
 
 impl<'run> KoanRuntime<'run> {
+    /// The run frame's subtype-verdict registry, cloned out of the ambient context. `None` until
+    /// `ensure_run_frame` mints the run frame — i.e. before the first submission. Test-only: the
+    /// harness clones the `Rc` out before dropping the runtime so verdict counters stay readable
+    /// after the run ends.
+    #[cfg(test)]
+    pub(crate) fn type_registry(&self) -> Option<Rc<TypeRegistry>> {
+        self.ambient
+            .run_frame
+            .as_ref()
+            .and_then(|frame| frame.type_registry())
+            .cloned()
+    }
+
     /// Bracket one slot step: install `node_frame` / `node_payload` as the ambient values (resetting
     /// the obligation slot, which the step's wrapper deposits into), run `body`, restore the previous
     /// values, and return `body`'s result alongside the [`PostStep`] the Replace / Done / Error arms

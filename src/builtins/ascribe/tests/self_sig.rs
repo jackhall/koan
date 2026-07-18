@@ -4,7 +4,8 @@
 //! them; a transparent view records the source's concrete types.
 
 use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
+    binds_module, lookup_module, parse_one, run, run_one_err, run_returning_registry,
+    run_root_silent,
 };
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
@@ -160,12 +161,12 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
 }
 
 #[test]
-fn satisfying_module_ascribes_and_repeat_hits_memo() {
+fn satisfying_module_ascribes_and_repeat_hits_verdict() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
     // succeeds too — the run's registry records the first verdict and the repeat check hits it.
-    run(
+    let registry = run_returning_registry(
         scope,
         "NEWTYPE (Type AS Wrapper)\n\
          SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
@@ -175,6 +176,12 @@ fn satisfying_module_ascribes_and_repeat_hits_memo() {
     );
     assert!(binds_module(scope, "first_view"));
     assert!(binds_module(scope, "second_view"));
+    assert!(
+        registry.hit_count() > 0,
+        "the repeat ascription should hit the verdict the first one recorded, got {} hits / {} misses",
+        registry.hit_count(),
+        registry.miss_count(),
+    );
 }
 
 #[test]
@@ -218,20 +225,27 @@ fn opaque_views_have_distinct_type_of() {
     );
 }
 
-/// The `SigSatisfies` memo keys the subject on the module's self-sig content digest, so a second
-/// module with an identical interface reuses the first's cached satisfaction verdict rather than
-/// re-walking `sig_subtype`.
+/// The `SigSatisfies` verdict keys the subject on the module's self-sig content digest, so two
+/// modules with an identical interface share one verdict: `TAKE b`'s satisfaction check hits the
+/// verdict `TAKE a` recorded, rather than re-walking `sig_subtype`. Verdicts are scoped to the run,
+/// so both takes run against the one registry of a single runtime.
 #[test]
 fn identical_modules_share_satisfaction_verdict() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    run(
+    let registry = run_returning_registry(
         scope,
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\
          MODULE b = ((LET x = 2))\n\
-         FN (TAKE m :Ord) -> Number = (m.x)",
+         FN (TAKE m :Ord) -> Number = (m.x)\n\
+         TAKE a\n\
+         TAKE b",
     );
-    run_one(scope, parse_one("TAKE a"));
-    run_one(scope, parse_one("TAKE b"));
+    assert!(
+        registry.hit_count() > 0,
+        "the second take's satisfaction check should hit the first's verdict, got {} hits / {} misses",
+        registry.hit_count(),
+        registry.miss_count(),
+    );
 }
