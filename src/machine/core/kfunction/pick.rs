@@ -5,6 +5,7 @@
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
 
@@ -36,7 +37,11 @@ impl<'a> KFunction<'a> {
     /// bound by an `ExpressionPart::Expression`; the caller schedules the returned eager
     /// indices as deps and leaves the lazy ones in place for the receiving builtin to
     /// dispatch itself. Returns `None` when `self` isn't a lazy candidate.
-    pub fn lazy_eager_indices<'e>(&self, expr: &KExpression<'e>) -> Option<Vec<usize>> {
+    pub fn lazy_eager_indices<'e>(
+        &self,
+        expr: &KExpression<'e>,
+        types: &TypeRegistry,
+    ) -> Option<Vec<usize>> {
         let sig = &self.signature;
         if sig.elements.len() != expr.parts.len() {
             return None;
@@ -96,7 +101,7 @@ impl<'a> KFunction<'a> {
                         {
                             continue;
                         }
-                        if !arg.matches(other) {
+                        if !arg.matches(other, types) {
                             return None;
                         }
                     }
@@ -114,8 +119,12 @@ impl<'a> KFunction<'a> {
     /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
     /// `(SignatureElement, ExpressionPart)` shape lands in at most one bucket — and the
     /// downstream scheduler relies on it.
-    pub fn classify_for_pick<'e>(&self, expr: &KExpression<'e>) -> ClassifiedSlots {
-        let eager_indices = self.lazy_eager_indices(expr);
+    pub fn classify_for_pick<'e>(
+        &self,
+        expr: &KExpression<'e>,
+        types: &TypeRegistry,
+    ) -> ClassifiedSlots {
+        let eager_indices = self.lazy_eager_indices(expr, types);
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();
         let picked_has_binder_name = self.binder_name.is_some();

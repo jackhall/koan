@@ -261,7 +261,7 @@ pub(in crate::machine::execute) fn install_eager_subs_track<'step>(
     // resolve by sub-Dispatch rather than the keyword path's pre-pick `bare_outcomes` lookup —
     // each rides `bare_identifier`'s reach carrier through the eager-subs finish and reaches
     // `accepts_part` at bind. No slot resolves inline here.
-    let wrap_indices = picked.classify_for_pick(&expr).wrap_indices;
+    let wrap_indices = picked.classify_for_pick(&expr, ctx.types()).wrap_indices;
     let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts, &wrap_indices);
     let working_expr = KExpression::new(new_parts);
     ctx.install_eager_subs(working_expr, staged_subs, Some(picked))

@@ -71,7 +71,8 @@ use super::sig_subtype as relation;
 /// Run the relation and unbox the failure so `matches!` can name the variant directly.
 #[allow(clippy::result_large_err)] // test ergonomics: unbox so assertions name the variant
 fn check<'s, 'p>(sub: &SigSchema<'s>, sup: &SigSchema<'p>) -> Result<(), SigSubtypeFailure> {
-    relation(sub, sup).map_err(|e| *e)
+    let types = TypeRegistry::new();
+    relation(sub, sup, &types).map_err(|e| *e)
 }
 
 // --- width ----------------------------------------------------------------------------
@@ -373,6 +374,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
 
 #[test]
 fn sig_subtype_runs_across_distinct_lifetimes() {
+    let types = TypeRegistry::new();
     // The relation takes `sub` and `sup` at independent lifetimes. Build one in a fresh
     // shorter-lived scope and the other in `'static` to prove the heterogeneous signature
     // is exercised (not just same-lifetime `check`).
@@ -390,7 +392,7 @@ fn sig_subtype_runs_across_distinct_lifetimes() {
             vec![("Type", KType::Number)],
             vec![(name.as_str(), KType::Number)],
         );
-        assert!(sig_subtype(&sub, &sup).is_ok());
+        assert!(sig_subtype(&sub, &sup, &types).is_ok());
     }
 }
 

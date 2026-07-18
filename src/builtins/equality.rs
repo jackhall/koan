@@ -13,6 +13,7 @@
 //! for interface comparison. `!=` negates a successful comparison and propagates the error
 //! unchanged (an error is never negated into a `false`).
 
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Held, KObject, KType, ValueEqualityError};
 use crate::machine::{arg_held, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -35,9 +36,14 @@ fn ban_error(op: &str, error: ValueEqualityError) -> KError {
 
 /// Compare the `left` / `right` operands as raw cells: objects structurally, types by digest, a
 /// mixed channel unequal. `op` labels a banned-operand error.
-fn cells_equal(left: &Held<'_>, right: &Held<'_>, op: &str) -> Result<bool, KError> {
+fn cells_equal(
+    left: &Held<'_>,
+    right: &Held<'_>,
+    op: &str,
+    types: &TypeRegistry,
+) -> Result<bool, KError> {
     match (left, right) {
-        (Held::Object(a), Held::Object(b)) => a.value_equal(b).map_err(|e| ban_error(op, e)),
+        (Held::Object(a), Held::Object(b)) => a.value_equal(b, types).map_err(|e| ban_error(op, e)),
         (Held::Type(a), Held::Type(b)) => Ok(a == b),
         _ => Ok(false),
     }
@@ -49,7 +55,7 @@ fn compare(ctx: &BodyCtx<'_, '_>, op: &str) -> Result<bool, KError> {
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("left".to_string())))?;
     let right = arg_held(ctx.args, "right")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("right".to_string())))?;
-    cells_equal(left, right, op)
+    cells_equal(left, right, op, ctx.types)
 }
 
 pub fn body_eq<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {

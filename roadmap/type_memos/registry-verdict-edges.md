@@ -6,7 +6,7 @@ run frame owns. First of the four items that land
 ships the registry substrate and its verdict edges, before any content moves in.
 
 **Problem.** Subtype verdicts memoize in a `thread_local!` LRU
-([`type_memos.rs`](../../src/machine/model/types/type_memos.rs)) — state homed
+(`type_memos.rs`) — state homed
 outside the run frame, and the one live counterexample of global runtime state in
 the type layer. The predicates that consult it — `is_more_specific_than`
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)),

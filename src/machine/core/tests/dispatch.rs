@@ -5,6 +5,7 @@ use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::builtins::{register_builtin, register_overload_at};
 use crate::machine::core::kfunction::action::{Action, BodyCtx};
 use crate::machine::model::Carried;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::{BindingIndex, DispatchOutcome, LexicalFrame};
@@ -37,6 +38,7 @@ fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
 /// An Identifier in an `Any` slot lands in `wrap_indices`.
 #[test]
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
@@ -44,7 +46,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         "foo".into(),
     ))]);
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
             assert!(r.slots.ref_name_indices.is_empty());
@@ -56,6 +58,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
 
 #[test]
 fn resolve_returns_ambiguous_for_tied_overloads() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
@@ -66,7 +69,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
     }
@@ -76,6 +79,7 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 /// resolution does not fall through past a tie.
 #[test]
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // User-position (not BUILTIN) so the builtin root-first short-circuit doesn't fire —
@@ -96,7 +100,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
     ]);
     let chain = LexicalFrame::detached();
-    match inner.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
     }
@@ -105,6 +109,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
 /// A binder_name-bearing overload populates `placeholder` from its extractor.
 #[test]
 fn resolve_carries_placeholder_name_for_binder_function() {
+    let types = TypeRegistry::new();
     use crate::builtins::register_builtin_full;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         match expr.parts.get(1).map(|p| &p.value) {
@@ -144,7 +149,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(r) => {
             assert_eq!(r.placeholder.as_ref().map(|(n, _)| n.as_str()), Some("foo"));
             assert!(r.slots.picked_has_binder_name);
@@ -157,6 +162,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
 /// *and* tentatively (a Literal is not a bare name).
 #[test]
 fn resolve_tentative_falls_back_only_when_strict_empty() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -170,7 +176,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     ))]);
     let chain = LexicalFrame::detached();
     assert!(matches!(
-        scope.resolve_dispatch(&expr, Some(&chain), &[]),
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
         DispatchOutcome::Unmatched
     ));
 }
@@ -182,6 +188,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 /// eager-sub loop instead of erroring.
 #[test]
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     register_builtin(
@@ -200,7 +207,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     ]);
     let chain = LexicalFrame::detached();
     assert!(matches!(
-        scope.resolve_dispatch(&expr, Some(&chain), &[]),
+        scope.resolve_dispatch(&expr, Some(&chain), &[], &types),
         DispatchOutcome::Deferred
     ));
 }
@@ -210,6 +217,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 /// sharing a lead keyword is not enough to collide.
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
+    let types = TypeRegistry::new();
     use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
     let region = run_root_storage();
@@ -227,7 +235,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         Spanned::bare(ExpressionPart::Identifier("fwd".into())),
     ]);
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&bare, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&bare, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
         other => panic!(
             "expected ParkOnProducers([42]) for matching bucket, got {}",
@@ -243,7 +251,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     ]);
     assert!(
         matches!(
-            scope.resolve_dispatch(&multi, Some(&chain), &[]),
+            scope.resolve_dispatch(&multi, Some(&chain), &[], &types),
             DispatchOutcome::Unmatched
         ),
         "different-bucket call must not park on a lead-keyword sibling",
@@ -255,6 +263,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
 /// scope parks rather than letting the outer Pick win on finalize order.
 #[test]
 fn inner_scope_pending_overload_shadows_outer_strict_pick() {
+    let types = TypeRegistry::new();
     use crate::machine::NodeId;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
@@ -288,7 +297,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     scope_install_pending(inner, &expr, NodeId(55));
 
     let chain = LexicalFrame::detached();
-    match inner.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match inner.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![NodeId(55)],
@@ -306,6 +315,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
 /// strict Pick: the inner scope `Deferred`s rather than letting the outer win.
 #[test]
 fn inner_scope_eager_lean_shadows_outer_strict_pick() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     // Outer overload that would strictly Pick once the eager sub resolves.
@@ -333,7 +343,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     let chain = LexicalFrame::detached();
     assert!(
         matches!(
-            inner.resolve_dispatch(&expr, Some(&chain), &[]),
+            inner.resolve_dispatch(&expr, Some(&chain), &[], &types),
             DispatchOutcome::Deferred
         ),
         "inner eager-lean must Defer at its scope, not fall through to outer",
@@ -345,6 +355,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
 /// (dead lean → continue), and the outer `:Identifier` slot Picks it shape-only.
 #[test]
 fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
+    let types = TypeRegistry::new();
     use crate::machine::NameOutcome;
     let region = run_root_storage();
     let outer = run_root_bare(&region);
@@ -364,7 +375,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     ))]);
     let bare_outcomes = vec![Some(NameOutcome::Unbound("fwd".into()))];
     let chain = LexicalFrame::detached();
-    match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes) {
+    match inner.resolve_dispatch(&expr, Some(&chain), &bare_outcomes, &types) {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
                 r.function.signature.elements.first(),
@@ -385,6 +396,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
 /// the pending entry is removed at finalize, the bucket resolves.
 #[test]
 fn finalized_pick_with_pending_sibling_parks_until_finalize() {
+    let types = TypeRegistry::new();
     use crate::machine::core::kfunction::{Body, KFunction};
     use crate::machine::model::KObject;
     use crate::machine::NodeId;
@@ -432,7 +444,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         .expect("install_pending_overload");
 
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => assert_eq!(
             ps,
             vec![NodeId(77)],
@@ -477,7 +489,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         )
         .expect("register sibling overload");
 
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::Resolved(_) => {}
         other => panic!(
             "bucket must resolve once the pending sibling finalizes; got {}",
@@ -503,6 +515,7 @@ fn scope_install_pending<'a>(
 /// entry.
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
+    let types = TypeRegistry::new();
     use crate::machine::model::{UntypedElement, UntypedKey};
     use crate::machine::NodeId;
     let region = run_root_storage();
@@ -528,7 +541,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         Spanned::bare(ExpressionPart::Identifier("fwd".into())),
     ]);
     let chain = LexicalFrame::detached();
-    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
+    match scope.resolve_dispatch(&expr, Some(&chain), &[], &types) {
         DispatchOutcome::ParkOnProducers(ps) => {
             assert_eq!(
                 ps,

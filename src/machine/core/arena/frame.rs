@@ -9,6 +9,7 @@ use std::rc::Rc;
 use super::{KoanRegion, KoanStorageProfile, RegionBrand};
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{Scope, ScopeId, ScopeRefFamily};
+use crate::machine::model::types::TypeRegistry;
 use crate::machine::CarrierWitness;
 use crate::witnessed::{
     Delivered, RegionHandle, RegionHandleFamily, RegionHost, RegionSet, Sealed, SealedExtern,
@@ -140,6 +141,10 @@ pub struct CallFrame {
     /// that slot's `Done` / tail-`Continue` to close the frame's scope exactly when its body completes.
     /// A `Yoked` sub-expression slot sharing the frame is not the owner, so its `Done` does not close.
     owner: Cell<Option<NodeId>>,
+    /// The run's subtype-verdict store, `Some` only on the run frame ([`Self::adopting`]). Per-call
+    /// frames reach it through the execution context rather than owning one, so a verdict recorded
+    /// anywhere in the run is visible everywhere in it; the map drops when the run frame does.
+    type_registry: Option<Rc<TypeRegistry>>,
 }
 
 impl CallFrame {
@@ -185,6 +190,7 @@ impl CallFrame {
             envelope: Delivered::hosted(scope_carrier, storage),
             non_dying: false,
             owner: Cell::new(None),
+            type_registry: None,
         })
     }
 
@@ -211,7 +217,15 @@ impl CallFrame {
             envelope: Delivered::hosted(scope_carrier, run_storage),
             non_dying: true,
             owner: Cell::new(None),
+            type_registry: Some(Rc::new(TypeRegistry::new())),
         })
+    }
+
+    /// The run's subtype-verdict store — `Some` only on the run frame. The execution context reads
+    /// it from there (`AmbientContext::type_registry`) and hands `&TypeRegistry` to the memoized
+    /// predicates.
+    pub(crate) fn type_registry(&self) -> Option<&Rc<TypeRegistry>> {
+        self.type_registry.as_ref()
     }
 
     /// True only for the scheduler-owned run frame (see [`Self::adopting`]). The Done boundary

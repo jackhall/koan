@@ -13,6 +13,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
+use super::registry::TypeRegistry;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
@@ -144,7 +145,10 @@ impl<'a> PartialEq for DeferredReturn<'a> {
                 // Structural syntax equality over the two captured expressions — the same walk
                 // `==` runs on a quoted value. A banned-shape splice inside a deferred return
                 // conservatively counts as a distinct overload (`Err` → not equal).
-                crate::machine::model::values::expression_equal(a, b).unwrap_or(false)
+                // Overload identity is a syntax compare, so a cold registry is exact: a verdict
+                // is never load-bearing, it only saves a re-walk (`registry.rs`).
+                let types = TypeRegistry::new();
+                crate::machine::model::values::expression_equal(a, b, &types).unwrap_or(false)
             }
             _ => false,
         }
@@ -184,9 +188,13 @@ impl<'a> ReturnType<'a> {
     /// Lift-time return-type check. `Deferred` returns `true` — the real slot check
     /// runs in the per-call elaboration's dep-finish, where the resolved `KType`
     /// is available.
-    pub fn matches_value(&self, obj: &crate::machine::model::values::KObject<'a>) -> bool {
+    pub fn matches_value(
+        &self,
+        obj: &crate::machine::model::values::KObject<'a>,
+        types: &TypeRegistry,
+    ) -> bool {
         match self {
-            ReturnType::Resolved(kt) => kt.matches_value(obj),
+            ReturnType::Resolved(kt) => kt.matches_value(obj, types),
             ReturnType::Deferred(_) => true,
         }
     }
@@ -197,7 +205,7 @@ impl<'a> ReturnType<'a> {
 }
 
 impl<'a> ExpressionSignature<'a> {
-    pub fn matches<'e>(&self, expr: &KExpression<'e>) -> bool {
+    pub fn matches<'e>(&self, expr: &KExpression<'e>, types: &TypeRegistry) -> bool {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
@@ -207,7 +215,7 @@ impl<'a> ExpressionSignature<'a> {
             .all(|(el, part)| match (el, &part.value) {
                 (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
                 (SignatureElement::Keyword(_), _) => false,
-                (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
+                (SignatureElement::Argument(arg), part_value) => arg.matches(part_value, types),
             })
     }
 
@@ -239,14 +247,18 @@ impl<'a> ExpressionSignature<'a> {
 
     /// Assumes `self` and `other` share an `UntypedKey` — only argument slots contribute,
     /// since fixed-token positions are equal by construction.
-    pub fn specificity_vs(&self, other: &ExpressionSignature<'a>) -> Specificity {
+    pub fn specificity_vs(
+        &self,
+        other: &ExpressionSignature<'a>,
+        types: &TypeRegistry,
+    ) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
         for (a, b) in self.elements.iter().zip(other.elements.iter()) {
             if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
-                if aa.ktype.is_more_specific_than(&bb.ktype) {
+                if aa.ktype.is_more_specific_than(&bb.ktype, types) {
                     any_more = true;
-                } else if bb.ktype.is_more_specific_than(&aa.ktype) {
+                } else if bb.ktype.is_more_specific_than(&aa.ktype, types) {
                     any_less = true;
                 }
             }
@@ -262,13 +274,16 @@ impl<'a> ExpressionSignature<'a> {
     /// Pairwise specificity tournament across co-bucket signatures. Returns `Some(i)` iff
     /// `candidates[i]` is `StrictlyMore` than every peer — `Equal` against any peer means a
     /// same-arg-type duplicate, which must surface as ambiguity rather than silently win.
-    pub fn most_specific(candidates: &[&ExpressionSignature<'a>]) -> Option<usize> {
+    pub fn most_specific(
+        candidates: &[&ExpressionSignature<'a>],
+        types: &TypeRegistry,
+    ) -> Option<usize> {
         candidates
             .iter()
             .enumerate()
             .find(|(i, a)| {
                 candidates.iter().enumerate().all(|(j, b)| {
-                    *i == j || matches!(a.specificity_vs(b), Specificity::StrictlyMore)
+                    *i == j || matches!(a.specificity_vs(b, types), Specificity::StrictlyMore)
                 })
             })
             .map(|(i, _)| i)
@@ -311,8 +326,8 @@ pub struct Argument<'a> {
 }
 
 impl<'a> Argument<'a> {
-    pub fn matches<'e>(&self, part: &ExpressionPart<'e>) -> bool {
-        self.ktype.accepts_part(part)
+    pub fn matches<'e>(&self, part: &ExpressionPart<'e>, types: &TypeRegistry) -> bool {
+        self.ktype.accepts_part(part, types)
     }
 }
 

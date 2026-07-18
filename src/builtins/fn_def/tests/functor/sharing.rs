@@ -5,6 +5,7 @@ use crate::builtins::test_support::{
 };
 use crate::machine::model::Carried;
 use crate::machine::model::SigSource;
+use crate::machine::model::TypeRegistry;
 use crate::machine::{run_root_storage, FrameStorageExt};
 
 /// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Elem = Number}` admits a
@@ -14,6 +15,7 @@ use crate::machine::{run_root_storage, FrameStorageExt};
 /// no `Elem` rejected (pin absent). Admission is structural, so ascription is never required.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
+    let types = TypeRegistry::new();
     use crate::machine::model::KType;
     use crate::machine::model::ModuleSignature;
     let region = run_root_storage();
@@ -54,10 +56,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             panic!("{name} must bind a module value-side");
         })))
     };
-    assert!(slot.accepts_part(&module_part("num_pinned")));
-    assert!(!slot.accepts_part(&module_part("str_pinned")));
-    assert!(!slot.accepts_part(&module_part("no_elem_pin")));
-    assert!(slot.accepts_part(&module_part("num_bare")));
+    assert!(slot.accepts_part(&module_part("num_pinned"), &types));
+    assert!(!slot.accepts_part(&module_part("str_pinned"), &types));
+    assert!(!slot.accepts_part(&module_part("no_elem_pin"), &types));
+    assert!(slot.accepts_part(&module_part("num_bare"), &types));
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
@@ -211,6 +213,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
 /// view binding `Elem = Str` does not.
 #[test]
 fn transparent_view_pin_agreement_reads_source_types() {
+    let types = TypeRegistry::new();
     use crate::builtins::test_support::run_root_silent;
     use crate::machine::model::KType;
     let region = run_root_storage();
@@ -238,11 +241,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Object(num_view))),
+        slot.accepts_part(&spliced_part(Carried::Object(num_view)), &types),
         "transparent view over `Elem = Number` must agree with the `{{Elem = Number}}` pin",
     );
     assert!(
-        !slot.accepts_part(&spliced_part(Carried::Object(str_view))),
+        !slot.accepts_part(&spliced_part(Carried::Object(str_view)), &types),
         "transparent view over `Elem = Str` must not agree with the `{{Elem = Number}}` pin",
     );
 }
@@ -252,6 +255,7 @@ fn transparent_view_pin_agreement_reads_source_types() {
 /// same identity accepts it.
 #[test]
 fn opaque_view_pin_agreement_names_its_abstract_identity() {
+    let types = TypeRegistry::new();
     use crate::builtins::test_support::run_root_silent;
     use crate::machine::model::KType;
     let region = run_root_storage();
@@ -283,7 +287,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(
-        slot.accepts_part(&spliced_part(Carried::Object(view_obj))),
+        slot.accepts_part(&spliced_part(Carried::Object(view_obj)), &types),
         "opaque view must agree with a pin naming its own per-call abstract `Carrier`",
     );
 }

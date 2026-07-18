@@ -8,6 +8,7 @@
 
 use crate::machine::model::KType;
 use crate::machine::model::SigSource;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, ProjectedSchema,
     RecursiveSet, SigSchema,
@@ -130,7 +131,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
     seal_view_self_sig(new_module, s);
 
-    if let Err(e) = check_satisfies(m, s) {
+    if let Err(e) = check_satisfies(m, s, ctx.types) {
         return Action::Done(Err(e));
     }
 
@@ -159,7 +160,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
-    if let Err(e) = check_satisfies(m, s) {
+    if let Err(e) = check_satisfies(m, s, ctx.types) {
         return Action::Done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
@@ -262,12 +263,13 @@ fn resolve_module_and_signature<'a>(
 fn check_satisfies<'a>(
     m: &Module<'a>,
     s: &'a crate::machine::model::ModuleSignature<'a>,
+    types: &TypeRegistry,
 ) -> Result<(), KError> {
-    if m.structurally_satisfies(s) {
+    if m.structurally_satisfies(s, types) {
         return Ok(());
     }
-    match sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[])) {
-        Ok(()) => unreachable!("memoized false must re-fail on the diagnostic walk"),
+    match sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[]), types) {
+        Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
             s.path,

@@ -13,10 +13,10 @@
 use super::kkind::KKind;
 use super::record::Record;
 use super::recursive_set::{same_nominal, NominalSchema, RecursiveSet};
+use super::registry::{Relation, TypeRegistry};
 use super::sig_schema::sig_subtype;
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, TypeDigest};
-use super::type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
 use crate::machine::core::ScopeId;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::TypeIdentifier;
@@ -87,21 +87,21 @@ impl<'a> SigSource<'a> {
     /// caller, as they live on `KType::Signature`, not here). `Empty` admits every module;
     /// `Declared(s)` admits a module whose self-sig structurally satisfies `s`; `SelfOf(m2)`
     /// admits `m` when it is the same module or its self-sig is a subtype of `m2`'s.
-    pub fn satisfied_by_module<'v>(&self, m: &Module<'v>) -> bool {
+    pub fn satisfied_by_module<'v>(&self, m: &Module<'v>, types: &TypeRegistry) -> bool {
         match self {
             SigSource::Empty => true,
-            SigSource::Declared(s) => m.structurally_satisfies(s),
+            SigSource::Declared(s) => m.structurally_satisfies(s, types),
             SigSource::SelfOf(m2) => {
                 if m.scope_id() == m2.scope_id() {
                     return true;
                 }
                 let subject = m.self_sig_digest();
                 let candidate = m2.self_sig_digest();
-                if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
+                if let Some(hit) = types.verdict(subject, candidate, Relation::SigSatisfies) {
                     return hit;
                 }
-                let ok = sig_subtype(m.self_sig(), m2.self_sig()).is_ok();
-                memo_insert(subject, candidate, Relation::SigSatisfies, ok);
+                let ok = sig_subtype(m.self_sig(), m2.self_sig(), types).is_ok();
+                types.record_verdict(subject, candidate, Relation::SigSatisfies, ok);
                 ok
             }
         }

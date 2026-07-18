@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::machine::model::types::TypeRegistry;
 use crate::machine::CallFrame;
 
 use super::nodes::NodePayload;
@@ -80,6 +81,15 @@ impl AmbientContext {
 
     pub(in crate::machine::execute) fn active_payload(&self) -> Option<&NodePayload> {
         self.active_payload.as_ref()
+    }
+
+    /// The run's subtype-verdict store, owned by the run frame. `ensure_run_frame` installs that
+    /// frame before any step runs, so the registry is always reachable from step code.
+    pub(in crate::machine::execute) fn type_registry(&self) -> &Rc<TypeRegistry> {
+        self.run_frame
+            .as_ref()
+            .and_then(|frame| frame.type_registry())
+            .expect("run frame (and its type registry) established before any step")
     }
 
     /// Whether the executing slot carries a declared-return obligation — i.e. it is a tail call

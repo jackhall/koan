@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use crate::machine::core::{Scope, ScopeId};
 
 use super::super::types::{
-    memo_insert, memo_lookup, schema_content_digest, sig_subtype, signature_digest, KType,
-    Relation, SigSchema, SigSource, TypeDigest,
+    schema_content_digest, sig_subtype, signature_digest, KType, Relation, SigSchema, SigSource,
+    TypeDigest, TypeRegistry,
 };
 
 /// First-class module value. `path` is the lexical-source label (`"int_ord"`,
@@ -49,8 +49,8 @@ pub struct Module<'a> {
     /// installed after the surrounding value is alloc'd.
     self_sig: OnceCell<SigSchema<'a>>,
     /// The self-sig content digest — the identity a `Signature { SelfOf(self) }` carries and the
-    /// `SigSatisfies` memo subject key. Filled once from the sealed self-sig (content is stable
-    /// after `seal_self_sig`) and immutable thereafter.
+    /// `SigSatisfies` verdict subject key (`registry.rs`). Filled once from the sealed self-sig
+    /// (content is stable after `seal_self_sig`) and immutable thereafter.
     self_sig_digest: OnceCell<TypeDigest>,
 }
 
@@ -82,8 +82,9 @@ impl<'a> Module<'a> {
     }
 
     /// The module's self-sig content digest — the identity a `Signature { SelfOf(self) }` carries
-    /// and the `SigSatisfies` memo subject key. Computed once from the sealed self-sig and cached;
-    /// a bare, never-sealed [`Module::new`] derives its self-sig lazily first, then digests that.
+    /// and the `SigSatisfies` verdict subject key (`registry.rs`). Computed once from the sealed
+    /// self-sig and cached; a bare, never-sealed [`Module::new`] derives its self-sig lazily first,
+    /// then digests that.
     pub fn self_sig_digest(&self) -> TypeDigest {
         *self
             .self_sig_digest
@@ -105,17 +106,21 @@ impl<'a> Module<'a> {
 
     /// Structural satisfaction: `self_sig <: bare-schema(sig)` under [`sig_subtype`] — the
     /// admission rule for a signature-typed dispatch slot and the check `:|` / `:!` assert.
-    /// Consults the thread-local match registry under `SigSatisfies`, keyed by this module's
-    /// and `sig`'s digests, both outcomes cached; a `WITH`-pinned slot's residue is checked
+    /// Consults the run's type registry under `SigSatisfies`, keyed by this module's and
+    /// `sig`'s digests, both outcomes recorded; a `WITH`-pinned slot's residue is checked
     /// separately via [`Module::satisfies_pins`].
-    pub fn structurally_satisfies<'p>(&self, sig: &'p ModuleSignature<'p>) -> bool {
+    pub fn structurally_satisfies<'p>(
+        &self,
+        sig: &'p ModuleSignature<'p>,
+        types: &TypeRegistry,
+    ) -> bool {
         let subject = self.self_sig_digest();
         let candidate = signature_digest(SigSource::Declared(sig), &[]);
-        if let Some(hit) = memo_lookup(subject, candidate, Relation::SigSatisfies) {
+        if let Some(hit) = types.verdict(subject, candidate, Relation::SigSatisfies) {
             return hit;
         }
-        let ok = sig_subtype(self.self_sig(), &SigSchema::of_sig(sig, &[])).is_ok();
-        memo_insert(subject, candidate, Relation::SigSatisfies, ok);
+        let ok = sig_subtype(self.self_sig(), &SigSchema::of_sig(sig, &[]), types).is_ok();
+        types.record_verdict(subject, candidate, Relation::SigSatisfies, ok);
         ok
     }
 

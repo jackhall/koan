@@ -17,25 +17,28 @@ fn expr_with_keyword<'a>(kw: &str) -> KExpression<'a> {
 
 #[test]
 fn most_specific_picks_number_over_any() {
+    let types = TypeRegistry::new();
     let any = one_slot(KType::Any);
     let num = one_slot(KType::Number);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&any, &num];
-    assert_eq!(ExpressionSignature::most_specific(&cands), Some(1));
+    assert_eq!(ExpressionSignature::most_specific(&cands, &types), Some(1));
 }
 
 #[test]
 fn most_specific_returns_none_for_empty() {
+    let types = TypeRegistry::new();
     let cands: Vec<&ExpressionSignature<'_>> = Vec::new();
-    assert_eq!(ExpressionSignature::most_specific(&cands), None);
+    assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
 }
 
 #[test]
 fn most_specific_returns_none_when_tied() {
+    let types = TypeRegistry::new();
     // Ambiguity must surface, not a winner.
     let a = one_slot(KType::Number);
     let b = one_slot(KType::Number);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
-    assert_eq!(ExpressionSignature::most_specific(&cands), None);
+    assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
 }
 
 #[test]
@@ -87,20 +90,21 @@ fn type_name_eq_compares_leaf_names() {
 
 #[test]
 fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
+    let types = TypeRegistry::new();
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     };
     let empty: KExpression<'_> = KExpression::new(vec![]);
-    assert!(!sig.matches(&empty));
+    assert!(!sig.matches(&empty, &types));
 
     let mismatched = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
         crate::machine::model::ast::KLiteral::Number(1.0),
     ))]);
-    assert!(!sig.matches(&mismatched));
+    assert!(!sig.matches(&mismatched, &types));
 
     let matching = KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword("FOO".into()))]);
-    assert!(sig.matches(&matching));
+    assert!(sig.matches(&matching, &types));
 }
 
 #[test]
@@ -159,15 +163,16 @@ fn exact_equal_unaffected_by_deferred_return_synthesis() {
 
 #[test]
 fn return_type_matches_value_deferred_always_true_resolved_delegates() {
+    let types = TypeRegistry::new();
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
     // Deferred always matches — per-call check runs elsewhere.
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert!(d.matches_value(&obj));
+    assert!(d.matches_value(&obj, &types));
     assert!(!d.is_resolved());
     let r_num = ReturnType::Resolved(KType::Number);
-    assert!(r_num.matches_value(&obj));
+    assert!(r_num.matches_value(&obj, &types));
     assert!(r_num.is_resolved());
     let r_bool = ReturnType::Resolved(KType::Bool);
-    assert!(!r_bool.matches_value(&obj));
+    assert!(!r_bool.matches_value(&obj, &types));
 }

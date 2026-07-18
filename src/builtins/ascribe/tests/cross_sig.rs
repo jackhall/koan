@@ -3,7 +3,6 @@
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
 use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
-use crate::machine::model::memo_reset;
 use crate::machine::model::KObject;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
@@ -16,7 +15,6 @@ use crate::machine::KoanRuntime;
 fn strict_cross_sig_subtype_wins_dispatch() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    memo_reset();
     run(
         scope,
         "SIG Base = ((VAL x :Number))\n\
@@ -57,7 +55,6 @@ fn strict_cross_sig_subtype_wins_dispatch() {
 fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    memo_reset();
     run(
         scope,
         "SIG Base = ((VAL x :Number))\n\
@@ -102,7 +99,6 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
 fn incomparable_distinct_sigs_are_ambiguous() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    memo_reset();
     run(
         scope,
         "SIG Alpha = ((VAL x :Number))\n\
@@ -140,7 +136,6 @@ fn incomparable_distinct_sigs_are_ambiguous() {
 fn cross_sig_specificity_with_pinned_abstract_member() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    memo_reset();
     run(
         scope,
         "SIG Base = ((TYPE Elt) (VAL x :Number))\n\

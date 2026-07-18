@@ -259,15 +259,14 @@ pub fn body_constructor_family<'a>(
     // `type_decl::bind_abstract_member`. The minted `SetRef` is owned/region-pure (an `Rc` set
     // with no foreign borrow), so the `None` carrier is correct.
     let bind_index = ctx.bind_index();
-    let (kt_ref, stored) = match ctx.scope.register_user_type_delivered(
-        member_name,
-        kt,
-        None,
-        bind_index,
-    ) {
-        Ok(pair) => pair,
-        Err(e) => return Action::Done(Err(e)),
-    };
+    let (kt_ref, stored) =
+        match ctx
+            .scope
+            .register_user_type_delivered(member_name, kt, None, bind_index)
+        {
+            Ok(pair) => pair,
+            Err(e) => return Action::Done(Err(e)),
+        };
     let carrier = ctx.scope.resident_type_carrier(kt_ref, stored);
     Action::Done(Ok(StepCarried::born(carrier)))
 }
@@ -786,7 +785,10 @@ mod tests {
                         schema,
                         param_names,
                     }) => {
-                        assert!(schema.is_empty(), "a constructor family has an empty schema");
+                        assert!(
+                            schema.is_empty(),
+                            "a constructor family has an empty schema"
+                        );
                         assert_eq!(*param_names, vec!["Type".to_string()]);
                     }
                     other => panic!("expected a TypeConstructor schema, got {other:?}"),
@@ -954,7 +956,13 @@ mod tests {
         run(scope, "NEWTYPE (Type AS Wrapper)");
         let err = run_one_err(scope, parse_one("Wrapper ()"));
         assert!(
-            matches!(&err.kind, KErrorKind::ArityMismatch { expected: 1, got: 0 }),
+            matches!(
+                &err.kind,
+                KErrorKind::ArityMismatch {
+                    expected: 1,
+                    got: 0
+                }
+            ),
             "expected ArityMismatch(1, 0), got {err}",
         );
     }

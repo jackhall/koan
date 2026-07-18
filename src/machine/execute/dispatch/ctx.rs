@@ -15,6 +15,7 @@ use std::rc::Rc;
 use crate::machine::core::KFunction;
 use crate::machine::core::{scope_frame, DepPlacement};
 use crate::machine::core::{FrameStorage, StepAllocator};
+use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
@@ -112,6 +113,12 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
 
     pub(in crate::machine::execute) fn current_scope(&self) -> &'step Scope<'step> {
         self.scope
+    }
+
+    /// The run's subtype-verdict store, read through the ambient context's run frame. Memoized
+    /// predicates take it as their final parameter.
+    pub(in crate::machine::execute) fn types(&self) -> &TypeRegistry {
+        self.ambient.type_registry()
     }
 
     pub(super) fn chain_deref(&self) -> Option<&LexicalFrame> {

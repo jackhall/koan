@@ -31,8 +31,9 @@ fn newtype_setref<'a>(name: &str, scope_id: ScopeId, repr: KType<'a>) -> KType<'
 
 #[test]
 fn is_more_specific_concrete_beats_any() {
-    assert!(KType::Number.is_more_specific_than(&KType::Any));
-    assert!(!KType::Any.is_more_specific_than(&KType::Number));
+    let types = TypeRegistry::new();
+    assert!(KType::Number.is_more_specific_than(&KType::Any, &types));
+    assert!(!KType::Any.is_more_specific_than(&KType::Number, &types));
 }
 
 /// Dispatch treats two structurally identical nominal declarations interchangeably — the
@@ -41,42 +42,46 @@ fn is_more_specific_concrete_beats_any() {
 /// satisfy each other's slot, so a value of one is admitted where the other is declared.
 #[test]
 fn dispatch_unifies_structurally_identical_nominals() {
+    let types = TypeRegistry::new();
     let slot = newtype_setref("Wrapper", ScopeId::from_raw(1, 1), KType::Number);
     let carried = newtype_setref("Wrapper", ScopeId::from_raw(2, 2), KType::Number);
     assert_eq!(
         slot, carried,
         "same content unifies regardless of allocation"
     );
-    assert!(slot.satisfied_by(&carried));
-    assert!(carried.satisfied_by(&slot));
+    assert!(slot.satisfied_by(&carried, &types));
+    assert!(carried.satisfied_by(&slot, &types));
 
     // A different declared name is genuinely different content, so it is not admitted.
     let other = newtype_setref("Boxer", ScopeId::from_raw(1, 1), KType::Number);
-    assert!(!slot.satisfied_by(&other));
+    assert!(!slot.satisfied_by(&other, &types));
 }
 
 #[test]
 fn is_more_specific_list_number_beats_list_any() {
+    let types = TypeRegistry::new();
     let n = KType::list(Box::new(KType::Number));
     let a = KType::list(Box::new(KType::Any));
-    assert!(n.is_more_specific_than(&a));
-    assert!(!a.is_more_specific_than(&n));
+    assert!(n.is_more_specific_than(&a, &types));
+    assert!(!a.is_more_specific_than(&n, &types));
 }
 
 #[test]
 fn is_more_specific_disjoint_lists_incomparable() {
+    let types = TypeRegistry::new();
     let n = KType::list(Box::new(KType::Number));
     let s = KType::list(Box::new(KType::Str));
-    assert!(!n.is_more_specific_than(&s));
-    assert!(!s.is_more_specific_than(&n));
+    assert!(!n.is_more_specific_than(&s, &types));
+    assert!(!s.is_more_specific_than(&n, &types));
 }
 
 #[test]
 fn is_more_specific_dict_refines_value() {
+    let types = TypeRegistry::new();
     let strict = KType::dict(Box::new(KType::Str), Box::new(KType::Number));
     let loose = KType::dict(Box::new(KType::Str), Box::new(KType::Any));
-    assert!(strict.is_more_specific_than(&loose));
-    assert!(!loose.is_more_specific_than(&strict));
+    assert!(strict.is_more_specific_than(&loose, &types));
+    assert!(!loose.is_more_specific_than(&strict, &types));
 }
 
 /// Width-subset specificity: a nullary function `{}` is strictly more specific than a
@@ -85,13 +90,14 @@ fn is_more_specific_dict_refines_value() {
 /// (the unary declares a param the nullary lacks → contravariant width violation).
 #[test]
 fn is_more_specific_function_width_subset() {
+    let types = TypeRegistry::new();
     let unary = KType::function_type(
         Record::from_pairs(vec![("x".into(), KType::Number)]),
         Box::new(KType::Number),
     );
     let nullary = KType::function_type(Record::new(), Box::new(KType::Number));
-    assert!(nullary.is_more_specific_than(&unary));
-    assert!(!unary.is_more_specific_than(&nullary));
+    assert!(nullary.is_more_specific_than(&unary, &types));
+    assert!(!unary.is_more_specific_than(&nullary, &types));
 }
 
 /// Depth-contravariant function specificity: `(x :Any) -> R ≺ (x :Number) -> R`. The
@@ -99,6 +105,7 @@ fn is_more_specific_function_width_subset() {
 /// value accepting `Any` fills a slot that promised only `Number`.
 #[test]
 fn is_more_specific_function_param_contravariant() {
+    let types = TypeRegistry::new();
     let any_param = KType::function_type(
         Record::from_pairs(vec![("x".into(), KType::Any)]),
         Box::new(KType::Str),
@@ -107,14 +114,15 @@ fn is_more_specific_function_param_contravariant() {
         Record::from_pairs(vec![("x".into(), KType::Number)]),
         Box::new(KType::Str),
     );
-    assert!(any_param.is_more_specific_than(&number_param));
-    assert!(!number_param.is_more_specific_than(&any_param));
+    assert!(any_param.is_more_specific_than(&number_param, &types));
+    assert!(!number_param.is_more_specific_than(&any_param, &types));
 }
 
 /// Return-covariant function specificity: `(x) -> Number ≺ (x) -> Any`. The narrower
 /// return makes the function more specific.
 #[test]
 fn is_more_specific_function_return_covariant() {
+    let types = TypeRegistry::new();
     let number_ret = KType::function_type(
         Record::from_pairs(vec![("x".into(), KType::Number)]),
         Box::new(KType::Number),
@@ -123,8 +131,8 @@ fn is_more_specific_function_return_covariant() {
         Record::from_pairs(vec![("x".into(), KType::Number)]),
         Box::new(KType::Any),
     );
-    assert!(number_ret.is_more_specific_than(&any_ret));
-    assert!(!any_ret.is_more_specific_than(&number_ret));
+    assert!(number_ret.is_more_specific_than(&any_ret, &types));
+    assert!(!any_ret.is_more_specific_than(&number_ret, &types));
 }
 
 fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
@@ -137,29 +145,32 @@ fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
 /// strictly more specific (a `{x, y}` value fills an `{x}` slot, dropping `y`).
 #[test]
 fn record_width_superset_more_specific() {
+    let types = TypeRegistry::new();
     let wide = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
     let narrow = record_ty(vec![("x", KType::Number)]);
-    assert!(wide.is_more_specific_than(&narrow));
-    assert!(!narrow.is_more_specific_than(&wide));
+    assert!(wide.is_more_specific_than(&narrow, &types));
+    assert!(!narrow.is_more_specific_than(&wide, &types));
 }
 
 /// Covariant depth: `:{x :Number} ≺ :{x :Any}`.
 #[test]
 fn record_depth_covariant() {
+    let types = TypeRegistry::new();
     let number = record_ty(vec![("x", KType::Number)]);
     let any = record_ty(vec![("x", KType::Any)]);
-    assert!(number.is_more_specific_than(&any));
-    assert!(!any.is_more_specific_than(&number));
+    assert!(number.is_more_specific_than(&any, &types));
+    assert!(!any.is_more_specific_than(&number, &types));
 }
 
 /// Disjoint field sets are incomparable (`{x, y}` vs `{x, z}`) — dispatch ambiguity, not
 /// an ordering.
 #[test]
 fn record_disjoint_fields_incomparable() {
+    let types = TypeRegistry::new();
     let xy = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
     let xz = record_ty(vec![("x", KType::Number), ("z", KType::Str)]);
-    assert!(!xy.is_more_specific_than(&xz));
-    assert!(!xz.is_more_specific_than(&xy));
+    assert!(!xy.is_more_specific_than(&xz, &types));
+    assert!(!xz.is_more_specific_than(&xy, &types));
 }
 
 /// `accepts_carried` is the lifetime-heterogeneous classifier `accepts_part`'s `Spliced` arm
@@ -167,6 +178,7 @@ fn record_disjoint_fields_incomparable() {
 /// directly. Also pins the value-shaped arms (object type-tag, type-channel `OfKind`) it owns.
 #[test]
 fn accepts_carried_matches_spliced_delegation() {
+    let types = TypeRegistry::new();
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
@@ -180,19 +192,19 @@ fn accepts_carried_matches_spliced_delegation() {
     ] {
         // The delegation equivalence: classifying the spliced cell and opening the value directly agree.
         assert_eq!(
-            ty.accepts_carried(carried),
-            ty.accepts_part(&spliced_part(carried))
+            ty.accepts_carried(carried, &types),
+            ty.accepts_part(&spliced_part(carried), &types)
         );
     }
     // A numeric value is admitted by `:Number` / `:Any`, refused by `:Str`.
-    assert!(KType::Number.accepts_carried(Carried::Object(n)));
-    assert!(KType::Any.accepts_carried(Carried::Object(n)));
-    assert!(!KType::Str.accepts_carried(Carried::Object(n)));
+    assert!(KType::Number.accepts_carried(Carried::Object(n), &types));
+    assert!(KType::Any.accepts_carried(Carried::Object(n), &types));
+    assert!(!KType::Str.accepts_carried(Carried::Object(n), &types));
     // A type-channel value reaches the `OfKind` arm; a proper-type slot admits it.
     let kt_number = KType::Number;
-    assert!(KType::OfKind(KKind::ProperType).accepts_carried(Carried::Type(&kt_number)));
+    assert!(KType::OfKind(KKind::ProperType).accepts_carried(Carried::Type(&kt_number), &types));
     // An object value reports a non-type `kind_of` and is refused by a type-channel slot.
-    assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n)));
+    assert!(!KType::OfKind(KKind::ProperType).accepts_carried(Carried::Object(n), &types));
 }
 
 /// A spliced **cell** classifies through `accepts_part` by opening at its own brand and handing the
@@ -203,6 +215,7 @@ fn accepts_carried_matches_spliced_delegation() {
 /// (a resolved value is not raw AST, so the checked seal's guard rejects it).
 #[test]
 fn spliced_cell_classifies_by_opening() {
+    let types = TypeRegistry::new();
     use crate::builtins::test_support::run_root_bare;
     use crate::machine::core::run_root_storage;
     use crate::machine::model::ast::KExpression;
@@ -226,14 +239,14 @@ fn spliced_cell_classifies_by_opening() {
         (KType::Str, false),
     ] {
         assert_eq!(
-            ty.accepts_part(&cell_part),
+            ty.accepts_part(&cell_part, &types),
             admits,
             "cell classification for {ty:?}",
         );
         // Agrees with opening the value directly.
         assert_eq!(
-            ty.accepts_part(&cell_part),
-            ty.accepts_carried(Carried::Object(obj))
+            ty.accepts_part(&cell_part, &types),
+            ty.accepts_carried(Carried::Object(obj), &types)
         );
     }
 
@@ -248,6 +261,7 @@ fn spliced_cell_classifies_by_opening() {
 /// literal admits any record slot shape-only.
 #[test]
 fn record_value_admission_and_matches() {
+    let types = TypeRegistry::new();
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
@@ -257,19 +271,19 @@ fn record_value_admission_and_matches() {
     ])));
 
     let narrow = record_ty(vec![("x", KType::Number)]);
-    assert!(narrow.accepts_part(&spliced_part(Carried::Object(value))));
-    assert!(narrow.matches_value(value));
+    assert!(narrow.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(narrow.matches_value(value, &types));
 
     let mismatch = record_ty(vec![("x", KType::Str)]);
-    assert!(!mismatch.accepts_part(&spliced_part(Carried::Object(value))));
-    assert!(!mismatch.matches_value(value));
+    assert!(!mismatch.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(!mismatch.matches_value(value, &types));
 
     let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
-    assert!(!extra.accepts_part(&spliced_part(Carried::Object(value))));
-    assert!(!extra.matches_value(value));
+    assert!(!extra.accepts_part(&spliced_part(Carried::Object(value)), &types));
+    assert!(!extra.matches_value(value, &types));
 
     // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
-    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![])));
+    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![]), &types));
 }
 
 /// Admission table for `KType::accepts_part`: bare builtin type tokens
@@ -278,6 +292,7 @@ fn record_value_admission_and_matches() {
 /// stays intact; non-type-denoting carriers reject.
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
+    let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::{Module, ModuleSignature};
@@ -288,10 +303,10 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let kt_str: &KType<'_> = region.brand().alloc_ktype(KType::Str);
     let kt_bool: &KType<'_> = region.brand().alloc_ktype(KType::Bool);
     let kt_null: &KType<'_> = region.brand().alloc_ktype(KType::Null);
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_number))));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str))));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool))));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_null))));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_number)), &types));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str)), &types));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool)), &types));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(kt_null)), &types));
     // NewType / union-variant type tokens flow as `SetRef { .. }` in the type channel — a
     // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
     let newtype_set = RecursiveSet::singleton(
@@ -306,8 +321,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let struct_token: &KType<'_> = region
         .brand()
         .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token))));
-    assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token))));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token)), &types));
+    assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token)), &types));
     let child = region
         .brand()
         .alloc_scope(crate::machine::Scope::child_under_module(
@@ -322,7 +337,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_object_checked(KObject::Module(module))
         .expect("module was just allocated into region's own region");
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value))));
+    assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value)), &types));
     let sig = region
         .brand()
         .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
@@ -330,11 +345,11 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .brand()
         .alloc_ktype_checked(KType::signature(SigSource::Declared(sig), Vec::new()))
         .expect("sig was just allocated into region's own region");
-    assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig))));
+    assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
     let s: &KObject<'_> = region.brand().alloc_object(KObject::KString("hi".into()));
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(n))));
-    assert!(!t.accepts_part(&spliced_part(Carried::Object(s))));
+    assert!(!t.accepts_part(&spliced_part(Carried::Object(n)), &types));
+    assert!(!t.accepts_part(&spliced_part(Carried::Object(s)), &types));
 }
 
 /// `OfKind` is type-channel-only: a nominal-kind slot classifies a *type value* by its
@@ -343,6 +358,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
 /// declines the runtime `Wrapped` *instance* entirely; `OfKind(Proper)` subsumes the NewType type.
 #[test]
 fn of_kind_nominal_is_type_channel_only() {
+    let types = TypeRegistry::new();
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
@@ -350,10 +366,9 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(&newtype_tv))));
-    assert!(
-        KType::OfKind(KKind::ProperType).accepts_part(&spliced_part(Carried::Type(&newtype_tv)))
-    );
+    assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
+    assert!(KType::OfKind(KKind::ProperType)
+        .accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
 
     // A `TypeConstructor` type value is the wrong family — declined.
     let ctor_tv = KType::SetRef {
@@ -367,7 +382,7 @@ fn of_kind_nominal_is_type_channel_only() {
         ),
         index: 0,
     };
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(&ctor_tv))));
+    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(&ctor_tv)), &types));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
@@ -380,21 +395,22 @@ fn of_kind_nominal_is_type_channel_only() {
             type_id,
         })
         .expect("type_id was just allocated into region's own region");
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w))));
-    assert!(!newtype_ty.matches_value(w));
+    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w)), &types));
+    assert!(!newtype_ty.matches_value(w, &types));
 }
 
 /// Pins the kind refinement: a `NewType`-kind `SetRef` is strictly more specific than
 /// `OfKind(NewType)`, and incomparable with `OfKind(TypeConstructor)` (a sibling family).
 #[test]
 fn user_type_newtype_specificity_lattice() {
+    let types = TypeRegistry::new();
     let newtype_kind = KType::OfKind(KKind::NewType);
     let ctor_kind = KType::OfKind(KKind::TypeConstructor);
     let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
-    assert!(dist.is_more_specific_than(&newtype_kind));
-    assert!(!newtype_kind.is_more_specific_than(&dist));
-    assert!(!dist.is_more_specific_than(&ctor_kind));
-    assert!(!ctor_kind.is_more_specific_than(&dist));
+    assert!(dist.is_more_specific_than(&newtype_kind, &types));
+    assert!(!newtype_kind.is_more_specific_than(&dist, &types));
+    assert!(!dist.is_more_specific_than(&ctor_kind, &types));
+    assert!(!ctor_kind.is_more_specific_than(&dist, &types));
 }
 
 /// Specificity ordering for `SetRef` against the `OfKind` kind lattice:
@@ -403,20 +419,21 @@ fn user_type_newtype_specificity_lattice() {
 /// - a `SetRef` of one kind and `OfKind` of a different kind are incomparable.
 #[test]
 fn user_type_specificity_lattice() {
+    let types = TypeRegistry::new();
     let newtype_kind = KType::OfKind(KKind::NewType);
     let ctor_kind = KType::OfKind(KKind::TypeConstructor);
     let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
     // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
-    assert!(newtype_kind.is_more_specific_than(&KType::Any));
-    assert!(!KType::Any.is_more_specific_than(&newtype_kind));
-    assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::ProperType)));
-    assert!(!KType::OfKind(KKind::ProperType).is_more_specific_than(&newtype_kind));
+    assert!(newtype_kind.is_more_specific_than(&KType::Any, &types));
+    assert!(!KType::Any.is_more_specific_than(&newtype_kind, &types));
+    assert!(newtype_kind.is_more_specific_than(&KType::OfKind(KKind::ProperType), &types));
+    assert!(!KType::OfKind(KKind::ProperType).is_more_specific_than(&newtype_kind, &types));
     // A `NewType`-kind `SetRef` strictly under `OfKind(NewType)`.
-    assert!(point.is_more_specific_than(&newtype_kind));
-    assert!(!newtype_kind.is_more_specific_than(&point));
+    assert!(point.is_more_specific_than(&newtype_kind, &types));
+    assert!(!newtype_kind.is_more_specific_than(&point, &types));
     // Different-kind pairs incomparable.
-    assert!(!point.is_more_specific_than(&ctor_kind));
-    assert!(!ctor_kind.is_more_specific_than(&point));
+    assert!(!point.is_more_specific_than(&ctor_kind, &types));
+    assert!(!ctor_kind.is_more_specific_than(&point, &types));
 }
 
 /// `KType::Signature { pinned_slots }` specificity rules (constraint role):
@@ -429,6 +446,7 @@ fn user_type_specificity_lattice() {
 /// - A `Signature` (pinned or not) strictly refines `OfKind(Module)`.
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
+    let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::ModuleSignature;
@@ -476,16 +494,16 @@ fn is_more_specific_for_pinned_signature_bound() {
         vec![("Elt".into(), KType::Number)],
     );
 
-    assert!(pinned_number.is_more_specific_than(&bare));
-    assert!(!bare.is_more_specific_than(&pinned_number));
-    assert!(pinned_two.is_more_specific_than(&pinned_number));
-    assert!(!pinned_number.is_more_specific_than(&pinned_two));
-    assert!(!pinned_number.is_more_specific_than(&pinned_str));
-    assert!(!pinned_str.is_more_specific_than(&pinned_number));
-    assert!(!pinned_number.is_more_specific_than(&pinned_elt));
-    assert!(!pinned_elt.is_more_specific_than(&pinned_number));
-    assert!(!pinned_number.is_more_specific_than(&other_sig));
-    assert!(!other_sig.is_more_specific_than(&pinned_number));
+    assert!(pinned_number.is_more_specific_than(&bare, &types));
+    assert!(!bare.is_more_specific_than(&pinned_number, &types));
+    assert!(pinned_two.is_more_specific_than(&pinned_number, &types));
+    assert!(!pinned_number.is_more_specific_than(&pinned_two, &types));
+    assert!(!pinned_number.is_more_specific_than(&pinned_str, &types));
+    assert!(!pinned_str.is_more_specific_than(&pinned_number, &types));
+    assert!(!pinned_number.is_more_specific_than(&pinned_elt, &types));
+    assert!(!pinned_elt.is_more_specific_than(&pinned_number, &types));
+    assert!(!pinned_number.is_more_specific_than(&other_sig, &types));
+    assert!(!other_sig.is_more_specific_than(&pinned_number, &types));
 }
 
 /// A shared `Result` `TypeConstructor` set. Identity is now `(set ptr, index)`, so a
@@ -545,6 +563,7 @@ fn error_type_set<'a>(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet<'a>> {
 /// the slot's `E` and the value's payload carrier share one set per error type.
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
+    let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let kerror_sid = ScopeId::from_raw(0, 0x9002);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
@@ -567,13 +586,13 @@ fn constructor_apply_result_checks_inhabited_error_param() {
 
     let slot_myerr = KType::constructor_apply(ctor.clone(), vec![KType::Any, myerr_ty.clone()]);
     let caught = result_value(&r_set, "Error", error_carrier(&kerror_set));
-    assert!(!slot_myerr.matches_value(&caught));
+    assert!(!slot_myerr.matches_value(&caught, &types));
 
     let slot_kerror = KType::constructor_apply(ctor.clone(), vec![KType::Any, kerror_ty.clone()]);
-    assert!(slot_kerror.matches_value(&caught));
+    assert!(slot_kerror.matches_value(&caught, &types));
 
     let my_error = result_value(&r_set, "Error", error_carrier(&myerr_set));
-    assert!(slot_myerr.matches_value(&my_error));
+    assert!(slot_myerr.matches_value(&my_error, &types));
 }
 
 /// The `Ok` field maps to param 0, so `:(Result Number E)` checks the `Ok` payload
@@ -581,6 +600,7 @@ fn constructor_apply_result_checks_inhabited_error_param() {
 /// `Error` parameter is unconstrained at the value).
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
+    let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
     let r_set = result_set(result_sid);
@@ -594,9 +614,9 @@ fn constructor_apply_result_ok_admits_any_error_param() {
     };
     let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
     let slot = KType::constructor_apply(ctor.clone(), vec![KType::Number, myerr_ty]);
-    assert!(slot.matches_value(&ok_value));
+    assert!(slot.matches_value(&ok_value, &types));
     let slot_str = KType::constructor_apply(ctor, vec![KType::Str, KType::Any]);
-    assert!(!slot_str.matches_value(&ok_value));
+    assert!(!slot_str.matches_value(&ok_value, &types));
 }
 
 /// `result_field_param_index` is the field→param linkage source of truth: `Ok`→0,
@@ -615,6 +635,7 @@ fn result_field_param_index_table() {
 /// toward the refined overload.
 #[test]
 fn constructor_apply_covariant_admission_and_specificity() {
+    let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
     let r_set = result_set(result_sid);
@@ -635,16 +656,17 @@ fn constructor_apply_covariant_admission_and_specificity() {
     };
     let coarse = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
     let refined = KType::constructor_apply(ctor, vec![KType::Number, myerr]);
-    assert!(coarse.matches_value(&stamped));
-    assert!(refined.matches_value(&stamped));
-    assert!(refined.is_more_specific_than(&coarse));
-    assert!(!coarse.is_more_specific_than(&refined));
+    assert!(coarse.matches_value(&stamped, &types));
+    assert!(refined.matches_value(&stamped, &types));
+    assert!(refined.is_more_specific_than(&coarse, &types));
+    assert!(!coarse.is_more_specific_than(&refined, &types));
 }
 
 /// A populated `type_args` carrier (stamped by ascription) is checked structurally against
 /// the slot args, taking precedence over the inhabited-tag path.
 #[test]
 fn constructor_apply_stamped_type_args_checked_structurally() {
+    let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let r_set = result_set(result_sid);
     let ctor = Box::new(KType::SetRef {
@@ -659,11 +681,11 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
         type_args: std::rc::Rc::new(vec![KType::Number, KType::Str]),
     };
     let slot_ok = KType::constructor_apply(ctor.clone(), vec![KType::Number, KType::Str]);
-    assert!(slot_ok.matches_value(&stamped));
+    assert!(slot_ok.matches_value(&stamped, &types));
     let slot_any = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
-    assert!(slot_any.matches_value(&stamped));
+    assert!(slot_any.matches_value(&stamped, &types));
     let slot_bad = KType::constructor_apply(ctor, vec![KType::Bool, KType::Str]);
-    assert!(!slot_bad.matches_value(&stamped));
+    assert!(!slot_bad.matches_value(&stamped, &types));
 }
 
 use crate::machine::model::ast::TypeIdentifier;
@@ -674,6 +696,7 @@ use crate::machine::model::types::{DeferredReturn, DeferredReturnSurface, Return
 /// does not hold — `Any` never refines a precise placeholder.
 #[test]
 fn deferred_return_more_specific_than_any() {
+    let types = TypeRegistry::new();
     let deferred = KType::function_type(
         Record::new(),
         Box::new(KType::DeferredReturn(DeferredReturnSurface::Type(
@@ -681,14 +704,15 @@ fn deferred_return_more_specific_than_any() {
         ))),
     );
     let any = KType::function_type(Record::new(), Box::new(KType::Any));
-    assert!(deferred.is_more_specific_than(&any));
-    assert!(!any.is_more_specific_than(&deferred));
+    assert!(deferred.is_more_specific_than(&any, &types));
+    assert!(!any.is_more_specific_than(&deferred, &types));
 }
 
 /// Two function types differing only in their deferred-return shadow are distinct: not equal,
 /// neither more specific than the other, and they hash apart.
 #[test]
 fn two_functions_differ_only_in_deferred_return_are_distinct() {
+    let types = TypeRegistry::new();
     use std::hash::{Hash, Hasher};
     let er = KType::function_type(
         Record::new(),
@@ -703,8 +727,8 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
         ))),
     );
     assert_ne!(er, ar);
-    assert!(!er.is_more_specific_than(&ar));
-    assert!(!ar.is_more_specific_than(&er));
+    assert!(!er.is_more_specific_than(&ar, &types));
+    assert!(!ar.is_more_specific_than(&er, &types));
     // `KType` carries interior mutability, so it can't key a `HashSet` (clippy
     // `mutable_key_type`). Hash each directly: the deferred-return shadow participates
     // in `KType`'s hash, so the two function types hash apart.
@@ -722,6 +746,7 @@ fn two_functions_differ_only_in_deferred_return_are_distinct() {
 /// precise than its own shadow.
 #[test]
 fn deferred_return_admission_via_function_compat() {
+    let types = TypeRegistry::new();
     let candidate = ExpressionSignature {
         return_type: ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
         elements: vec![],
@@ -732,19 +757,24 @@ fn deferred_return_admission_via_function_compat() {
     let slot_er = KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf(
         "er".into(),
     )));
-    assert!(function_compat(&candidate, &no_params, &slot_er));
+    assert!(function_compat(&candidate, &no_params, &slot_er, &types));
 
     // Differing shadow → reject.
     let slot_ar = KType::DeferredReturn(DeferredReturnSurface::Type(TypeIdentifier::leaf(
         "Ar".into(),
     )));
-    assert!(!function_compat(&candidate, &no_params, &slot_ar));
+    assert!(!function_compat(&candidate, &no_params, &slot_ar, &types));
 
     // Resolved slot → reject (opaque until elaboration).
-    assert!(!function_compat(&candidate, &no_params, &KType::Number));
+    assert!(!function_compat(
+        &candidate,
+        &no_params,
+        &KType::Number,
+        &types
+    ));
 
     // `Any` slot → admit.
-    assert!(function_compat(&candidate, &no_params, &KType::Any));
+    assert!(function_compat(&candidate, &no_params, &KType::Any, &types));
 }
 
 /// `DeferredReturnSurface` identity is syntactic: two `Expression` shadows built from the
@@ -772,6 +802,7 @@ fn deferred_return_surface_eq_and_hash() {
 /// admits — via both `accepts_carried` and `matches_value`.
 #[test]
 fn union_admits_member_typed_value() {
+    let types = TypeRegistry::new();
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
@@ -780,17 +811,18 @@ fn union_admits_member_typed_value() {
     let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
     let str_or_bool = KType::union_of(vec![KType::Str, KType::Bool]);
 
-    assert!(number_or_str.accepts_carried(Carried::Object(n)));
-    assert!(!str_or_bool.accepts_carried(Carried::Object(n)));
+    assert!(number_or_str.accepts_carried(Carried::Object(n), &types));
+    assert!(!str_or_bool.accepts_carried(Carried::Object(n), &types));
     // `matches_value` agrees with `accepts_carried`.
-    assert!(number_or_str.matches_value(n));
-    assert!(!str_or_bool.matches_value(n));
+    assert!(number_or_str.matches_value(n, &types));
+    assert!(!str_or_bool.matches_value(n, &types));
 }
 
 /// A union honors a container value's memoized carried element type: a `List<Number>`
 /// value is admitted by a union containing `:(LIST OF Number)`, refused by one without it.
 #[test]
 fn union_honors_memoized_list_element_type() {
+    let types = TypeRegistry::new();
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
@@ -802,30 +834,31 @@ fn union_honors_memoized_list_element_type() {
     let with_list = KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]);
     let without_list = KType::union_of(vec![KType::Number, KType::Str]);
 
-    assert!(with_list.accepts_carried(Carried::Object(list_value)));
-    assert!(!without_list.accepts_carried(Carried::Object(list_value)));
+    assert!(with_list.accepts_carried(Carried::Object(list_value), &types));
+    assert!(!without_list.accepts_carried(Carried::Object(list_value), &types));
 }
 
 /// Specificity: each member refines its union (AC3); a union refines `Any` and a superset
 /// union; a union is not more specific than a bare member nor than an equal union.
 #[test]
 fn union_specificity_ordering() {
+    let types = TypeRegistry::new();
     let number = KType::Number;
     let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
     let number_or_str_or_bool = KType::union_of(vec![KType::Number, KType::Str, KType::Bool]);
 
     // Each member is a subtype of the union.
-    assert!(number.is_more_specific_than(&number_or_str));
+    assert!(number.is_more_specific_than(&number_or_str, &types));
     // A union refines `Any`.
-    assert!(number_or_str.is_more_specific_than(&KType::Any));
+    assert!(number_or_str.is_more_specific_than(&KType::Any, &types));
     // A union is not more specific than one of its members.
-    assert!(!number_or_str.is_more_specific_than(&number));
+    assert!(!number_or_str.is_more_specific_than(&number, &types));
     // A subset union refines a superset union; the reverse does not hold.
-    assert!(number_or_str.is_more_specific_than(&number_or_str_or_bool));
-    assert!(!number_or_str_or_bool.is_more_specific_than(&number_or_str));
+    assert!(number_or_str.is_more_specific_than(&number_or_str_or_bool, &types));
+    assert!(!number_or_str_or_bool.is_more_specific_than(&number_or_str, &types));
     // Equal unions (order-blind) are not strictly more specific than each other.
     let str_or_number = KType::union_of(vec![KType::Str, KType::Number]);
-    assert!(!number_or_str.is_more_specific_than(&str_or_number));
+    assert!(!number_or_str.is_more_specific_than(&str_or_number, &types));
 }
 
 /// A module value's `ktype()` reports `Signature { SelfOf(m) }`, and its identity is its self-sig
@@ -889,6 +922,7 @@ fn module_object_ktype_reports_self_sig() {
 /// value.
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
+    let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::{Module, ModuleSignature};
@@ -914,19 +948,19 @@ fn matches_value_admits_module_object_via_signature_slot() {
         .insert("Type".into(), KType::Number);
 
     let declared = KType::signature(SigSource::Declared(sig), Vec::new());
-    assert!(declared.matches_value(&KObject::Module(m)));
+    assert!(declared.matches_value(&KObject::Module(m), &types));
 
     let pinned_ok = KType::signature(
         SigSource::Declared(sig),
         vec![("Type".into(), KType::Number)],
     );
     let pinned_bad = KType::signature(SigSource::Declared(sig), vec![("Type".into(), KType::Str)]);
-    assert!(pinned_ok.matches_value(&KObject::Module(m)));
-    assert!(!pinned_bad.matches_value(&KObject::Module(m)));
+    assert!(pinned_ok.matches_value(&KObject::Module(m), &types));
+    assert!(!pinned_bad.matches_value(&KObject::Module(m), &types));
 
     let empty = KType::empty_signature();
-    assert!(empty.matches_value(&KObject::Module(m)));
-    assert!(!empty.matches_value(&KObject::Number(1.0)));
+    assert!(empty.matches_value(&KObject::Module(m), &types));
+    assert!(!empty.matches_value(&KObject::Number(1.0), &types));
 }
 
 /// Specificity over the module lattice: a module's `SelfOf` self-sig refines a `Declared`
@@ -936,6 +970,7 @@ fn matches_value_admits_module_object_via_signature_slot() {
 /// collapse into one type and there would be no ordering to test.
 #[test]
 fn specificity_self_sig_refines_declared_and_empty() {
+    let types = TypeRegistry::new();
     use crate::builtins::test_support::{lookup_module, run, run_root_silent};
     use crate::machine::run_root_storage;
     let region = run_root_storage();
@@ -962,80 +997,73 @@ fn specificity_self_sig_refines_declared_and_empty() {
     let empty = KType::empty_signature();
 
     // `SelfOf(m) ≺ Declared(sig)` because `m`'s self-sig satisfies `Ordered`.
-    assert!(self_of.is_more_specific_than(&declared));
+    assert!(self_of.is_more_specific_than(&declared, &types));
     // Any non-empty signature `≺ Empty`; `Empty` refines nothing narrower.
-    assert!(declared.is_more_specific_than(&empty));
-    assert!(self_of.is_more_specific_than(&empty));
-    assert!(!empty.is_more_specific_than(&declared));
+    assert!(declared.is_more_specific_than(&empty, &types));
+    assert!(self_of.is_more_specific_than(&empty, &types));
+    assert!(!empty.is_more_specific_than(&declared, &types));
     // `satisfied_by` routes a memoized `SelfOf` element type through the `SelfOf ≺ Declared` arm.
-    assert!(declared.satisfied_by(&self_of));
+    assert!(declared.satisfied_by(&self_of, &types));
 }
 
-// --- memo cache wiring (`is_more_specific_than` routes composite pairs through `type_memos`) --
+// --- verdict-registry wiring (`is_more_specific_than` routes composite pairs through the run's
+// `TypeRegistry`) ------------------------------------------------------------------------------
 
 /// A repeat check of the same composite pair (`List<Number>` vs `List<Any>`, verdict `true`)
-/// is a counter-verified cache hit on the second call, and the verdict is identical both times.
+/// is a counter-verified registry hit on the second call, and the verdict is identical both times.
 #[test]
-fn memo_repeat_composite_hit() {
-    type_memos::reset();
+fn verdict_repeat_composite_hit() {
+    let types = TypeRegistry::new();
     let n = KType::list(Box::new(KType::Number));
     let a = KType::list(Box::new(KType::Any));
 
-    let first = n.is_more_specific_than(&a);
+    let first = n.is_more_specific_than(&a, &types);
     assert!(first);
-    assert_eq!(type_memos::miss_count(), 1);
-    assert_eq!(type_memos::hit_count(), 0);
+    assert_eq!(types.miss_count(), 1);
+    assert_eq!(types.hit_count(), 0);
 
-    let second = n.is_more_specific_than(&a);
+    let second = n.is_more_specific_than(&a, &types);
     assert_eq!(second, first);
-    assert_eq!(
-        type_memos::hit_count(),
-        1,
-        "second call must be a cache hit"
-    );
+    assert_eq!(types.hit_count(), 1, "second call must be a registry hit");
 }
 
-/// A negative verdict is cached too: the second call to a pair the walk resolves `false` for
+/// A negative verdict is recorded too: the second call to a pair the walk resolves `false` for
 /// is a hit returning `false`.
 #[test]
-fn memo_negative_verdict_also_caches() {
-    type_memos::reset();
+fn verdict_negative_also_recorded() {
+    let types = TypeRegistry::new();
     let a = KType::list(Box::new(KType::Any));
     let n = KType::list(Box::new(KType::Number));
 
-    let first = a.is_more_specific_than(&n);
+    let first = a.is_more_specific_than(&n, &types);
     assert!(!first);
-    assert_eq!(type_memos::miss_count(), 1);
+    assert_eq!(types.miss_count(), 1);
 
-    let second = a.is_more_specific_than(&n);
+    let second = a.is_more_specific_than(&n, &types);
     assert!(!second);
-    assert_eq!(
-        type_memos::hit_count(),
-        1,
-        "second call must be a cache hit"
-    );
+    assert_eq!(types.hit_count(), 1, "second call must be a registry hit");
 }
 
-/// Leaf pairs never probe the cache: `Number` vs `Any` takes `is_stored_digest_variant`'s
+/// Leaf pairs never probe the registry: `Number` vs `Any` takes `is_stored_digest_variant`'s
 /// `else` branch (`Any` is not a stored-digest variant), so both counters stay at zero.
 #[test]
-fn memo_leaf_pairs_move_no_counters() {
-    type_memos::reset();
-    assert!(KType::Number.is_more_specific_than(&KType::Any));
-    assert_eq!(type_memos::hit_count(), 0);
-    assert_eq!(type_memos::miss_count(), 0);
+fn verdict_leaf_pairs_move_no_counters() {
+    let types = TypeRegistry::new();
+    assert!(KType::Number.is_more_specific_than(&KType::Any, &types));
+    assert_eq!(types.hit_count(), 0);
+    assert_eq!(types.miss_count(), 0);
 }
 
-/// Purity sanity: resetting the cache between two computations of the same composite verdict
-/// changes nothing observable — the cache is an accelerator, never load-bearing.
+/// Purity sanity: a cold registry computes the same composite verdict a warm one does — the
+/// registry is an accelerator, never load-bearing.
 #[test]
-fn memo_purity_across_reset() {
-    type_memos::reset();
+fn verdict_purity_across_a_cold_registry() {
+    let warm = TypeRegistry::new();
     let n = KType::list(Box::new(KType::Number));
     let a = KType::list(Box::new(KType::Any));
 
-    let before = n.is_more_specific_than(&a);
-    type_memos::reset();
-    let after = n.is_more_specific_than(&a);
+    let before = n.is_more_specific_than(&a, &warm);
+    let cold = TypeRegistry::new();
+    let after = n.is_more_specific_than(&a, &cold);
     assert_eq!(before, after);
 }

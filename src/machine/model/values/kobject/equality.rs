@@ -19,7 +19,7 @@
 //! design note.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::{same_nominal, KType};
+use crate::machine::model::types::{same_nominal, KType, TypeRegistry};
 use crate::machine::model::values::{Carried, Held};
 
 use super::KObject;
@@ -39,8 +39,8 @@ pub enum ValueEqualityError {
 /// Comparability gate for container type parameters: the two are compared iff one `satisfied_by` the
 /// other in either direction (an unrelated pair short-circuits the container to `Ok(false)`).
 /// Cross-lifetime — the slot and value type parameters carry independent lifetimes.
-fn types_related<'a, 'b>(a: &KType<'a>, b: &KType<'b>) -> bool {
-    a.satisfied_by(b) || b.satisfied_by(a)
+fn types_related<'a, 'b>(a: &KType<'a>, b: &KType<'b>, types: &TypeRegistry) -> bool {
+    a.satisfied_by(b, types) || b.satisfied_by(a, types)
 }
 
 impl<'a> KObject<'a> {
@@ -53,7 +53,11 @@ impl<'a> KObject<'a> {
     /// generative, and the builtin turns the error into a diagnostic. A shape short-circuit that
     /// never reaches a banned cell (e.g. a length mismatch) may return `Ok(false)` first; that
     /// asymmetry is intended — the error fires when a banned value actually participates.
-    pub fn value_equal<'b>(&self, other: &KObject<'b>) -> Result<bool, ValueEqualityError> {
+    pub fn value_equal<'b>(
+        &self,
+        other: &KObject<'b>,
+        types: &TypeRegistry,
+    ) -> Result<bool, ValueEqualityError> {
         match (self, other) {
             // Banned operands first, so the error fires even against a mismatched-variant partner.
             (KObject::KFunction(_), _) | (_, KObject::KFunction(_)) => {
@@ -67,11 +71,11 @@ impl<'a> KObject<'a> {
             (KObject::Null, KObject::Null) => Ok(true),
 
             (KObject::List(items_a, elem_a), KObject::List(items_b, elem_b)) => {
-                if !types_related(elem_a, elem_b) || items_a.len() != items_b.len() {
+                if !types_related(elem_a, elem_b, types) || items_a.len() != items_b.len() {
                     return Ok(false);
                 }
                 for (a, b) in items_a.iter().zip(items_b.iter()) {
-                    if !held_equal(a, b)? {
+                    if !held_equal(a, b, types)? {
                         return Ok(false);
                     }
                 }
@@ -79,15 +83,15 @@ impl<'a> KObject<'a> {
             }
 
             (KObject::Dict(map_a, k_a, v_a), KObject::Dict(map_b, k_b, v_b)) => {
-                if !types_related(k_a, k_b)
-                    || !types_related(v_a, v_b)
+                if !types_related(k_a, k_b, types)
+                    || !types_related(v_a, v_b, types)
                     || map_a.len() != map_b.len()
                 {
                     return Ok(false);
                 }
                 for (key, held_a) in map_a.iter() {
                     match map_b.get(key) {
-                        Some(held_b) if held_equal(held_a, held_b)? => {}
+                        Some(held_b) if held_equal(held_a, held_b, types)? => {}
                         _ => return Ok(false),
                     }
                 }
@@ -97,7 +101,7 @@ impl<'a> KObject<'a> {
             (KObject::Record(fields_a, types_a), KObject::Record(fields_b, types_b)) => {
                 let ra = KType::record(types_a.clone());
                 let rb = KType::record(types_b.clone());
-                if !(ra.satisfied_by(&rb) || rb.satisfied_by(&ra))
+                if !(ra.satisfied_by(&rb, types) || rb.satisfied_by(&ra, types))
                     || fields_a.len() != fields_b.len()
                 {
                     return Ok(false);
@@ -105,7 +109,7 @@ impl<'a> KObject<'a> {
                 // Order-blind: same name set, per-name held equality.
                 for (name, held_a) in fields_a.iter() {
                     match fields_b.get(name) {
-                        Some(held_b) if held_equal(held_a, held_b)? => {}
+                        Some(held_b) if held_equal(held_a, held_b, types)? => {}
                         _ => return Ok(false),
                     }
                 }
@@ -140,12 +144,12 @@ impl<'a> KObject<'a> {
                     if !args_a
                         .iter()
                         .zip(args_b.iter())
-                        .all(|(x, y)| types_related(x, y))
+                        .all(|(x, y)| types_related(x, y, types))
                     {
                         return Ok(false);
                     }
                 }
-                value_a.value_equal(value_b)
+                value_a.value_equal(value_b, types)
             }
 
             (
@@ -163,10 +167,10 @@ impl<'a> KObject<'a> {
                 if **type_id_a != **type_id_b {
                     return Ok(false);
                 }
-                inner_a.get().value_equal(inner_b.get())
+                inner_a.get().value_equal(inner_b.get(), types)
             }
 
-            (KObject::KExpression(a), KObject::KExpression(b)) => expression_equal(a, b),
+            (KObject::KExpression(a), KObject::KExpression(b)) => expression_equal(a, b, types),
 
             // Every remaining cross-variant pair (including `Wrapped` vs a bare value) is unequal.
             _ => Ok(false),
@@ -176,9 +180,13 @@ impl<'a> KObject<'a> {
 
 /// Cell-wise equality: two objects walk structurally, two types compare by digest (the cross-lifetime
 /// `KType` `PartialEq`), a mixed object/type pair is unequal.
-fn held_equal<'a, 'b>(a: &Held<'a>, b: &Held<'b>) -> Result<bool, ValueEqualityError> {
+fn held_equal<'a, 'b>(
+    a: &Held<'a>,
+    b: &Held<'b>,
+    types: &TypeRegistry,
+) -> Result<bool, ValueEqualityError> {
     match (a, b) {
-        (Held::Object(oa), Held::Object(ob)) => oa.value_equal(ob),
+        (Held::Object(oa), Held::Object(ob)) => oa.value_equal(ob, types),
         (Held::Type(ta), Held::Type(tb)) => Ok(ta == tb),
         _ => Ok(false),
     }
@@ -190,12 +198,13 @@ fn held_equal<'a, 'b>(a: &Held<'a>, b: &Held<'b>) -> Result<bool, ValueEqualityE
 pub(crate) fn expression_equal<'a, 'b>(
     a: &KExpression<'a>,
     b: &KExpression<'b>,
+    types: &TypeRegistry,
 ) -> Result<bool, ValueEqualityError> {
     if a.parts.len() != b.parts.len() {
         return Ok(false);
     }
     for (pa, pb) in a.parts.iter().zip(b.parts.iter()) {
-        if !part_equal(&pa.value, &pb.value)? {
+        if !part_equal(&pa.value, &pb.value, types)? {
             return Ok(false);
         }
     }
@@ -205,6 +214,7 @@ pub(crate) fn expression_equal<'a, 'b>(
 fn part_equal<'a, 'b>(
     a: &ExpressionPart<'a>,
     b: &ExpressionPart<'b>,
+    types: &TypeRegistry,
 ) -> Result<bool, ValueEqualityError> {
     use ExpressionPart::*;
     match (a, b) {
@@ -215,13 +225,13 @@ fn part_equal<'a, 'b>(
         (Expression(x), Expression(y))
         | (SigiledTypeExpr(x), SigiledTypeExpr(y))
         | (RecordType(x), RecordType(y))
-        | (QuotedExpression(x), QuotedExpression(y)) => expression_equal(x, y),
+        | (QuotedExpression(x), QuotedExpression(y)) => expression_equal(x, y, types),
         (ListLiteral(xs), ListLiteral(ys)) => {
             if xs.len() != ys.len() {
                 return Ok(false);
             }
             for (x, y) in xs.iter().zip(ys.iter()) {
-                if !part_equal(x, y)? {
+                if !part_equal(x, y, types)? {
                     return Ok(false);
                 }
             }
@@ -232,7 +242,7 @@ fn part_equal<'a, 'b>(
                 return Ok(false);
             }
             for ((kx, vx), (ky, vy)) in xs.iter().zip(ys.iter()) {
-                if !part_equal(kx, ky)? || !part_equal(vx, vy)? {
+                if !part_equal(kx, ky, types)? || !part_equal(vx, vy, types)? {
                     return Ok(false);
                 }
             }
@@ -243,7 +253,7 @@ fn part_equal<'a, 'b>(
                 return Ok(false);
             }
             for ((nx, vx), (ny, vy)) in xs.iter().zip(ys.iter()) {
-                if nx != ny || !part_equal(vx, vy)? {
+                if nx != ny || !part_equal(vx, vy, types)? {
                     return Ok(false);
                 }
             }
@@ -251,9 +261,8 @@ fn part_equal<'a, 'b>(
         }
         // A spliced result compares by the value walk: open both envelopes at their own brand (hence
         // the cross-lifetime comparison) and compare the carried values.
-        (Spliced { cell: cell_a }, Spliced { cell: cell_b }) => {
-            cell_a.open(|carried_a| cell_b.open(|carried_b| carried_equal(carried_a, carried_b)))
-        }
+        (Spliced { cell: cell_a }, Spliced { cell: cell_b }) => cell_a
+            .open(|carried_a| cell_b.open(|carried_b| carried_equal(carried_a, carried_b, types))),
         _ => Ok(false),
     }
 }
@@ -271,9 +280,13 @@ fn literal_equal(a: &KLiteral, b: &KLiteral) -> bool {
 
 /// Two spliced carried values: objects walk structurally, types compare by digest, a mixed pair is
 /// unequal — the [`Held`] semantics over the borrowed [`Carried`] currency.
-fn carried_equal<'a, 'b>(a: Carried<'a>, b: Carried<'b>) -> Result<bool, ValueEqualityError> {
+fn carried_equal<'a, 'b>(
+    a: Carried<'a>,
+    b: Carried<'b>,
+    types: &TypeRegistry,
+) -> Result<bool, ValueEqualityError> {
     match (a, b) {
-        (Carried::Object(oa), Carried::Object(ob)) => oa.value_equal(ob),
+        (Carried::Object(oa), Carried::Object(ob)) => oa.value_equal(ob, types),
         (Carried::Type(ta), Carried::Type(tb)) => Ok(ta == tb),
         _ => Ok(false),
     }

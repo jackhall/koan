@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{FoldingBrand, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KType};
+use crate::machine::model::{Carried, KType, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, RegionHandle, Residence, Sealed, SealedExtern, Witnessed};
 
@@ -80,6 +80,7 @@ impl NodeFinalize for KoanRuntime<'_> {
             // retention host.
             let producer_pin = Rc::clone(envelope.host());
             let home = live.home_region();
+            let types = self.ambient.type_registry();
             let is_object = envelope.open(|carried| matches!(carried, Carried::Object(_)));
             if is_object {
                 let mut mismatch: Option<KError> = None;
@@ -102,7 +103,7 @@ impl NodeFinalize for KoanRuntime<'_> {
                         |value, (_home_region, declared_type), placement| {
                             let home_region = FoldingBrand::in_fold_closure(placement);
                             let object = value.object();
-                            if !declared_type.matches_value(object) {
+                            if !declared_type.matches_value(object, types) {
                                 mismatch = Some(return_type_mismatch(
                                     declared_type,
                                     per_call,
@@ -148,8 +149,15 @@ impl NodeFinalize for KoanRuntime<'_> {
                 // this open — so the producer pin alone rides the zip open.
                 None => FrameSet::singleton(producer_pin),
             };
-            match match_declared_return(value_cell, home.handle(), declared, &pin, per_call, label)
-            {
+            match match_declared_return(
+                value_cell,
+                home.handle(),
+                declared,
+                &pin,
+                per_call,
+                label,
+                types,
+            ) {
                 Some(error) => Err(error),
                 None => Ok(sealed.unseal()),
             }
@@ -208,6 +216,7 @@ fn match_declared_return<'c>(
     pin: &FrameSet,
     per_call: bool,
     label: &str,
+    types: &TypeRegistry,
 ) -> Option<KError> {
     let contract_operand = SealedExtern::<ContractHomeFamily>::erase((home_handle, declared));
     let mut mismatch: Option<KError> = None;
@@ -215,7 +224,7 @@ fn match_declared_return<'c>(
         .zip(contract_operand)
         .open(pin, |(value, (_home_region, declared_type))| {
             let matched = match value {
-                Carried::Object(object) => declared_type.matches_value(object),
+                Carried::Object(object) => declared_type.matches_value(object, types),
                 Carried::Type(t) => declared_type.matches_type(t),
             };
             if !matched {
@@ -238,6 +247,7 @@ fn match_declared_return<'c>(
 pub(in crate::machine::execute) fn check_spliced_return(
     obligation: &ReturnObligation,
     delivered: &DeliveredCarried,
+    types: &TypeRegistry,
 ) -> Result<(), KError> {
     obligation.open_cell(|live| {
         let Some((declared, per_call)) = pull_declared_return(live) else {
@@ -258,7 +268,15 @@ pub(in crate::machine::execute) fn check_spliced_return(
             ),
             None => FrameSet::singleton(Rc::clone(delivered.host())),
         };
-        match match_declared_return(value_cell, home.handle(), declared, &pin, per_call, label) {
+        match match_declared_return(
+            value_cell,
+            home.handle(),
+            declared,
+            &pin,
+            per_call,
+            label,
+            types,
+        ) {
             Some(error) => Err(error),
             None => Ok(()),
         }

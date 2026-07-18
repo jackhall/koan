@@ -6,6 +6,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
 
@@ -96,7 +97,11 @@ impl<'a> KFunction<'a> {
     /// the latter binds via `bind_by_name` (a pure rename that trusts the picker), so for a
     /// uniquely-picked call (admitted shape-only by dispatch) this is where a non-satisfying typed
     /// argument becomes a hard `TypeMismatch` rather than slipping through.
-    pub(crate) fn validate_call_args(&'a self, expr: &KExpression<'a>) -> Result<(), KError> {
+    pub(crate) fn validate_call_args(
+        &'a self,
+        expr: &KExpression<'a>,
+        types: &TypeRegistry,
+    ) -> Result<(), KError> {
         if self.signature.elements.len() != expr.parts.len() {
             return Err(KError::new(KErrorKind::ArityMismatch {
                 expected: self.signature.elements.len(),
@@ -121,7 +126,7 @@ impl<'a> KFunction<'a> {
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !arg.matches(&part.value) {
+                    if !arg.matches(&part.value, types) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
                             expected: arg.ktype.name(),
@@ -151,8 +156,9 @@ impl<'a> KFunction<'a> {
         &'a self,
         expr: &KExpression<'a>,
         scope: &'a Scope<'a>,
+        types: &TypeRegistry,
     ) -> Result<Record<Held<'a>>, KError> {
-        self.validate_call_args(expr)?;
+        self.validate_call_args(expr, types)?;
         let mut args: Record<Held<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             if let SignatureElement::Argument(arg) = el {

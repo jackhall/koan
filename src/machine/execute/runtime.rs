@@ -680,7 +680,11 @@ impl<'run> KoanRuntime<'run> {
                     // carries no value to check — `ForwardReady` relocates its error as the
                     // obligation-free path would.
                     let checked = match self.sched.dep_delivered(producer) {
-                        Ok(delivered) => check_spliced_return(&obligation, &delivered),
+                        Ok(delivered) => check_spliced_return(
+                            &obligation,
+                            &delivered,
+                            self.ambient.type_registry(),
+                        ),
                         Err(_) => Ok(()),
                     };
                     match checked {
@@ -694,10 +698,14 @@ impl<'run> KoanRuntime<'run> {
                     // pass — which re-enters this arm with no ambient obligation (the micro-step ran
                     // obligation-free) and, the producer now resolved, takes the plain `ForwardReady`
                     // path. No re-check, no loop.
-                    let finish: TerminalDepFinish<'step> = Box::new(move |_view, terminals| {
+                    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
                         // The single parked dep is `producer`, delivered un-relocated at index 0.
                         let producer_terminal = terminals.all()[0];
-                        match check_spliced_return(&obligation, &producer_terminal.delivered) {
+                        match check_spliced_return(
+                            &obligation,
+                            &producer_terminal.delivered,
+                            view.types(),
+                        ) {
                             Ok(()) => Outcome::Forward(producer),
                             Err(error) => Outcome::Done(Err(error)),
                         }

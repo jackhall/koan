@@ -16,6 +16,7 @@ use crate::machine::core::{BindKind, FunctionLookup, KError, LexicalFrame, Scope
 use crate::machine::core::{ClassifiedSlots, KFunction};
 use crate::machine::model::Carried;
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::NodeId;
@@ -98,6 +99,7 @@ impl<'step> Scope<'step> {
         expr: &KExpression<'e>,
         chain: Option<&LexicalFrame>,
         bare_outcomes: &[Option<NameOutcome<'e>>],
+        types: &TypeRegistry,
     ) -> DispatchOutcome<'step> {
         #[cfg(test)]
         RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
@@ -109,7 +111,9 @@ impl<'step> Scope<'step> {
         if root.bindings().has_builtin_function(&key) {
             let cutoff = chain.and_then(|c| c.index_for(root.id));
             let lookup = root.bindings().lookup_function(&key, cutoff);
-            if let ScopeDecision::Terminal(outcome) = decide_scope(&lookup, expr, bare_outcomes) {
+            if let ScopeDecision::Terminal(outcome) =
+                decide_scope(&lookup, expr, bare_outcomes, types)
+            {
                 return outcome;
             }
         }
@@ -119,7 +123,7 @@ impl<'step> Scope<'step> {
         for scope in self.ancestors() {
             let cutoff = scope.binding_cutoff(chain);
             let lookup = scope.bindings().lookup_function(&key, cutoff);
-            match decide_scope(&lookup, expr, bare_outcomes) {
+            match decide_scope(&lookup, expr, bare_outcomes, types) {
                 ScopeDecision::Terminal(outcome) => return outcome,
                 ScopeDecision::DeadLean(name) => {
                     if dead_lean.is_none() {
@@ -161,6 +165,7 @@ fn decide_scope<'step, 'e>(
     lookup: &FunctionLookup<'step>,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome<'e>>],
+    types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let bucket = OverloadBucket {
         candidates: &lookup.overloads,
@@ -171,16 +176,16 @@ fn decide_scope<'step, 'e>(
     // would have leaned on so a single wake re-runs the full resolution.
     if let Some(pending) = lookup.pending {
         let mut producers = vec![pending];
-        for p in bucket.relaxed_parked_producers(expr, bare_outcomes) {
+        for p in bucket.relaxed_parked_producers(expr, bare_outcomes, types) {
             if !producers.contains(&p) {
                 producers.push(p);
             }
         }
         return ScopeDecision::Terminal(DispatchOutcome::ParkOnProducers(producers));
     }
-    match bucket.pick_strict(expr, bare_outcomes) {
+    match bucket.pick_strict(expr, bare_outcomes, types) {
         PickPass::Picked(f) => {
-            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(f, expr)))
+            ScopeDecision::Terminal(DispatchOutcome::Resolved(build_resolved(f, expr, types)))
         }
         // Tie with an unevaluated eager part may break once it evaluates: a
         // typed `Spliced(List …)` re-dispatch is element-aware where the bare
@@ -191,7 +196,7 @@ fn decide_scope<'step, 'e>(
             ScopeDecision::Terminal(DispatchOutcome::Deferred)
         }
         PickPass::Tie(n) => ScopeDecision::Terminal(DispatchOutcome::Ambiguous(n)),
-        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes),
+        PickPass::Empty => decide_relaxed(&bucket, expr, bare_outcomes, types),
     }
 }
 
@@ -205,12 +210,13 @@ fn decide_relaxed<'step, 'e>(
     bucket: &OverloadBucket<'step, '_>,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome<'e>>],
+    types: &TypeRegistry,
 ) -> ScopeDecision<'step> {
     let mut parked: Vec<NodeId> = Vec::new();
     let mut any_eager_lean = false;
     let mut dead_name: Option<String> = None;
     for f in bucket.candidates.iter() {
-        let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes) else {
+        let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes, types) else {
             continue;
         };
         for lean in leans {
@@ -252,15 +258,16 @@ impl<'step> OverloadBucket<'step, '_> {
         &self,
         expr: &KExpression<'e>,
         bare_outcomes: &[Option<NameOutcome<'e>>],
+        types: &TypeRegistry,
     ) -> PickPass<'step> {
         let survivors: Vec<&'step KFunction<'step>> = self
             .candidates
             .iter()
             .copied()
-            .filter(|f| signature_admits_strict(&f.signature, expr, bare_outcomes))
+            .filter(|f| signature_admits_strict(&f.signature, expr, bare_outcomes, types))
             .collect();
         let sigs: Vec<&ExpressionSignature> = survivors.iter().map(|f| &f.signature).collect();
-        match ExpressionSignature::most_specific(&sigs) {
+        match ExpressionSignature::most_specific(&sigs, types) {
             Some(i) => PickPass::Picked(survivors[i]),
             None if !survivors.is_empty() => PickPass::Tie(survivors.len()),
             None => PickPass::Empty,
@@ -274,10 +281,11 @@ impl<'step> OverloadBucket<'step, '_> {
         &self,
         expr: &KExpression<'e>,
         bare_outcomes: &[Option<NameOutcome<'e>>],
+        types: &TypeRegistry,
     ) -> Vec<NodeId> {
         let mut producers: Vec<NodeId> = Vec::new();
         for f in self.candidates.iter() {
-            let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes) else {
+            let Some(leans) = relaxed_admits(&f.signature, expr, bare_outcomes, types) else {
                 continue;
             };
             for lean in leans {
@@ -316,6 +324,7 @@ fn signature_admits_strict<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome<'e>>],
+    types: &TypeRegistry,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -326,7 +335,14 @@ fn signature_admits_strict<'e>(
         .zip(&expr.parts)
         .enumerate()
         .all(|(i, (el, part))| {
-            slot_admits_strict(el, &part.value, i, has_lazy_kexpr_slot, bare_outcomes)
+            slot_admits_strict(
+                el,
+                &part.value,
+                i,
+                has_lazy_kexpr_slot,
+                bare_outcomes,
+                types,
+            )
         })
 }
 
@@ -348,6 +364,7 @@ fn relaxed_admits<'e>(
     sig: &ExpressionSignature<'_>,
     expr: &KExpression<'e>,
     bare_outcomes: &[Option<NameOutcome<'e>>],
+    types: &TypeRegistry,
 ) -> Option<Vec<Lean>> {
     if sig.elements.len() != expr.parts.len() {
         return None;
@@ -355,7 +372,14 @@ fn relaxed_admits<'e>(
     let has_lazy_kexpr_slot = has_lazy_kexpr_slot(sig, expr);
     let mut leans: Vec<Lean> = Vec::new();
     for (i, (el, part)) in sig.elements.iter().zip(&expr.parts).enumerate() {
-        if slot_admits_strict(el, &part.value, i, has_lazy_kexpr_slot, bare_outcomes) {
+        if slot_admits_strict(
+            el,
+            &part.value,
+            i,
+            has_lazy_kexpr_slot,
+            bare_outcomes,
+            types,
+        ) {
             continue;
         }
         // Strict rejected — admit relaxed only if this is an unresolved slot the
@@ -402,6 +426,7 @@ fn slot_admits_strict<'e>(
     i: usize,
     has_lazy_kexpr_slot: bool,
     bare_outcomes: &[Option<NameOutcome<'e>>],
+    types: &TypeRegistry,
 ) -> bool {
     match (el, part_value) {
         (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
@@ -419,10 +444,10 @@ fn slot_admits_strict<'e>(
                 ) {
                     return true;
                 }
-                return arg.matches(part_value);
+                return arg.matches(part_value, types);
             }
             if matches!(arg.ktype, KType::Identifier) {
-                return arg.matches(part_value);
+                return arg.matches(part_value, types);
             }
             // A sigil / record-type part in a slot that is neither `:KExpression` nor the
             // *other* lazy raw-capture kind sub-dispatches to a type-side carrier. The two
@@ -456,14 +481,14 @@ fn slot_admits_strict<'e>(
                 return true;
             }
             match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                Some(NameOutcome::Resolved(c)) => arg.ktype.accepts_carried(*c),
+                Some(NameOutcome::Resolved(c)) => arg.ktype.accepts_carried(*c, types),
                 // Speculative admit so the splice/park walk can surface the
                 // precise per-slot diagnostic.
                 Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
-                    arg.matches(part_value)
+                    arg.matches(part_value, types)
                 }
                 Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => false,
-                None => arg.matches(part_value),
+                None => arg.matches(part_value, types),
             }
         }
     }
@@ -494,6 +519,7 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 fn build_resolved<'step, 'e>(
     picked: &'step KFunction<'step>,
     expr: &KExpression<'e>,
+    types: &TypeRegistry,
 ) -> Resolved<'step> {
     Resolved {
         function: picked,
@@ -504,6 +530,6 @@ fn build_resolved<'step, 'e>(
             .binder_bucket
             .and_then(|extractor| extractor(expr))
             .unwrap_or_default(),
-        slots: picked.classify_for_pick(expr),
+        slots: picked.classify_for_pick(expr, types),
     }
 }

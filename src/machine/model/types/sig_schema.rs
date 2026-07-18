@@ -17,6 +17,7 @@ use crate::machine::core::{Scope, ScopeId};
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::recursive_set::{ProjectedSchema, RecursiveSet};
+use super::registry::TypeRegistry;
 use crate::machine::model::values::{Module, ModuleSignature};
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
@@ -268,6 +269,7 @@ impl SigSubtypeFailure {
 pub fn sig_subtype<'s, 'p>(
     sub: &SigSchema<'s>,
     sup: &SigSchema<'p>,
+    types: &TypeRegistry,
 ) -> Result<(), Box<SigSubtypeFailure>> {
     // 1. Abstract members: present at the matching kind/arity (manifest or abstract in `sub`).
     for (name, (_, sup_arity)) in &sup.abstract_members {
@@ -338,9 +340,9 @@ pub fn sig_subtype<'s, 'p>(
             }));
         };
         let ok = match sup.sig_id {
-            Some(id) => slot_satisfied_by(declared, sub_type, &sub_member_map, id),
+            Some(id) => slot_satisfied_by(declared, sub_type, &sub_member_map, id, types),
             // No `sig_id`: nothing to substitute, so the heterogeneous `satisfied_by` is exact.
-            None => declared.satisfied_by(sub_type),
+            None => declared.satisfied_by(sub_type, types),
         };
         if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
@@ -430,16 +432,17 @@ fn slot_satisfied_by<'p, 's>(
     sub_type: &KType<'s>,
     members: &HashMap<String, KType<'s>>,
     sig_id: ScopeId,
+    types: &TypeRegistry,
 ) -> bool {
     if let Some(binding) = substitution_binding(declared, sig_id, members) {
-        return binding.satisfied_by(sub_type);
+        return binding.satisfied_by(sub_type, types);
     }
     if !references_sig_member(declared, sig_id, members) {
-        return declared.satisfied_by(sub_type);
+        return declared.satisfied_by(sub_type, types);
     }
     match (declared, sub_type) {
         (KType::List { element: ed, .. }, KType::List { element: es, .. }) => {
-            slot_satisfied_by(ed, es, members, sig_id)
+            slot_satisfied_by(ed, es, members, sig_id, types)
         }
         (
             KType::Dict {
@@ -449,13 +452,14 @@ fn slot_satisfied_by<'p, 's>(
                 key: ks, value: vs, ..
             },
         ) => {
-            slot_satisfied_by(kd, ks, members, sig_id) && slot_satisfied_by(vd, vs, members, sig_id)
+            slot_satisfied_by(kd, ks, members, sig_id, types)
+                && slot_satisfied_by(vd, vs, members, sig_id, types)
         }
         (KType::Record { fields: fd, .. }, KType::Record { fields: fs, .. }) => {
             // Record-value covariance: every slot field present in the value, covariantly.
             fd.iter().all(|(name, dt)| {
                 fs.get(name)
-                    .is_some_and(|st| slot_satisfied_by(dt, st, members, sig_id))
+                    .is_some_and(|st| slot_satisfied_by(dt, st, members, sig_id, types))
             })
         }
         (
@@ -473,7 +477,7 @@ fn slot_satisfied_by<'p, 's>(
                 && ad
                     .iter()
                     .zip(as_.iter())
-                    .all(|(d, s)| slot_satisfied_by(d, s, members, sig_id))
+                    .all(|(d, s)| slot_satisfied_by(d, s, members, sig_id, types))
         }
         (
             KType::KFunction {
@@ -491,10 +495,11 @@ fn slot_satisfied_by<'p, 's>(
             // substituted slot fixes equal-or-more-specific. Covariant return.
             ps.keys().all(|k| pd.get(k).is_some())
                 && ps.iter().all(|(name, sp)| {
-                    pd.get(name)
-                        .is_some_and(|dp| slot_more_specific_or_equal(dp, sp, members, sig_id))
+                    pd.get(name).is_some_and(|dp| {
+                        slot_more_specific_or_equal(dp, sp, members, sig_id, types)
+                    })
                 })
-                && slot_satisfied_by(rd, rs, members, sig_id)
+                && slot_satisfied_by(rd, rs, members, sig_id, types)
         }
         (KType::Union { members: ud, .. }, _) => {
             // A value satisfies a substituted union slot iff it (each of its members, if it is
@@ -505,7 +510,7 @@ fn slot_satisfied_by<'p, 's>(
             };
             ys.iter().all(|y| {
                 ud.iter()
-                    .any(|md| slot_satisfied_by(md, y, members, sig_id))
+                    .any(|md| slot_satisfied_by(md, y, members, sig_id, types))
             })
         }
         _ => false,
@@ -521,12 +526,13 @@ fn slot_more_specific_or_equal<'p, 's>(
     target: &KType<'s>,
     members: &HashMap<String, KType<'s>>,
     sig_id: ScopeId,
+    types: &TypeRegistry,
 ) -> bool {
     if let Some(binding) = substitution_binding(declared, sig_id, members) {
-        return binding == target || binding.is_more_specific_than(target);
+        return binding == target || binding.is_more_specific_than(target, types);
     }
     if !references_sig_member(declared, sig_id, members) {
-        return declared == target || declared.is_more_specific_than(target);
+        return declared == target || declared.is_more_specific_than(target, types);
     }
     // The substituted slot outranks `Any` / an unconstrained name, and refines a union it has a
     // member in — the top guards of `more_specific_walk`, mirrored here.
@@ -536,13 +542,13 @@ fn slot_more_specific_or_equal<'p, 's>(
         KType::Union { members: ts, .. } => {
             return ts
                 .iter()
-                .any(|t| slot_more_specific_or_equal(declared, t, members, sig_id))
+                .any(|t| slot_more_specific_or_equal(declared, t, members, sig_id, types))
         }
         _ => {}
     }
     match (declared, target) {
         (KType::List { element: ed, .. }, KType::List { element: et, .. }) => {
-            slot_more_specific_or_equal(ed, et, members, sig_id)
+            slot_more_specific_or_equal(ed, et, members, sig_id, types)
         }
         (
             KType::Dict {
@@ -552,16 +558,17 @@ fn slot_more_specific_or_equal<'p, 's>(
                 key: kt, value: vt, ..
             },
         ) => {
-            slot_more_specific_or_equal(kd, kt, members, sig_id)
-                && slot_more_specific_or_equal(vd, vt, members, sig_id)
+            slot_more_specific_or_equal(kd, kt, members, sig_id, types)
+                && slot_more_specific_or_equal(vd, vt, members, sig_id, types)
         }
         (KType::Record { fields: fd, .. }, KType::Record { fields: ft, .. }) => {
             // Record-value covariance with width-superset: the more-specific record has every
             // field of `target`, each covariantly refined.
             ft.keys().all(|k| fd.get(k).is_some())
                 && ft.iter().all(|(name, tt)| {
-                    fd.get(name)
-                        .is_some_and(|dt| slot_more_specific_or_equal(dt, tt, members, sig_id))
+                    fd.get(name).is_some_and(|dt| {
+                        slot_more_specific_or_equal(dt, tt, members, sig_id, types)
+                    })
                 })
         }
         (
@@ -577,7 +584,7 @@ fn slot_more_specific_or_equal<'p, 's>(
                 && ad
                     .iter()
                     .zip(at.iter())
-                    .all(|(d, t)| slot_more_specific_or_equal(d, t, members, sig_id))
+                    .all(|(d, t)| slot_more_specific_or_equal(d, t, members, sig_id, types))
         }
         (
             KType::KFunction {
@@ -595,9 +602,9 @@ fn slot_more_specific_or_equal<'p, 's>(
             pd.keys().all(|k| pt.get(k).is_some())
                 && pd.iter().all(|(name, dp)| {
                     pt.get(name)
-                        .is_some_and(|tp| slot_satisfied_by(dp, tp, members, sig_id))
+                        .is_some_and(|tp| slot_satisfied_by(dp, tp, members, sig_id, types))
                 })
-                && slot_more_specific_or_equal(rd, rt, members, sig_id)
+                && slot_more_specific_or_equal(rd, rt, members, sig_id, types)
         }
         _ => false,
     }

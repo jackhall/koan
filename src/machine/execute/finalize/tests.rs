@@ -436,7 +436,10 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
 
     let foreign_count_before = Rc::strong_count(&foreign_storage);
 
-    let runtime = KoanRuntime::new();
+    let mut runtime = KoanRuntime::new();
+    // The type registry the declared-return check reads hangs off the run frame, which production
+    // establishes before any step.
+    runtime.ensure_run_frame(scope);
     let checked = runtime
         .finalize_terminal(
             Delivered::seal(carrier, producer.storage_rc()),

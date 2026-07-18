@@ -120,8 +120,8 @@ overload-resolution walk returning a `ResolveOutcome`),
 content-hash every `KType` compares by),
 [sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema` and the
 canonical signature-subtyping relation),
-[type_memos.rs](src/machine/model/types/type_memos.rs) (the thread-local LRU
-that memoizes subtype verdicts by digest pair),
+[registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
+run-frame-owned store that memoizes subtype verdicts by digest pair),
 [builtins.rs](src/builtins.rs) (registry),
 [constructors.rs](src/machine/execute/dispatch/constructors.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).

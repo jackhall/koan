@@ -14,6 +14,7 @@ use crate::machine::core::DepPlacement;
 use crate::machine::core::{
     FoldingBrand, FrameStorage, KoanRegionExt, KoanStorageProfile, Scope, StoredReach,
 };
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject, Record};
 use crate::machine::model::{CarriedFamily, WrappedPayload};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -137,7 +138,11 @@ pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
 /// this repr) collapses so identities never stack; a union-repr variant (`Succ :Nat`) wraps a
 /// *member* of the union, whose identity differs from the union repr, so it preserves the nested
 /// payload — the recursion the dissolved-union model needs.
-fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<bool, KError> {
+fn check_newtype_repr<'a>(
+    identity: &KType<'a>,
+    value: &KObject<'a>,
+    types: &TypeRegistry,
+) -> Result<bool, KError> {
     let (set, index) = match identity {
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
@@ -146,7 +151,7 @@ fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<b
         ProjectedSchema::NewType(repr) => repr,
         _ => unreachable!("newtype construct ran on a non-NewType member"),
     };
-    if !repr.matches_value(value) {
+    if !repr.matches_value(value, types) {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
             expected: repr.name(),
@@ -340,7 +345,7 @@ fn finish_witnessed<'step>(
     match kind {
         CtorKind::NewType { identity, reach } => {
             debug_assert_eq!(terminals.len(), 1);
-            let collapse = check_newtype_repr(identity, terminals[0].value.object())?;
+            let collapse = check_newtype_repr(identity, terminals[0].value.object(), view.types())?;
             let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
             Ok(terminals[0]
                 .delivered
@@ -375,7 +380,7 @@ fn finish_witnessed<'step>(
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
             // A record probe is never a `Wrapped`, so the repr check never asks to collapse.
-            check_newtype_repr(identity, &KObject::record(probe))?;
+            check_newtype_repr(identity, &KObject::record(probe), view.types())?;
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
@@ -430,7 +435,7 @@ fn finish_witnessed<'step>(
                     schema.keys().cloned().collect::<Vec<_>>().join(", ")
                 )))
             })?;
-            if !expected.matches_value(terminals[0].value.object()) {
+            if !expected.matches_value(terminals[0].value.object(), view.types()) {
                 return Err(KError::new(KErrorKind::TypeMismatch {
                     arg: "value".to_string(),
                     expected: expected.name().to_string(),
@@ -502,10 +507,9 @@ fn finish_witnessed<'step>(
                             Box::new(identity_ty.clone()),
                             vec![arg],
                         ));
-                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner,
-                            type_id,
-                        }))
+                        Carried::Object(
+                            region.alloc_object_folded(KObject::Wrapped { inner, type_id }),
+                        )
                     },
                 ))
         }

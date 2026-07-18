@@ -2,6 +2,7 @@ use super::*;
 use crate::machine::core::ScopeId;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::values::KKey;
+use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 /// A singleton newtype-set `Rc` named `name` over `repr`.
@@ -69,24 +70,27 @@ fn ktype_of_empty_dict_is_dict_any_any() {
 
 #[test]
 fn matches_value_list_number_rejects_string_element() {
+    let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Number));
     let bad: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
-    assert!(!t.matches_value(&bad));
+    assert!(!t.matches_value(&bad, &types));
 }
 
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
+    let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Number));
     let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
-    assert!(t.matches_value(&good));
+    assert!(t.matches_value(&good, &types));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
+    let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Any));
     let mixed: KObject<'_> =
         KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
-    assert!(t.matches_value(&mixed));
+    assert!(t.matches_value(&mixed, &types));
 }
 
 /// Carrier is authoritative for `ktype()`: a stamped `List<Any>` reports `Any`

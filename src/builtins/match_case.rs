@@ -36,17 +36,22 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     };
     let contract = crate::try_action!(resolve_arm_contract(ctx, "MATCH"));
     let branches_expr = crate::try_action!(require_kexpression(ctx.args, "MATCH", "branches"));
-    let selected =
-        match find_branch_body_by_type(&branches_expr, value, ctx.scope, ctx.chain.clone()) {
-            Ok(Some(arm)) => arm,
-            Ok(None) => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "inexhaustive match = no branch for value of type `{}`",
-                    value.ktype().name()
-                )))))
-            }
-            Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
-        };
+    let selected = match find_branch_body_by_type(
+        &branches_expr,
+        value,
+        ctx.scope,
+        ctx.chain.clone(),
+        ctx.types,
+    ) {
+        Ok(Some(arm)) => arm,
+        Ok(None) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "inexhaustive match = no branch for value of type `{}`",
+                value.ktype().name()
+            )))))
+        }
+        Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
+    };
     // The scrutinee reaches its `it` binding through the same carrier door TRY's success arm uses:
     // the envelope's retained host pins the producer until the single bind-time copy, and the
     // projection (ruling F3) picks the scrutinee itself or its wrapped payload. A boolean arm over

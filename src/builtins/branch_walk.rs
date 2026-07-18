@@ -9,6 +9,7 @@
 //! enforce on their result.
 
 use super::{arg, sig};
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, RecursiveSet, TypeResolution};
 use crate::machine::model::{KObject, KType};
@@ -272,6 +273,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     scrutinee: &KObject<'a>,
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
+    types: &TypeRegistry,
 ) -> Result<Option<SelectedArm<'a>>, String> {
     let parts = &branches.parts;
     if !parts.len().is_multiple_of(3) {
@@ -460,7 +462,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     // entirely on that type.
     let admitted: Vec<TypedArm<'a>> = typed_arms
         .into_iter()
-        .filter(|arm| arm.ktype.matches_value(scrutinee))
+        .filter(|arm| arm.ktype.matches_value(scrutinee, types))
         .collect();
     if admitted.is_empty() {
         return Ok(None);
@@ -470,7 +472,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
         .map(|arm| sig(KType::Any, vec![arg("it", arm.ktype.clone())]))
         .collect();
     let refs: Vec<&ExpressionSignature<'a>> = sigs.iter().collect();
-    match ExpressionSignature::most_specific(&refs) {
+    match ExpressionSignature::most_specific(&refs, types) {
         Some(winner) => {
             let arm = admitted
                 .into_iter()

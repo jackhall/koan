@@ -14,6 +14,7 @@ use crate::machine::core::{
 };
 use crate::machine::execute::StepCarried;
 use crate::machine::model::Held;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, Record};
@@ -211,6 +212,9 @@ pub struct BodyCtx<'a, 'c> {
     /// `'a`: its doors return a [`StepCarried`] that cannot outlive the step. The same allocator a
     /// wake-time [`FinishCtx`] carries.
     pub ctx: StepAllocator<'a>,
+    /// The run's subtype-verdict registry, reached from the scheduler view at the call. A builtin
+    /// body that runs a type predicate (ascription, MATCH arm selection, `==`) passes it down.
+    pub types: &'c TypeRegistry,
 }
 
 impl<'a, 'c> BodyCtx<'a, 'c> {

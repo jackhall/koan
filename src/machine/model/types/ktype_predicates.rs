@@ -7,10 +7,10 @@ use super::ktraits::Parseable;
 use super::ktype::{KType, SigSource};
 use super::record::Record;
 use super::recursive_set::same_nominal;
+use super::registry::{digest_is_content, Relation, TypeRegistry};
 use super::sig_schema::{sig_subtype, SigSchema};
 use super::signature::{ExpressionSignature, SignatureElement};
 use super::type_digest::TypeDigest;
-use super::type_memos::{self, Relation};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject, ModuleSignature};
 use crate::machine::DeliveredCarried;
@@ -73,27 +73,27 @@ impl<'a> KType<'a> {
     /// OfKind(Proper)`), and a sealed `SetRef` member out-specifies the
     /// `OfKind(kind)` of its own family. Parameterized containers are covariant in their
     /// inner slots. Returns `false` for equal types.
-    pub fn is_more_specific_than<'b>(&self, other: &KType<'b>) -> bool {
+    pub fn is_more_specific_than<'b>(&self, other: &KType<'b>, types: &TypeRegistry) -> bool {
         if self.is_stored_digest_variant() && other.is_stored_digest_variant() {
             let (subject, candidate) = (self.digest(), other.digest());
-            if let Some(verdict) = type_memos::lookup(subject, candidate, Relation::MoreSpecific) {
+            if let Some(verdict) = types.verdict(subject, candidate, Relation::MoreSpecific) {
                 return verdict;
             }
-            let verdict = self.more_specific_walk(other);
-            if type_memos::memo_safe(self) && type_memos::memo_safe(other) {
-                type_memos::insert(subject, candidate, Relation::MoreSpecific, verdict);
+            let verdict = self.more_specific_walk(other, types);
+            if digest_is_content(self) && digest_is_content(other) {
+                types.record_verdict(subject, candidate, Relation::MoreSpecific, verdict);
             }
             verdict
         } else {
-            self.more_specific_walk(other)
+            self.more_specific_walk(other, types)
         }
     }
 
     /// True iff `self` is one of the composite variants whose digest is a stored field
     /// (`digest_of` in `type_digest.rs` reads it directly rather than recomputing it) —
     /// the set of pairs [`is_more_specific_than`](Self::is_more_specific_than) consults the
-    /// memo cache for. Gating on both sides being composite keeps a leaf-vs-leaf or
-    /// `OfKind`/`SetRef` compare (already O(1)-ish) out of the cache, where a probe would
+    /// registry for. Gating on both sides being composite keeps a leaf-vs-leaf or
+    /// `OfKind`/`SetRef` compare (already O(1)-ish) out of the registry, where a probe would
     /// only slow it down.
     fn is_stored_digest_variant(&self) -> bool {
         matches!(
@@ -108,7 +108,7 @@ impl<'a> KType<'a> {
         )
     }
 
-    fn more_specific_walk<'b>(&self, other: &KType<'b>) -> bool {
+    fn more_specific_walk<'b>(&self, other: &KType<'b>, types: &TypeRegistry) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
@@ -119,7 +119,7 @@ impl<'a> KType<'a> {
             return true;
         }
         match (self, other) {
-            (List { element: a, .. }, List { element: b, .. }) => a.is_more_specific_than(b),
+            (List { element: a, .. }, List { element: b, .. }) => a.is_more_specific_than(b, types),
             (
                 Dict {
                     key: ka, value: va, ..
@@ -128,8 +128,8 @@ impl<'a> KType<'a> {
                     key: kb, value: vb, ..
                 },
             ) => {
-                let k_more = ka.is_more_specific_than(kb);
-                let v_more = va.is_more_specific_than(vb);
+                let k_more = ka.is_more_specific_than(kb, types);
+                let v_more = va.is_more_specific_than(vb, types);
                 let k_eq = **ka == **kb;
                 let v_eq = **va == **vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
@@ -137,7 +137,7 @@ impl<'a> KType<'a> {
             // Record-value subtyping: width-superset + covariant depth (the dual of the
             // contravariant width-drop `param_record_more_specific` for function params).
             (Record { fields: a, .. }, Record { fields: b, .. }) => {
-                record_value_more_specific(a, b)
+                record_value_more_specific(a, b, types)
             }
             // Function subtyping: contravariant params (width-subset), covariant return —
             // see `param_record_more_specific`.
@@ -152,7 +152,7 @@ impl<'a> KType<'a> {
                     ret: rb,
                     ..
                 },
-            ) => param_record_more_specific(pa, ra, pb, rb),
+            ) => param_record_more_specific(pa, ra, pb, rb, types),
             // Value role: a concrete signature type is more specific than the
             // `:Signature` wildcard.
             (Signature { .. }, OfKind(KKind::Signature)) => true,
@@ -169,7 +169,7 @@ impl<'a> KType<'a> {
                     pinned_slots: pb,
                     ..
                 },
-            ) => m.structurally_satisfies(s) && (pb.is_empty() || m.satisfies_pins(pb)),
+            ) => m.structurally_satisfies(s, types) && (pb.is_empty() || m.satisfies_pins(pb)),
             // Any non-empty signature refines the empty interface (the lattice top). Keyed on
             // empty *content*, not the `Empty` source variant, so a zero-member `SIG E = ()` is the
             // same top as `:Module` — and pins must agree (an empty interface pins nothing).
@@ -231,7 +231,7 @@ impl<'a> KType<'a> {
                     ..
                 },
             ) if sa.sig_id() != sb.sig_id() => {
-                declared_sig_more_specific(sa, pa, self.digest(), sb, pb, other.digest())
+                declared_sig_more_specific(sa, pa, self.digest(), sb, pb, other.digest(), types)
             }
             // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(NewType) ≺
             // OfKind(Proper)`. (Against `Identifier` / `OfKind(Proper)` the generic rule
@@ -251,11 +251,11 @@ impl<'a> KType<'a> {
                 let any_more = aa
                     .iter()
                     .zip(ab.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y));
+                    .any(|(x, y)| x.is_more_specific_than(y, types));
                 let all_eq_or_more = aa
                     .iter()
                     .zip(ab.iter())
-                    .all(|(x, y)| x == y || x.is_more_specific_than(y));
+                    .all(|(x, y)| x == y || x.is_more_specific_than(y, types));
                 any_more && all_eq_or_more
             }
             // Union subset: `a` refines `b` iff they are not the same set and every member of
@@ -264,14 +264,16 @@ impl<'a> KType<'a> {
             (Union { members: a, .. }, Union { members: b, .. }) => {
                 let same_set = a.len() == b.len() && a.iter().all(|m| b.iter().any(|bm| bm == m));
                 !same_set
-                    && a.iter()
-                        .all(|x| b.iter().any(|y| x == y || x.is_more_specific_than(y)))
+                    && a.iter().all(|x| {
+                        b.iter()
+                            .any(|y| x == y || x.is_more_specific_than(y, types))
+                    })
             }
             // Each member of a union is a subtype of it: a non-union `x` is more specific than
             // `Union(ms)` iff it equals or refines one of the members.
-            (x, Union { members: ms, .. }) => {
-                ms.iter().any(|m| x == m || x.is_more_specific_than(m))
-            }
+            (x, Union { members: ms, .. }) => ms
+                .iter()
+                .any(|m| x == m || x.is_more_specific_than(m, types)),
             _ => false,
         }
     }
@@ -279,8 +281,8 @@ impl<'a> KType<'a> {
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
     /// refinement. A `List<Any>` value (the join an empty or heterogeneous literal
     /// memoizes) does not satisfy `:(LIST OF Number)`.
-    pub fn satisfied_by<'v>(&self, carried: &KType<'v>) -> bool {
-        *self == *carried || carried.is_more_specific_than(self)
+    pub fn satisfied_by<'v>(&self, carried: &KType<'v>, types: &TypeRegistry) -> bool {
+        *self == *carried || carried.is_more_specific_than(self, types)
     }
 
     /// True iff a runtime `KObject` value satisfies this declared type.
@@ -288,9 +290,9 @@ impl<'a> KType<'a> {
     /// cell (a first-class type stored in a list/dict/record) satisfies a type-accepting
     /// slot — `Any`, an `OfKind` kind that subsumes the type's `kind_of`, or an exact type
     /// identity.
-    pub fn matches_held(&self, cell: &Held<'a>) -> bool {
+    pub fn matches_held(&self, cell: &Held<'a>, types: &TypeRegistry) -> bool {
         match cell {
-            Held::Object(o) => self.matches_value(o),
+            Held::Object(o) => self.matches_value(o, types),
             Held::Type(t) => match self {
                 KType::Any => true,
                 KType::OfKind(k) => k.admits(t.kind_of()),
@@ -299,11 +301,11 @@ impl<'a> KType<'a> {
         }
     }
 
-    pub fn matches_value(&self, obj: &KObject<'a>) -> bool {
+    pub fn matches_value(&self, obj: &KObject<'a>, types: &TypeRegistry) -> bool {
         match self {
             KType::Any => true,
             KType::List { element: elem, .. } => match obj {
-                KObject::List(items, _) => items.iter().all(|x| elem.matches_held(x)),
+                KObject::List(items, _) => items.iter().all(|x| elem.matches_held(x, types)),
                 _ => false,
             },
             KType::Dict {
@@ -314,7 +316,7 @@ impl<'a> KType<'a> {
                 KObject::Dict(map, _, _) => map.iter().all(|(k_key, v_obj)| {
                     let k_t = k_key.ktype();
                     (matches!(k_ty.as_ref(), KType::Any) || **k_ty == k_t)
-                        && v_ty.matches_held(v_obj)
+                        && v_ty.matches_held(v_obj, types)
                 }),
                 _ => false,
             },
@@ -324,13 +326,13 @@ impl<'a> KType<'a> {
                 KObject::Record(values, _) => fields.iter().all(|(name, ft)| {
                     values
                         .get(name)
-                        .map(|v| ft.matches_held(v))
+                        .map(|v| ft.matches_held(v, types))
                         .unwrap_or(false)
                 }),
                 _ => false,
             },
             KType::KFunction { params, ret, .. } => match obj {
-                KObject::KFunction(f) => function_compat(&f.signature, params, ret),
+                KObject::KFunction(f) => function_compat(&f.signature, params, ret, types),
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
@@ -339,7 +341,7 @@ impl<'a> KType<'a> {
                 sig, pinned_slots, ..
             } => match obj {
                 KObject::Module(m) => {
-                    sig.satisfied_by_module(m)
+                    sig.satisfied_by_module(m, types)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -383,7 +385,7 @@ impl<'a> KType<'a> {
                                 .all(|(a, b)| matches!(b, KType::Any) || a == b);
                     }
                     match result_field_param_index(name, tag).and_then(|i| args.get(i)) {
-                        Some(arg) => arg.matches_value(value),
+                        Some(arg) => arg.matches_value(value, types),
                         None => true,
                     }
                 }
@@ -407,7 +409,7 @@ impl<'a> KType<'a> {
             // `TypeConstructor` (`Result`) value.
             KType::SetRef { .. } => *self == obj.ktype(),
             // A union slot admits a value any of its members admits.
-            KType::Union { members, .. } => members.iter().any(|m| m.matches_value(obj)),
+            KType::Union { members, .. } => members.iter().any(|m| m.matches_value(obj, types)),
             _ => *self == obj.ktype(),
         }
     }
@@ -448,7 +450,7 @@ impl<'a> KType<'a> {
     /// of which relates the two lifetimes, so no re-anchoring is needed. "Dispatch trusts the
     /// carried element type": a container's memoized carried `KType` is read via `satisfied_by`,
     /// never by walking its contents.
-    pub fn accepts_carried<'v>(&self, c: Carried<'v>) -> bool {
+    pub fn accepts_carried<'v>(&self, c: Carried<'v>, types: &TypeRegistry) -> bool {
         match self {
             KType::Any => true,
             KType::Number => matches!(c, Carried::Object(KObject::Number(_))),
@@ -458,7 +460,7 @@ impl<'a> KType<'a> {
             // Evaluated container: compare the memoized carried element/field type against the slot
             // via `satisfied_by` — pure type-level, no element walk.
             KType::List { element: elem, .. } => match c {
-                Carried::Object(KObject::List(_, carried)) => elem.satisfied_by(carried),
+                Carried::Object(KObject::List(_, carried)) => elem.satisfied_by(carried, types),
                 _ => false,
             },
             KType::Dict {
@@ -467,19 +469,19 @@ impl<'a> KType<'a> {
                 ..
             } => match c {
                 Carried::Object(KObject::Dict(_, carried_k, carried_v)) => {
-                    k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
+                    k_ty.satisfied_by(carried_k, types) && v_ty.satisfied_by(carried_v, types)
                 }
                 _ => false,
             },
             KType::Record { .. } => match c {
                 Carried::Object(KObject::Record(_, carried)) => {
-                    self.satisfied_by(&KType::record(carried.clone()))
+                    self.satisfied_by(&KType::record(carried.clone()), types)
                 }
                 _ => false,
             },
             KType::KFunction { params, ret, .. } => match c {
                 Carried::Object(KObject::KFunction(f)) => {
-                    function_compat(&f.signature, params, ret)
+                    function_compat(&f.signature, params, ret, types)
                 }
                 _ => false,
             },
@@ -504,7 +506,7 @@ impl<'a> KType<'a> {
             KType::SetRef { .. } => &c.ktype() == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
-            KType::Union { members, .. } => members.iter().any(|m| m.accepts_carried(c)),
+            KType::Union { members, .. } => members.iter().any(|m| m.accepts_carried(c, types)),
             KType::AbstractType { .. } => c.ktype() == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
@@ -515,7 +517,7 @@ impl<'a> KType<'a> {
                 sig, pinned_slots, ..
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
-                    sig.satisfied_by_module(m)
+                    sig.satisfied_by_module(m, types)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -556,8 +558,8 @@ impl<'a> KType<'a> {
     /// lifetime-heterogeneous [`accepts_carried`](Self::accepts_carried) at that brand. No cast: the
     /// slot's `'a` and the opened value's brand stay independent through a verdict-only walk. The
     /// picker may reject the candidate, so this deliberately does not adopt.
-    pub(crate) fn accepts_cell(&self, cell: &DeliveredCarried) -> bool {
-        cell.open(|c| self.accepts_carried(c))
+    pub(crate) fn accepts_cell(&self, cell: &DeliveredCarried, types: &TypeRegistry) -> bool {
+        cell.open(|c| self.accepts_carried(c, types))
     }
 
     /// Per-`ExpressionPart` admissibility for argument slots. Unevaluated container
@@ -565,12 +567,12 @@ impl<'a> KType<'a> {
     /// ([`ExpressionPart::Spliced`]) classifies through [`accepts_cell`](Self::accepts_cell),
     /// which opens it at its own brand. Non-satisfying containers fall through the scope walk
     /// rather than failing the bind.
-    pub fn accepts_part(&self, part: &ExpressionPart<'_>) -> bool {
+    pub fn accepts_part(&self, part: &ExpressionPart<'_>, types: &TypeRegistry) -> bool {
         // A spliced cell opens at its own brand through `accepts_cell`, which routes the opened
         // value through the lifetime-heterogeneous `accepts_carried` — no cast. Every remaining arm
         // is a lifetime-agnostic shape check on the parser part, so no coercion of `part` is needed.
         if let ExpressionPart::Spliced { cell } = part {
-            return self.accepts_cell(cell);
+            return self.accepts_cell(cell, types);
         }
         match self {
             KType::Any => true,
@@ -609,7 +611,7 @@ impl<'a> KType<'a> {
             // (via `accepts_carried`); no parser part shape satisfies them. A union delegates to
             // its members, and a member admits a part only for a shape it classifies — a literal
             // for `Number` / `Str` / `Bool` / `Null`.
-            KType::Union { members, .. } => members.iter().any(|m| m.accepts_part(part)),
+            KType::Union { members, .. } => members.iter().any(|m| m.accepts_part(part, types)),
             KType::SetRef { .. }
             | KType::AbstractType { .. }
             | KType::Signature { .. }
@@ -632,8 +634,8 @@ impl<'a> KType<'a> {
 /// strictly more specific than `b` iff `of_sig(a, pins_a)` is a `sig_subtype` of
 /// `of_sig(b, pins_b)` in the forward direction only — the reverse must fail, or the two
 /// are mutually-satisfying (structurally equal) and neither strictly refines. Both
-/// directions memoize under `SigSatisfies`, keyed by the two signature digests (which fold
-/// their pins, so the key is exact).
+/// directions record a verdict under `SigSatisfies`, keyed by the two signature digests (which
+/// fold their pins, so the key is exact).
 fn declared_sig_more_specific<'a, 'b>(
     a: &ModuleSignature<'a>,
     pins_a: &[(String, KType<'a>)],
@@ -641,30 +643,31 @@ fn declared_sig_more_specific<'a, 'b>(
     b: &ModuleSignature<'b>,
     pins_b: &[(String, KType<'b>)],
     digest_b: TypeDigest,
+    types: &TypeRegistry,
 ) -> bool {
-    let forward_hit = type_memos::lookup(digest_a, digest_b, Relation::SigSatisfies);
-    let reverse_hit = type_memos::lookup(digest_b, digest_a, Relation::SigSatisfies);
+    let forward_hit = types.verdict(digest_a, digest_b, Relation::SigSatisfies);
+    let reverse_hit = types.verdict(digest_b, digest_a, Relation::SigSatisfies);
     if let (Some(forward), Some(reverse)) = (forward_hit, reverse_hit) {
         return forward && !reverse;
     }
     // At least one direction missed: build both schemas once (the walk we're memoizing).
     let schema_a = SigSchema::of_sig(a, pins_a);
     let schema_b = SigSchema::of_sig(b, pins_b);
-    // The key (digest_a, digest_b) is transient-safe only if BOTH sides' pin types are
-    // memo_safe — a pin embedding an unsealed set makes the digest pointer-derived.
-    let insertable = pins_a.iter().all(|(_, kt)| type_memos::memo_safe(kt))
-        && pins_b.iter().all(|(_, kt)| type_memos::memo_safe(kt));
+    // The key (digest_a, digest_b) is content-derived only if BOTH sides' pin types are
+    // content-digested — a pin embedding an unsealed set makes the digest pointer-derived.
+    let insertable = pins_a.iter().all(|(_, kt)| digest_is_content(kt))
+        && pins_b.iter().all(|(_, kt)| digest_is_content(kt));
     let forward = forward_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(&schema_a, &schema_b).is_ok();
+        let verdict = sig_subtype(&schema_a, &schema_b, types).is_ok();
         if insertable {
-            type_memos::insert(digest_a, digest_b, Relation::SigSatisfies, verdict);
+            types.record_verdict(digest_a, digest_b, Relation::SigSatisfies, verdict);
         }
         verdict
     });
     let reverse = reverse_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(&schema_b, &schema_a).is_ok();
+        let verdict = sig_subtype(&schema_b, &schema_a, types).is_ok();
         if insertable {
-            type_memos::insert(digest_b, digest_a, Relation::SigSatisfies, verdict);
+            types.record_verdict(digest_b, digest_a, Relation::SigSatisfies, verdict);
         }
         verdict
     });
@@ -689,18 +692,21 @@ fn param_record_more_specific<'a, 'b>(
     ra: &KType<'a>,
     pb: &Record<KType<'b>>,
     rb: &KType<'b>,
+    types: &TypeRegistry,
 ) -> bool {
     if !pa.keys().all(|k| pb.get(k).is_some()) {
         return false;
     }
     let params_ok = pa.iter().all(|(name, s)| {
         let o = pb.get(name).unwrap();
-        o == s || o.is_more_specific_than(s)
+        o == s || o.is_more_specific_than(s, types)
     });
-    let params_more = pa
-        .keys()
-        .any(|k| pb.get(k).unwrap().is_more_specific_than(pa.get(k).unwrap()));
-    let ret_more = ra.is_more_specific_than(rb);
+    let params_more = pa.keys().any(|k| {
+        pb.get(k)
+            .unwrap()
+            .is_more_specific_than(pa.get(k).unwrap(), types)
+    });
+    let ret_more = ra.is_more_specific_than(rb, types);
     let ret_ok = ra == rb || ret_more;
     let width_strict = pa.len() < pb.len();
     params_ok && ret_ok && (width_strict || params_more || ret_more)
@@ -719,17 +725,23 @@ fn param_record_more_specific<'a, 'b>(
 /// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
 /// call-by-name function parameters. Records and function params share the `Record`
 /// substrate but order opposite ways — do **not** unify the two helpers.
-fn record_value_more_specific<'a, 'b>(a: &Record<KType<'a>>, b: &Record<KType<'b>>) -> bool {
+fn record_value_more_specific<'a, 'b>(
+    a: &Record<KType<'a>>,
+    b: &Record<KType<'b>>,
+    types: &TypeRegistry,
+) -> bool {
     if !b.keys().all(|k| a.get(k).is_some()) {
         return false;
     }
     let depth_ok = b.iter().all(|(name, bt)| {
         let at = a.get(name).unwrap();
-        at == bt || at.is_more_specific_than(bt)
+        at == bt || at.is_more_specific_than(bt, types)
     });
-    let depth_more = b
-        .keys()
-        .any(|k| a.get(k).unwrap().is_more_specific_than(b.get(k).unwrap()));
+    let depth_more = b.keys().any(|k| {
+        a.get(k)
+            .unwrap()
+            .is_more_specific_than(b.get(k).unwrap(), types)
+    });
     let width_strict = a.len() > b.len();
     depth_ok && (width_strict || depth_more)
 }
@@ -769,10 +781,11 @@ pub(super) fn function_compat<'a, 'v>(
     sig: &ExpressionSignature<'v>,
     params: &Record<KType<'a>>,
     ret: &KType<'a>,
+    types: &TypeRegistry,
 ) -> bool {
     use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
     let ret_ok = match &sig.return_type {
-        ReturnType::Resolved(kt) => kt == ret || kt.is_more_specific_than(ret),
+        ReturnType::Resolved(kt) => kt == ret || kt.is_more_specific_than(ret, types),
         ReturnType::Deferred(d) => match ret {
             KType::Any => true,
             KType::DeferredReturn(slot) => &DeferredReturnSurface::from_deferred(d) == slot,
@@ -787,7 +800,7 @@ pub(super) fn function_compat<'a, 'v>(
             match params.get(&a.name) {
                 None => return false,
                 Some(slot_pt) => {
-                    if !(slot_pt == &a.ktype || slot_pt.is_more_specific_than(&a.ktype)) {
+                    if !(slot_pt == &a.ktype || slot_pt.is_more_specific_than(&a.ktype, types)) {
                         return false;
                     }
                 }

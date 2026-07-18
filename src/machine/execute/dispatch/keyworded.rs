@@ -35,7 +35,7 @@ pub(super) fn initial<'step>(
     // Resolve dispatch against the cart scope at `'step`: the `Resolved` carries the picked function
     // already at the cart lifetime, so it rides straight into `invoke_continue` with no re-anchor.
     let scope = ctx.current_scope();
-    let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes);
+    let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes, ctx.types());
     let resolved = match outcome {
         DispatchOutcome::Resolved(r) => r,
         // Dispatch failures are slot-terminal (TRY-catchable), uniform with the
@@ -174,7 +174,12 @@ pub(super) fn finish<'step>(
         return Outcome::Done(Err(e));
     }
     let scope = ctx.current_scope();
-    match scope.resolve_dispatch(&working_expr, ctx.chain_deref(), &bare_outcomes) {
+    match scope.resolve_dispatch(
+        &working_expr,
+        ctx.chain_deref(),
+        &bare_outcomes,
+        ctx.types(),
+    ) {
         DispatchOutcome::Resolved(r) => walk_and_invoke(
             ctx,
             r,

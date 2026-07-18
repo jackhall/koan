@@ -5,6 +5,7 @@ use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
 use crate::machine::model::Parseable;
+use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
 
 fn kw(s: &str) -> ExpressionPart<'static> {
@@ -104,12 +105,13 @@ fn kexpression_summarize_joins_parts_with_spaces() {
 
 #[test]
 fn structural_equal_and_ktype_for_kexpression() {
+    let types = TypeRegistry::new();
     use crate::machine::model::values::KObject;
     let a = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
     let b = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("x")])));
     let c = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("y")])));
-    assert_eq!(a.value_equal(&b), Ok(true));
-    assert_eq!(a.value_equal(&c), Ok(false));
+    assert_eq!(a.value_equal(&b, &types), Ok(true));
+    assert_eq!(a.value_equal(&c, &types), Ok(false));
     assert!(matches!(a.ktype(), KType::KExpression));
 }
 

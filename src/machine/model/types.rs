@@ -9,11 +9,11 @@ mod ktype_predicates;
 mod ktype_resolution;
 mod record;
 mod recursive_set;
+pub(crate) mod registry;
 mod resolver;
 mod sig_schema;
 mod signature;
 mod type_digest;
-mod type_memos;
 mod typed_field_list;
 
 pub use kkind::KKind;
@@ -25,6 +25,8 @@ pub use recursive_set::{
     seal_recursive_refs, seal_union_refs, NominalMember, NominalSchema, ProjectedSchema,
     RecursiveSet,
 };
+pub(crate) use registry::Relation;
+pub use registry::TypeRegistry;
 pub use resolver::{
     elaborate_type_identifier, finalize_nominal_member, Elaborator, SchemaSealResult, SealOutcome,
     TypeResolution,
@@ -37,9 +39,6 @@ pub use signature::{
     ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
 pub(crate) use type_digest::{schema_content_digest, signature_digest, TypeDigest};
-#[cfg(test)]
-pub(crate) use type_memos::{hit_count as memo_hit_count, reset as memo_reset};
-pub(crate) use type_memos::{insert as memo_insert, lookup as memo_lookup, Relation};
 pub use typed_field_list::{
     parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };

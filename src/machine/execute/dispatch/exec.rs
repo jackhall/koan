@@ -88,7 +88,7 @@ pub(super) fn invoke<'step>(
     if let Body::Builtin(f) = &picked.body {
         let f = *f;
         let arg_carriers = map_arg_carriers(picked, arg_carriers);
-        let args = match picked.bind_args(&working_expr, view.current_scope()) {
+        let args = match picked.bind_args(&working_expr, view.current_scope(), view.types()) {
             Ok(args) => args,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -98,7 +98,7 @@ pub(super) fn invoke<'step>(
     // A uniquely-picked call is admitted shape-only by dispatch, so validate each argument against
     // its declared parameter type before the type-trusting `bind_by_name` — a non-satisfying typed
     // argument (e.g. a module that doesn't satisfy a `:Signature` param) is caught here.
-    if let Err(e) = picked.validate_call_args(&working_expr) {
+    if let Err(e) = picked.validate_call_args(&working_expr, view.types()) {
         return Outcome::Done(Err(e));
     }
 
@@ -269,6 +269,7 @@ fn run_action_builtin<'step>(
             args: args_obj,
             arg_carriers: &arg_carriers,
             ctx: view.step_ctx(),
+            types: view.types(),
         };
         f(&body_ctx)
     };

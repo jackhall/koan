@@ -6,6 +6,7 @@ pub(crate) mod values;
 pub use operators::{
     binary_key, probe_key, unary_key, FoldDirection, OperatorGroup, ReductionMode,
 };
+pub use types::TypeRegistry;
 pub use types::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature, KKind,
     KType, NominalMember, NominalSchema, Parseable, ProjectedSchema, Record, RecursiveSet,
@@ -22,6 +23,4 @@ pub(crate) use types::{
     FieldListOutcome, FieldNameKind, ResultFeed, SchemaSealResult, SealOutcome, SigSchema,
     TypeResolution,
 };
-#[cfg(test)]
-pub(crate) use types::{memo_hit_count, memo_reset};
 pub(crate) use values::{CarriedFamily, Module, ModuleSignature, NamedPairs, WrappedPayload};
