@@ -273,7 +273,11 @@ it mirrors the application surface `:(Number AS Wrap)` with the concrete
 argument replaced by the parameter name). Inside a SIG body it binds the
 slot name (`Wrap` above) to a sentinel `KType::SetRef` whose member is a
 `KKind::TypeConstructor` carrying the parameter symbol list. The declarator
-lives in [`type_decl.rs`](../../src/builtins/type_decl.rs).
+lives in [`type_decl.rs`](../../src/builtins/type_decl.rs). The value-level
+counterpart `NEWTYPE (Type AS Wrap)` declares a *real* (non-sentinel)
+constructor family a module can supply as the witness for this slot, and
+constructs values inhabiting the applied type — see
+[user-types.md § Constructor families](user-types.md#constructor-families-newtype-type-as-wrapper).
 
 Application uses the `AS` keyworded builtin through the type-expression sigil:
 `:(Number AS Wrap)` in a type-position slot lowers to
@@ -308,14 +312,17 @@ conceptual — real code writes `TYPE (Type AS Wrap)` or
 `TYPE (Elt AS Wrap)`. The [token-class rule](tokens.md) is the
 parser-level cause.
 
-`ConstructorApply` is a type-language-only variant: no `KObject` reports a
-`ConstructorApply` `ktype()`. The variant flows through the type-position
-machinery (FN return-type elaboration, signature-body ascription) and the
-value-level admissibility — wrapping a concrete value in `Wrap<Number>` and
-unwrapping it — and cross-module application (`M.Wrap<Number>` reached via
-ATTR-then-apply) are tracked in [open-work.md](open-work.md). A bare
-`:(T AS Wrap)` in a signature body or against a root-scope-bound constructor
-is the path the test suite pins.
+`ConstructorApply` flows through the type-position machinery (FN return-type
+elaboration, signature-body ascription) and now also names a **runtime value's**
+type: a value constructed over a `NEWTYPE (Type AS Wrapper)`-declared family
+reports a `ConstructorApply` `ktype()`, so wrapping a concrete value in
+`Wrapper (v)` and dispatching on `:(Number AS Wrapper)` both ship — see
+[user-types.md § Constructor families](user-types.md#constructor-families-newtype-type-as-wrapper).
+Still future and tracked in [open-work.md](open-work.md): re-tagging an
+applied-constructor-typed VAL slot read through an opaque view, and cross-module
+application (`:(Number AS mo.Wrap)` over another module's constructor member,
+reached via ATTR-then-apply). A bare `:(T AS Wrap)` in a signature body or against a
+root-scope-bound constructor is the path the test suite pins.
 
 ## Type expressions and constraints
 

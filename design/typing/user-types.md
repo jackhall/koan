@@ -379,3 +379,58 @@ diagnostics name the inner record (`b: Boxed = Point; b.z` reports the field mis
 keyword `Newtype` is *not* registered in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs); the `OfKind(Newtype)`
 slot is type-channel-only and never matches a runtime value.
+
+## Constructor families: `NEWTYPE (Type AS Wrapper)`
+
+`NEWTYPE (Type AS Wrapper)` declares a **type-constructor family** — the koan-source
+counterpart of the higher-kinded slot form `TYPE (Type AS Wrap)`
+([functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)). It is
+declaration-by-example: the head mirrors the application surface `:(Number AS Wrapper)`
+with the concrete argument replaced by the parameter name. The declarator
+([`body_constructor_family`](../../src/builtins/newtype_def.rs)) reuses the shared `TYPE`
+declaration parser (which rejects arity above 1), so the family is **arity 1 only**. It is
+valid in any scope — top level or a `MODULE` body — with no SIG-body gate, so a module can
+declare the constructor member a higher-kinded signature slot demands.
+
+**Identity is a real singleton `TypeConstructor` set at the declaring scope.** The
+declaration mints one `KKind::TypeConstructor` member —
+[`mint_type_constructor`](../../src/builtins/type_decl.rs), an empty variant schema plus the
+one `param_names` entry — and writes it to `bindings.types` only, no value-side carrier. The
+`scope_id` on the member is the **declaring scope's own id**, and that is the sole
+discriminant separating a NEWTYPE-declared family from the `TYPE` declarator's *sentinel*
+abstract slot ([`ScopeId::SENTINEL`](../../src/machine/execute/dispatch/single_poll.rs)):
+the sentinel names a kind but constructs nothing, while a real scope id constructs values.
+The empty schema is the second discriminant, separating a constructor family from the
+builtin `Result`, whose non-empty variant schema routes construction down the sealed
+tagged-union path instead.
+
+**The family is the identity-wrapper over its argument** — `(T AS Wrapper)` is a newtype
+over `T` itself, so the applied argument *is* the representation; there is no type-variable
+substrate. Application through `AS` lowers `:(Number AS Wrapper)` to
+`KType::ConstructorApply { ctor: <the Wrapper SetRef>, args: [Number] }`, the same lowering
+the sentinel-slot form uses.
+
+**Construction stamps then collapses.** `Wrapper (v)` routes through
+[`dispatch_construct_apply`](../../src/machine/execute/dispatch/constructors.rs) (an
+[`ApplyConstructor`](../../src/machine/execute/dispatch/single_poll.rs) `CtorKind`), which
+mirrors `dispatch_construct_newtype`'s arity handling: a single redundant paren group
+unwraps, an empty body is `ArityMismatch { expected: 1, got: 0 }`. Its `finish_witnessed`
+arm reads the resolved value `v`, **stamps** `v`'s full `ktype()` — including a `Wrapped`
+payload's own nominal identity — as the sole applied arg, then **collapses** by peeling one
+`Wrapped` layer off `v` so the stored `inner` is never itself `Wrapped` (the single-layer
+invariant the constructor path holds; the peeled identity is preserved *in the stamped
+arg*). The result is `KObject::Wrapped { inner, type_id: ConstructorApply(<ctor SetRef>,
+[arg]) }`, so the value's `ktype()` reports the applied type for free and inhabits
+`:(<v's type> AS Wrapper)`. A record-literal payload (`Wrapper ({x = 1.0})`) rides through
+as a single positional value; ATTR then projects a field through the `Wrapped` layer.
+
+**Matching keys on the ctor nominal plus per-arg agreement.** A slot typed
+`:(Number AS Wrapper)` is a `ConstructorApply` slot; a value satisfies it when the two
+ctors' `(set, index)` match via `same_nominal` (both are `SetRef`s) and the stamped args
+agree pairwise — an `Any` slot arg admits anything, otherwise the args must be structurally
+equal. The rule lives in one cross-lifetime helper
+([`constructor_apply_admits`](../../src/machine/model/types/ktype_predicates.rs)) shared by
+both the same-lifetime `KType::matches_value` `Wrapped` arm and the heterogeneous
+`KType::accepts_carried` dispatch arm, so a FN parameter typed `:(Number AS Wrapper)` and a
+value-position match apply the identical admission. Two `Wrapper (v)` values compare `==`
+through the ordinary `Wrapped` structural-equality path.

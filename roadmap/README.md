@@ -54,9 +54,9 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
 - [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
+- [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [User-defined type constructors](type_memos/user-defined-type-constructors.md)
 

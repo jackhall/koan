@@ -154,6 +154,39 @@ declares a *higher-kinded* type member — a slot that takes a type and produces
 type — for signatures that abstract over type constructors rather than plain
 types.
 
+## Declaring a type constructor: `NEWTYPE (Type AS Wrap)`
+
+`TYPE (Type AS Wrap)` above only *declares a slot* inside a signature. To make a
+real constructor a module can supply — or that you can wrap values with — use the
+`NEWTYPE` form: `NEWTYPE (Type AS Wrapper)` declares a **type constructor** named
+`Wrapper`. It reads like the application form `:(Number AS Wrapper)` with the
+concrete type replaced by the placeholder `Type`.
+
+Once declared, `Wrapper` wraps a value of any type, and the result carries the
+*applied* type `:(<value's type> AS Wrapper)` — so you can dispatch on what's inside
+the box:
+
+```koan
+NEWTYPE (Type AS Boxed)
+FN (OPEN b :(Number AS Boxed)) -> Str = ("a boxed number")
+FN (OPEN b :(Str AS Boxed)) -> Str = ("a boxed string")
+PRINT (OPEN (Boxed (7)))
+PRINT (OPEN (Boxed ("hi")))
+```
+
+```text
+a boxed number
+a boxed string
+```
+
+`Boxed (7)` builds a value whose type is `:(Number AS Boxed)`, and `Boxed ("hi")`
+one of type `:(Str AS Boxed)`, so the two `OPEN` overloads dispatch on the boxed
+type exactly as ordinary overloads dispatch on a plain argument type. Because the
+declaration is valid inside a `MODULE` body, a module can declare `Wrapper` as the
+concrete witness for a signature's `TYPE (Type AS Wrap)` slot — the missing piece
+that lets a module satisfy a higher-kinded signature. The form takes one parameter
+(arity 1).
+
 ---
 
 That completes the tour of the language as it stands. For the shape of what's

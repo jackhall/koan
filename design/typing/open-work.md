@@ -31,6 +31,10 @@ Future work on the type and module system. Each entry points at a
 
 ## Cross-cutting
 
+- [Applied constructor types through views](../../roadmap/type_language/applied-constructors-through-views.md)
+  — reading applied-constructor-typed value slots through an opaque view at the
+  view's per-call identity, and naming `:(Number AS mo.Wrap)` over another module's
+  constructor member.
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
   as functors — module-returning FNs — over their element/key types. Parks the
   **applicative functor semantics** open question: the decided seam is the
