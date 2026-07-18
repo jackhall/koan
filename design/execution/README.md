@@ -28,3 +28,6 @@ work, decides when each resolved call runs, and hands its body the live scope.
   lanes, the keyworded apply pipeline, and dispatch birth/resume (the execute side).
 - [Calls, values, and performance](calls-and-values.md) — the `KObject` model/core
   boundary, performance characteristics, the lexical provenance chain, and open work.
+- [Value equality](value-equality.md) — the `==` / `!=` builtins, the structural
+  `value_equal` walk, the comparability gate and its deliberate intransitivity, the
+  function/module ban with the `TYPE OF` idiom, and dict-key normalization.

@@ -18,20 +18,20 @@ system.
    paren-delimited string into a nested expression tree.
 4. [tokens.rs](../src/parse/tokens.rs) — classify each whitespace-delimited
    token as a literal, keyword (any pure-symbol token that is not a builtin
-   compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>` — or
+   compound trigger — `=`, `->`, `:|`, `:!`, `+`, `|`, `<=`, `>>`, `==`, `!=` — or
    alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`),
    type name (uppercase-leading with at least one lowercase — `Number`,
    `KFunction`, `Ordered`), identifier, or compound (member access, indexing,
    prefix/suffix operators). Tagging arbitrary symbol tokens as keywords is what
    lets a post-parse detector recognize chainable operators (see the
-   `OperatorChain` shape below); the builtin triggers `.`/`?`/`!` keep their
+   `OperatorChain` shape below); the builtin triggers `.`/`?` keep their
    compound desugaring instead. A token that starts uppercase but classifies as
    neither keyword nor type (single uppercase letter, or uppercase + digits
    only) is a parse error. See
    [typing/tokens.md](typing/tokens.md)
    for what the three classes mean.
 5. [operators.rs](../src/parse/operators.rs) — table of compound-token
-   operators (`!`, `.`, `[]`, `?`); add a row to extend.
+   operators (`.`, `[]`, `?`); add a row to extend.
 
 ## Line continuation
 

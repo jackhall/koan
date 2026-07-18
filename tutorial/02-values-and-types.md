@@ -82,6 +82,52 @@ argument to a function whose parameter is typed. A standalone `[]`, or
 [type ascription](#naming-types) below, you can give an empty collection a type
 through the position it appears in.
 
+## Comparing values with `==` and `!=`
+
+`==` tests whether two values are equal and `!=` whether they differ; both give
+back a boolean:
+
+```koan
+PRINT (1 == 1)
+PRINT (1 != 2)
+PRINT ("a" == "b")
+```
+
+```text
+true
+true
+false
+```
+
+Equality is **structural** — it looks at the contents, not at how a value was
+built or rendered. Two lists are equal when they have the same elements in the
+same order:
+
+```koan
+PRINT ([1, 2, 3] == [1, 2, 3])
+PRINT ([1, 2] != [1, 2, 3])
+```
+
+```text
+true
+true
+```
+
+A few rules are worth knowing early:
+
+- **Binary only.** `==` and `!=` compare exactly two values. There is no
+  chaining: `a == b == c` is an error, not a three-way test.
+- **Numbers follow IEEE.** In particular a not-a-number result is not equal to
+  anything, including itself.
+- **Records ignore field order.** `{x = 1, y = 2}` equals `{y = 2, x = 1}` (see
+  [Records](07-records.md)).
+- **Newtypes compare by identity.** A [newtype](08-newtypes.md) value is never
+  equal to its bare representation, and two different newtypes with the same
+  representation are unequal.
+- **Functions and modules can't be compared** — the comparison is an error. To
+  compare two modules by their interface, compare their types instead:
+  `(TYPE OF m1) == (TYPE OF m2)` (see [Modules](11-modules.md)).
+
 ## Naming types
 
 The type names you can write in source are:

@@ -34,9 +34,9 @@ paragraphs name the gap, not the fix.
   exactly the modules the `:Module` lattice top admits — under content identity the two are the
   same interface and should be one type. But `signature_digest` gives `SigSource::Empty` a distinct
   `TAG_SIG_EMPTY` sentinel digest ([`type_digest.rs`](../../src/machine/model/types/type_digest.rs)),
-  so `E` and `:Module` compare unequal, and once
-  [structural value equality](../refactor/structural-value-equality.md) ships `(E == :Module)`
-  observably returns false. Relatedly, the `Signature` arms of `is_more_specific_than`
+  so `E` and `:Module` compare unequal, and
+  [value equality](../../design/execution/value-equality.md) makes `(E == :Module)`
+  observably return false. Relatedly, the `Signature` arms of `is_more_specific_than`
   ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)) branch on the
   `Empty` source *variant* rather than on content, so they treat two equal-content signature types
   asymmetrically. A principled fix makes `Empty` digest and specify by its (empty) content like

@@ -55,8 +55,9 @@ other.
 ## Dependencies
 
 Builds on the shipped `RECURSIVE TYPES` type-cycle machinery (no roadmap prerequisite).
-A constructible cycle forces [structural value equality](../refactor/structural-value-equality.md)
-and the renderer to be cycle-safe; coordinate so neither hangs on a cyclic value.
+A constructible cycle forces [value equality](../../design/execution/value-equality.md)
+and the renderer to be cycle-safe; the shipped `value_equal` walk assumes acyclic values,
+so coordinate that neither hangs on a cyclic value.
 Update [design/typing/user-types.md](../../design/typing/user-types.md) and
 [design/memory-model.md](../../design/memory-model.md) when it ships.
 

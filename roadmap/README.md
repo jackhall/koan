@@ -48,7 +48,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Own singleton nominal-set construction](refactor/own-singleton-nominal-set-construction.md)
 - [Region-store records and resolved KTypes](refactor/region-store-records-and-ktypes.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
-- [Structural value equality](refactor/structural-value-equality.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
 - [Region debug audits](scheduler_library/region-debug-audits.md)
 - [Carving the workcell crate](scheduler_library/workcell-extraction.md)
