@@ -7,8 +7,8 @@ freed when the call's slot finalizes.
 
 ## Storage shape: a graph of region slots
 
-A `KoanRegion` holds seven `typed_arena`-backed sub-arenas — for `KObject`,
-`KFunction`, `Scope`, `Module`, `Signature`, `KType`, and `OperatorGroup`. Slots have stable
+A `KoanRegion` holds six `typed_arena`-backed sub-arenas — for `KObject`,
+`KFunction`, `Scope`, `Module`, `KType`, and `OperatorGroup`. Slots have stable
 heap addresses; the runtime carries cross-references between them rather
 than ownership trees. The structural edges:
 
@@ -312,9 +312,9 @@ witness pins nothing, so its carrier is sound only as a within-step transient; t
 it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's `'step`
 lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
 sole exit to node storage is finalize's fold. A value that
-cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines a
-module-family pointer or an `Rc`-shared set — `SetRef` / `Variant`
-/ `RecursiveGroup`, whose `Rc::ptr_eq` identity a rebuild would break) takes one of three tiers
+cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines an
+`Rc`-shared payload — a `SetRef` / `RecursiveGroup` set, whose `Rc::ptr_eq` identity a rebuild
+would break, or a non-empty signature's shared content) takes one of three tiers
 instead. The two runtime-checked tiers route through the library's
 [`RegionHandle::alloc_resident_checked`](../workgraph/src/witnessed/region.rs), which stores only if
 the family's own [`AuditedStored`](../workgraph/src/witnessed/region.rs) audit returns true — nothing
@@ -328,9 +328,11 @@ compile-only capability with no runtime audit at all:
   [`KType::resident_in`](../src/machine/model/types/ktype.rs) /
   [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walk the value's own structure and
   confirm every region pointer it carries points into the destination region, checking an `Rc`-shared
-  set's members by address rather than rebuilding them. Confined to identity-preserving stores: a
+  set's members by address rather than rebuilding them. `KType` borrows no region data in any
+  variant — every variant owns its content, a signature's schema included — so its walk answers
+  trivially and only `KObject`'s carries real pointers. Confined to identity-preserving stores: a
   caller reaches here only to store a value whose identity a `'static` rebuild would break (a
-  module-family pointer, a signature pointer, an `Rc`-shared set). A site assembling a *new* composite
+  module-family pointer, an `Rc`-shared payload). A site assembling a *new* composite
   `KType` from ambiently-read parts does not land here — synchronous composition builds at a brand
   instead, through the field-list fold ([`fold_field_list_sync`](../src/machine/execute/dispatch/field_list.rs)),
   `StepAllocator::alloc_carried_with` (`WITH`'s pinned `Signature`), or `alloc_type_composed` — so no
@@ -394,11 +396,11 @@ compile-only capability with no runtime audit at all:
   the brand rather than ambiently.
 
 `KObject::resident_in` is honest-partial: a `Wrapped { type_id }`'s raw `&KType` pointer is
-un-answerable (`KType` opts out of the address side-table the `owns_module` / `owns_signature` /
+un-answerable (`KType` opts out of the address side-table the `owns_module` /
 `owns_function` checks read, by not implementing `Stored::record_local`), so that one field is
-unchecked. Every structural family (`Scope` / `Module` / `ModuleSignature` / `KFunction`) always
+unchecked. Every structural family (`Scope` / `Module` / `KFunction`) always
 captures a borrow (its parent, its declaring scope), so its bare veneer takes the checked-not-`'static`
-form too — `alloc_scope` / `alloc_module` / `alloc_signature` / `alloc_function` run a
+form too — `alloc_scope` / `alloc_module` / `alloc_function` run a
 release-enforced `ptr::eq` same-region check via their family's `AuditedStored` audit rather than a
 `debug_assert!`. The frame-child door ([`build_frame_child_witnessed`](../src/machine/core/arena.rs))
 routes the same real `Scope` family audit as `alloc_scope`: the child is built over the frame's own

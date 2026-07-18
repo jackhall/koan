@@ -118,8 +118,8 @@ overload-resolution walk returning a `ResolveOutcome`),
 `Rc`-owned unit of nominal identity, allocation, and lift),
 [type_digest.rs](src/machine/model/types/type_digest.rs) (`TypeDigest`, the eager
 content-hash every `KType` compares by),
-[sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema` and the
-canonical signature-subtyping relation),
+[sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema`, the owned
+`SigContent` a signature type carries, and the canonical signature-subtyping relation),
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [builtins.rs](src/builtins.rs) (registry),
@@ -191,7 +191,7 @@ src/
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
     │   │   ├── recursive_set.rs   RecursiveSet — Rc-owned unit of nominal identity, allocation, and lift
-    │   │   ├── sig_schema.rs      SigSchema + sig_subtype — module self-sig and the signature-subtyping relation
+    │   │   ├── sig_schema.rs      SigSchema + SigContent + sig_subtype — a signature type's owned content and the subtyping relation
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Serializable
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
@@ -201,7 +201,7 @@ src/
     │       ├── carried.rs         Carried — the scheduler's value currency (Object | Type)
     │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
     │       ├── named_pairs.rs     shared (name, value) ordered-list helper
-    │       └── module.rs          Module / Signature — first-class module values
+    │       └── module.rs          Module — first-class module values and their sealed self-sig content
     ├── core.rs            module surface for core/
     ├── core/
     │   ├── arena.rs       KoanRegion (= Region<KoanStorageProfile>), RegionBrand, FoldingBrand, KoanRegionExt — the Koan storage substrate and allocation veneer (children below)

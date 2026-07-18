@@ -104,18 +104,17 @@
   these): **there is no module variant.** A module is a value — it rides the value
   channel's Object arm as `KObject::Module`, and its `ktype()` is its principal
   signature, so the type channel names a module only through
-  `Signature { sig: SelfOf(m), .. }`. A module name is a value token and types
+  the self-sig `Signature` type it seals at creation. A module name is a value token and types
   nothing on its own; `TYPE OF` is the door that surfaces that self-sig as a type
   value (`m :(TYPE OF int_ord)`, `-> :(TYPE OF er)`) — see
   [modules.md § Modules in type position](../modules.md#modules-in-type-position-type-of).
-  `Signature { sig: SigSource<'a>, pinned_slots: Vec<(String, KType)> }`
-  serves both signature roles in one variant — its `sig` names one of three
-  module-lattice points ([`SigSource`](../../../src/machine/model/types/ktype.rs):
-  `Declared` SIG, `SelfOf` module self-sig, `Empty`) — the introspectable value
-  (a `Declared`, carrying `decl_scope` via `sig`) *and* the dispatch constraint ("any
-  module satisfying this signature"). It is the one variant holding a live region
-  pointer (`&'a Module` / `&'a Signature`), so it is also the one that cannot rebuild
-  at `'static`.
+  `Signature { content: Rc<SigContent<'a>>, pinned_slots: Vec<(String, KType)> }`
+  serves both signature roles in one variant. Its
+  [`SigContent`](../../../src/machine/model/types/sig_schema.rs) is **owned data** —
+  `{ path, sig_id, schema, schema_digest }` — so a `SIG`-declared interface, a module's
+  self-sig, and the empty `:Module` top are one shape differing only in schema, and the
+  variant is both the introspectable value *and* the dispatch constraint ("any module
+  satisfying this signature"). No `KType` variant borrows region data.
   `AbstractType { source: ScopeId, name: String }` is the per-abstract-type-member
   tag — **owned data**, id-keyed, with no `&Module` inside it. The single variant has
   two **minting sites**, and the distinction between them is load-bearing for
@@ -127,8 +126,8 @@
   allocates a fresh child scope, the two never collide.
   Manual `PartialEq` keys `KType::AbstractType` on `(source, name)`, while
   `KType::Signature` compares by its stored content
-  digest (which folds `sig.sig_id()` and `pinned_slots`; the `SigSource`'s `path()`
-  is diagnostic-only) — so two
+  digest (which folds the content's `schema_digest` and `pinned_slots`; its `path` and
+  `sig_id` are diagnostic and specificity-refinement data, never identity) — so two
   opaque ascriptions of the same source module mint distinct abstract identities
   (the abstraction barrier) while two `AbstractType` carriers minted from the *same*
   ascription for the same slot name compare equal, and a per-call mint stays distinct
@@ -139,12 +138,12 @@
   The companion wildcard `OfKind(Signature)` admits any signature value; the
   surface keyword `Signature` lowers to it in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs),
-  while `Module` lowers to the empty signature (`Signature { SigSource::Empty }`),
+  while `Module` lowers to the empty signature (a `Signature` over `SigContent::empty()`),
   the module-lattice top every module value satisfies.
   The single `Signature` variant is **disambiguated by position**: a
   `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
   arm) whose self-sig structurally
-  satisfies `sig` (the constraint role — what `er :Ordered`
+  satisfies the slot's schema (the constraint role — what `er :Ordered`
   lowers to in an FN parameter slot, so `:Ordered` means "module
   satisfying Ordered," never "the signature value itself"), while a
   signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only

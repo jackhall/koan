@@ -4,17 +4,18 @@ Delete `KType<'a>`'s lifetime parameter and the type-side residence machinery th
 polices it. Part of the arc landing
 [design/typing/type-registry.md](../../design/typing/type-registry.md).
 
-**Problem.** `KType<'a>`'s lifetime parameter exists solely because `Signature`
-holds region pointers behind `SigSource`
-([`ktype.rs`](../../src/machine/model/types/ktype.rs)); once
-[Signature types own their schema](signature-schema-ownership.md) ships, the
-parameter constrains nothing yet still infects 69 files (405 `KType<` occurrences).
-A whole type-side enforcement apparatus exists to police the pointers it threads:
-`KType::to_static` and the `resident_in` walk family, an
-`unsafe impl AuditedStored for KType`
-([`residence.rs`](../../src/machine/core/arena/residence.rs)), the checked/reaching
-`Scope` allocation tiers over plain `alloc_ktype`, and `StoredReach` evidence on
-the type binding tables ([`bindings.rs`](../../src/machine/core/bindings.rs)).
+**Problem.** No `KType` variant borrows region data — every variant owns its content,
+a signature's schema included ([`ktype.rs`](../../src/machine/model/types/ktype.rs)) —
+so `KType<'a>`'s lifetime parameter constrains nothing yet still infects 69 files
+(405 `KType<` occurrences). The type-side enforcement apparatus built to police
+region pointers outlives the pointers themselves and is now vacuous: the
+`resident_in`/`resident_in_reach` walk reaches no `owns_*` leaf and returns `true`
+for every `KType`, so the `unsafe impl AuditedStored for KType`
+([`residence.rs`](../../src/machine/core/arena/residence.rs)) admits every store and
+its SAFETY argument rests on a tautology rather than a check. `KType::to_static`,
+the checked/reaching `Scope` allocation tiers over plain `alloc_ktype`, and
+`StoredReach` evidence on the type binding tables
+([`bindings.rs`](../../src/machine/core/bindings.rs)) carry the same dead weight.
 
 **Acceptance criteria.**
 
@@ -42,8 +43,6 @@ the type binding tables ([`bindings.rs`](../../src/machine/core/bindings.rs)).
 
 **Requires:**
 
-- [Signature types own their schema](signature-schema-ownership.md) — removes the
-  region pointers that make the lifetime parameter load-bearing.
 
 **Unblocks:**
 

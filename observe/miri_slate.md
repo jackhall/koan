@@ -366,13 +366,13 @@ dispatch through a functor-call's per-call scope, and `MODULE_TYPE_OF` lift-out.
 
 **Stored scope-pointer re-anchor** ([src/machine/core/scope_ptr.rs](../src/machine/core/scope_ptr.rs)) — every
 holder stores a captured / defining / parent scope as a plain `&'a Scope<'a>` (`Module::child_scope`,
-`ModuleSignature::decl_scope`, `KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
+`KFunction::captured`, `Scope::outer` / `root`) and re-anchors it **with
 the holder as a whole** when the holder is read out of its region (the `Region::alloc` retype in
 `witnessed.rs`), so the accessors are bare field reads and scope_ptr.rs carries no `unsafe` of its own.
 The construction-time reference is built at `'a` by plain coercion (a same-region child) or at the
 construction door's generative brand (a per-call frame child, `build_frame_child_witnessed`) — there is
 no construction-time re-anchor verb. This test pins the re-anchor directly through the `Module` carrier;
-`ModuleSignature::decl_scope` / `KFunction::captured_scope` route the identical `Region::alloc` retype
+`KFunction::captured_scope` routes the identical `Region::alloc` retype
 (their equivalents run under plain `cargo test`), and every `Scope::outer()` / `ancestors()` walk reads
 the field end-to-end.
 

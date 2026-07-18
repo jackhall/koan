@@ -33,7 +33,7 @@ read the concrete runtime shape directly:
   signature.
 - [`KObject::ktype()`](../../src/machine/model/values/kobject.rs)
   reports each value's runtime tag — a module value (`KObject::Module`) reports
-  its principal signature `KType::Signature { SigSource::SelfOf(m), .. }` — while
+  its principal signature, a `KType::Signature` over the module's sealed self-sig content — while
   a `Type`-arm signature carrier *is* its own `KType` identity, so the
   dispatcher reads the same identity the carrier holds rather than
   a synthesized shadow.

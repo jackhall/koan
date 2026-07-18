@@ -158,7 +158,7 @@ principal **self-sig** — a [`SigSchema`](../../src/machine/model/types/sig_sch
 abstract members (always none — `TYPE` is SIG-body-only), manifest type members, and
 value-slot types — derived once at creation and sealed immutable (`Module::seal_self_sig`;
 a bare construction derives it lazily via `raw_self_sig`). A signature likewise projects to a
-`SigSchema` (`SigSchema::of_sig`, which folds any `WITH` pins in). Ascription (`check_satisfies`,
+`SigSchema` (`SigSchema::with_pins`, which folds any `WITH` pins in). Ascription (`check_satisfies`,
 run for both `:|` and `:!`) holds iff `module.self_sig <: sig-schema` under `sig_subtype`:
 `Sub <: Super` iff `Sub` supplies every member `Super` names (width — extra `Sub` members are
 ignored), with each manifest member *equal*, each abstract member present at the matching
@@ -168,11 +168,13 @@ covariantly compatible — the module's member type must be `satisfied_by`-admis
 slot's declared type, after the slot's references to `Super`'s abstract members are substituted
 with `Sub`'s bindings for them. Each ascription view seals its own self-sig recording those
 substituted slot types, so a view structurally satisfies its own signature. The result is
-memoized per `sig_id` on the module (a pure cache — types are immutable).
+memoized in the type registry under `Relation::SigSatisfies`, keyed on the two schema content
+digests (a pure cache — types are immutable).
 
 Dispatch matching of a `:Sig` slot runs the same structural check ascription asserts
-([`Module::structurally_satisfies`](../../src/machine/model/values/module.rs), memoized per
-`sig_id`), plus, for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig
+([`Module::satisfies_sig_content`](../../src/machine/model/values/module.rs), memoized on the
+pair of schema content digests, with a content-equality fast path that records nothing), plus,
+for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig
 manifest member fixed equal
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)). Ascription is
 assertion plus view construction, never an admission gate: an unascribed module whose self-sig
@@ -203,10 +205,10 @@ The type language is first-class; modules and signatures live there. A
 module value rides the value channel's Object arm as
 [`KObject::Module`](../../src/machine/model/values/kobject.rs), typed by its
 principal signature — `ktype()` reports
-`KType::Signature { sig: SigSource::SelfOf(m), .. }`, so dispatch trusts the
-carried self-sig. A signature value rides the
+`KType::Signature { content, .. }` sharing the module's sealed self-sig content, so dispatch
+trusts the carried self-sig. A signature value rides the
 [`Carried::Type`](../../src/machine/model/values/carried.rs) arm as
-`KType::Signature { sig, pinned_slots }` — the same arm that carries `Number`,
+`KType::Signature { content, pinned_slots }` — the same arm that carries `Number`,
 `Str`, and builtin type values. A module value flows through `LET`, ATTR, and function
 calls like any other value: there is no separate pack/unpack form, no
 `(module M)` construction syntax, and no `(val m)` projection. A module
@@ -224,7 +226,9 @@ never to a lexically enclosing binding. The module-own rule holds even for a spe
 that collides with a builtin: `int_ord.Type` reads module-own too, and since `Type`
 is an unshadowable builtin meta-type no module can declare that member, so it is a
 missing member, never the builtin. Signature member access
-(`access_type_member` over `KType::Signature`) reads its decl scope the same way.
+(`access_type_member` over `KType::Signature`) answers from the signature type's own owned
+schema — a manifest or abstract type member first, then a declared `VAL` slot's type — with no
+decl-scope lookup, so a signature projects exactly the interface its content names.
 
 `MODULE` binds **value-side**: it takes an `Identifier` name part, installs a
 `BindKind::Value` placeholder, and finalize allocates the Object-arm module value and
@@ -269,7 +273,7 @@ LET SetType = (TYPE OF int_set)
 as an ordinary type value — `TYPE OF 5` is `Number`, `TYPE OF xs` is
 `LIST OF Number` — so it is general over the value channel, not a module-specific
 form. Applied to a module it yields that module's **principal signature**
-(`KType::Signature { sig: SigSource::SelfOf(m), pinned_slots: [] }`), which is how a
+(`KType::Signature { content: <m's self-sig content>, pinned_slots: [] }`), which is how a
 module reaches a slot, a return, or a `LET` type alias. Its `value` slot is
 `KType::Any`, which admits both channels, so a *type* argument reaches the body and
 is refused there with a diagnostic rather than falling through dispatch as a miss;
@@ -306,23 +310,25 @@ and [`type_of/tests.rs`](../../src/builtins/type_ops/type_of/tests.rs).
 Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
 structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
-`KType::Signature { sig, pinned_slots }`
-carries a [`SigSource`](../../src/machine/model/types/ktype.rs) — the three
-points of the module lattice: `Declared(&Signature)` for a `SIG` declaration,
-`SelfOf(&Module)` for a module value's principal signature, and `Empty` for the
-empty signature — plus any `WITH` abstract-type
-pins; `KType::AbstractType { source, name }` carries an abstract-type member, its
+`KType::Signature { content, pinned_slots }` carries an `Rc`-shared
+[`SigContent`](../../src/machine/model/types/sig_schema.rs) — the owned bundle
+`{ path, sig_id, schema, schema_digest }` — plus any `WITH` abstract-type pins. There is one
+kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the empty
+`:Module` interface differ only in the schema their content holds, not in variant. The content
+borrows nothing from a region, so `KType` holds no region pointer in any variant.
+`KType::AbstractType { source, name }` carries an abstract-type member, its
 `source` naming either the SIG decl scope (a declared member) or the per-call
 ascription module (an opaque mint). Module identity is by `module.scope_id()` — the
-key both `SelfOf` and an `AbstractType` minted off that module digest on; signature
-identity by `sig.sig_id()` + `pinned_slots`; abstract-type identity by
+key both a self-sig's `sig_id` and an `AbstractType` minted off that module digest on; signature
+identity is by schema *content* (`schema_digest`) + `pinned_slots`, so two textually identical
+declarations name one type and `sig_id` never enters identity; abstract-type identity by
 `(source, name)`. The value channel carries a module as `KObject::Module`; the type
 channel never names one directly, only through the self-sig that types it.
 The type-position wildcard `KType::OfKind(KKind::Signature)` admits any
 first-class signature value; the surface keyword `Signature` lowers to it in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs). The
 `Module` surface keyword lowers to the **empty signature**
-(`KType::empty_signature()`, `Signature { SigSource::Empty }`) — the lattice top
+(`KType::empty_signature()`, a `Signature` over `SigContent::empty()`) — the lattice top
 every module value satisfies — so an "any module" slot is signature-typed like
 every other module slot rather than a kind wildcard.
 
@@ -337,13 +343,16 @@ expression position — is matched by the `:Signature` (`OfKind(Signature)`)
 wildcard. A slot typed `:Ordered` therefore never admits the signature
 value itself, and `:Signature` never admits a satisfying module.
 
-When a module satisfies two distinct SIG slots at once, dispatch orders them by
-**structural subtyping**, not by declaration order: `:A` is more specific than
-`:B` iff `of_sig(A)` is a *strict* `sig_subtype` of `of_sig(B)` — the forward
-direction holds and the reverse fails (`WITH` pins fold into `of_sig` on both
-sides). A slot whose signature requires strictly more (`Wide` = `Base` plus an
-extra member) wins over the broader one. Two structurally-identical distinct SIGs
-are mutually satisfying — forward and reverse both hold — so neither strictly
+When a module satisfies two distinct signature slots at once, dispatch orders them by
+**structural subtyping**, not by declaration order. The rule is uniform over every signature
+type — `SIG`-declared, a module's self-sig, or the empty interface — since all three are the
+same owned-schema shape: for two contents with different `sig_id`s, `:A` is more specific than
+`:B` iff `A`'s pin-folded schema is a *strict* `sig_subtype` of `B`'s — the forward
+direction holds and the reverse fails (`WITH` pins fold in via `with_pins` on both
+sides). Contents sharing a `sig_id` instead compare by pin refinement, and any non-empty
+signature refines the empty interface. A slot whose signature requires strictly more
+(`Wide` = `Base` plus an extra member) wins over the broader one. Two structurally-identical
+signatures are mutually satisfying — forward and reverse both hold — so neither strictly
 refines the other and dispatch surfaces `AmbiguousDispatch` rather than letting
 declaration order silently pick a winner. The
 [`is_more_specific_than`](../../src/machine/model/types/ktype_predicates.rs) walk

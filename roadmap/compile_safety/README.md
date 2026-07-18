@@ -51,7 +51,7 @@ by local discipline rather than by construction.
 
 | Hole | Direction | Loose surface | Call sites riding it |
 |---|---|---|---|
-| Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 4 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`, `ModuleSignature`); `KType` and `Scope` are un-recorded |
+| Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 3 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`); `KType` and `Scope` are un-recorded |
 | [Cross-region pin cycles](../scheduler_library/region-debug-audits.md) | over-pin | reach sets holding `Rc<FrameStorage>` members with no cycle detection (`region.rs`) | 3 reach-mint doors in `scope.rs` (`mint_reach`, `mint_resident_reach`, `adopt_into`) |
 | Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_ktype_folded` / `alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
 | Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
@@ -61,7 +61,6 @@ by local discipline rather than by construction.
 | Carrier reach co-location | under-pin | `resident_*_carrier` accept a `StoredReach<'r>` whose reach may be shorter-lived than the scope — co-location backed by the re-anchor pin, not the type ([scope.rs](../../src/machine/core/scope.rs)) | every `resident_type_carrier` / `resident_value_carrier` reader |
 | [Unfused reach-alloc doors](fused-reach-alloc-doors.md) | under-pin | the evidence-tier doors take the value and its `StoredReach` as independent parameters, so a value can be audited under a reach derived for another value ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_ktype_reaching` / `alloc_object_reaching` / `alloc_module_reaching` caller (`scope.rs`, `ascribe.rs`, `resolve_type_identifier.rs`, `kfunction/exec.rs`) |
 | [Untyped re-anchor pins](typed-fold-pins.md) | under-pin | the pinned fold verbs take any `Pin: Witness`, unlinked to the operand backing the re-anchor needs ([witnessed.rs](../../workgraph/src/witnessed.rs)) | every koan `map_pinned*` / `merge_pinned*` call site (`catch.rs`, `constructors.rs`, `literal.rs`), incl. the possibly-empty pin in `build_type_operand` |
-| Module member installs | under-pin | `AuditedStored for Module` audits only the child scope's region; the `type_members` / opaque-slot maps admit `KType`s post-store through `RefCell` with no audit ([arena.rs](../../src/machine/core/arena.rs), [module.rs](../../src/machine/model/values/module.rs)) | store sites empty by construction (`Module::new`); post-store installs in `module_def.rs` and `ascribe.rs` |
 | Evidence dead states | under-pin | `ResidenceEvidence` is a struct of `Option`s, so the meaningless ambient+seen state is representable and the family audits silently drop `seen` when `ambient` is present ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_resident_checked` evidence mint in `arena.rs` (none passes both today) |
 | Module reach union breadth | over-pin | `child_module_reach` unions every child binding-entry reach, including entries the module never exposes ([scope.rs](../../src/machine/core/scope.rs), `entry_reaches` in [bindings.rs](../../src/machine/core/bindings.rs)) | MODULE finish + both ascribe views |
 
@@ -121,22 +120,6 @@ by local discipline rather than by construction.
   the reach's backing arena would dangle. Candidate: a witness bound tying the
   carried reach to its re-anchor pin, so co-location is typed rather than
   disciplined.
-
-- **Module member installs.** The `AuditedStored for Module` audit
-  ([arena.rs](../../src/machine/core/arena.rs)) vets only
-  `value.child_scope().region()`, while `Module` also carries region-borrowing
-  `KType`s in its `type_members` and opaque-slot maps
-  ([module.rs](../../src/machine/model/values/module.rs)). Sound at store time
-  only because `Module::new` always stores the maps empty — an honest-partial
-  the impl's SAFETY comment does not state. After the store, `RefCell` interior
-  mutability admits `KType`s with no audit at all: the module finish
-  ([module_def.rs](../../src/builtins/module_def.rs)) and ascription
-  ([ascribe.rs](../../src/builtins/ascribe.rs)) install minted types into an
-  already-stored module — a move-in channel no door vets. An installed `KType`
-  borrowing a region the module's coverage does not name would under-pin
-  silently. Candidate: state the honest-partial in the impl's SAFETY comment,
-  and route installs through a checked door that audits each installed `KType`
-  against the module's region and evidence.
 
 - **Evidence dead states.** `ResidenceEvidence`
   ([arena.rs](../../src/machine/core/arena.rs)) mirrors `Residence`'s evidence

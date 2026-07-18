@@ -63,16 +63,16 @@ in the type layer reaches for ambient static state.
 The registry owns every node outright, so nodes contain only owned data. The division
 of labor is:
 
-- **Values hold scopes.** `Module` and `ModuleSignature` are runtime *values*; they
-  keep their captured scope pointers (`child_scope`, `decl_scope`) exactly as any
-  closure-like value does, and they live in regions under the ordinary value rules.
+- **Values hold scopes.** `Module` is a runtime *value*; it keeps its captured scope
+  pointer (`child_scope`) exactly as any closure-like value does, and it lives in a
+  region under the ordinary value rules.
 - **Types are content.** The *type* extracted from such a value owns what it needs and
   points at nothing: a signature node stores the owned schema (abstract members,
   manifest members, `VAL`-slot types — each member itself a composition edge to a type
   node), the `ScopeId` sig-id used for same-declaration specificity refinement, and
   the diagnostic path string.
 
-There is no `SigSource`: the empty signature, a `SIG`-declared interface, and a
+The empty signature, a `SIG`-declared interface, and a
 module's self-sig are all the same kind of node — a signature node over its schema.
 The empty signature is a node whose schema has no members; an empty interface is an
 empty interface, so it and the module-lattice top `:Module` are one type (the digest
@@ -168,13 +168,11 @@ registries.
 The registry home and its verdict edges are shipped
 ([`registry.rs`](../../src/machine/model/types/registry.rs)); the storage model —
 everything this doc says about nodes, handles, and composition edges — lands through
-three further roadmap items. Until they ship, type content is owned by each `KType`
-value (`Box`/`Vec` children, `Rc<RecursiveSet>` transport, `Signature` region pointers
-behind `SigSource`), and `KType` carries a lifetime parameter and is `Clone` not
+two further roadmap items. Until they ship, type content is owned by each `KType`
+value (`Box`/`Vec` children, `Rc<RecursiveSet>` transport, `Rc<SigContent>` for a
+signature's schema), and `KType` carries a lifetime parameter and is `Clone` not
 `Copy`.
 
-- [Signature types own their schema](../../roadmap/type_memos/signature-schema-ownership.md)
-  — collapses `SigSource` into owned signature content.
 - [KType without a lifetime parameter](../../roadmap/type_memos/lifetime-free-ktype.md)
   — deletes the lifetime parameter and the type-side residence machinery.
 - [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
