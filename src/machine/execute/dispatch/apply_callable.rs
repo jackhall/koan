@@ -110,17 +110,39 @@ fn apply_constructor<'step>(
                 constructors::dispatch_construct_newtype(identity, reach, expr.parts[1..].to_vec())
             }
         },
-        ProjectedSchema::TypeConstructor { schema, .. } => match extract_call_body(expr) {
-            Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                Rc::clone(set),
-                *index,
-                Rc::new(schema),
-                reach,
-                parts,
-            ),
-            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-            Err(e) => Outcome::Done(Err(e)),
-        },
+        // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
+        // empty schema is a user-declared constructor family (`NEWTYPE (Type AS Wrapper)`); it
+        // constructs an identity-wrapper `Wrapped` value, unless it is the `TYPE`-declared
+        // abstract slot (sentinel scope id), which names a kind but constructs nothing.
+        ProjectedSchema::TypeConstructor { schema, .. } if !schema.is_empty() => {
+            match extract_call_body(expr) {
+                Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
+                    Rc::clone(set),
+                    *index,
+                    Rc::new(schema),
+                    reach,
+                    parts,
+                ),
+                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+                Err(e) => Outcome::Done(Err(e)),
+            }
+        }
+        ProjectedSchema::TypeConstructor { .. } => {
+            if set.member(*index).scope_id == crate::machine::ScopeId::SENTINEL {
+                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "`{}` is an abstract constructor slot declared by TYPE; only a \
+                     NEWTYPE-declared constructor can construct values",
+                    set.member(*index).name
+                )))));
+            }
+            match extract_call_body(expr) {
+                Ok(CallBody::Positional(parts)) => {
+                    constructors::dispatch_construct_apply(Rc::clone(set), *index, reach, parts)
+                }
+                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+                Err(e) => Outcome::Done(Err(e)),
+            }
+        }
     }
 }
 

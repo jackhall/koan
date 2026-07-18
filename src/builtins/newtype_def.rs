@@ -874,4 +874,205 @@ mod tests {
             "expected a shape error for a missing AS, got {err}",
         );
     }
+
+    /// `Wrapper (3.0)` over a `NEWTYPE (Type AS Wrapper)` family constructs a `Wrapped`
+    /// whose payload is the bare `Number` and whose `type_id` is
+    /// `ConstructorApply(Wrapper, [Number])` — the value inhabits `:(Number AS Wrapper)`.
+    #[test]
+    fn apply_construct_wraps_and_stamps() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE (Type AS Wrapper)");
+        let result = run_one(scope, parse_one("Wrapper (3.0)"));
+        match result {
+            KObject::Wrapped { inner, type_id } => {
+                match **type_id {
+                    KType::ConstructorApply {
+                        ref ctor, ref args, ..
+                    } => {
+                        match ctor.as_ref() {
+                            KType::SetRef { set, index } => {
+                                assert_eq!(set.member(*index).name, "Wrapper");
+                                assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
+                            }
+                            other => panic!("expected a SetRef ctor, got {other:?}"),
+                        }
+                        assert_eq!(*args, vec![KType::Number]);
+                    }
+                    ref other => panic!("expected a ConstructorApply type_id, got {other:?}"),
+                }
+                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+            }
+            other => panic!("expected Wrapped, got {:?}", other.ktype()),
+        }
+    }
+
+    /// `Wrapper (Distance (3.0))` collapses the inner `Wrapped` payload — the stored `inner`
+    /// is the bare `Number`, never a nested `Wrapped` (the single-layer invariant) — while the
+    /// stamped arg keeps the full `Distance` nominal identity: args are `[Distance's SetRef]`.
+    #[test]
+    fn apply_construct_collapses_wrapped_payload() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "NEWTYPE Distance = Number\nNEWTYPE (Type AS Wrapper)",
+        );
+        let result = run_one(scope, parse_one("Wrapper (Distance (3.0))"));
+        match result {
+            KObject::Wrapped { inner, type_id } => {
+                // Single-layer invariant: the collapsed inner is the bare Number, not a Wrapped.
+                assert!(
+                    matches!(inner.get(), KObject::Number(n) if *n == 3.0),
+                    "inner must be the bare Number, got {:?}",
+                    inner.get().ktype(),
+                );
+                match **type_id {
+                    KType::ConstructorApply { ref args, .. } => {
+                        assert_eq!(args.len(), 1);
+                        // The stamped arg keeps the Distance identity (a NewType SetRef).
+                        match &args[0] {
+                            KType::SetRef { set, index } => {
+                                assert_eq!(set.member(*index).name, "Distance");
+                                assert_eq!(set.member(*index).kind, KKind::NewType);
+                            }
+                            other => panic!("expected the Distance SetRef arg, got {other:?}"),
+                        }
+                    }
+                    ref other => panic!("expected a ConstructorApply type_id, got {other:?}"),
+                }
+            }
+            other => panic!("expected Wrapped, got {:?}", other.ktype()),
+        }
+    }
+
+    /// `Wrapper ()` — no value — is an arity-zero rejection.
+    #[test]
+    fn apply_construct_arity_zero_rejects() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE (Type AS Wrapper)");
+        let err = run_one_err(scope, parse_one("Wrapper ()"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ArityMismatch { expected: 1, got: 0 }),
+            "expected ArityMismatch(1, 0), got {err}",
+        );
+    }
+
+    /// A `FN` param typed `:(Number AS Wrapper)` admits a matching `Wrapper (3.0)` value,
+    /// rejects a bare `3.0` (not a `Wrapped`), and rejects a `(Str AS Wrapper)` value
+    /// (`Wrapper ("s")` — the stamped arg is `Str`, not `Number`).
+    #[test]
+    fn applied_type_dispatches() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "NEWTYPE (Type AS Wrapper)\n\
+             FN (UNPACK x :(Number AS Wrapper)) -> Str = (\"hit\")",
+        );
+        // A matching applied-type value dispatches.
+        let hit = run_one(scope, parse_one("UNPACK (Wrapper (3.0))"));
+        assert!(
+            matches!(hit, KObject::KString(s) if s == "hit"),
+            "Wrapper (3.0) must dispatch, got {:?}",
+            hit.ktype(),
+        );
+        // A bare Number is not a Wrapped value — dispatch fails.
+        expect_dispatch_failure(scope, "UNPACK 3.0");
+        // A (Str AS Wrapper) value: the stamped arg is Str, not Number — dispatch fails.
+        expect_dispatch_failure(scope, "UNPACK (Wrapper (\"s\"))");
+    }
+
+    /// Run `probe` against `scope` and assert it fails dispatch (a slot-terminal
+    /// `DispatchFailed`, not a fatal execute error).
+    fn expect_dispatch_failure<'a>(scope: &'a Scope<'a>, probe: &str) {
+        let mut runtime = KoanRuntime::new();
+        let root = runtime.dispatch_in_scope(parse_one(probe), scope);
+        runtime
+            .execute()
+            .expect("a dispatch failure is slot-terminal, not a fatal execute error");
+        let err = runtime
+            .result_error(root)
+            .expect_err("probe should fail dispatch");
+        assert!(
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected DispatchFailed for `{probe}`, got {err}",
+        );
+    }
+
+    /// Two `Wrapper (3.0)` values compare `==` true (structural `Wrapped` equality); a
+    /// `Wrapper (3.0)` and a `Wrapper ("x")` compare false.
+    #[test]
+    fn applied_values_are_value_equal() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE (Type AS Wrapper)");
+        match run_one(scope, parse_one("(Wrapper (3.0)) == (Wrapper (3.0))")) {
+            KObject::Bool(b) => assert!(*b, "two Wrapper (3.0) must compare equal"),
+            other => panic!("expected Bool, got {:?}", other.ktype()),
+        }
+        match run_one(scope, parse_one("(Wrapper (3.0)) == (Wrapper (\"x\"))")) {
+            KObject::Bool(b) => assert!(!*b, "Wrapper (3.0) and Wrapper (\"x\") must differ"),
+            other => panic!("expected Bool, got {:?}", other.ktype()),
+        }
+    }
+
+    /// A record-literal payload rides through as a single positional value; ATTR projects a
+    /// field of it through the `Wrapped` layer.
+    #[test]
+    fn attr_projects_record_payload() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "NEWTYPE (Type AS Wrapper)\nLET w = (Wrapper ({x = 1.0}))",
+        );
+        let result = run_one(scope, parse_one("w.x"));
+        assert!(matches!(result, KObject::Number(n) if *n == 1.0));
+    }
+
+    /// A `:(Any AS Wrapper)` param admits every instantiation of the family — `Wrapper (3.0)`
+    /// and `Wrapper ("s")` both dispatch (the `Any` slot arg admits any stamped arg) — while a
+    /// bare `3.0` (not a `Wrapped`) still fails.
+    #[test]
+    fn applied_any_slot_admits_all_instantiations() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(
+            scope,
+            "NEWTYPE (Type AS Wrapper)\n\
+             FN (ANYUNPACK x :(Any AS Wrapper)) -> Str = (\"hit\")",
+        );
+        for probe in ["ANYUNPACK (Wrapper (3.0))", "ANYUNPACK (Wrapper (\"s\"))"] {
+            let hit = run_one(scope, parse_one(probe));
+            assert!(
+                matches!(hit, KObject::KString(s) if s == "hit"),
+                "`{probe}` must dispatch, got {:?}",
+                hit.ktype(),
+            );
+        }
+        expect_dispatch_failure(scope, "ANYUNPACK 3.0");
+    }
+
+    /// A `TYPE`-declared abstract constructor slot (sentinel scope id) names a kind but
+    /// constructs nothing: constructing over it is a `ShapeError`, not a `Wrapped` value.
+    #[test]
+    fn abstract_constructor_slot_rejects_construction() {
+        use crate::machine::BindingIndex;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let kt = crate::builtins::type_decl::mint_type_constructor(
+            "Abstract".into(),
+            vec!["Type".into()],
+            ScopeId::SENTINEL,
+        );
+        scope.register_builtin_type("Abstract".into(), kt, BindingIndex::BUILTIN);
+        let err = run_one_err(scope, parse_one("Abstract (3.0)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("abstract constructor slot declared by TYPE")),
+            "expected the abstract-constructor-slot ShapeError, got {err}",
+        );
+    }
 }

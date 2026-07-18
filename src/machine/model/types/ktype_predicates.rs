@@ -15,6 +15,33 @@ use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::{Carried, Held, KObject, ModuleSignature};
 use crate::machine::DeliveredCarried;
 
+/// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
+/// slot: the ctor nominal `(set, index)` matches via [`same_nominal`], the arities agree, and
+/// each arg matches pairwise (`Any` slot admits anything, else structural equality). Both ctors
+/// must be `SetRef`s. Cross-lifetime — the value's `'v` is independent of the slot's `'a`, so
+/// this drives both the same-lifetime [`KType::matches_value`] `Wrapped` arm and the
+/// heterogeneous [`KType::accepts_carried`] dispatch arm.
+fn constructor_apply_admits<'a, 'v>(
+    slot_ctor: &KType<'a>,
+    slot_args: &[KType<'a>],
+    value_ctor: &KType<'v>,
+    value_args: &[KType<'v>],
+) -> bool {
+    let ctor_matches = matches!(
+        (slot_ctor, value_ctor),
+        (
+            KType::SetRef { set: cset, index: ci },
+            KType::SetRef { set: vset, index: vi },
+        ) if same_nominal(cset, *ci, vset, *vi)
+    );
+    ctor_matches
+        && value_args.len() == slot_args.len()
+        && value_args
+            .iter()
+            .zip(slot_args.iter())
+            .all(|(value_arg, slot_arg)| matches!(slot_arg, KType::Any) || value_arg == slot_arg)
+}
+
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
@@ -360,6 +387,19 @@ impl<'a> KType<'a> {
                         None => true,
                     }
                 }
+                // An identity-wrapper value (`NEWTYPE (Type AS Wrapper)`): its `type_id` is itself
+                // a `ConstructorApply`. Match the ctor nominal `(set, index)` via `same_nominal`
+                // (both ctors are `SetRef`s), then check the stamped args pairwise by the same rule
+                // the stamped-`type_args` `Tagged` path uses (`Any` slot admits anything).
+                KObject::Wrapped {
+                    type_id:
+                        KType::ConstructorApply {
+                            ctor: vctor,
+                            args: vargs,
+                            ..
+                        },
+                    ..
+                } => constructor_apply_admits(ctor, args, vctor, vargs),
                 _ => false,
             },
             // A sealed nominal slot admits a value whose `ktype()` reports the same
@@ -488,11 +528,25 @@ impl<'a> KType<'a> {
             KType::RecursiveGroup(_) => false,
             // Confined to a synthesized FN `ret` slot — never a free-standing argument slot.
             KType::DeferredReturn(_) => false,
-            // Meta-type path: no runtime carrier synthesizes a `ConstructorApply` `ktype()`, so admit
-            // only a `Carried::Type` with structurally-equal inner `KType`.
-            KType::ConstructorApply { .. } => match c {
+            // Two carriers satisfy a `ConstructorApply` slot: a first-class meta-type value with a
+            // structurally-equal inner `KType`, and an identity-wrapper `Wrapped` object whose
+            // `ktype()` is itself a `ConstructorApply` (a `NEWTYPE (Type AS Wrapper)`-constructed
+            // value) — admitted by the same ctor-nominal + per-arg rule the `matches_value` arm uses,
+            // taken cross-lifetime.
+            KType::ConstructorApply {
+                ctor: slot_ctor,
+                args: slot_args,
+                ..
+            } => match c {
                 Carried::Type(kt) => kt == self,
-                _ => false,
+                Carried::Object(obj) => match obj.ktype() {
+                    KType::ConstructorApply {
+                        ctor: value_ctor,
+                        args: value_args,
+                        ..
+                    } => constructor_apply_admits(slot_ctor, slot_args, &value_ctor, &value_args),
+                    _ => false,
+                },
             },
         }
     }

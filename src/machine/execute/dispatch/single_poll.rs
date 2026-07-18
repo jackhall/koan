@@ -62,6 +62,18 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
         /// today; it names the set's region once `RecursiveSet` is region-allocated.
         reach: StoredReach<'step>,
     },
+    /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
+    /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
+    /// expression; the finish stamps the value's full type as the sole applied arg, peels any
+    /// `Wrapped` layer, and wraps the payload with a fresh `ConstructorApply(Wrapper, [<arg>])`
+    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`. `reach` is the ctor
+    /// `SetRef` identity's stored per-binding type token, folded into the construction operand's
+    /// witness so it names the set's region once `RecursiveSet` is region-allocated.
+    ApplyConstructor {
+        set: Rc<RecursiveSet<'step>>,
+        index: usize,
+        reach: StoredReach<'step>,
+    },
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and

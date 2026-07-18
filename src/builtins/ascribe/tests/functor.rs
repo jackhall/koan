@@ -285,6 +285,57 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
+/// The monad program of record: a `NEWTYPE (Type AS Wrapper)` family, a SIG whose `pure` VAL
+/// slot returns `:(Number AS Wrap)`, and a module supplying `Wrap = Wrapper` plus a `pure` whose
+/// body constructs `Wrapper (x)`. Returned as a source string reused by the end-to-end tests.
+fn monad_program() -> &'static str {
+    "NEWTYPE (Type AS Wrapper)\n\
+     SIG Monad = ((TYPE (Type AS Wrap)) (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))\n\
+     MODULE id_monad = ((LET Wrap = Wrapper) \
+     (LET pure = (FN (PURE x :Number) -> :(Number AS Wrapper) = (Wrapper (x)))))"
+}
+
+/// `id_monad :| Monad` succeeds: `substitute_sig_members` substitutes the SIG's `Wrap` slot to
+/// the module's `Wrapper` and descends the `pure` VAL slot's `ConstructorApply` return type, so
+/// the module's `pure` (returning `:(Number AS Wrapper)`) satisfies the substituted
+/// `:(Number AS Wrap)` slot end to end.
+#[test]
+fn hk_value_slot_satisfies_after_substitution() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, monad_program());
+    run(scope, "LET view = (id_monad :| Monad)");
+    assert!(
+        matches!(
+            lookup_module(scope, "view"),
+            m if m.child_scope().bindings().data().get("pure").is_some()
+        ),
+        "id_monad must satisfy Monad and bind a view module carrying `pure`",
+    );
+}
+
+/// `(id_monad.pure {x = 3.0})` runs the module's `pure`, whose declared return type
+/// `:(Number AS Wrapper)` is checked via `matches_value` against the constructed
+/// `Wrapper (x)` — the per-call return check passing on an identity-wrapper value.
+#[test]
+fn pure_call_passes_return_check() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, monad_program());
+    let result = run_one(scope, parse_one("id_monad.pure {x = 3.0}"));
+    match result {
+        KObject::Wrapped { inner, type_id } => {
+            assert!(
+                matches!(**type_id, KType::ConstructorApply { .. }),
+                "pure must return an identity-wrapper value, got {:?}",
+                type_id,
+            );
+            assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
+        }
+        other => panic!("expected Wrapped from pure, got {:?}", other.ktype()),
+    }
+}
+
 /// A bare Type-classified argument (`MAKESET int_ord_a`) auto-wraps to a value lookup
 /// just like the lowercase-identifier and parens-wrapped forms do.
 #[test]

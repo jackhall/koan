@@ -157,6 +157,42 @@ fn check_newtype_repr<'a>(identity: &KType<'a>, value: &KObject<'a>) -> Result<b
     Ok(collapse)
 }
 
+/// Construct an identity-wrapper value over a `NEWTYPE (Type AS Wrapper)`-declared constructor
+/// family. Mirrors [`dispatch_construct_newtype`]'s body shape: a single redundant `(...)` paren
+/// group unwraps so `(Wrapper 3.0)` / `Wrapper (3.0)` construct identically and `Wrapper ()` is
+/// arity-zero; a single part dispatches directly, a multi-part value wraps as one value cell. The
+/// finish ([`finish_witnessed`]'s `ApplyConstructor` arm) stamps the value's type as the applied
+/// arg and wraps it with a `ConstructorApply(<ctor SetRef>, [arg])` identity.
+pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
+    set: Rc<RecursiveSet<'step>>,
+    index: usize,
+    reach: StoredReach<'step>,
+    mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+) -> Outcome<'step> {
+    if let [Spanned {
+        value: ExpressionPart::Expression(inner),
+        ..
+    }] = value_parts.as_slice()
+    {
+        value_parts = inner.parts.clone();
+    }
+    if value_parts.is_empty() {
+        return Outcome::Done(Err(KError::new(KErrorKind::ArityMismatch {
+            expected: 1,
+            got: 0,
+        })));
+    }
+    let value_cell = if value_parts.len() == 1 {
+        value_parts.into_iter().next().expect("len == 1").value
+    } else {
+        ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
+    };
+    launch(
+        vec![value_cell],
+        CtorKind::ApplyConstructor { set, index, reach },
+    )
+}
+
 /// Direct-construct a tagged-union value from the projected schema of its sealed
 /// `RecursiveSet` member. Shared by named UNIONs (`Tagged` kind) and the builtin `Result`
 /// constructor (`TypeConstructor` kind) — both reference a sealed member.
@@ -427,6 +463,48 @@ fn finish_witnessed<'step>(
                             set,
                             index,
                             type_args: Rc::new(vec![]),
+                        }))
+                    },
+                ))
+        }
+        CtorKind::ApplyConstructor { set, index, reach } => {
+            debug_assert_eq!(terminals.len(), 1);
+            // The ctor `SetRef` identity crosses the brand as a `&KType` so the built value's
+            // `ConstructorApply` type id names the ctor's set/index at the brand. Freshly minted
+            // in the dest region, so `reach` is empty today; the operand `merge`s it under the
+            // dest frame's yoke plus that reach.
+            let identity: &KType<'step> = region.alloc_ktype_checked(KType::SetRef {
+                set: Rc::clone(set),
+                index: *index,
+            })?;
+            let home = build_type_operand(scope, view.dest_frame(), identity, *reach);
+            Ok(terminals[0]
+                .delivered
+                .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
+                    home,
+                    Residence::Copied,
+                    move |value, (_region, identity_ty), placement| {
+                        let region = FoldingBrand::in_fold_closure(placement);
+                        // Stamp the value's FULL type — including a `Wrapped` payload's own
+                        // nominal identity — as the sole applied arg before collapsing.
+                        let arg = value.object().ktype();
+                        // Collapse: peel any single `Wrapped` layer so `Wrapped.inner` is never
+                        // itself `Wrapped` (the single-layer invariant); the peeled identity is
+                        // not lost — it lives in `arg`.
+                        let inner = if matches!(value.object(), KObject::Wrapped { .. }) {
+                            WrappedPayload::peel(value.object())
+                        } else {
+                            WrappedPayload::hold(value.object())
+                        };
+                        // The type id is a fresh `ConstructorApply(<ctor SetRef>, [arg])`, allocated
+                        // at the fold brand — `arg` may borrow the value's region, folded in here.
+                        let type_id = region.alloc_ktype_folded(KType::constructor_apply(
+                            Box::new(identity_ty.clone()),
+                            vec![arg],
+                        ));
+                        Carried::Object(region.alloc_object_folded(KObject::Wrapped {
+                            inner,
+                            type_id,
                         }))
                     },
                 ))
