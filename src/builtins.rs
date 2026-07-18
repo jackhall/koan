@@ -11,6 +11,7 @@ mod await_body;
 mod block_tail;
 mod branch_walk;
 mod catch;
+mod equality;
 mod eval;
 mod fn_def;
 mod group_def;
@@ -228,6 +229,7 @@ pub fn default_scope<'a>(
     group_def::register(scope);
     arithmetic::register(scope);
     arithmetic::register_builtin_operator_groups(scope);
+    equality::register(scope);
 
     run_storage.brand().alloc_scope(Scope::run_child(scope))
 }

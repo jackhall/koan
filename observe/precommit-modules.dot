@@ -8,6 +8,7 @@ digraph {
     "koan::builtins::block_tail" [label="koan::builtins::block_tail"];
     "koan::builtins::branch_walk" [label="koan::builtins::branch_walk"];
     "koan::builtins::catch" [label="koan::builtins::catch"];
+    "koan::builtins::equality" [label="koan::builtins::equality"];
     "koan::builtins::eval" [label="koan::builtins::eval"];
     "koan::builtins::fn_def" [label="koan::builtins::fn_def"];
     "koan::builtins::fn_def::finalize" [label="koan::builtins::fn_def::finalize"];
@@ -138,6 +139,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::block_tail" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::branch_walk" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::catch" [label="owns", style="solid"];
+    "koan::builtins" -> "koan::builtins::equality" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::eval" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::fn_def" [label="owns", style="solid"];
     "koan::builtins" -> "koan::builtins::group_def" [label="owns", style="solid"];
@@ -276,6 +278,9 @@ digraph {
     "koan::builtins::catch" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::catch" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::equality" -> "koan::builtins" [label="uses", style="dashed"];
+    "koan::builtins::equality" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::builtins::equality" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::builtins::block_tail" [label="uses", style="dashed"];
     "koan::builtins::eval" -> "koan::machine" [label="uses", style="dashed"];

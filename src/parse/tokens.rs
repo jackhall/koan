@@ -1,13 +1,13 @@
 //! Token classification: turn each whitespace-delimited word into a
 //! `Spanned<ExpressionPart>`. Recognizes literals, classifies non-literal atoms into
-//! keywords / types / identifiers, and desugars compound atoms (`a.b`, `a[i]`, `!a`)
+//! keywords / types / identifiers, and desugars compound atoms (`a.b`, `a?`)
 //! into nested `ExpressionPart`s using the `operators` table.
 //!
-//! A pure-symbol token that is not a builtin compound trigger (`+`, `|`, `<=`) reaches
+//! A pure-symbol token that is not a builtin compound trigger (`+`, `|`, `<=`, `==`, `!=`) reaches
 //! `classify_atom` and tags as a `Keyword`, so a post-parse chain detector recognizes
-//! user operators. Builtin triggers (`.`/`?`/`!`) keep their compound desugaring.
+//! user operators. Builtin triggers (`.`/`?`) keep their compound desugaring.
 //!
-//! Synthetic operator keywords (ATTR / NOT / TRY) take 1-codepoint trigger spans;
+//! Synthetic operator keywords (ATTR / TRY) take 1-codepoint trigger spans;
 //! mid-token errors attach the enclosing token's span so the message names the
 //! offending char while the span pinpoints the token.
 //!
@@ -22,7 +22,7 @@ use regex::Regex;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeIdentifier};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
-use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
+use crate::parse::operators::{find_suffix, is_atom_terminator, SuffixOp};
 use crate::source::{Span, Spanned};
 
 static FLOAT: LazyLock<Regex> =
@@ -142,14 +142,6 @@ fn parse_compound<'a>(
     start: u32,
     token_span: Span,
 ) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let mut prefixes: Vec<(UnaryBuild, Span)> = Vec::new();
-    while let Some(&(ci, c)) = chars.peek() {
-        let Some(build) = find_prefix(c) else { break };
-        chars.next();
-        let trigger = trigger_span(start, ci, c);
-        prefixes.push((build, trigger));
-    }
-
     let mut expr = read_atom(chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
@@ -165,9 +157,6 @@ fn parse_compound<'a>(
         };
     }
 
-    for (build, trigger) in prefixes.into_iter().rev() {
-        expr = build(expr, trigger);
-    }
     Ok(expr)
 }
 
@@ -310,21 +299,9 @@ mod tests {
     }
 
     #[test]
-    fn negation() {
-        assert_eq!(classify("!foo").unwrap(), "[t(NOT) t(foo)]");
-    }
-
-    #[test]
-    fn double_negation() {
-        assert_eq!(classify("!!foo").unwrap(), "[t(NOT) [t(NOT) t(foo)]]");
-    }
-
-    #[test]
-    fn negation_over_attr() {
-        assert_eq!(
-            classify("!foo.bar").unwrap(),
-            "[t(NOT) [t(ATTR) t(foo) t(bar)]]"
-        );
+    fn bang_prefix_does_not_desugar() {
+        // `!` is not a compound trigger, so `!foo` is an invalid-character identifier, not `NOT foo`.
+        assert!(classify("!foo").is_err());
     }
 
     #[test]
@@ -354,8 +331,12 @@ mod tests {
     }
 
     #[test]
-    fn bare_bang_errors() {
-        assert!(classify("!").is_err());
+    fn bang_and_bang_equals_are_keywords() {
+        // `!` is not a compound trigger, so pure-symbol tokens beginning with it classify as
+        // operator keywords: `!=` is the not-equal operator, and a bare `!` is an operator keyword
+        // (unbound, so it fails at dispatch, not at tokenization).
+        assert_eq!(classify("!=").unwrap(), "t(!=)");
+        assert_eq!(classify("!").unwrap(), "t(!)");
     }
 
     #[test]
@@ -374,11 +355,6 @@ mod tests {
             classify("foo.bar?").unwrap(),
             "[t(TRY) [t(ATTR) t(foo) t(bar)]]"
         );
-    }
-
-    #[test]
-    fn negation_over_suffix() {
-        assert_eq!(classify("!foo?").unwrap(), "[t(NOT) [t(TRY) t(foo)]]");
     }
 
     #[test]

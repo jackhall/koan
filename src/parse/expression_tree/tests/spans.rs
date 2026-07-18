@@ -88,16 +88,6 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
 }
 
 #[test]
-fn prefix_negation_trigger_is_one_byte_span() {
-    let exprs = top("!foo");
-    let outer = &exprs[0];
-    assert_eq!(span_of(outer), Some(s(0, 4)));
-    assert!(matches!(outer.parts[0].value, ExpressionPart::Keyword(ref k) if k == "NOT"));
-    assert_eq!(outer.parts[0].span, Some(s(0, 1)));
-    assert_eq!(outer.parts[1].span, Some(s(1, 4)));
-}
-
-#[test]
 fn list_literal_wrapper_spans_brackets_inclusive() {
     let exprs = top("[1 2 3]");
     let outer = &exprs[0];
