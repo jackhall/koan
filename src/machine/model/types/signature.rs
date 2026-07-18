@@ -2,8 +2,8 @@
 //! mix of fixed `Keyword` tokens and typed `Argument` slots, plus a `return_type`.
 //! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
-//! Not to be confused with the **module-signature** type (`SIG`-declared) at
-//! [`crate::machine::model::values::module::ModuleSignature`].
+//! Not to be confused with the **module-signature** content (`SIG`-declared) at
+//! [`crate::machine::model::types::sig_schema::SigContent`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so return types that
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
@@ -318,8 +318,8 @@ pub enum SignatureElement<'a> {
 }
 
 /// `name` keys the slot in the bound argument record; `ktype` gates what `ExpressionPart`s it
-/// accepts. `'a` because the declared `KType` may reference region-pinned `Module` /
-/// `ModuleSignature` carriers.
+/// accepts. `'a` threads through the declared `KType`'s own container/signature-content
+/// lifetime (vestigial — no variant borrows region data).
 pub struct Argument<'a> {
     pub name: String,
     pub ktype: KType<'a>,

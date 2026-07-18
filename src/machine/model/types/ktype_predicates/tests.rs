@@ -295,7 +295,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::{Module, ModuleSignature};
+    use crate::machine::model::values::Module;
+    use crate::machine::model::{SigContent, SigSchema};
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let t = KType::OfKind(KKind::AnyType);
@@ -338,12 +339,17 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         .alloc_object_checked(KObject::Module(module))
         .expect("module was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value)), &types));
-    let sig = region
+    let sig_scope = region
         .brand()
-        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
+        .alloc_scope(crate::machine::Scope::child_under_sig(
+            scope,
+            "Ordered".into(),
+        ));
+    let schema = SigSchema::project_decl(sig_scope);
+    let content = Rc::new(SigContent::new("Ordered".into(), sig_scope.id, schema));
     let kt_sig: &KType<'_> = region
         .brand()
-        .alloc_ktype_checked(KType::signature(SigSource::Declared(sig), Vec::new()))
+        .alloc_ktype_checked(KType::signature(content, Vec::new()))
         .expect("sig was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     let n: &KObject<'_> = region.brand().alloc_object(KObject::Number(7.0));
@@ -449,7 +455,7 @@ fn is_more_specific_for_pinned_signature_bound() {
     let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::ModuleSignature;
+    use crate::machine::model::{SigContent, SigSchema};
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     // Two distinct decl_scopes → two distinct `sig_id`s.
@@ -465,34 +471,26 @@ fn is_more_specific_for_pinned_signature_bound() {
             scope,
             "Hashed".into(),
         ));
-    let ordered = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("Ordered".into(), ordered_scope));
-    let hashed = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("Hashed".into(), hashed_scope));
+    let ordered = Rc::new(SigContent::new(
+        "Ordered".into(),
+        ordered_scope.id,
+        SigSchema::project_decl(ordered_scope),
+    ));
+    let hashed = Rc::new(SigContent::new(
+        "Hashed".into(),
+        hashed_scope.id,
+        SigSchema::project_decl(hashed_scope),
+    ));
 
-    let bare = KType::signature(SigSource::Declared(ordered), Vec::new());
-    let pinned_number = KType::signature(
-        SigSource::Declared(ordered),
-        vec![("Type".into(), KType::Number)],
-    );
-    let pinned_str = KType::signature(
-        SigSource::Declared(ordered),
-        vec![("Type".into(), KType::Str)],
-    );
+    let bare = KType::signature(Rc::clone(&ordered), Vec::new());
+    let pinned_number = KType::signature(Rc::clone(&ordered), vec![("Type".into(), KType::Number)]);
+    let pinned_str = KType::signature(Rc::clone(&ordered), vec![("Type".into(), KType::Str)]);
     let pinned_two = KType::signature(
-        SigSource::Declared(ordered),
+        Rc::clone(&ordered),
         vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
     );
-    let other_sig = KType::signature(
-        SigSource::Declared(hashed),
-        vec![("Type".into(), KType::Number)],
-    );
-    let pinned_elt = KType::signature(
-        SigSource::Declared(ordered),
-        vec![("Elt".into(), KType::Number)],
-    );
+    let other_sig = KType::signature(hashed, vec![("Type".into(), KType::Number)]);
+    let pinned_elt = KType::signature(ordered, vec![("Elt".into(), KType::Number)]);
 
     assert!(pinned_number.is_more_specific_than(&bare, &types));
     assert!(!bare.is_more_specific_than(&pinned_number, &types));
@@ -886,11 +884,14 @@ fn module_object_ktype_reports_self_sig() {
     let kt = KObject::Module(m).ktype();
     assert!(matches!(
         &kt,
-        KType::Signature { sig: SigSource::SelfOf(mm), pinned_slots, .. }
-            if mm.scope_id() == m.scope_id() && pinned_slots.is_empty()
+        KType::Signature { content, pinned_slots, .. }
+            if content.sig_id == m.scope_id() && pinned_slots.is_empty()
     ));
     // Identity is content: the same module equals its own re-derived signature.
-    assert_eq!(kt, KType::signature(SigSource::SelfOf(m), Vec::new()));
+    assert_eq!(
+        kt,
+        KType::signature(Rc::clone(m.self_sig_content()), Vec::new())
+    );
 
     // A second module with the identical interface shares the type — content, not mint.
     let child2 = region
@@ -925,8 +926,9 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let types = TypeRegistry::new();
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::values::{Module, ModuleSignature};
+    use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
+    use crate::machine::model::{SigContent, SigSchema};
     use crate::machine::Scope;
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
@@ -935,9 +937,11 @@ fn matches_value_admits_module_object_via_signature_slot() {
     let sig_scope = region
         .brand()
         .alloc_scope(Scope::child_under_sig(scope, "S".into()));
-    let sig = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("S".into(), sig_scope));
+    let sig = Rc::new(SigContent::new(
+        "S".into(),
+        sig_scope.id,
+        SigSchema::project_decl(sig_scope),
+    ));
 
     let child = region
         .brand()
@@ -947,14 +951,11 @@ fn matches_value_admits_module_object_via_signature_slot() {
         .borrow_mut()
         .insert("Type".into(), KType::Number);
 
-    let declared = KType::signature(SigSource::Declared(sig), Vec::new());
+    let declared = KType::signature(Rc::clone(&sig), Vec::new());
     assert!(declared.matches_value(&KObject::Module(m), &types));
 
-    let pinned_ok = KType::signature(
-        SigSource::Declared(sig),
-        vec![("Type".into(), KType::Number)],
-    );
-    let pinned_bad = KType::signature(SigSource::Declared(sig), vec![("Type".into(), KType::Str)]);
+    let pinned_ok = KType::signature(Rc::clone(&sig), vec![("Type".into(), KType::Number)]);
+    let pinned_bad = KType::signature(sig, vec![("Type".into(), KType::Str)]);
     assert!(pinned_ok.matches_value(&KObject::Module(m), &types));
     assert!(!pinned_bad.matches_value(&KObject::Module(m), &types));
 
@@ -984,16 +985,13 @@ fn specificity_self_sig_refines_declared_and_empty() {
          MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
     );
     let sig = match scope.resolve_type("Ordered") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+        Some(KType::Signature { content, .. }) => Rc::clone(content),
         _ => panic!("Ordered must bind a Signature KType"),
     };
     let m = lookup_module(scope, "int_ord");
 
-    let self_of = KType::signature(SigSource::SelfOf(m), Vec::new());
-    let declared = KType::signature(SigSource::Declared(sig), Vec::new());
+    let self_of = KType::signature(Rc::clone(m.self_sig_content()), Vec::new());
+    let declared = KType::signature(sig, Vec::new());
     let empty = KType::empty_signature();
 
     // `SelfOf(m) ≺ Declared(sig)` because `m`'s self-sig satisfies `Ordered`.

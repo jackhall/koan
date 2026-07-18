@@ -55,7 +55,7 @@ pub struct Scope<'a> {
     /// scope built outside any `FrameStorage`.
     region_owner: Weak<FrameStorage>,
     /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
-    /// and on `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on
+    /// and on `KType::Signature { content, .. }` (via `content.sig_id`) so dispatch on
     /// user-declared types compares ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
@@ -463,12 +463,6 @@ impl<'a> Scope<'a> {
                 (None, ScopeKind::Root | ScopeKind::Anonymous) => None,
             })
             .flatten()
-    }
-
-    /// The declared type + stored reach of value slot `name` on THIS scope (a SIG decl scope),
-    /// or `None`. No ancestor walk — callers hold the decl scope directly.
-    pub(crate) fn sig_slot(&self, name: &str) -> Option<(&'a KType<'a>, StoredReach<'a>)> {
-        self.sig_slots.as_ref()?.borrow().get(name).copied()
     }
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read.

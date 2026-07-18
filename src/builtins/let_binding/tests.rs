@@ -1,5 +1,4 @@
 use crate::builtins::default_scope;
-use crate::machine::model::SigSource;
 use crate::machine::model::{KObject, KType};
 use crate::machine::KoanRuntime;
 
@@ -273,17 +272,13 @@ fn let_type_class_in_sig_body_binds_manifest() {
         scope,
         "SIG WithTag = ((LET Tag = Number) (VAL zero :Number))",
     );
-    let s = match scope.resolve_type("WithTag") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("WithTag") {
+        Some(KType::Signature { content, .. }) => content,
         other => panic!("WithTag should be a Signature KType, got {:?}", other),
     };
-    let decl_scope = s.decl_scope();
-    let bound = decl_scope
-        .resolve_type("Tag")
-        .expect("Tag binding should survive in the SIG types map after manifest LET");
+    let bound = content.schema.manifest_members.get("Tag").expect(
+        "Tag binding should survive in the SIG schema's manifest members after manifest LET",
+    );
     assert_eq!(
         *bound,
         KType::Number,

@@ -1,6 +1,6 @@
 //! `<sig> WITH {<Slot> = <Type>, …}` — infix signature specialization. Pins a subset of
 //! `sig`'s abstract-type slots, each to the type bound in the record literal, yielding a
-//! `KType::Signature { sig, pinned_slots }`. A pin naming a manifest member (its type already
+//! `KType::Signature { content, pinned_slots }`. A pin naming a manifest member (its type already
 //! fixed) is not an abstract slot: a pin equal to the fixed type normalizes away (leaving
 //! signature identity unchanged), and an unequal one is a type error.
 //!
@@ -11,10 +11,10 @@
 
 use std::collections::HashSet;
 
+use std::rc::Rc;
+
 use crate::machine::model::{Carried, Held, KObject, KType};
 use crate::machine::{KError, KErrorKind};
-
-use crate::machine::model::SigSource;
 
 /// `<sig> WITH {<Slot> = <Type>, …}`: reads the `sig` type cell and the eager-evaluated `bindings`
 /// record from `BodyCtx::args`, validates each pin against the SIG's abstract type slots, and
@@ -24,10 +24,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
     let done_err = |e: KError| Action::Done(Err(e));
     let s = match arg_type(ctx.args, "sig") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+        Some(KType::Signature { content, .. }) => content,
         other => {
             let got = match (other, arg_held(ctx.args, "sig")) {
                 (Some(kt), _) => kt.name(),
@@ -54,9 +51,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // A binding names either an abstract slot (recorded as a pin) or a manifest member (its
     // type is already fixed). Slot names are capitalized, so a lowercase / unknown key is in
     // neither set; no separate name-shape check is needed.
-    let abstract_slots: HashSet<String> = s.schema().abstract_members.keys().cloned().collect();
+    let abstract_slots: HashSet<String> = s.schema.abstract_members.keys().cloned().collect();
     let manifest_members: std::collections::HashMap<String, KType> = s
-        .schema()
+        .schema
         .manifest_members
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
@@ -121,7 +118,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 &[&sig_carrier, &bindings_carrier],
                 move |brand, views| {
                     let sig = match views[0] {
-                        Carried::Type(KType::Signature { sig, .. }) => *sig,
+                        Carried::Type(KType::Signature { content, .. }) => Rc::clone(content),
                         _ => unreachable!("validated above: the sig arg is a Signature type"),
                     };
                     let pinned: Vec<(String, KType)> = match views[1] {
@@ -157,7 +154,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 Some(plan) => {
                     let sealed = ctx.ctx.alloc_carried_with(&[&sig_carrier], move |brand, views| {
                         let sig = match views[0] {
-                            Carried::Type(KType::Signature { sig, .. }) => *sig,
+                            Carried::Type(KType::Signature { content, .. }) => Rc::clone(content),
                             _ => unreachable!("validated above: the sig arg is a Signature type"),
                         };
                         let pinned: Vec<(String, KType)> = plan
@@ -193,16 +190,18 @@ mod tests {
             "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
         );
         let sig_id = match scope.resolve_type("Ordered") {
-            Some(KType::Signature { sig, .. }) => sig.sig_id(),
+            Some(KType::Signature { content, .. }) => content.sig_id,
             _ => panic!("Ordered must bind a Signature KType"),
         };
         let result = run_one_type(scope, parse_one("Ordered WITH {Carrier = Number}"));
         match result {
             KType::Signature {
-                sig, pinned_slots, ..
+                content,
+                pinned_slots,
+                ..
             } => {
-                assert_eq!(sig.sig_id(), sig_id);
-                assert_eq!(sig.path(), "Ordered");
+                assert_eq!(content.sig_id, sig_id);
+                assert_eq!(content.path, "Ordered");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Carrier");
                 assert_eq!(pinned_slots[0].1, KType::Number);

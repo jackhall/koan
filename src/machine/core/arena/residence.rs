@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use super::{FrameSet, KoanRegion, KoanRegionExt, KoanStorageProfile, RegionBrand};
 use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
-use crate::machine::model::{CarriedFamily, KObject, KType, Module, ModuleSignature};
+use crate::machine::model::{CarriedFamily, KObject, KType, Module};
 use crate::machine::CarrierWitness;
 use crate::witnessed::{AuditedStored, Witnessed};
 
@@ -29,8 +29,8 @@ impl<'a> Scope<'a> {
     /// last disjunct is the exact complement of the mint's omission policy, which materializes no
     /// member for an ambiently covered region, so a dest/evidence-only audit would under-cover a
     /// value legitimately reaching one (a module bound at an outer/root scope, read by a nested
-    /// per-call functor body). Exact for `KType`, since its only region pointers (`&Module` /
-    /// `&ModuleSignature` / `&KFunction`) are all side-table-recorded.
+    /// per-call functor body). Trivially exact for `KType`, which borrows no region data at all —
+    /// every variant owns its content.
     ///
     /// The stored reference comes back at a caller-chosen `'c` no longer than this scope's own `'a`:
     /// the destination stays this scope's region, but a caller homing a type it may use only for a
@@ -276,8 +276,8 @@ pub(crate) struct Residence<'d> {
     dest: &'d KoanRegion,
     reach: &'d [&'d FrameSet],
     ambient: Option<&'d dyn Fn(&KoanRegion) -> bool>,
-    /// A saw-a-region-pointer recorder: each `owns_*` leaf (a `KFunction` / `Module` /
-    /// `ModuleSignature` pointer — the residence side-table's recorded region pointers) sets it. A
+    /// A saw-a-region-pointer recorder: each `owns_*` leaf (a `KFunction` / `Module`
+    /// pointer — the residence side-table's recorded region pointers) sets it. A
     /// walk that passes the audit and set this reports a value whose borrows reach *some* region; a
     /// value freshly stored in the scope's own region (where every pointer is home by construction)
     /// reads it as its honest home-borrow bit ([`Scope::seal_fresh_object`]). `None` when a caller
@@ -360,12 +360,6 @@ impl<'d> Residence<'d> {
             || self.covers_region(module.child_scope().region())
     }
 
-    pub(crate) fn owns_signature(&self, sig: &ModuleSignature<'_>) -> bool {
-        self.note_region_pointer();
-        self.dest.owns_signature(sig as *const ModuleSignature<'_>)
-            || self.covers_region(sig.decl_scope().region())
-    }
-
     pub(crate) fn owns_function(&self, f: &KFunction<'_>) -> bool {
         self.note_region_pointer();
         self.dest.owns_function(f as *const KFunction<'_>)
@@ -429,8 +423,8 @@ impl<'ctx> ResidenceEvidence<'ctx> {
 // SAFETY: `audit` returns true only when every region borrow the stored `KType` carries is
 // resident in `region`, covered by `context`'s reach evidence, or (when the ambient predicate is
 // present) covered by the destination scope's own ambient coverage — the exact residence the
-// `KType` walk verifies. Exact for `KType`: its only region pointers (`&Module` / `&ModuleSignature`
-// / `&KFunction`) each expose their owning region, so no member enumeration is needed.
+// `KType` walk verifies. Trivially exact for `KType`: it borrows no region data — every variant
+// owns its content — so the walk has nothing to enumerate and the audit cannot under-cover.
 unsafe impl AuditedStored<KoanStorageProfile> for KType<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &KType<'_>, context: ResidenceEvidence<'_>) -> bool {
@@ -514,14 +508,5 @@ unsafe impl AuditedStored<KoanStorageProfile> for Module<'static> {
             None => Residence::dest_only(region),
         };
         residence.covers_region(value.child_scope().region())
-    }
-}
-
-// SAFETY: `audit` returns true only when `region` is the region that owns the stored
-// `ModuleSignature`'s decl scope — the signature borrows that scope, so a store elsewhere dangles.
-unsafe impl AuditedStored<KoanStorageProfile> for ModuleSignature<'static> {
-    type AuditContext<'ctx> = ();
-    fn audit(region: &KoanRegion, value: &ModuleSignature<'_>, _context: ()) -> bool {
-        std::ptr::eq(region, value.decl_scope().region())
     }
 }

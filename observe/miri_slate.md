@@ -1,7 +1,7 @@
 # Miri audit slate
 
 <!-- slate-fingerprint
-src/machine/core/arena/residence.rs: 6
+src/machine/core/arena/residence.rs: 5
 -->
 
 The canonical list of tests Miri's tree-borrows mode signs off on for koan's
@@ -40,11 +40,6 @@ group just to silence the stale-anchor check.
   `witnessed.rs`; the `unsafe impl AuditedStored` audits that gate those stores moved to
   [`arena/residence.rs`](../src/machine/core/arena/residence.rs). arena.rs itself carries no
   `unsafe` of its own.
-- `src/machine/execute/dispatch/keyworded.rs` — the type-channel splice reach group pins a
-  safe-code discipline (`part_walk`'s wrap-slot arm must route a resolved type through
-  `resolve_type_identifier` + `resident_type_carrier`, never seal empty reach); the real
-  `unsafe` is `Erased::reattach` inside `Scope::adopt_sealed`, so keyworded.rs carries none
-  of its own.
 - `src/machine/core/scope.rs` — `Scope::add` re-entry pins the queue-and-drain
   discipline that keeps `Scope`'s `RefCell<…>` invariant intact when a binding
   is added while a `data` borrow is live.
@@ -106,7 +101,7 @@ group just to silence the stale-anchor check.
 
 ## The slate
 
-38 tests, grouped by the unsafe site each pins down. Names below are the exact
+36 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command. A further 21 tests
 covering the witnessed substrate live in the `workgraph` crate's own slate
 ([workgraph/observe/miri_slate.md](../workgraph/observe/miri_slate.md)).
@@ -231,15 +226,15 @@ otherwise routes the shared `retype` in `witnessed.rs`.
 — `KoanStepContextExt::alloc_carried_with` routes a finish's result through the
 library combinator `StepContext::alloc_with`, folding each listed dep's sealed reach into the
 result's witness by construction before the caller's `build` closure ever clones a dep-derived
-value in. This test seals a region-borrowing `KType::Signature { sig: SigSource::Declared(&s) }`
-resident in a producer frame's region (the stand-in for a dep terminal's `t.value`/`t.carrier`)
-as a *different* consumer frame's own carrier via `alloc_carried_with`, rebuilt at the fold brand from
-the dep's view; it then drops the dep envelope and every producer-frame handle and reads the sealed
-signature's decl scope back — a use-after-free under tree borrows if the fold is skipped (as
+value in. This test seals a `KType` resident in a producer frame's region — the arena reference is
+the borrow at stake (the stand-in for a dep terminal's `t.value`/`t.carrier`) — as a *different*
+consumer frame's own carrier via `alloc_carried_with`, rebuilt at the fold brand from the dep's
+view; it then drops the dep envelope and every producer-frame handle and reads the sealed type
+back — a use-after-free under tree borrows if the fold is skipped (as
 `alloc_type`, its unfolded sibling, would leave it). The only `unsafe` routed is the shared
 `retype` in `witnessed.rs` (through `alloc_with`'s `yoke`/`merge`).
 
-- `signature_field_reach_fold_survives_producer_frame_free`
+- `type_field_reach_fold_survives_producer_frame_free`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, now a bare field read of the stored
@@ -282,16 +277,13 @@ or the pin regresses.
 adoption consumes a *delivered* cell: the mint (run first in `adopt_sealed`, at `Residence::Kept` —
 the envelope's host always materializes) pins the producer's residence and the value's foreign reach
 into the consumer's arena before the copy-free `Erased::reattach` fabricates the consumer-lifetime
-borrow. These tests finalize a value at the Done boundary (mirroring production), ride the retention
-hold across the producer shell's drop, adopt into an independent consumer scope, then drop the hold
-and every other source handle before reading — the consumer's minted set is the sole owner at the
-read. The Object case pins the hold-to-mint handoff; the Type case is the interior-borrow one — a
-`KType::Module` reaching a foreign frame, where a lost mint member dangles the shallow-cloned
-`&'a KType`. Tree borrows catches a use-after-free if the mint-before-reattach order, the host
-materialization, or the pin regresses.
+borrow. This test finalizes an object at the Done boundary (mirroring production), rides the
+retention hold across the producer shell's drop, adopts into an independent consumer scope, then
+drops the hold and every other source handle before reading — the consumer's minted set is the sole
+owner at the read, pinning the hold-to-mint handoff. Tree borrows catches a use-after-free if the
+mint-before-reattach order, the host materialization, or the pin regresses.
 
 - `adopt_sealed_object_rides_retention_across_producer_shell_drop`
-- `adopt_sealed_type_pins_foreign_region_after_producer_drop`
 
 **Dep envelopes held across a step's own open** ([src/machine/execute/run_loop.rs](../src/machine/execute/run_loop.rs))
 — `run_step`'s consumer-step `pin` is a plain `FrameSet` folded from each dep envelope's
@@ -318,16 +310,6 @@ handle on both regions — tree borrows catches a use-after-free if the union dr
 the mint's home-omission fires on the wrong side.
 
 - `child_module_reach_unions_member_entry_reaches_across_regions`
-
-**Type-channel splice reach** ([src/machine/execute/dispatch/keyworded.rs](../src/machine/execute/dispatch/keyworded.rs))
-— `part_walk`'s wrap-slot arm re-consults `Scope::resolve_type_identifier` and seals the hit through
-`Scope::resident_type_carrier` instead of the old `Witnessed::resident` empty-witness fallback
-(total-carrier-resolution). This test registers a `KType::Module` reaching into a foreign frame,
-drives the exact splice-arm surface, adopts the sealed cell into an independent consumer frame, drops
-every other direct handle, then reads — tree borrows catches a use-after-free if the splice arm
-regresses to sealing empty reach.
-
-- `spliced_type_carrier_pins_the_producer_region_after_drop`
 
 **`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
 `ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
@@ -533,9 +515,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-07-18: 722s — 36 tests, 0 leaks, 0 UB
 - 2026-07-17: 633s — 38 tests, 0 leaks, 0 UB
 - 2026-07-17: 625s — 40 tests, 0 leaks, 0 UB
 - 2026-07-17: 638s — 40 tests, 0 leaks, 0 UB
 - 2026-07-14: 1108s — 40 tests, 0 leaks, 0 UB
-- 2026-07-13: 509s — 40 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

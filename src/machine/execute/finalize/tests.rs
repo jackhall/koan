@@ -20,7 +20,7 @@ use crate::machine::execute::obligation::ReturnObligation;
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Module;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::model::{ExpressionSignature, KType, ReturnType, SigSource, SignatureElement};
+use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
 
@@ -262,76 +262,6 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     }
 }
 
-/// `Scope::adopt_sealed` on a delivered type: a `KType` whose interior (here a module self-sig's
-/// `&'a Module`) points into a **foreign** frame is the dangerous case — adoption's mint must pin
-/// both the foreign reach and the producer residence into the consumer's arena, so the module's
-/// child scope reads back cleanly after every other handle on the foreign frame drops.
-#[test]
-fn adopt_sealed_type_pins_foreign_region_after_producer_drop() {
-    let foreign_storage = run_root_storage();
-    let foreign_scope = run_root_bare(&foreign_storage);
-    let foreign_child = foreign_storage
-        .brand()
-        .alloc_scope(Scope::child_under(foreign_scope));
-    let module = foreign_storage
-        .brand()
-        .alloc_module(Module::new("M".to_string(), foreign_child));
-    let foreign_weak = Rc::downgrade(&foreign_storage);
-
-    let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
-    let producer = CallFrame::new(scope);
-    let foreign_reach = FrameSet::singleton(Rc::clone(&foreign_storage));
-    let carrier = producer.with_scope(|child| {
-        let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), false);
-        let kt_ref = child
-            .alloc_ktype_reaching(
-                KType::signature(SigSource::SelfOf(module), Vec::new()),
-                &evidence,
-            )
-            .expect("module is covered by foreign_reach");
-        child.resident_type_carrier(kt_ref, evidence)
-    });
-    assert!(
-        !carrier.witness().reach_covers(None, producer.region()),
-        "the type borrows only into the foreign module region, not the producer's own"
-    );
-
-    let runtime = KoanRuntime::new();
-    let sealed = runtime
-        .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
-        .expect("no declared return, no error");
-    let cell = Delivered::seal(sealed, producer.storage_rc());
-    drop(producer);
-
-    let consumer_storage = run_root_storage();
-    let consumer = run_root_bare(&consumer_storage);
-    let adopted: Carried = consumer.adopt_sealed(&cell);
-
-    // Drop the hold and every other handle on the foreign frame: the consumer's minted arena set is
-    // now the sole pin — Miri confirms no use-after-free on the read below.
-    drop(cell);
-    drop(foreign_storage);
-
-    match adopted {
-        Carried::Type(KType::Signature {
-            sig: SigSource::SelfOf(module),
-            ..
-        }) => {
-            assert_eq!(
-                module.path, "M",
-                "the re-homed module survives the foreign frame's drop"
-            )
-        }
-        Carried::Type(other) => panic!("expected the severed self-sig type, got {}", other.name()),
-        Carried::Object(_) => panic!("expected the severed self-sig type, got an Object"),
-    }
-    assert!(
-        foreign_weak.upgrade().is_some(),
-        "the consumer's minted reach still pins the foreign frame"
-    );
-}
-
 /// The pass-through acceptance criterion: a value returned unmodified through the Done boundary
 /// rides by reference. Finalize clones nothing and allocates nothing — the read on the consumer
 /// side is the birth allocation, byte-for-byte the same address — and the only refcount the
@@ -415,7 +345,7 @@ fn type_passthrough_declared_return_mints_nothing_into_home() {
         let evidence = crate::machine::core::StoredReach::for_test(Some(&foreign_reach), true);
         let kt_ref = child
             .alloc_ktype_reaching(
-                KType::signature(SigSource::SelfOf(module), Vec::new()),
+                KType::signature(Rc::clone(module.self_sig_content()), Vec::new()),
                 &evidence,
             )
             .expect("module is covered by foreign_reach");

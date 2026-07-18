@@ -6,14 +6,13 @@ use super::*;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
+use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
-use crate::machine::model::{KType, SigSource};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
 use crate::machine::DeliveredCarried;
 use crate::machine::KFunction;
-use crate::machine::ScopeId;
 use crate::witnessed::{
     Delivered, Erased, FoldToken, FoldedPlacement, RegionHandleFamily, RegionHost, Residence,
     WitnessRegion, Witnessed,
@@ -968,53 +967,36 @@ fn multi_region_record_of_closures_survives_frame_free() {
     );
 }
 
-/// A `ModuleSignature` plus a `KType::Signature { sig: SigSource::Declared(&s), .. }` wrapping it,
-/// both resident in `home`'s own region — the stand-in for a dep terminal's `t.value`/`t.carrier`
-/// pair (a region-borrowing sealed carrier). Mirrors [`alloc_home_closure`]'s construction, but
-/// returns the *type*, since it is the signature type's `decl_scope_ref` borrow the fold closes a
-/// hole around.
-fn alloc_home_signature_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
-    use crate::machine::model::ModuleSignature;
-    home.with_scope(|child| {
-        let sig_ref: &ModuleSignature = home
-            .brand()
-            .alloc_signature(ModuleSignature::new("Held".into(), child));
-        let kt = KType::signature(SigSource::Declared(sig_ref), Vec::new());
-        home.brand()
-            .alloc_ktype_checked(kt)
-            .expect("sig_ref was just allocated into home's own region")
-    })
-}
-
-/// The decl-scope id a [`alloc_home_signature_type`] carrier borrows — the read-back identity the
-/// reach-fold tests compare across a producer-frame free.
-fn declared_sig_id(kt: &KType<'_>) -> ScopeId {
-    match kt {
-        KType::Signature {
-            sig: SigSource::Declared(s),
-            ..
-        } => s.sig_id(),
-        other => panic!("expected a declared Signature type, got {}", other.name()),
-    }
+/// A `KType` resident in `home`'s own region — the stand-in for a dep terminal's
+/// `t.value`/`t.carrier` pair (a producer-frame-resident sealed carrier). Mirrors
+/// [`alloc_home_closure`]'s construction, but returns the *type*: the reach-fold tests below
+/// exercise the arena reference `&'run KType<'run>` itself, tied to the producer frame's own
+/// region, independent of what the type's payload holds.
+fn alloc_home_type<'run>(home: &'run Rc<CallFrame>) -> &'run KType<'run> {
+    home.brand()
+        .alloc_ktype_checked(KType::list(Box::new(KType::Number)))
+        .expect("a region-free type is always coverable by its own destination")
 }
 
 /// **`alloc_carried_with`'s single-dep reach fold, exercised through the actual finish-surface
-/// combinator.** A dep terminal's `KType::Signature { sig: SigSource::Declared(&s) }` — the
-/// stand-in for `t.value`/`t.carrier` — is sealed as the step's own carrier by rebuilding it at the
-/// fold brand from the dep's view in a *different* frame's region. The fold unions the producer's
-/// reach into the result's witness; every producer-frame handle then drops, and reading the sealed
-/// signature's decl scope must not dangle. Fails on UB, not values — the closing case for the reach
-/// hole `alloc_type` (no fold) leaves open.
+/// combinator.** A dep terminal's `KType` — the stand-in for `t.value`/`t.carrier` — is sealed as
+/// the step's own carrier by rebuilding it at the fold brand from the dep's view in a *different*
+/// frame's region. The fold unions the producer's reach into the result's witness; every
+/// producer-frame handle then drops, and reading the sealed type back through the arena reference
+/// must not dangle. Fails on UB, not values — the closing case for the reach hole `alloc_type`
+/// (no fold) leaves open.
 #[test]
-fn signature_field_reach_fold_survives_producer_frame_free() {
+fn type_field_reach_fold_survives_producer_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
-    // Producer: a region-borrowing Signature type resident in its own frame's region — the
-    // stand-in for a dep terminal delivered to the finish.
+    // Producer: a type resident in its own frame's region — the stand-in for a dep terminal
+    // delivered to the finish.
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_signature_type(&producer_frame);
-    let expected_id = declared_sig_id(kt);
+    let kt: &KType = alloc_home_type(&producer_frame);
+    // Erase to `'static` (the payload is region-free) before `producer_frame` drops below — a
+    // borrowed `'run` clone would keep the borrow-checker treating it as still borrowing the frame.
+    let expected: KType<'static> = kt.to_static().expect("KType::list(Number) is region-free");
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1027,7 +1009,7 @@ fn signature_field_reach_fold_survives_producer_frame_free() {
     let ctx = StepAllocator::over_frame(consumer_frame.storage_rc());
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| match views[0] {
         Carried::Type(kt) => Carried::Type(b.alloc_ktype_folded(kt.clone())),
-        Carried::Object(_) => unreachable!("the dep terminal is a Signature type"),
+        Carried::Object(_) => unreachable!("the dep terminal is a Type"),
     });
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
@@ -1038,23 +1020,20 @@ fn signature_field_reach_fold_survives_producer_frame_free() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    // Read back through the sealed carrier into the signature's decl scope.
-    let read_id = sealed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(kt) => declared_sig_id(kt),
-        other => panic!("expected a Signature type, got {}", other.summarize()),
+    // Read back through the sealed carrier's arena reference.
+    let read: KType<'static> = sealed.inspect_pinned(&consumer_storage, |c| match c {
+        Carried::Type(kt) => kt.to_static().expect("KType::list(Number) is region-free"),
+        other => panic!("expected a Type, got {}", other.summarize()),
     });
-    assert_eq!(
-        read_id, expected_id,
-        "signature type read back after producer frame freed"
-    );
+    assert_eq!(read, expected, "type read back after producer frame freed");
 }
 
 /// **`alloc_type_composed`'s correlation, exercised through the actual door.** A mixed operand
 /// list — a region-free `Pure` value at position 0, a region-reaching `Reaching` carrier at
 /// position 1 — composes into a `Dict` whose `k`/`v` land at the same positions as the operands,
-/// and the `v` side (the dep's signature type) survives dropping the dep envelope and the producer
-/// frame: the fold, not ambient capture, is what keeps it alive. This is the pin the builtin-level
-/// tests can't provide — an ambient capture would reproduce the same read-back surface without the
+/// and the `v` side (the dep's type) survives dropping the dep envelope and the producer frame:
+/// the fold, not ambient capture, is what keeps it alive. This is the pin the builtin-level tests
+/// can't provide — an ambient capture would reproduce the same read-back surface without the
 /// reach-fold, so only this door-level test distinguishes the two.
 #[test]
 fn alloc_type_composed_correlates_mixed_operands() {
@@ -1062,8 +1041,10 @@ fn alloc_type_composed_correlates_mixed_operands() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_signature_type(&producer_frame);
-    let expected_id = declared_sig_id(kt);
+    let kt: &KType = alloc_home_type(&producer_frame);
+    // Erase to `'static` (the payload is region-free) before `producer_frame` drops below — a
+    // borrowed `'run` clone would keep the borrow-checker treating it as still borrowing the frame.
+    let expected: KType<'static> = kt.to_static().expect("KType::list(Number) is region-free");
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1084,18 +1065,24 @@ fn alloc_type_composed_correlates_mixed_operands() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    let (k_is_number, read_id) = composed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::Dict {
-            key: k, value: v, ..
-        }) => {
-            let k_is_number = matches!(k.as_ref(), KType::Number);
-            (k_is_number, declared_sig_id(v.as_ref()))
-        }
-        other => panic!("expected a Dict type, got {}", other.summarize()),
-    });
+    let (k_is_number, read): (bool, KType<'static>) =
+        composed.inspect_pinned(&consumer_storage, |c| match c {
+            Carried::Type(KType::Dict {
+                key: k, value: v, ..
+            }) => {
+                let k_is_number = matches!(k.as_ref(), KType::Number);
+                (
+                    k_is_number,
+                    v.as_ref()
+                        .to_static()
+                        .expect("KType::list(Number) is region-free"),
+                )
+            }
+            other => panic!("expected a Dict type, got {}", other.summarize()),
+        });
     assert!(k_is_number, "Pure operand at position 0 lands in k");
     assert_eq!(
-        read_id, expected_id,
+        read, expected,
         "Reaching operand at position 1 lands in v and survives producer frame free"
     );
 }
@@ -1109,8 +1096,10 @@ fn alloc_type_composed_operand_order_is_positional() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
 
     let producer_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let kt: &KType = alloc_home_signature_type(&producer_frame);
-    let expected_id = declared_sig_id(kt);
+    let kt: &KType = alloc_home_type(&producer_frame);
+    // Erase to `'static` (the payload is region-free) before `producer_frame` drops below — a
+    // borrowed `'run` clone would keep the borrow-checker treating it as still borrowing the frame.
+    let expected: KType<'static> = kt.to_static().expect("KType::list(Number) is region-free");
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(Erased::erase(Carried::Type(kt)), CarrierWitness::default()),
         producer_frame.storage_rc(),
@@ -1131,17 +1120,23 @@ fn alloc_type_composed_operand_order_is_positional() {
     drop(producer_frame);
     drop(consumer_frame);
 
-    let (read_id, v_is_number) = composed.inspect_pinned(&consumer_storage, |c| match c {
-        Carried::Type(KType::Dict {
-            key: k, value: v, ..
-        }) => {
-            let v_is_number = matches!(v.as_ref(), KType::Number);
-            (declared_sig_id(k.as_ref()), v_is_number)
-        }
-        other => panic!("expected a Dict type, got {}", other.summarize()),
-    });
+    let (read, v_is_number): (KType<'static>, bool) =
+        composed.inspect_pinned(&consumer_storage, |c| match c {
+            Carried::Type(KType::Dict {
+                key: k, value: v, ..
+            }) => {
+                let v_is_number = matches!(v.as_ref(), KType::Number);
+                (
+                    k.as_ref()
+                        .to_static()
+                        .expect("KType::list(Number) is region-free"),
+                    v_is_number,
+                )
+            }
+            other => panic!("expected a Dict type, got {}", other.summarize()),
+        });
     assert_eq!(
-        read_id, expected_id,
+        read, expected,
         "Reaching operand now at position 0 lands in k and survives producer frame free"
     );
     assert!(v_is_number, "Pure operand now at position 1 lands in v");
@@ -1317,69 +1312,6 @@ fn mint_teardown_releases_members() {
     drop(c);
     assert_eq!(Rc::strong_count(&a), count_before_a, "C's death releases A");
     assert_eq!(Rc::strong_count(&b), count_before_b, "C's death releases B");
-}
-
-/// The checked-seal rejection this item's audits exist to catch: a `ModuleSignature` allocated
-/// into region A, wrapped as `KType::Signature`, sealed into region B's `alloc_ktype_checked`
-/// (no evidence naming A) — a structured `ShapeError`, and nothing stored.
-#[test]
-fn alloc_ktype_checked_rejects_foreign_signature_with_no_store() {
-    use crate::machine::model::ModuleSignature;
-
-    let region_a = run_root_storage();
-    let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
-    let sig = region_a
-        .brand()
-        .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
-    let kt = KType::signature(SigSource::Declared(sig), Vec::new());
-
-    let region_b = run_root_storage();
-    let before = region_b.region().alloc_count();
-    let result = region_b.brand().alloc_ktype_checked(kt);
-
-    let err = result.expect_err("a foreign-region Signature must be rejected, not stored");
-    assert!(
-        matches!(&err.kind, crate::machine::core::KErrorKind::ShapeError(_)),
-        "expected ShapeError, got {err:?}"
-    );
-    assert_eq!(
-        region_b.region().alloc_count(),
-        before,
-        "a rejected checked seal must store nothing"
-    );
-}
-
-/// The reaching tier is evidence-gated, not a rubber stamp: the same foreign-region `Signature`,
-/// sealed into region B's `alloc_ktype_reaching` under an **empty** `StoredReach`, is refused just
-/// like the dest-only tier refuses it — B's own region and its ambient coverage name nothing in A.
-/// This is the tier a deferred `-> er` return homes through, so a return type borrowing a region
-/// the parameter's binding does not pin still errors loudly.
-#[test]
-fn alloc_ktype_reaching_rejects_foreign_signature_with_no_evidence() {
-    use crate::machine::model::ModuleSignature;
-
-    let region_a = run_root_storage();
-    let scope_a = default_scope(&region_a, Box::new(std::io::sink()));
-    let sig = region_a
-        .brand()
-        .alloc_signature(ModuleSignature::new("Sig".into(), scope_a));
-    let kt = KType::signature(SigSource::Declared(sig), Vec::new());
-
-    let region_b = run_root_storage();
-    let scope_b = default_scope(&region_b, Box::new(std::io::sink()));
-    let before = region_b.region().alloc_count();
-    let result: Result<&KType<'_>, _> = scope_b.alloc_ktype_reaching(kt, &StoredReach::empty());
-
-    let err = result.expect_err("no evidence names region A, so the seal must be refused");
-    assert!(
-        matches!(&err.kind, crate::machine::core::KErrorKind::ShapeError(_)),
-        "expected ShapeError, got {err:?}"
-    );
-    assert_eq!(
-        region_b.region().alloc_count(),
-        before,
-        "a rejected reaching seal must store nothing"
-    );
 }
 
 /// `alloc_carried_with_scope` crosses two operands to the fold brand at once: a delivered dep view

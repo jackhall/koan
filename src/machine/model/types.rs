@@ -18,7 +18,7 @@ mod typed_field_list;
 
 pub use kkind::KKind;
 pub use ktraits::Parseable;
-pub use ktype::{KType, SigSource};
+pub use ktype::KType;
 pub use record::Record;
 pub(crate) use recursive_set::same_nominal;
 pub use recursive_set::{
@@ -31,14 +31,14 @@ pub use resolver::{
     elaborate_type_identifier, finalize_nominal_member, Elaborator, SchemaSealResult, SealOutcome,
     TypeResolution,
 };
-pub use sig_schema::{sig_subtype, substitute_sig_members, SigSchema};
+pub use sig_schema::{sig_subtype, substitute_sig_members, SigContent, SigSchema};
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{
     is_keyword_token, Argument, DeferredReturn, DeferredReturnSurface, ExpressionSignature,
     ReturnType, SignatureElement, UntypedElement, UntypedKey,
 };
-pub(crate) use type_digest::{schema_content_digest, signature_digest, TypeDigest};
+pub(crate) use type_digest::TypeDigest;
 pub use typed_field_list::{
     parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
 };

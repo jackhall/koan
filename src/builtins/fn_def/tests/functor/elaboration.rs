@@ -36,8 +36,8 @@ fn elaborator_lowers_ktype_value_binding() {
 }
 
 /// A parameter typed `er :Ordered` lowers via `elaborate_type_identifier` into
-/// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
-/// declaring `ModuleSignature::sig_id()`. Also pins that the SIG and FN can land in the
+/// `KType::Signature { content, pinned_slots: [] }` with `content.sig_id` matching the
+/// declaring SIG's decl-scope id. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
@@ -51,7 +51,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
     let sig_id = match scope.resolve_type("Ordered") {
-        Some(KType::Signature { sig, .. }) => sig.sig_id(),
+        Some(KType::Signature { content, .. }) => content.sig_id,
         other => panic!("Ordered should be a Signature KType, got {:?}", other),
     };
     let f = lookup_fn(scope, "USE_ORD");
@@ -61,14 +61,15 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(name, "er");
             match ktype {
                 KType::Signature {
-                    sig, pinned_slots, ..
+                    content,
+                    pinned_slots,
+                    ..
                 } => {
                     assert_eq!(
-                        sig.sig_id(),
-                        sig_id,
-                        "sig_id must match ModuleSignature::sig_id()"
+                        content.sig_id, sig_id,
+                        "sig_id must match the declaring SIG's decl-scope id"
                     );
-                    assert_eq!(sig.path(), "Ordered");
+                    assert_eq!(content.path, "Ordered");
                     assert!(pinned_slots.is_empty(), "bare Ordered has no pinned slots");
                 }
                 other => panic!("expected Signature, got {:?}", other),

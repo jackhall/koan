@@ -7,15 +7,15 @@
 //! its own self-sig at creation.
 
 use crate::machine::model::KType;
-use crate::machine::model::SigSource;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, ProjectedSchema,
-    RecursiveSet, SigSchema,
+    RecursiveSet, SigContent, SigSchema,
 };
 use crate::machine::model::{KObject, Module};
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
+use std::rc::Rc;
 
 use super::{arg, kw, sig};
 
@@ -50,7 +50,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();
-    for (name, (kt, _arity)) in &s.schema().abstract_members {
+    for (name, (kt, _arity)) in &s.schema.abstract_members {
         let minted_kt = match kt {
             KType::SetRef { set, index }
                 if set.member(*index).kind == KKind::TypeConstructor
@@ -94,7 +94,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
     // is mirrored into `type_members` alongside the per-call abstract mints.
     let manifest: Vec<(String, KType<'a>)> = s
-        .schema()
+        .schema
         .manifest_members
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
@@ -112,7 +112,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     {
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType<'a>)> = Vec::new();
-        for (slot_name, kt) in &s.schema().value_slots {
+        for (slot_name, kt) in &s.schema.value_slots {
             if let KType::AbstractType { name: member, .. } = kt {
                 if let Some(per_call) = tm.get(member) {
                     tags.push((slot_name.clone(), per_call.clone()));
@@ -129,9 +129,9 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     }
 
     // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
-    seal_view_self_sig(new_module, s);
+    seal_view_self_sig(new_module, &s);
 
-    if let Err(e) = check_satisfies(m, s, ctx.types) {
+    if let Err(e) = check_satisfies(m, &s, ctx.types) {
         return Action::Done(Err(e));
     }
 
@@ -160,7 +160,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
-    if let Err(e) = check_satisfies(m, s, ctx.types) {
+    if let Err(e) = check_satisfies(m, &s, ctx.types) {
         return Action::Done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
@@ -178,7 +178,7 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     );
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
-    seal_view_self_sig(new_module, s);
+    seal_view_self_sig(new_module, &s);
     // The view surfaces as the Object-arm module value under the same token that pins the reused
     // source's (foreign) child-scope region; a LET around it binds that value like any other.
     let obj = crate::try_action!(ctx
@@ -195,17 +195,17 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
 /// per-call abstract mints, a transparent view's concrete source types). Without this a slot
 /// typed against an abstract member would read concrete off the underlying value and the view
 /// would not structurally satisfy its own signature.
-fn seal_view_self_sig<'a>(module: &Module<'a>, sig: &crate::machine::model::ModuleSignature<'a>) {
+fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent<'a>) {
     let mut view_sig = SigSchema::raw_self_sig(module);
     let member_map: std::collections::HashMap<String, KType<'a>> = view_sig
         .manifest_members
         .iter()
         .map(|(n, t)| (n.clone(), t.clone()))
         .collect();
-    for (slot_name, declared) in &sig.schema().value_slots {
+    for (slot_name, declared) in &content.schema.value_slots {
         view_sig.value_slots.insert(
             slot_name.clone(),
-            substitute_sig_members(declared, sig.sig_id(), &member_map),
+            substitute_sig_members(declared, content.sig_id, &member_map),
         );
     }
     module.seal_self_sig(view_sig);
@@ -216,13 +216,7 @@ fn seal_view_self_sig<'a>(module: &Module<'a>, sig: &crate::machine::model::Modu
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
-) -> Result<
-    (
-        &'a crate::machine::model::Module<'a>,
-        &'a crate::machine::model::ModuleSignature<'a>,
-    ),
-    KError,
-> {
+) -> Result<(&'a crate::machine::model::Module<'a>, Rc<SigContent<'a>>), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
@@ -245,34 +239,31 @@ fn resolve_module_and_signature<'a>(
         _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
     };
     let s = match arg_type(args, "s") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(s),
-            ..
-        }) => *s,
+        Some(KType::Signature { content, .. }) => Rc::clone(content),
         _ => return Err(type_mismatch_or_missing(args, "s", "Signature")),
     };
     Ok((m, s))
 }
 
-/// Verify a module satisfies `sig` through the signature-subtyping relation: the module's
+/// Verify a module satisfies `c` through the signature-subtyping relation: the module's
 /// self-sig must be a subtype of the signature's bare schema (every member present, manifest
 /// members equal, abstract members at the right kind/arity, value slots covariantly compatible
 /// after abstract-member substitution). The decision (and its memoization) lives in
-/// [`Module::structurally_satisfies`], the shared entry point dispatch also routes through; this
+/// [`Module::satisfies_sig_content`], the shared entry point dispatch also routes through; this
 /// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
 fn check_satisfies<'a>(
     m: &Module<'a>,
-    s: &'a crate::machine::model::ModuleSignature<'a>,
+    c: &SigContent<'a>,
     types: &TypeRegistry,
 ) -> Result<(), KError> {
-    if m.structurally_satisfies(s, types) {
+    if m.satisfies_sig_content(c, types) {
         return Ok(());
     }
-    match sig_subtype(m.self_sig(), &SigSchema::of_sig(s, &[]), types) {
+    match sig_subtype(m.self_sig(), &c.schema, types) {
         Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
-            s.path,
+            c.path,
             failure.render_fragment()
         )))),
     }

@@ -15,7 +15,7 @@
 use crate::machine::core::NodeId;
 use crate::machine::core::{LexicalFrame, Scope, ScopeId, TypeHit};
 use crate::machine::model::TypeIdentifier;
-use crate::machine::model::{KType, SigSource, TypeResolution};
+use crate::machine::model::{KType, TypeResolution};
 
 impl<'step> Scope<'step> {
     /// Layer-2 scope-bound TypeIdentifier resolution memo. On miss, elaborates against
@@ -123,13 +123,13 @@ impl<'b, 'step> Iterator for KTypeUserRefs<'b, 'step> {
                     let member = set.member(*index);
                     return Some((member.scope_id, member.name.as_str()));
                 }
-                // A `Declared`/`SelfOf` signature yields its decl/module `(scope_id, path)`; the
-                // empty signature borrows no user type, so it is a leaf and yields nothing.
-                KType::Signature { sig, .. } => match sig {
-                    SigSource::Declared(s) => return Some((s.sig_id(), s.path.as_str())),
-                    SigSource::SelfOf(m) => return Some((m.scope_id(), m.path.as_str())),
-                    SigSource::Empty => {}
-                },
+                // A SIG-declared or module self-sig yields its declaring `(scope_id, path)`; the
+                // scopeless `:Module` mint (`SENTINEL`) borrows no user type, so it is a leaf and
+                // yields nothing.
+                KType::Signature { content, .. } if content.sig_id != ScopeId::SENTINEL => {
+                    return Some((content.sig_id, content.path.as_str()));
+                }
+                KType::Signature { .. } => {}
                 KType::AbstractType { source, name } => {
                     return Some((*source, name.as_str()));
                 }

@@ -13,7 +13,6 @@
 //! wins its own slot, and only a bare runtime value falls through to [`body_newtype`].
 
 use crate::machine::model::KKind;
-use crate::machine::model::SigSource;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module, WrappedPayload};
 use crate::machine::model::{Held, KObject, KType};
@@ -120,7 +119,9 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
         KType::Unresolved(te) => match ctx.scope.resolve_type_identifier(te, None) {
             // The lhs type's own reach is irrelevant here — the member's carrier is built from the
             // *member's* stored reach inside `access_type_member`.
-            TypeResolution::Done(resolved) => route(access_type_member(resolved.kt, &field_name)),
+            TypeResolution::Done(resolved) => {
+                route(access_type_member(ctx.scope, resolved.kt, &field_name))
+            }
             TypeResolution::Unbound(name) => {
                 Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
             }
@@ -134,7 +135,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
                 )))))
             }
         },
-        kt => route(access_type_member(kt, &field_name)),
+        kt => route(access_type_member(ctx.scope, kt, &field_name)),
     }
 }
 
@@ -187,40 +188,35 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     route(access_module_member(m, &field_name))
 }
 
-/// Project `field` off a Type-channel lhs. A `Declared` signature reverse-looks-up its decl scope;
-/// an abstract identity carries no receiver and errors. A module rides the value channel, so a
-/// module lhs lands in [`body_module`] instead. A `SetRef` (struct / union name) and every other
-/// type has no members and falls through to the same TypeMismatch a static struct field access
-/// produces.
-fn access_type_member<'a>(kt: &KType<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
+/// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
+/// a manifest or abstract type member first, then a declared value slot's type — with no
+/// decl-scope reverse-lookup; an abstract identity carries no receiver and errors. A module rides
+/// the value channel, so a module lhs lands in [`body_module`] instead. A `SetRef` (struct /
+/// union name) and every other type has no members and falls through to the same TypeMismatch a
+/// static struct field access produces.
+fn access_type_member<'a>(
+    scope: &Scope<'a>,
+    kt: &KType<'a>,
+    field: &str,
+) -> Result<StepCarried<'a>, KError> {
     match kt {
-        // ATTR over a first-class signature value — reverse-lookup against the decl scope. A value
-        // member lives in that decl region, so it seals under the decl scope's home frame. Only a
-        // `Declared` signature carries a decl scope; the `SelfOf`/`Empty` sources reach here from
-        // no signature-value ATTR receiver and fall through to the mismatch below.
-        KType::Signature {
-            sig: SigSource::Declared(s),
-            ..
-        } => {
-            let decl = s.decl_scope();
-            match decl.bindings().lookup_member(field, None) {
-                Some(MemberResolution::Value { obj, stored }) => {
-                    Ok(StepCarried::born(decl.resident_value_carrier(obj, stored)))
-                }
-                Some(MemberResolution::Type { kt, stored }) => {
-                    Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
-                }
-                // Not a binding-map member — consult the decl scope's slot collector before
-                // erroring: a `VAL <name> :Type` slot lives there, not in `bindings`.
-                None => match decl.sig_slot(field) {
-                    Some((kt, stored)) => {
-                        Ok(StepCarried::born(decl.resident_type_carrier(kt, stored)))
-                    }
-                    None => Err(KError::new(KErrorKind::ShapeError(format!(
-                        "signature `{}` has no member `{}`",
-                        s.path, field
-                    )))),
-                },
+        // ATTR over a first-class signature value — answered from the owned schema. The
+        // projected member is a clone out of that schema (region-pure — the schema holds only
+        // owned content), allocated fresh into the read-site scope's region and sealed under the
+        // checked audit's own witness.
+        KType::Signature { content, .. } => {
+            let member = content
+                .schema
+                .manifest_members
+                .get(field)
+                .or_else(|| content.schema.abstract_members.get(field).map(|(kt, _)| kt))
+                .or_else(|| content.schema.value_slots.get(field));
+            match member {
+                Some(kt) => Ok(StepCarried::born(scope.seal_fresh_ktype(kt.clone())?)),
+                None => Err(KError::new(KErrorKind::ShapeError(format!(
+                    "signature `{}` has no member `{}`",
+                    content.path, field
+                )))),
             }
         }
         KType::AbstractType { name, .. } => Err(abstract_type_has_no_members(name)),

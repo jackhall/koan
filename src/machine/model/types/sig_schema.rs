@@ -2,11 +2,14 @@
 //!
 //! A [`SigSchema`] is the normalized carrier of a signature's shape — the abstract type
 //! members, the manifest (fixed) type members, and the value slots — projected out of either
-//! a [`ModuleSignature`] declaration ([`SigSchema::of_sig`]) or a [`Module`]'s own body
+//! a SIG declaration ([`SigSchema::project_decl`]) or a [`Module`]'s own body
 //! ([`SigSchema::raw_self_sig`], the self-sig). [`sig_subtype`] is the canonical relation:
 //! `Sub <: Super` iff `Sub` supplies every member `Super` names, with each manifest member
 //! equal, each abstract member present at the right kind/arity, and each value slot
 //! covariantly compatible after abstract-member substitution.
+//!
+//! [`SigContent`] is the owned bundle a `KType::Signature` carries: a schema plus the
+//! diagnostic path and same-declaration `sig_id` a `KType::Signature` needs alongside it.
 //!
 //! See [design/typing/modules.md](../../../../design/typing/modules.md).
 
@@ -18,7 +21,8 @@ use super::kkind::KKind;
 use super::ktype::KType;
 use super::recursive_set::{ProjectedSchema, RecursiveSet};
 use super::registry::TypeRegistry;
-use crate::machine::model::values::{Module, ModuleSignature};
+use super::type_digest::{empty_schema_digest, schema_content_digest, TypeDigest};
+use crate::machine::model::values::Module;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
@@ -70,12 +74,13 @@ impl<'a> SigSchema<'a> {
         }
     }
 
-    /// Apply `WITH` pins to a SIG's stored schema: clone it and convert each pinned abstract
-    /// member into a manifest one fixed to the pin's type (a pin naming an already-manifest
-    /// member overwrites it — unreachable through `WITH`, which normalizes equal pins away and
-    /// errors on unequal ones).
-    pub fn of_sig(sig: &ModuleSignature<'a>, pins: &[(String, KType<'a>)]) -> SigSchema<'a> {
-        let mut schema = sig.schema().clone();
+    /// Apply `WITH` pins to a schema: clone it and convert each pinned abstract member into a
+    /// manifest one fixed to the pin's type (a pin naming an already-manifest member overwrites
+    /// it — unreachable through `WITH`, which normalizes equal pins away and errors on unequal
+    /// ones). A no-op clone when `pins` is empty (a self-sig or `:Module`, which carry no
+    /// abstract members to fold).
+    pub fn with_pins(&self, pins: &[(String, KType<'a>)]) -> SigSchema<'a> {
+        let mut schema = self.clone();
         for (name, kt) in pins {
             schema.abstract_members.remove(name);
             schema.manifest_members.insert(name.clone(), kt.clone());
@@ -116,6 +121,54 @@ impl<'a> SigSchema<'a> {
             manifest_members,
             value_slots,
         }
+    }
+}
+
+/// Owned content of a `KType::Signature` — everything the type carries about the interface it
+/// names. Shared by `Rc` until interning replaces the transport.
+pub struct SigContent<'a> {
+    /// Diagnostic-only path label ("Ordered", "int_ord", "Module").
+    pub path: String,
+    /// Same-declaration key for WITH-pin specificity refinement; [`ScopeId::SENTINEL`] for the
+    /// scopeless `:Module` mint. Never part of identity.
+    pub sig_id: ScopeId,
+    pub schema: SigSchema<'a>,
+    /// [`schema_content_digest`] of `schema`, computed once at construction.
+    pub schema_digest: TypeDigest,
+}
+
+impl<'a> SigContent<'a> {
+    pub fn new(path: String, sig_id: ScopeId, schema: SigSchema<'a>) -> Self {
+        let schema_digest = schema_content_digest(&schema);
+        SigContent {
+            path,
+            sig_id,
+            schema,
+            schema_digest,
+        }
+    }
+
+    /// The `:Module` mint — empty schema, `SENTINEL` id, path `"Module"`, digest ==
+    /// [`empty_schema_digest`] (the schema's own `sig_id` is `None`, matching a self-sig).
+    pub fn empty() -> Self {
+        SigContent::new(
+            "Module".to_string(),
+            ScopeId::SENTINEL,
+            SigSchema {
+                sig_id: None,
+                abstract_members: HashMap::new(),
+                manifest_members: HashMap::new(),
+                value_slots: HashMap::new(),
+            },
+        )
+    }
+
+    /// Content-keyed lattice-top test — true for [`Self::empty`] and, by content, for any other
+    /// signature whose schema has no members: an empty interface is an empty interface
+    /// regardless of how it was minted. Keyed off the schema digest so it tracks the identity
+    /// relation, letting the specificity walk place the top by content, not by mint.
+    pub fn is_empty_interface(&self) -> bool {
+        self.schema_digest == empty_schema_digest()
     }
 }
 

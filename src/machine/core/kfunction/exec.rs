@@ -77,11 +77,11 @@ pub enum PerCallReturn<'step> {
 /// the frame brand, so `kt`'s lifetime is the short brand; the re-anchor lifts the clone to `'a`.
 ///
 /// The cap is load-bearing: callers pass the **contract** lifetime (`'step`), not the captured
-/// region's full lifetime. A return type can embed a scope borrow into a region neither the captured
-/// scope nor the call owns (a [`KType::Signature`]'s `decl_scope_ref` or `SelfOf` module, whose
-/// module may have been minted in some earlier call's region), so the clone's reach borrows out of
-/// the destination — valid for `'step` (the caller awaits the callee and the reach-set fold pins the
-/// argument), but it must not lengthen to the captured region's lifetime, which can outlive that pin.
+/// region's full lifetime. A return type can carry an `Rc`-shared identity `to_static` declines to
+/// re-mint (a [`KType::SetRef`] / `RecursiveGroup`'s recursive-type set, minted in some earlier
+/// call's region), so the clone's reach borrows out of the destination — valid for `'step` (the
+/// caller awaits the callee and the reach-set fold pins the argument), but it must not lengthen to
+/// the captured region's lifetime, which can outlive that pin.
 ///
 /// The evidence is the [`TypeHit`]'s own stored reach — the reach of the binding `hit.kt` was
 /// resolved through, which names exactly the foreign regions that binding pins. The door takes the
@@ -129,11 +129,11 @@ pub(crate) fn home_delivered_return_type<'captured: 'a, 'a>(
     home(kt, captured, &call_scope.adopted_reach_of(delivered))
 }
 
-/// A region-free return type takes the compile-enforced `'static` tier. One embedding a scope borrow
-/// (a `Signature`'s `decl_scope_ref` or `SelfOf` module) cannot rebuild at `'static`; it re-anchors
-/// into the captured scope's region at the caller's contract lifetime `'a` through the reaching tier,
-/// audited against `reach`. Private so a reach reaches the audit only from one of the two doors
-/// above, each of which derives it — never as a reach a caller asserts.
+/// A region-free return type takes the compile-enforced `'static` tier. One carrying an `Rc`-shared
+/// identity `to_static` declines to re-mint (a `SetRef` / `RecursiveGroup`, or a non-`:Module`
+/// `Signature`) re-anchors into the captured scope's region at the caller's contract lifetime `'a`
+/// through the reaching tier, audited against `reach`. Private so a reach reaches the audit only
+/// from one of the two doors above, each of which derives it — never as a reach a caller asserts.
 fn home<'captured: 'a, 'a>(
     kt: &KType<'_>,
     captured: &Scope<'captured>,

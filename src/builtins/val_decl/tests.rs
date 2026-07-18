@@ -1,6 +1,5 @@
 use crate::builtins::test_support::{binds_module, parse_one, run, run_one_err, run_root_silent};
 use crate::machine::model::KType;
-use crate::machine::model::SigSource;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -11,15 +10,12 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Ordered = ((VAL zero :Number))");
-    let s = match scope.resolve_type("Ordered") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Ordered") {
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let zero = s
-        .schema()
+    let zero = content
+        .schema
         .value_slots
         .get("zero")
         .expect("zero must live in Ordered's stored schema value_slots");
@@ -35,15 +31,12 @@ fn val_resolves_sig_local_type_shadow() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
-    let s = match scope.resolve_type("WithZero") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("WithZero") {
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("WithZero must bind a Signature KType"),
     };
-    let zero = s
-        .schema()
+    let zero = content
+        .schema
         .value_slots
         .get("zero")
         .expect("zero must live in WithZero's stored schema value_slots");
@@ -53,7 +46,7 @@ fn val_resolves_sig_local_type_shadow() {
                 name, "Carrier",
                 "VAL slot must record that it names the SIG-local abstract `Carrier`",
             );
-            assert_eq!(*source, s.decl_scope().id);
+            assert_eq!(*source, content.sig_id);
         }
         other => panic!("expected AbstractType(Carrier), got {other:?}"),
     }
@@ -125,15 +118,12 @@ fn val_function_typed_slot() {
         scope,
         "SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
     );
-    let s = match scope.resolve_type("Ordered") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Ordered") {
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let compare = s
-        .schema()
+    let compare = content
+        .schema
         .value_slots
         .get("compare")
         .expect("compare must live in Ordered's stored schema value_slots");
@@ -198,21 +188,22 @@ fn val_with_abstract_type_member_declaration() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
-    let s = match scope.resolve_type("WithZero") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("WithZero") {
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("WithZero must bind a Signature KType"),
     };
-    let decl_id = s.decl_scope().id;
-    let type_kt = s.decl_scope().bindings().expect_type("Carrier");
+    let decl_id = content.sig_id;
+    let (type_kt, _arity) = content
+        .schema
+        .abstract_members
+        .get("Carrier")
+        .expect("Carrier must live in WithZero's stored schema abstract_members");
     assert!(matches!(
         type_kt,
         KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
     ));
-    let zero = s
-        .schema()
+    let zero = content
+        .schema
         .value_slots
         .get("zero")
         .expect("zero must live in WithZero's stored schema value_slots");

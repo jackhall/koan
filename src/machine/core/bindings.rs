@@ -134,13 +134,6 @@ impl<'a> StoredReach<'a> {
             borrows_into_home,
         }
     }
-
-    /// Whether the token names a non-empty foreign reach — a semantic query over the opaque token
-    /// for in-crate `mod tests` that assert a reach round-tripped, without decomposing the fields.
-    #[cfg(test)]
-    pub(crate) fn names_a_region(&self) -> bool {
-        self.foreign.is_some()
-    }
 }
 
 /// The value-or-type a name resolves to in one classified result — for ATTR module/signature

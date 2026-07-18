@@ -22,7 +22,7 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
-use crate::machine::model::{Carried, CarriedFamily, KObject, Module, ModuleSignature};
+use crate::machine::model::{Carried, CarriedFamily, KObject, Module};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, RegionSet, StorageOf,
@@ -54,10 +54,7 @@ impl StorageProfile for KoanStorageProfile {
                 Scope<'static>,
                 (
                     Module<'static>,
-                    (
-                        ModuleSignature<'static>,
-                        (KType<'static>, (OperatorGroup, (FrameSet, ()))),
-                    ),
+                    (KType<'static>, (OperatorGroup, (FrameSet, ()))),
                 ),
             ),
         ),
@@ -190,18 +187,6 @@ impl<'a> RegionBrand<'a> {
         self.0
             .alloc_resident_checked::<Module<'static>>(m, ResidenceEvidence::dest_only())
             .expect("alloc_module: a Module must be allocated into its own child scope's region")
-    }
-
-    /// INVARIANT: a `ModuleSignature` must be allocated into its own decl scope's region — every
-    /// `ModuleSignature` borrows the decl scope `SIG` opened for its body, so it can never be
-    /// `'static`. See [`Self::alloc_function`].
-    pub fn alloc_signature(self, s: ModuleSignature<'_>) -> &'a ModuleSignature<'a> {
-        self.0
-            .alloc_resident_checked::<ModuleSignature<'static>>(s, ())
-            .expect(
-                "alloc_signature: a ModuleSignature must be allocated into its own decl \
-                 scope's region",
-            )
     }
 
     /// Allocate an [`OperatorGroup`]. Lifetime-free and anchor-free, so the gate is a no-op, but it
@@ -370,7 +355,6 @@ reattachable! {
     KFunction<'static> => KFunction<'r>,
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
-    ModuleSignature<'static> => ModuleSignature<'r>,
     OperatorGroup => OperatorGroup,
 }
 
@@ -437,30 +421,21 @@ impl Stored<KoanStorageProfile> for Module<'static> {
     }
 }
 
-impl Stored<KoanStorageProfile> for ModuleSignature<'static> {
-    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .0
-    }
-    fn record_local(frame: &KoanRegion, stored: &ModuleSignature<'static>) {
-        frame.record_addr(stored as *const _ as usize);
-    }
-}
-
 impl Stored<KoanStorageProfile> for KType<'static> {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for OperatorGroup {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .0
     }
 }
 
 impl Stored<KoanStorageProfile> for FrameSet {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
-        &s.1 .1 .1 .1 .1 .1 .1 .0
+        &s.1 .1 .1 .1 .1 .1 .0
     }
 }
 
@@ -513,13 +488,8 @@ pub(crate) trait KoanRegionExt {
     fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_module` on this region — the residence audit's
-    /// check for any payload that borrows a `&Module`: a `KObject::Module` value or a
-    /// `KType::Signature { sig: SelfOf(_), .. }`.
+    /// check for a `KObject::Module` payload.
     fn owns_module<'a>(&self, ptr: *const Module<'a>) -> bool;
-
-    /// Whether `ptr` was returned by a prior `alloc_signature` on this region — the residence
-    /// audit's check for a `KType::Signature` payload.
-    fn owns_signature<'a>(&self, ptr: *const ModuleSignature<'a>) -> bool;
 
     /// Whether `ptr` was returned by a prior `alloc_function` on this region — the residence
     /// audit's check for a `KObject::KFunction` payload.
@@ -570,14 +540,6 @@ impl KoanRegionExt for KoanRegion {
         self.owns_addr(target)
     }
 
-    fn owns_signature<'a>(&self, ptr: *const ModuleSignature<'a>) -> bool {
-        // `ModuleSignature` is invariant in `'a`, so the through-`'static` cast is required
-        // despite clippy's complaint.
-        #[allow(clippy::unnecessary_cast)]
-        let target = ptr as *const ModuleSignature<'static> as usize;
-        self.owns_addr(target)
-    }
-
     fn owns_function<'a>(&self, ptr: *const KFunction<'a>) -> bool {
         // `KFunction` is invariant in `'a`, so the through-`'static` cast is required despite
         // clippy's complaint.
@@ -591,7 +553,7 @@ impl KoanRegionExt for KoanRegion {
 /// reason as [`KoanRegionExt`].
 #[cfg(test)]
 pub(crate) trait KoanRegionTestExt {
-    /// Total number of values stored across all eight sub-arenas. Each `alloc_*` writes to
+    /// Total number of values stored across all seven sub-arenas. Each `alloc_*` writes to
     /// exactly one sub-arena, so this is the precise allocation count without double-counting.
     fn alloc_count(&self) -> usize;
 }
@@ -603,7 +565,6 @@ impl KoanRegionTestExt for KoanRegion {
             + self.family_len::<KFunction<'static>>()
             + self.family_len::<Scope<'static>>()
             + self.family_len::<Module<'static>>()
-            + self.family_len::<ModuleSignature<'static>>()
             + self.family_len::<KType<'static>>()
             + self.family_len::<OperatorGroup>()
             + self.family_len::<FrameSet>()

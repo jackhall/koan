@@ -26,25 +26,6 @@ fn module_child_scope_transmute_does_not_dangle() {
     assert!(ptr::eq(recovered2, scope));
 }
 
-/// Covered independently of the module path because `ModuleSignature` lives on a different
-/// sub-arena (`signatures`) — a regression in `alloc_signature` or `decl_scope` must
-/// surface without the module path masking it.
-#[test]
-fn signature_decl_scope_transmute_does_not_dangle() {
-    let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(sink()));
-    let sig = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("Ordered".into(), scope));
-    let recovered = sig.decl_scope();
-    assert!(ptr::eq(recovered, scope));
-    let _other = region
-        .brand()
-        .alloc_object(crate::machine::model::values::KObject::Number(1.0));
-    let recovered2 = sig.decl_scope();
-    assert!(ptr::eq(recovered2, scope));
-}
-
 /// Opaque ascription mutates `type_members` after the surrounding `KObject` is alloc'd,
 /// so the `&'a Module<'a>` borrow is live across the `borrow_mut` + insert. Tree
 /// borrows is strict about interior mutation under a live shared borrow.

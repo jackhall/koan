@@ -1,30 +1,30 @@
 use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
-use crate::machine::model::{
-    KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet, SigSource,
-};
+use crate::machine::model::{KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet};
 use crate::machine::run_root_storage;
 use crate::machine::KoanRuntime;
 use crate::machine::{BindingIndex, ScopeId};
 
-/// Resolve a SIG-declared member's stored `KType` out of the signature's decl-scope type table.
+/// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
+/// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
+/// representation at SIG finish.
 fn member_type<'a>(
     scope: &'a crate::machine::Scope<'a>,
     sig_name: &str,
     member: &str,
 ) -> KType<'a> {
-    let sig = match scope.resolve_type(sig_name) {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type(sig_name) {
+        Some(KType::Signature { content, .. }) => content,
         other => panic!("{sig_name} must bind a Signature, got {other:?}"),
     };
-    sig.decl_scope()
-        .bindings()
-        .lookup_type(member, None)
-        .and_then(crate::machine::NameLookup::bound)
+    if let Some((kt, _arity)) = content.schema.abstract_members.get(member) {
+        return kt.clone();
+    }
+    content
+        .schema
+        .manifest_members
+        .get(member)
         .cloned()
         .unwrap_or_else(|| panic!("member `{member}` must live in {sig_name}'s type table"))
 }
@@ -35,17 +35,14 @@ fn bare_type_binds_abstract_member() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Container = ((TYPE Elt))");
-    let sig = match scope.resolve_type("Container") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let sig_id = match scope.resolve_type("Container") {
+        Some(KType::Signature { content, .. }) => content.sig_id,
         other => panic!("Container must bind a Signature, got {other:?}"),
     };
     match member_type(scope, "Container", "Elt") {
         KType::AbstractType { source, name } => {
             assert_eq!(name, "Elt");
-            assert_eq!(source, sig.decl_scope().id);
+            assert_eq!(source, sig_id);
         }
         other => {
             panic!("Elt must be an abstract member sourced at the SIG decl scope, got {other:?}")
@@ -109,15 +106,12 @@ fn val_slot_after_type_records_abstract_member() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Container = ((TYPE Elt) (VAL item :Elt))");
-    let sig = match scope.resolve_type("Container") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Container") {
+        Some(KType::Signature { content, .. }) => content,
         other => panic!("Container must bind a Signature, got {other:?}"),
     };
-    match sig
-        .schema()
+    match content
+        .schema
         .value_slots
         .get("item")
         .expect("item must live in Container's stored schema value_slots")
@@ -158,10 +152,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
 /// The `ScopeId` a SIG's decl-time abstract members are sourced at.
 fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> ScopeId {
     match scope.resolve_type(sig_name) {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => sig.decl_scope().id,
+        Some(KType::Signature { content, .. }) => content.sig_id,
         other => panic!("{sig_name} must bind a Signature, got {other:?}"),
     }
 }
@@ -258,19 +249,20 @@ fn monad_signature_smoke() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let s = match scope.resolve_type("Monad") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Monad") {
+        Some(KType::Signature { content, .. }) => content,
         other => panic!("Monad must bind a Signature KType, got {:?}", other),
     };
-    let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
+    let (wrap_kt, _arity) = content
+        .schema
+        .abstract_members
+        .get("Wrap")
+        .expect("Wrap must live in Monad's stored schema abstract_members");
     assert_type_constructor(wrap_kt, &["Type"]);
     // A SIG-body `VAL pure :T` slot lives in the signature's stored schema (`value_slots`),
     // carrying the declared type directly.
-    let kt: &KType = s
-        .schema()
+    let kt: &KType = content
+        .schema
         .value_slots
         .get("pure")
         .expect("pure must live in Monad's stored schema value_slots");

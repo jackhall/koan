@@ -4,10 +4,10 @@
 use crate::builtins::test_support::{
     lookup_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
 };
-use crate::machine::model::SigSource;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+use std::rc::Rc;
 
 #[test]
 fn type_of_number_literal_is_number() {
@@ -39,11 +39,8 @@ fn type_of_module_is_its_self_sig() {
     );
     let module = lookup_module(scope, "int_ord");
     match run_one_type(scope, parse_one("TYPE OF int_ord")) {
-        KType::Signature {
-            sig: SigSource::SelfOf(m),
-            ..
-        } => assert!(
-            std::ptr::eq(*m, module),
+        KType::Signature { content, .. } => assert!(
+            Rc::ptr_eq(content, module.self_sig_content()),
             "the self-sig must source the module itself",
         ),
         other => panic!("expected a module's self-sig, got {other:?}"),
@@ -65,21 +62,18 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     let view = lookup_module(scope, "view");
     let source = lookup_module(scope, "int_ord");
     match run_one_type(scope, parse_one("TYPE OF view")) {
-        KType::Signature {
-            sig: SigSource::SelfOf(m),
-            ..
-        } => {
+        KType::Signature { content, .. } => {
             assert!(
-                std::ptr::eq(*m, view),
+                Rc::ptr_eq(content, view.self_sig_content()),
                 "TYPE OF must report the view itself"
             );
             assert!(
-                !std::ptr::eq(*m, source),
+                !Rc::ptr_eq(content, source.self_sig_content()),
                 "the opaque view's sealed self-sig is not the source module's",
             );
             assert!(
                 matches!(
-                    m.self_sig().manifest_members.get("Elt"),
+                    content.schema.manifest_members.get("Elt"),
                     Some(KType::AbstractType { .. })
                 ),
                 "the opaque view's self-sig holds `Elt` as its per-call abstract identity, \
@@ -103,12 +97,9 @@ fn type_of_transparent_view_reports_concrete_slots() {
          LET view = (int_ord :! Ordered)",
     );
     match run_one_type(scope, parse_one("TYPE OF view")) {
-        KType::Signature {
-            sig: SigSource::SelfOf(m),
-            ..
-        } => {
+        KType::Signature { content, .. } => {
             assert_eq!(
-                m.self_sig().manifest_members.get("Elt"),
+                content.schema.manifest_members.get("Elt"),
                 Some(&KType::Number),
                 "a transparent view records the source's concrete `Elt`",
             );

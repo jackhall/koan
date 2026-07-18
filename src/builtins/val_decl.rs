@@ -3,22 +3,21 @@
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
 //! A VAL slot records "value member whose declared type is `kt`" into the SIG decl_scope's
-//! own slot collector ([`Scope::sig_slot`]/[`Scope::sig_value_slots`]) — a schema-in-progress
-//! separate from `bindings.types`, the table `TYPE <Name>` abstract members and
-//! `LET <Name> = <Type>` manifest members live in. VAL never binds a value: the slot is a
-//! specification (name → declared type) the module supplies a value for.
+//! own slot collector ([`Scope::sig_value_slots`]) — a schema-in-progress separate from
+//! `bindings.types`, the table `TYPE <Name>` abstract members and `LET <Name> = <Type>`
+//! manifest members live in. VAL never binds a value: the slot is a specification (name →
+//! declared type) the module supplies a value for.
 //!
 //! Type resolution dispatches on the `ty` carrier shape: a [`KType::Unresolved`] leaf or a
 //! builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
 //! builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KKind, SigSource};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KKind, KObject, KType};
 use crate::machine::DeliveredCarried;
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -32,13 +31,18 @@ fn typeexpr_from_carrier<'a>(kt: &KType<'a>) -> CarrierForm<'a> {
         | KType::Null
         | KType::OfKind(KKind::AnyType)
         | KType::OfKind(KKind::Signature)
-        // `:Module` lowers to the empty signature; its `name()` is "Module", so it re-resolves
-        // against decl_scope through the same leaf path as the other builtin type names.
-        | KType::Signature { sig: SigSource::Empty, .. }
         | KType::Any
         | KType::Identifier
         | KType::KExpression
         | KType::OfKind(KKind::ProperType) => CarrierForm::Leaf(TypeIdentifier::leaf(kt.name())),
+        // `:Module` lowers to the empty signature (no declaring scope); its `name()` is
+        // "Module", so it re-resolves against decl_scope through the same leaf path as the
+        // other builtin type names. A user-declared signature (a real `sig_id`) stays `Direct`:
+        // re-resolution is by name, and an aliased user SIG reached through a `LET` could miss
+        // or hit a shadow.
+        KType::Signature { content, .. } if content.sig_id == ScopeId::SENTINEL => {
+            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name()))
+        }
         _ => CarrierForm::Direct(kt.clone()),
     }
 }

@@ -1,12 +1,12 @@
 //! Unit tests for the signature-subtyping relation, its schema, and abstract-member
 //! substitution. Schemas are built both directly (region-free `KType`s in `'static`) and by
-//! projecting parsed SIG declarations through [`SigSchema::of_sig`].
+//! projecting parsed SIG declarations, pinned via [`SigSchema::with_pins`].
 
 use std::collections::HashMap;
 
 use super::*;
 use crate::machine::core::ScopeId;
-use crate::machine::model::types::{NominalSchema, Record, RecursiveSet, SigSource};
+use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
 
 // --- region-free builders -------------------------------------------------------------
 
@@ -396,7 +396,7 @@ fn sig_subtype_runs_across_distinct_lifetimes() {
     }
 }
 
-// --- pins via of_sig ------------------------------------------------------------------
+// --- pins via with_pins ----------------------------------------------------------------
 
 #[test]
 fn pin_converts_abstract_to_manifest_via_parsed_sig() {
@@ -407,14 +407,11 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
     let scope = run_root_silent(&region);
     run(scope, "SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
     let s = match scope.resolve_type("Pinnable") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("Pinnable should resolve to a signature"),
     };
     // `S WITH {Elt = Number}` fixes the abstract member manifest.
-    let pinned = SigSchema::of_sig(s, &[("Elt".to_string(), KType::Number)]);
+    let pinned = s.schema.with_pins(&[("Elt".to_string(), KType::Number)]);
     assert!(pinned.abstract_members.is_empty());
     assert_eq!(pinned.manifest_members.get("Elt"), Some(&KType::Number));
 
@@ -450,23 +447,17 @@ fn sig_to_sig_entailment_over_shared_abstract() {
          SIG Beta = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))",
     );
     let a = match scope.resolve_type("Alpha") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("Alpha should resolve to a signature"),
     };
     let b = match scope.resolve_type("Beta") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+        Some(KType::Signature { content, .. }) => content,
         _ => panic!("Beta should resolve to a signature"),
     };
     // Two SIGs declaring the same abstract member and slot entail each other: the
     // substitution maps each super `Type` ref onto the sub's own abstract identity.
-    assert!(check(&SigSchema::of_sig(a, &[]), &SigSchema::of_sig(b, &[])).is_ok());
-    assert!(check(&SigSchema::of_sig(b, &[]), &SigSchema::of_sig(a, &[])).is_ok());
+    assert!(check(&a.schema.with_pins(&[]), &b.schema.with_pins(&[])).is_ok());
+    assert!(check(&b.schema.with_pins(&[]), &a.schema.with_pins(&[])).is_ok());
 }
 
 // --- substitute_sig_members units -----------------------------------------------------

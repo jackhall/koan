@@ -10,7 +10,7 @@
 //! same content digest equal with no shared interner. The two generative exceptions fold a
 //! minted `ScopeId` into the content — opaque ascription's per-application nonce (a set's
 //! `generative_nonce`) and the sole id-keyed leaf, `AbstractType` — so distinct abstractions
-//! stay distinct. A `Signature` digests by its source's schema content (see
+//! stay distinct. A `Signature` digests by its content's schema (see
 //! [`schema_content_digest`]), so two textually identical declarations minted against
 //! different scope ids digest identically; the order-independence property is scoped to
 //! types without a minted leaf.
@@ -28,7 +28,7 @@ use std::rc::Rc;
 use crate::machine::core::ScopeId;
 
 use super::kkind::KKind;
-use super::ktype::{KType, SigSource};
+use super::ktype::KType;
 use super::record::Record;
 use super::recursive_set::{NominalSchema, RecursiveSet};
 use super::sig_schema::SigSchema;
@@ -240,13 +240,16 @@ pub(crate) fn constructor_apply_digest(ctor: TypeDigest, args: &[KType]) -> Type
     h.finish()
 }
 
-/// A module-signature type's digest: the schema content digest of its [`SigSource`] (identity by
-/// interface, not by mint — see
-/// [type-identity.md](../../../../design/typing/type-identity.md)) wrapped with the `WITH` pins
-/// that specialize it. Positional over `pinned_slots` (matching `PartialEq`; do NOT sort).
-pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)]) -> TypeDigest {
+/// A module-signature type's digest: its content's schema digest (identity by interface, not by
+/// mint — see [type-identity.md](../../../../design/typing/type-identity.md)) wrapped with the
+/// `WITH` pins that specialize it. Positional over `pinned_slots` (matching `PartialEq`; do NOT
+/// sort).
+pub(crate) fn signature_digest(
+    content_digest: TypeDigest,
+    pinned_slots: &[(String, KType)],
+) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
-    h.digest(sig.content_digest());
+    h.digest(content_digest);
     h.count(pinned_slots.len());
     for (name, kt) in pinned_slots {
         h.string(name).digest(kt.digest());
@@ -261,8 +264,8 @@ pub(crate) fn signature_digest(sig: SigSource, pinned_slots: &[(String, KType)])
 /// two textually identical declarations — whose members are minted against different scope ids —
 /// digest identically. Every other minted `AbstractType` (an opaque view's slot tags, a manifest
 /// member sourced from another sig) keeps its id-keyed stored digest, so opacity stays generative.
-/// A module / signature caches this per value (see `Module::self_sig_digest`,
-/// `ModuleSignature::schema_digest`).
+/// A `SigContent` caches this once at construction (see `Module::self_sig_digest`,
+/// `SigContent::schema_digest`).
 pub(crate) fn schema_content_digest(schema: &SigSchema) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
 
@@ -290,12 +293,13 @@ pub(crate) fn schema_content_digest(schema: &SigSchema) -> TypeDigest {
     h.finish()
 }
 
-/// The digest `SigSource::Empty` folds in — the module-lattice top (`:Module`), the type a
-/// module-accepting slot lowers to. It is the content digest of a zero-member schema, byte-for-byte
-/// what [`schema_content_digest`] produces for an empty [`SigSchema`] (empty abstract count, then
-/// two empty `feed_named_types` headers). So `:Module` and a user's zero-member `SIG E = ()` share
-/// one content identity — an empty interface is an empty interface — and the specificity walk places
-/// the top by empty content, not by source variant.
+/// The digest [`SigContent::empty`](super::sig_schema::SigContent::empty) folds in — the
+/// module-lattice top (`:Module`), the type a module-accepting slot lowers to. It is the content
+/// digest of a zero-member schema, byte-for-byte what [`schema_content_digest`] produces for an
+/// empty [`SigSchema`] (empty abstract count, then two empty `feed_named_types` headers). So
+/// `:Module` and a user's zero-member `SIG E = ()` share one content identity — an empty
+/// interface is an empty interface — and the specificity walk places the top by empty content,
+/// not by mint.
 pub(crate) fn empty_schema_digest() -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
     h.count(0); // abstract_members

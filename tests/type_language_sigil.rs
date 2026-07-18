@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet, SigSource};
+use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet};
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -70,17 +70,15 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
 /// Signature's stored schema (`value_slots`) — where VAL value slots record their declared type
 /// under their value-class name.
 fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
-    let s = match scope.resolve_type(sig_name) {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type(sig_name) {
+        Some(KType::Signature { content, .. }) => content,
         other => panic!(
             "`{sig_name}` should bind a Signature KType, got {:?}",
             other
         ),
     };
-    s.schema()
+    content
+        .schema
         .value_slots
         .get(name)
         .cloned()

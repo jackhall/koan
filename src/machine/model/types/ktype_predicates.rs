@@ -4,15 +4,15 @@
 
 use super::kkind::KKind;
 use super::ktraits::Parseable;
-use super::ktype::{KType, SigSource};
+use super::ktype::KType;
 use super::record::Record;
 use super::recursive_set::same_nominal;
 use super::registry::{digest_is_content, Relation, TypeRegistry};
-use super::sig_schema::{sig_subtype, SigSchema};
+use super::sig_schema::{sig_subtype, SigContent};
 use super::signature::{ExpressionSignature, SignatureElement};
 use super::type_digest::TypeDigest;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
-use crate::machine::model::values::{Carried, Held, KObject, ModuleSignature};
+use crate::machine::model::values::{Carried, Held, KObject};
 use crate::machine::DeliveredCarried;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
@@ -156,55 +156,41 @@ impl<'a> KType<'a> {
             // Value role: a concrete signature type is more specific than the
             // `:Signature` wildcard.
             (Signature { .. }, OfKind(KKind::Signature)) => true,
-            // A module value's self-sig (`SelfOf`) refines a `Declared` signature it structurally
-            // satisfies (plus pin agreement), so a memoized `LIST OF <modules>` element type
-            // satisfies a `:(LIST OF Ordered)` slot through `satisfied_by`.
-            (
-                Signature {
-                    sig: SigSource::SelfOf(m),
-                    ..
-                },
-                Signature {
-                    sig: SigSource::Declared(s),
-                    pinned_slots: pb,
-                    ..
-                },
-            ) => m.structurally_satisfies(s, types) && (pb.is_empty() || m.satisfies_pins(pb)),
             // Any non-empty signature refines the empty interface (the lattice top). Keyed on
-            // empty *content*, not the `Empty` source variant, so a zero-member `SIG E = ()` is the
-            // same top as `:Module` — and pins must agree (an empty interface pins nothing).
+            // empty *content*, not the mint that produced it, so a zero-member `SIG E = ()` is
+            // the same top as `:Module` — and pins must agree (an empty interface pins nothing).
             (
                 Signature {
-                    sig: sa,
+                    content: ca,
                     pinned_slots: pa,
                     ..
                 },
                 Signature {
-                    sig: sb,
+                    content: cb,
                     pinned_slots: pb,
                     ..
                 },
-            ) if sb.is_empty_interface()
+            ) if cb.is_empty_interface()
                 && pb.is_empty()
-                && !(sa.is_empty_interface() && pa.is_empty()) =>
+                && !(ca.is_empty_interface() && pa.is_empty()) =>
             {
                 true
             }
-            // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
+            // Same-declaration: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
             (
                 Signature {
-                    sig: sa,
+                    content: ca,
                     pinned_slots: pa,
                     ..
                 },
                 Signature {
-                    sig: sb,
+                    content: cb,
                     pinned_slots: pb,
                     ..
                 },
-            ) if sa.sig_id() == sb.sig_id() => {
+            ) if ca.sig_id == cb.sig_id => {
                 if pa.len() <= pb.len() {
                     return false;
                 }
@@ -216,22 +202,24 @@ impl<'a> KType<'a> {
                 }
                 true
             }
-            // Two distinct SIG-declared signatures compare by structural subtyping: `a ≺ b` iff
-            // `of_sig(a)` strictly `sig_subtype`s `of_sig(b)` (forward holds, reverse fails). Two
-            // structurally-identical distinct SIGs are mutually-satisfying, hence incomparable.
+            // Two signature types with different `sig_id`s — SIG-declared or self-sig, any
+            // combination — compare by strict structural subtyping over their pin-folded
+            // schemas: `a ≺ b` iff `a`'s schema strictly `sig_subtype`s `b`'s schema (forward
+            // holds, reverse fails). Two structurally-identical schemas are mutually-satisfying,
+            // hence incomparable.
             (
                 Signature {
-                    sig: SigSource::Declared(sa),
+                    content: ca,
                     pinned_slots: pa,
                     ..
                 },
                 Signature {
-                    sig: SigSource::Declared(sb),
+                    content: cb,
                     pinned_slots: pb,
                     ..
                 },
-            ) if sa.sig_id() != sb.sig_id() => {
-                declared_sig_more_specific(sa, pa, self.digest(), sb, pb, other.digest(), types)
+            ) if ca.sig_id != cb.sig_id => {
+                sig_content_more_specific(ca, pa, self.digest(), cb, pb, other.digest(), types)
             }
             // A nominal-family kind out-specifies `OfKind(Proper)` — `OfKind(NewType) ≺
             // OfKind(Proper)`. (Against `Identifier` / `OfKind(Proper)` the generic rule
@@ -336,12 +324,14 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             // Constraint role: a `Signature { .. }` slot is satisfied by a module value on the
-            // Object channel, via [`SigSource::satisfied_by_module`] plus pinned-slot agreement.
+            // Object channel, via [`Module::satisfies_sig_content`] plus pinned-slot agreement.
             KType::Signature {
-                sig, pinned_slots, ..
+                content,
+                pinned_slots,
+                ..
             } => match obj {
                 KObject::Module(m) => {
-                    sig.satisfied_by_module(m, types)
+                    m.satisfies_sig_content(content, types)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -514,10 +504,12 @@ impl<'a> KType<'a> {
             // argument cell carry it on the Object channel. A signature *value* is admitted by the
             // `OfKind(Signature)` wildcard above, never here.
             KType::Signature {
-                sig, pinned_slots, ..
+                content,
+                pinned_slots,
+                ..
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
-                    sig.satisfied_by_module(m, types)
+                    m.satisfies_sig_content(content, types)
                         && (pinned_slots.is_empty() || m.satisfies_pins(pinned_slots))
                 }
                 _ => false,
@@ -630,17 +622,17 @@ impl<'a> KType<'a> {
     }
 }
 
-/// Strict cross-SIG specificity for two DISTINCT `SIG`-declared signature slots. `a` is
-/// strictly more specific than `b` iff `of_sig(a, pins_a)` is a `sig_subtype` of
-/// `of_sig(b, pins_b)` in the forward direction only — the reverse must fail, or the two
-/// are mutually-satisfying (structurally equal) and neither strictly refines. Both
-/// directions record a verdict under `SigSatisfies`, keyed by the two signature digests (which
+/// Strict cross-signature specificity for two signature types with DISTINCT `sig_id`s (SIG-declared
+/// or self-sig, any combination). `a` is strictly more specific than `b` iff `a`'s pin-folded
+/// schema is a `sig_subtype` of `b`'s pin-folded schema in the forward direction only — the reverse
+/// must fail, or the two are mutually-satisfying (structurally equal) and neither strictly refines.
+/// Both directions record a verdict under `SigSatisfies`, keyed by the two signature digests (which
 /// fold their pins, so the key is exact).
-fn declared_sig_more_specific<'a, 'b>(
-    a: &ModuleSignature<'a>,
+fn sig_content_more_specific<'a, 'b>(
+    a: &SigContent<'a>,
     pins_a: &[(String, KType<'a>)],
     digest_a: TypeDigest,
-    b: &ModuleSignature<'b>,
+    b: &SigContent<'b>,
     pins_b: &[(String, KType<'b>)],
     digest_b: TypeDigest,
     types: &TypeRegistry,
@@ -651,8 +643,8 @@ fn declared_sig_more_specific<'a, 'b>(
         return forward && !reverse;
     }
     // At least one direction missed: build both schemas once (the walk we're memoizing).
-    let schema_a = SigSchema::of_sig(a, pins_a);
-    let schema_b = SigSchema::of_sig(b, pins_b);
+    let schema_a = a.schema.with_pins(pins_a);
+    let schema_b = b.schema.with_pins(pins_b);
     // The key (digest_a, digest_b) is content-derived only if BOTH sides' pin types are
     // content-digested — a pin embedding an unsealed set makes the digest pointer-derived.
     let insertable = pins_a.iter().all(|(_, kt)| digest_is_content(kt))

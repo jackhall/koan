@@ -238,14 +238,17 @@ fn opaque_views_have_distinct_type_of() {
 }
 
 /// The `SigSatisfies` verdict keys the subject on the module's self-sig content digest, so two
-/// modules with an identical interface share one verdict. The discriminating counter is the
-/// **miss** delta: `TAKE b` — a second, distinct module — leaves misses flat, so every lookup it
-/// made (its satisfaction check included) hit a verdict the prelude recorded rather than
-/// re-walking `sig_subtype`. A hit delta alone would pass even with sharing broken, since `TAKE b`
-/// re-hits verdicts unrelated to the sharing (see the differing-interface companion below). The
-/// hit assertion stays as the vacuity guard: it proves the probe consulted the registry at all.
-/// Verdicts are scoped to the run, so both takes run against the one registry of a single
-/// retained runtime.
+/// modules with an identical interface share one verdict. `a`/`b` each carry an `extra` member
+/// beyond what `Ord` requires, so their shared self-sig digest differs from `Ord`'s schema digest
+/// — content-UNequal to the candidate, so the check falls past the digest-equality fast path
+/// (a content-equal pair records nothing) and into the registry proper. The discriminating
+/// counter is the **miss** delta: `TAKE b` — a second, distinct module — leaves misses flat, so
+/// every lookup it made (its satisfaction check included) hit a verdict the prelude recorded
+/// rather than re-walking `sig_subtype`. A hit delta alone would pass even with sharing broken,
+/// since `TAKE b` re-hits verdicts unrelated to the sharing (see the differing-interface
+/// companion below). The hit assertion stays as the vacuity guard: it proves the probe consulted
+/// the registry at all. Verdicts are scoped to the run, so both takes run against the one
+/// registry of a single retained runtime.
 #[test]
 fn identical_modules_share_satisfaction_verdict() {
     let region = run_root_storage();
@@ -253,8 +256,8 @@ fn identical_modules_share_satisfaction_verdict() {
     let (registry, hits_before, misses_before) = run_probe_returning_registry(
         scope,
         "SIG Ord = ((VAL x :Number))\n\
-         MODULE a = ((LET x = 1))\n\
-         MODULE b = ((LET x = 2))\n\
+         MODULE a = ((LET x = 1) (LET extra = 9))\n\
+         MODULE b = ((LET x = 2) (LET extra = 9))\n\
          FN (TAKE m :Ord) -> Number = (m.x)\n\
          TAKE a",
         "TAKE b",

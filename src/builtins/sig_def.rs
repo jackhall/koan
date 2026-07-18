@@ -4,22 +4,22 @@
 //!
 //! Routes [`await_body_in_scope`](super::await_body::await_body_in_scope) like
 //! `module_def` / `recursive_types`: body statements dispatch against a fresh child scope
-//! on the outer scheduler, and the finish captures the populated scope into a
-//! [`ModuleSignature`] value, allocates it in the parent's region, and binds it under the
-//! signature's name. `VAL <name> :Type` declares a value slot, `TYPE <Name>` declares an
-//! abstract type member, and `LET <Name> = <Type>` declares a manifest type member. The
-//! ascription operators (`:|` / `:!`) iterate the stored scope at ascription time.
+//! on the outer scheduler, and the finish projects the populated scope into a
+//! [`SigContent`] and installs the `KType::Signature` identity into the parent scope.
+//! `VAL <name> :Type` declares a value slot, `TYPE <Name>` declares an abstract type
+//! member, and `LET <Name> = <Type>` declares a manifest type member. The ascription
+//! operators (`:|` / `:!`) read the stored schema at ascription time.
 
 use crate::machine::model::KType;
-use crate::machine::model::ModuleSignature;
-use crate::machine::model::{KKind, SigSource};
+use crate::machine::model::{KKind, SigContent, SigSchema};
 use crate::machine::{Scope, TraceFrame};
+use std::rc::Rc;
 
 use super::{arg, kw, sig};
 
 /// The SIG body: mints the declaration scope, dispatches the SIG body block against it via
-/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish captures
-/// that scope into a [`ModuleSignature`] and installs the `KType::Signature` identity into
+/// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish projects
+/// that scope into a [`SigContent`] and installs the `KType::Signature` identity into
 /// the parent scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
@@ -40,11 +40,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         body_expr,
         ChildScopeSeal::SealBeforeFinish,
         move |fctx| {
-            let sig: &'a ModuleSignature<'a> = fctx
-                .scope
-                .brand()
-                .alloc_signature(ModuleSignature::new(name_for_finish.clone(), decl_scope));
-            let identity = KType::signature(SigSource::Declared(sig), Vec::new());
+            let schema = SigSchema::project_decl(decl_scope);
+            let content = Rc::new(SigContent::new(
+                name_for_finish.clone(),
+                decl_scope.id,
+                schema,
+            ));
+            let identity = KType::signature(content, Vec::new());
             match fctx
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
@@ -81,7 +83,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use super::SigSource;
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
@@ -115,14 +116,11 @@ mod tests {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         run(scope, "SIG Ordered = (VAL x :Number)");
-        let sig = match scope.resolve_type("Ordered") {
-            Some(KType::Signature {
-                sig: SigSource::Declared(sig),
-                ..
-            }) => *sig,
+        let content = match scope.resolve_type("Ordered") {
+            Some(KType::Signature { content, .. }) => content,
             _ => panic!("Ordered should be a signature"),
         };
-        assert_eq!(sig.path, "Ordered");
+        assert_eq!(content.path, "Ordered");
     }
 
     /// Body-statement forward-reference: a SIG body's `VAL x :SomeType` parks on an
@@ -133,15 +131,12 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::KType;
-        let sig = match scope.resolve_type("Foo") {
-            Some(KType::Signature {
-                sig: SigSource::Declared(sig),
-                ..
-            }) => *sig,
+        let content = match scope.resolve_type("Foo") {
+            Some(KType::Signature { content, .. }) => content,
             _ => panic!("Foo should be a signature"),
         };
-        let x = sig
-            .schema()
+        let x = content
+            .schema
             .value_slots
             .get("x")
             .expect("VAL slot `x` must live in the signature's stored schema");
@@ -252,11 +247,17 @@ mod tests {
         let scope = run_root_silent(&region);
         run(scope, "SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let container = match scope.resolve_type("Container") {
-            Some(KType::Signature { sig, .. }) => *sig,
+            Some(KType::Signature { content, .. }) => std::rc::Rc::clone(content),
             _ => panic!("Container should be a signature"),
         };
-        let pin_num = KType::signature(container, vec![("Elem".into(), KType::Number)]);
-        let pin_str = KType::signature(container, vec![("Elem".into(), KType::Str)]);
+        let pin_num = KType::signature(
+            std::rc::Rc::clone(&container),
+            vec![("Elem".into(), KType::Number)],
+        );
+        let pin_str = KType::signature(
+            std::rc::Rc::clone(&container),
+            vec![("Elem".into(), KType::Str)],
+        );
         let bare = KType::signature(container, Vec::new());
         assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
         assert_ne!(pin_num, bare, "a pin refines away from the bare signature");

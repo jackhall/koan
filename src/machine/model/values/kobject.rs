@@ -4,9 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{
-    KType, Parseable, Record, RecursiveSet, SigSource, SignatureElement,
-};
+use crate::machine::model::types::{KType, Parseable, Record, RecursiveSet, SignatureElement};
 
 use super::{Held, KKey, Module};
 
@@ -117,9 +115,9 @@ pub enum KObject<'a> {
     },
     /// First-class module value. A bare borrow into the region the module was minted in,
     /// pinned by the value carrier's witness set — the same contract as [`Self::KFunction`].
-    /// `ktype()` reports the module's principal signature (`Signature { SelfOf(m) }`), so a
-    /// module in expression position dispatches and satisfies signature slots on the value
-    /// channel.
+    /// `ktype()` reports the module's principal signature (`Signature { content, .. }`, its
+    /// self-sig content), so a module in expression position dispatches and satisfies signature
+    /// slots on the value channel.
     Module(&'a Module<'a>),
     Null,
 }
@@ -353,7 +351,7 @@ impl<'a> KObject<'a> {
             }
             KObject::Record(_, field_types) => KType::record(field_types.clone()),
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
-            KObject::Module(m) => KType::signature(SigSource::SelfOf(m), Vec::new()),
+            KObject::Module(m) => KType::signature(Rc::clone(m.self_sig_content()), Vec::new()),
         }
     }
 

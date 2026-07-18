@@ -4,9 +4,9 @@ use crate::builtins::test_support::{
     lookup_fn, lookup_module, parse_one, run, run_root_silent, spliced_part,
 };
 use crate::machine::model::Carried;
-use crate::machine::model::SigSource;
 use crate::machine::model::TypeRegistry;
 use crate::machine::{run_root_storage, FrameStorageExt};
+use std::rc::Rc;
 
 /// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Elem = Number}` admits a
 /// module iff its self-sig satisfies the signature *and* every pin names a manifest member
@@ -16,8 +16,7 @@ use crate::machine::{run_root_storage, FrameStorageExt};
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     let types = TypeRegistry::new();
-    use crate::machine::model::KType;
-    use crate::machine::model::ModuleSignature;
+    use crate::machine::model::{KType, SigContent, SigSchema};
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     // An empty signature: every module bare-satisfies it, so the pins alone gate. Declared
@@ -28,9 +27,8 @@ fn sharing_constraint_rejects_mismatched_module_type() {
             scope,
             "Ordered".into(),
         ));
-    let sig = region
-        .brand()
-        .alloc_signature(ModuleSignature::new("Ordered".into(), sig_scope));
+    let schema = SigSchema::project_decl(sig_scope);
+    let content = Rc::new(SigContent::new("Ordered".into(), sig_scope.id, schema));
 
     // `no_elem_pin` binds no `Elem` member, so the `{Elem = Number}` pin finds nothing to agree
     // with. `num_bare` is a second `Elem = Number` module, ascribed to nothing: admission is
@@ -43,10 +41,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
          MODULE num_bare = ((LET Elem = Number) (LET compare = 0))",
     );
 
-    let slot = KType::signature(
-        SigSource::Declared(sig),
-        vec![("Elem".into(), KType::Number)],
-    );
+    let slot = KType::signature(content, vec![("Elem".into(), KType::Number)]);
 
     // A module binds value-side, so both the overload probe and the built argument cell carry it
     // on the Object channel — its satisfaction of a `Signature` slot goes through
@@ -86,9 +81,11 @@ fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::Signature {
-            sig, pinned_slots, ..
+            content,
+            pinned_slots,
+            ..
         }) => {
-            assert_eq!(sig.path(), "OrderedSet");
+            assert_eq!(content.path, "OrderedSet");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
             assert_eq!(pinned_slots[0].1, KType::Number);
@@ -125,9 +122,11 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::Signature {
-            sig, pinned_slots, ..
+            content,
+            pinned_slots,
+            ..
         }) => {
-            assert_eq!(sig.path(), "Set");
+            assert_eq!(content.path, "Set");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
@@ -226,17 +225,11 @@ fn transparent_view_pin_agreement_reads_source_types() {
          LET num_view = (num_mod :! Ordered)\n\
          LET str_view = (str_mod :! Ordered)",
     );
-    let sig = match scope.resolve_type("Ordered") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Ordered") {
+        Some(KType::Signature { content, .. }) => Rc::clone(content),
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let slot = KType::signature(
-        SigSource::Declared(sig),
-        vec![("Elem".to_string(), KType::Number)],
-    );
+    let slot = KType::signature(content, vec![("Elem".to_string(), KType::Number)]);
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
@@ -266,11 +259,8 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let sig = match scope.resolve_type("Ordered") {
-        Some(KType::Signature {
-            sig: SigSource::Declared(sig),
-            ..
-        }) => *sig,
+    let content = match scope.resolve_type("Ordered") {
+        Some(KType::Signature { content, .. }) => Rc::clone(content),
         _ => panic!("Ordered must bind a Signature KType"),
     };
     let view = lookup_module(scope, "view");
@@ -280,10 +270,7 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         .get("Carrier")
         .cloned()
         .expect("opaque view mints an abstract `Carrier`");
-    let slot = KType::signature(
-        SigSource::Declared(sig),
-        vec![("Carrier".to_string(), carrier_abstract)],
-    );
+    let slot = KType::signature(content, vec![("Carrier".to_string(), carrier_abstract)]);
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(

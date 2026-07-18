@@ -129,8 +129,8 @@ pub(crate) fn digest_is_content(kt: &KType<'_>) -> bool {
         KType::ConstructorApply { ctor, args, .. } => {
             digest_is_content(ctor) && args.iter().all(digest_is_content)
         }
-        // `sig` itself is an id-leaf (`Declared`/`SelfOf`/`Empty` carry no nested `KType`);
-        // only the `WITH`-pinned slot types need recursing.
+        // `content` is owned schema data with no nested `KType` of its own; only the
+        // `WITH`-pinned slot types need recursing.
         KType::Signature { pinned_slots, .. } => {
             pinned_slots.iter().all(|(_, kt)| digest_is_content(kt))
         }
