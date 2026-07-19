@@ -10,7 +10,7 @@ a per-variant walk; the operators themselves are the binary-only builtins in
 `==` and `!=` are ordinary builtins over `(left :Any) op (right :Any) -> Bool`.
 Each `:Any` slot admits both value channels, so the body reads its operands as
 raw `Held` cells: two objects compare by `value_equal`, two types compare by
-digest ([`KType`](../typing/ktype/README.md)'s cross-lifetime `PartialEq`), and
+digest ([`KType`](../typing/ktype/README.md)'s `PartialEq`), and
 a mixed object/type pair is unequal. `!=` negates a successful comparison and
 propagates a banned-operand error unchanged.
 
@@ -23,8 +23,9 @@ reducing pairwise.
 
 `value_equal` is cross-lifetime (`&KObject<'a>` vs `&KObject<'b>`): a spliced
 expression part opens its delivery envelope at a fresh brand per side, so the two
-carried values never share a lifetime. The whole comparison threads independent
-slot and value lifetimes over the heterogeneous `KType` predicate suite. Values
+carried values never share a lifetime. The `KType` predicate suite it calls into
+takes its types by owned reference and its values at an independent lifetime, so
+the comparison threads the two value lifetimes without ever unifying them. Values
 are acyclic by construction (see
 [Constructing circular values](../../roadmap/type_language/circular-value-construction.md)),
 so the walk carries no cycle guard.
@@ -116,8 +117,9 @@ equality wherever both apply.
 ## Nominal identity, cross-lifetime
 
 Nominal identity (newtypes, tagged sets, module interfaces) compares through
-digest-based `KType` equality, which is lifetime-agnostic: `KType<'a>` compares
-directly to `KType<'b>`. The predicate suite takes heterogeneous slot and value
+digest-based `KType` equality. `KType` carries no lifetime parameter at all — every
+variant owns its content — so the comparison is lifetime-agnostic by construction,
+whatever regions the two values holding those types live in. The predicate suite takes heterogeneous slot and value
 lifetimes throughout, so classifying a resolved value against a slot never builds
 a mixed-lifetime type and never re-anchors a value across brands — a verdict-only
 walk over two independent lifetimes. See the

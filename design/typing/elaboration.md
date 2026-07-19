@@ -118,7 +118,7 @@ cross-link this section rather than restating its slice.
   (which sees it bound) from sharing a verdict. Reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which takes the
   chain and returns the three-outcome
-  `TypeResolution<TypeHit>::{Done, Park, Unbound}`. See
+  `TypeResolution<&KType>::{Done, Park, Unbound}`. See
   [Strict admission rules](#strict-admission-rules) for the gate and
   the monotonicity argument.
 - **Layer 3 — the elaborator** in
@@ -143,9 +143,10 @@ cross-link this section rather than restating its slice.
   keyworded splice walk's eager name-resolve pass — call
   [`Scope::resolve_type_identifier`](../../src/machine/execute/dispatch/resolve_type_identifier.rs)
   directly, the same memoized, park-capable bridge (Layer 2) every compound type form
-  uses. It returns `TypeResolution<TypeHit>::{Done, Park, Unbound}`: `Done` carries the
-  bridge's cached `&KType` plus its stored reach, witnessed in place on the value
-  channel's `Type` arm; `Park` lets a leaf naming an earlier still-finalizing binder park
+  uses. It returns `TypeResolution<&KType>::{Done, Park, Unbound}`: `Done` carries the
+  bridge's cached `&KType`, witnessed in place on the value
+  channel's `Type` arm — a `KType` is owned data, so there is no reach to carry beside it;
+  `Park` lets a leaf naming an earlier still-finalizing binder park
   on its producer and re-resolve on wake; `Unbound` is a miss. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
@@ -192,7 +193,7 @@ Two consequences follow, and both are load-bearing elsewhere in this tree:
 **SIG value slots live off the binding map.** A SIG body records each `VAL <name> :<Type>`
 slot's declared type into a **slot collector** on the decl scope
 ([`Scope::sig_slot`](../../src/machine/core/scope.rs) / `sig_value_slots`), keyed by the slot's
-value name and paired with the type's stored reach — never into the `types` map. That collector
+value name — never into the `types` map. That collector
 is a **schema in progress, not a binding universe**: no name resolves against it and it carries
 no `BindingIndex`. The `types` map holds only the SIG's genuine type members (`TYPE <Name>`
 abstract, `LET <Name> = <Type>` manifest), so the value-token→`types` gate needs no exemption
@@ -314,7 +315,7 @@ which calls the memoized, park-capable
 bridge directly — the same bridge the keyworded splice walk's eager
 name-resolve pass calls
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
-On a resolved leaf its `TypeResolution::Done(TypeHit)` surfaces the bridge's cached
+On a resolved leaf its `TypeResolution::Done(&KType)` surfaces the bridge's cached
 `&KType` in the value channel's `Type` arm for every type-only nominal — struct / union /
 Result *and* signature; on an earlier still-finalizing binder it parks; on a
 miss it surfaces `Unbound`. The ladder consults **only** the type universe: the token-class
@@ -377,8 +378,9 @@ it hot. The scope-bound resolution memo is therefore the only cache:
   Reached through
   [`Scope::resolve_type_identifier`](../../src/machine/core/scope.rs), which
   returns the three-outcome
-  `TypeResolution<TypeHit>::{Done(TypeHit), Park(Vec<NodeId>),
-  Unbound(String)}` (`TypeHit` carrying the region `&'a KType` plus its stored reach).
+  `TypeResolution<&KType>::{Done(&'a KType), Park(Vec<NodeId>),
+  Unbound(String)}` — the region reference alone, with no stored reach beside it, since a
+  `KType` owns all its content.
   Cache miss runs the elaborator against `self`, then
   checks a **finalize gate** before writing: every user-type referenced by the
   result must be fully finalized (its name absent from the owning scope's

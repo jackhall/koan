@@ -166,15 +166,16 @@ registries.
 ## Open work
 
 The registry home and its verdict edges are shipped
-([`registry.rs`](../../src/machine/model/types/registry.rs)); the storage model —
-everything this doc says about nodes, handles, and composition edges — lands through
-two further roadmap items. Until they ship, type content is owned by each `KType`
-value (`Box`/`Vec` children, `Rc<RecursiveSet>` transport, `Rc<SigContent>` for a
-signature's schema), and `KType` carries a lifetime parameter and is `Clone` not
+([`registry.rs`](../../src/machine/model/types/registry.rs)), and `KType` carries no
+lifetime parameter — every variant owns its content, so a type crosses a region
+boundary by clone through the single storage door
+([`RegionBrand::alloc_ktype`](../../src/machine/core/arena.rs)) with no residence
+audit to run. The storage model — everything this doc says about nodes, handles, and
+composition edges — lands through one further roadmap item. Until it ships, type
+content is owned by each `KType` value (`Box`/`Vec` children, `Rc<RecursiveSet>`
+transport, `Rc<SigContent>` for a signature's schema), and `KType` is `Clone` not
 `Copy`.
 
-- [KType without a lifetime parameter](../../roadmap/type_memos/lifetime-free-ktype.md)
-  — deletes the lifetime parameter and the type-side residence machinery.
 - [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
   — content nodes, the `Copy` digest handle, and the recursive-set builder. The
   cross-thread transfer mechanics (including whether verdict edges transfer as

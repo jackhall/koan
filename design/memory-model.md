@@ -311,10 +311,22 @@ any region borrow is rejected before it ever reaches the pins-nothing empty witn
 witness pins nothing, so its carrier is sound only as a within-step transient; the step doors return
 it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded at the step's `'step`
 lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
-sole exit to node storage is finalize's fold. A value that
-cannot rebuild at `'static` ([`KType::to_static`](../src/machine/model/types/ktype.rs) declines an
-`Rc`-shared payload — a `SetRef` / `RecursiveGroup` set, whose `Rc::ptr_eq` identity a rebuild
-would break, or a non-empty signature's shared content) takes one of three tiers
+sole exit to node storage is finalize's fold.
+
+`KType` never reaches those tiers at all. No `KType` variant borrows region data — every variant
+owns its content, a signature's schema included ([`ktype.rs`](../src/machine/model/types/ktype.rs)) —
+so a type has no residence to audit and no `unsafe` family declaration to write. Its store is
+compile-safe by ownership through a **single unchecked door**,
+[`RegionBrand::alloc_ktype`](../src/machine/core/arena.rs): an owned value cannot dangle, and the
+`&'a` resident it hands back points into the storing brand's own region. A type crossing a region
+boundary crosses **by clone** through that same door — `Clone` shares the `Rc` sets (`SetRef` /
+`RecursiveGroup` transport, a signature's `Rc<SigContent>`), so the copy is shallow and content-digest
+identity is preserved. The binding tables therefore store a bare `&KType` with no reach evidence
+beside it ([`bindings.rs`](../src/machine/core/bindings.rs)), and a type read witnesses that
+reference in place under the home-frame pin alone.
+
+A *value* that cannot rebuild at `'static` (`KObject` has no general `'static` rebuild; a module-family
+pointer or an embedded `&Scope` is a live region borrow) takes one of three tiers
 instead. The two runtime-checked tiers route through the library's
 [`RegionHandle::alloc_resident_checked`](../workgraph/src/witnessed/region.rs), which stores only if
 the family's own [`AuditedStored`](../workgraph/src/witnessed/region.rs) audit returns true — nothing
@@ -324,20 +336,15 @@ permissive audit is not writable in safe code, and each call site passes only ty
 [`ResidenceEvidence`](../src/machine/core/arena.rs), never code. The third tier stores through a
 compile-only capability with no runtime audit at all:
 
-- **checked** (`alloc_ktype_checked` / `alloc_object_checked`) —
-  [`KType::resident_in`](../src/machine/model/types/ktype.rs) /
-  [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walk the value's own structure and
-  confirm every region pointer it carries points into the destination region, checking an `Rc`-shared
-  set's members by address rather than rebuilding them. `KType` borrows no region data in any
-  variant — every variant owns its content, a signature's schema included — so its walk answers
-  trivially and only `KObject`'s carries real pointers. Confined to identity-preserving stores: a
+- **checked** (`alloc_object_checked`) —
+  [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walks the value's own structure and
+  confirms every region pointer it carries points into the destination region, checking an `Rc`-shared
+  set's members by address rather than rebuilding them. A `Wrapped { type_id }` tag needs no walk: the
+  `&KType` it names points at owned data allocated region-locally through `alloc_ktype`, so it reaches
+  nothing the audit could reject. Confined to identity-preserving stores: a
   caller reaches here only to store a value whose identity a `'static` rebuild would break (a
-  module-family pointer, an `Rc`-shared payload). A site assembling a *new* composite
-  `KType` from ambiently-read parts does not land here — synchronous composition builds at a brand
-  instead, through the field-list fold ([`fold_field_list_sync`](../src/machine/execute/dispatch/field_list.rs)),
-  `StepAllocator::alloc_carried_with` (`WITH`'s pinned `Signature`), or `alloc_type_composed` — so no
-  from-scratch composite rides the runtime audit.
-- **reaching / delivered** (`Scope::alloc_ktype_reaching` / `alloc_module_reaching` /
+  module-family pointer, an `Rc`-shared payload).
+- **reaching / delivered** (`Scope::alloc_object_reaching` / `alloc_module_reaching` /
   `alloc_object_delivered`) — widens the dest-only check with reach evidence the scope already minted
   (a bind's `host_reach_of` / `adopted_reach_of`), *plus* the regions the mint's own omission policy
   deliberately never materializes as reach-set members (`Scope::covers_region_ambiently`: the home
@@ -349,36 +356,24 @@ compile-only capability with no runtime audit at all:
   is meaningful only relative to its minting scope, so taking the destination from `self` binds
   evidence, ambient coverage, and destination region together by construction. These tiers' callers
   are fused doors: the `StoredReach` is an opaque token they derive and thread whole into the alloc,
-  never a free parameter a caller asserts. The bind/register doors (`Scope::bind_delivered` /
-  `register_type_delivered` and siblings) derive it from the value's own witness. The read door
-  ([`Scope::resolve_type_identifier`](../src/machine/execute/dispatch/resolve_type_identifier.rs))
-  materializes it from the binding entry a name resolves to and hands it back *fused with that type*
-  in a `TypeHit`. A consumer that re-homes such a type takes the hit whole —
-  [`home_resolved_return_type`](../src/machine/core/kfunction/exec.rs) re-homes a deferred FN's
-  per-call return type into the captured-scope region, and because it accepts the hit rather than a
-  type and a reach side by side, the reach it audits under can only be the one the resolver derived
-  for that very type. That is how a return type may name a module living in neither the callee
-  frame's nor the captured scope's region (a module-returning FN mints its module in its own per-call
-  region; the
-  delivered argument carrier pins it), while the re-home stays capped at the contract lifetime so the
-  stored reference cannot outlive that pin. A type no name resolution produced — the return-type
-  expression form's sub-dispatch result — has no binding to derive evidence from and takes a separate
-  door (`home_ambient_return_type`) that supplies none, leaving the audit at the destination's own
-  region plus ambient coverage.
+  never a free parameter a caller asserts. The bind door (`Scope::bind_delivered` and siblings)
+  derives it from the value's own witness. A deferred FN's per-call return *type* needs no evidence
+  at all — [`home_return_type`](../src/machine/core/kfunction/exec.rs) clones it into the
+  captured-scope region through the single type door — but the clone still comes back capped at the
+  caller-supplied **contract** lifetime rather than the captured region's own, so a `ret` reference
+  cannot outlive the window the lift boundary consumes it in. That cap is return-contract discipline,
+  independent of residence.
 
   "Never a free parameter a caller asserts" is enforced, not merely intended: `StoredReach::empty` —
   the only way to mint a token from nothing — is visible only within `crate::machine::core`, and
   `StoredReach` deliberately has **no `Default` impl**, since a public trait method would hand the
   rest of the crate that same power under another name. Code outside `core` therefore cannot conjure
   a reach at all; it can only hold one some door derived for a specific value, and the doors that
-  consume a reach take it fused to that value. Reads that want "this binding's reach, empty if it
-  names none" call `Scope::type_reach` / `Scope::reach_for_resolved_type`, which collapse the miss on
-  `core`'s side of the wall — the `Option`-returning lookups behind them are not exported, because an
-  `Option<StoredReach>` in a caller's hands is an invitation to forge the `None` case. `Residence`
-  ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate all three checked tiers
+  consume a reach take it fused to that value. `Residence`
+  ([arena.rs](../src/machine/core/arena.rs)) is the shared coverage predicate both checked tiers
   compose from.
-- **folded** (`FoldingBrand::alloc_ktype_folded` / `alloc_object_folded`) — no runtime audit at all,
-  sound by signature: each sink takes its input at the brand lifetime (`KType<'b>` / `KObject<'b>` on
+- **folded** (`FoldingBrand::alloc_object_folded`) — no runtime audit at all,
+  sound by signature: the sink takes its input at the brand lifetime (`KObject<'b>` on
   `FoldingBrand<'b>`), and inside a fold combinator's `for<'b>` closure the only inhabitants of that
   lifetime are values derived from the fold's declared operand views, the brand's own allocations, and
   owned/`'static` data — all named by the witness the enclosing combinator composes. An
@@ -388,17 +383,12 @@ compile-only capability with no runtime audit at all:
   ([`in_fold_closure`](../src/machine/core/arena.rs)) takes a
   [`FoldedPlacement`](../workgraph/src/witnessed.rs) — a compile-only capability privately wrapping
   the destination handle — which only a fold engine (`transfer_into` / `merge_pinned` / `map_pinned` /
-  `StepAllocator::alloc_carried_with` / `alloc_carried_with_scope`) mints over the destination region
+  `StepAllocator::alloc_carried_with`) mints over the destination region
   and whose `'b` brand keeps it from escaping the closure, so the capability is reachable only at a
   fresh fold brand. The placement's [`alloc_resident_folded`](../workgraph/src/witnessed.rs) store
-  discharges the residence obligation at compile time. `alloc_carried_with_scope` additionally crosses
-  the consumer's scope as its own delivered operand, so a field-list re-walk's scope reads resolve at
-  the brand rather than ambiently.
+  discharges the residence obligation at compile time.
 
-`KObject::resident_in` is honest-partial: a `Wrapped { type_id }`'s raw `&KType` pointer is
-un-answerable (`KType` opts out of the address side-table the `owns_module` /
-`owns_function` checks read, by not implementing `Stored::record_local`), so that one field is
-unchecked. Every structural family (`Scope` / `Module` / `KFunction`) always
+`KObject::resident_in` walks every region borrow a value carries. Every structural family (`Scope` / `Module` / `KFunction`) always
 captures a borrow (its parent, its declaring scope), so its bare veneer takes the checked-not-`'static`
 form too — `alloc_scope` / `alloc_module` / `alloc_function` run a
 release-enforced `ptr::eq` same-region check via their family's `AuditedStored` audit rather than a

@@ -51,15 +51,14 @@ by local discipline rather than by construction.
 
 | Hole | Direction | Loose surface | Call sites riding it |
 |---|---|---|---|
-| Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 3 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`); `KType` and `Scope` are un-recorded |
+| Residence side-table blind spots | under-pin | bare-`usize` `owns_addr` + default-no-op `Stored::record_local` ([region.rs](../../workgraph/src/witnessed/region.rs)) | 3 opt-in `record_local` impls in `arena.rs` (`KObject`, `KFunction`, `Module`); `Scope` is un-recorded |
 | [Cross-region pin cycles](../scheduler_library/region-debug-audits.md) | over-pin | reach sets holding `Rc<FrameStorage>` members with no cycle detection (`region.rs`) | 3 reach-mint doors in `scope.rs` (`mint_reach`, `mint_resident_reach`, `adopt_into`) |
-| Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_ktype_folded` / `alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
+| Reach over-approximation ([fold side](../scheduler_library/region-debug-audits.md)) | over-pin | every fold audit is one-sided (catches under-pinning only) | every fold sink (`alloc_object_folded`, `arena.rs`); the scalar counter-gates live in `arena.rs` |
 | Side-table growth | retention | `membership` vec + linear-scan `owns_addr` (`region.rs`) | every recorded-family allocation feeds it; every `owns_addr` audit scans it |
 | Raw-handle reach | under-pin | `pub(crate)` `RegionBrand::handle()` hands koan code the raw `RegionHandle`, bypassing the veneer ([arena.rs](../../src/machine/core/arena.rs)) | 11 raw-handle reaches across `src/machine` |
-| Resident-audit precondition | under-pin | `checked_reach_of_type` discards the audit walk's pass/fail and returns `foreign: None` ([arena.rs](../../src/machine/core/arena.rs)) | 2 region-pure seal operands (NEWTYPE, UNION) in `newtype_def.rs` / `union.rs` |
-| Region-purity by fiat | under-pin | `StoredReach::empty()` minted inside `register_nominal_upsert` / `register_builtin_type` / region-pure `seal_type_operand`, on a structural claim never audited ([scope.rs](../../src/machine/core/scope.rs)) | 5 nominal-upsert + 15 builtin-register callers |
-| Carrier reach co-location | under-pin | `resident_*_carrier` accept a `StoredReach<'r>` whose reach may be shorter-lived than the scope — co-location backed by the re-anchor pin, not the type ([scope.rs](../../src/machine/core/scope.rs)) | every `resident_type_carrier` / `resident_value_carrier` reader |
-| [Unfused reach-alloc doors](fused-reach-alloc-doors.md) | under-pin | the evidence-tier doors take the value and its `StoredReach` as independent parameters, so a value can be audited under a reach derived for another value ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_ktype_reaching` / `alloc_object_reaching` / `alloc_module_reaching` caller (`scope.rs`, `ascribe.rs`, `resolve_type_identifier.rs`, `kfunction/exec.rs`) |
+| Region-purity by fiat | under-pin | `StoredReach::empty()` minted inside the function-register door on a structural claim never audited ([bindings.rs](../../src/machine/core/bindings.rs)) | 1 production mint (`register_function`) plus test fixtures |
+| Carrier reach co-location | under-pin | `resident_value_carrier` accepts a `StoredReach<'r>` whose reach may be shorter-lived than the scope — co-location backed by the re-anchor pin, not the type ([scope.rs](../../src/machine/core/scope.rs)) | every `resident_value_carrier` reader |
+| [Unfused reach-alloc doors](fused-reach-alloc-doors.md) | under-pin | the evidence-tier doors take the value and its `StoredReach` as independent parameters, so a value can be audited under a reach derived for another value ([residence.rs](../../src/machine/core/arena/residence.rs)) | every `alloc_object_reaching` / `alloc_object_delivered` / `alloc_module_reaching` caller (`scope/registry.rs`, `scope/reach.rs`, `ascribe.rs`, `dispatch/exec.rs`) |
 | [Untyped re-anchor pins](typed-fold-pins.md) | under-pin | the pinned fold verbs take any `Pin: Witness`, unlinked to the operand backing the re-anchor needs ([witnessed.rs](../../workgraph/src/witnessed.rs)) | every koan `map_pinned*` / `merge_pinned*` call site (`catch.rs`, `constructors.rs`, `literal.rs`), incl. the possibly-empty pin in `build_type_operand` |
 | Evidence dead states | under-pin | `ResidenceEvidence` is a struct of `Option`s, so the meaningless ambient+seen state is representable and the family audits silently drop `seen` when `ambient` is present ([arena.rs](../../src/machine/core/arena.rs)) | every `alloc_resident_checked` evidence mint in `arena.rs` (none passes both today) |
 | Module reach union breadth | over-pin | `child_module_reach` unions every child binding-entry reach, including entries the module never exposes ([scope.rs](../../src/machine/core/scope.rs), `entry_reaches` in [bindings.rs](../../src/machine/core/bindings.rs)) | MODULE finish + both ascribe views |
@@ -90,29 +89,18 @@ by local discipline rather than by construction.
   family that forgets to opt in silently becomes audit-permissive.
   Candidate: drop `record_local`'s default no-op so every family states its
   recording choice explicitly, and stamp regions with a generation so a
-  reused address cannot false-pass; the `KType` gap needs its own ruling.
+  reused address cannot false-pass.
 
-- **Resident-audit precondition.** `Scope::checked_reach_of_type`
-  ([arena.rs](../../src/machine/core/arena.rs)) walks a value's borrows but
-  discards the walk's pass/fail, reading only the saw-a-region-pointer flag and
-  returning `foreign: None`. Honest only when the argument genuinely lives in the
-  scope's own region — its documented precondition, unenforced. A non-resident or
-  foreign-borrowing `&KType` would silently under-pin. Two callers today, both
-  region-pure `SetRef` identities (the NEWTYPE and UNION seal operands).
-  Candidate: `debug_assert!` the walk returned `true`, making the resident-only
-  precondition self-checking.
+- **Region-purity by fiat.** [`Bindings::register_function`](../../src/machine/core/bindings.rs)
+  mints `StoredReach::empty()` on the structural claim that the registered
+  reference holds no foreign region pointer. The claim is never audited; a
+  registration that ever embedded a foreign borrow would under-pin. Candidate:
+  derive the empty reach from a residence walk rather than assert it. The type
+  channel no longer participates — a `KType` owns all its content, so a type
+  binding carries no reach to mint in the first place.
 
-- **Region-purity by fiat.** `register_nominal_upsert`, `register_builtin_type`,
-  and the region-pure `seal_type_operand` operands
-  ([scope.rs](../../src/machine/core/scope.rs)) mint `StoredReach::empty()` on the
-  structural claim that a nominal `SetRef` identity (an `Rc` set + index) and
-  builtin identities hold no region pointer. The claim is never audited; a nominal
-  identity that ever embedded a region borrow would under-pin. Candidate: derive
-  the empty reach through `checked_reach_of_type` (once its precondition is
-  enforced) rather than assert it.
-
-- **Carrier reach co-location.** `resident_type_carrier` / `resident_value_carrier`
-  ([scope.rs](../../src/machine/core/scope.rs)) accept a `StoredReach<'r>` whose
+- **Carrier reach co-location.** `resident_value_carrier`
+  ([scope.rs](../../src/machine/core/scope.rs)) accepts a `StoredReach<'r>` whose
   reach reference may be shorter-lived than the binding scope. Sound because
   `Carrier::new` erases the reference and liveness rests on the pin supplied at
   re-anchor — but the type no longer enforces that the reach outlives its reader;
@@ -124,7 +112,7 @@ by local discipline rather than by construction.
 - **Evidence dead states.** `ResidenceEvidence`
   ([arena.rs](../../src/machine/core/arena.rs)) mirrors `Residence`'s evidence
   fields as a struct of `Option`s, so the meaningless ambient+seen combination
-  is representable; the `KType` / `KObject` family audits' ambient arm silently
+  is representable; the `KObject` family audit's ambient arm silently
   drops `seen`, and the `Module` audit ignores it entirely. No caller mints
   both today — discipline, not construction. A future evidence-tier site
   passing both would silently lose its saw-a-region-pointer recording and

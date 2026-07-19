@@ -118,14 +118,13 @@ so its reach folds in by construction),
 the Resolved arm through the binding scope's own
 [`resident_value_carrier`](../src/machine/core/scope.rs) — so the projected object
 names every region it reaches by construction. No construction terminal pairs an *already-built* value
-with a separately-asserted witness: the **type** family seals the same way — a delivered type terminal
-through the binding scope's own [`Scope::resident_type_carrier`](../src/machine/core/scope.rs), born
-co-located with the region-resident slot type the register door
-([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs (its stored reach derived from
-the delivered carrier via [`host_reach_of`](../src/machine/core/scope.rs)); a region-referencing module
-self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals the same way, under the child-scope reach
-folded at construction ([`Scope::child_module_reach`](../src/machine/core/scope.rs), from the child scope
-the birth site holds directly) — so every multi-dep constructed value, object or type, is born
+with a separately-asserted witness. The **type** family needs no witness set at all: a `KType` owns
+all its content, so a type terminal seals through the binding scope's own
+[`Scope::resident_type_carrier`](../src/machine/core/scope.rs) with an empty, pins-nothing witness,
+co-located with the region-resident type the register door
+([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs. That holds for a module
+self-sig (`KType::Signature { sig: SelfOf(m), .. }`) too — its `SelfOf` names the module
+structurally, not by region pointer. Every multi-dep constructed *object* is born
 co-located by the `yoke` brand. The region-pure
 carrier is built by the purpose-built [`Witnessed::resident`](../workgraph/src/witnessed.rs), which fixes the
 witness to `W::default()` — the empty, pins-nothing set — so it cannot pair a value with a *wrong*
@@ -276,13 +275,12 @@ they project; and a `let` or user-fn arg bind mints the bound value's carrier in
 ([`type_decl`](../src/builtins/type_decl.rs)), or a `LET` type alias
 ([`let_binding`](../src/builtins/let_binding.rs)) — seals via
 [`Scope::resident_type_carrier`](../src/machine/core/scope.rs), born co-located with the region-resident
-type the register door ([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs, its
-stored reach derived from the delivered carrier via [`host_reach_of`](../src/machine/core/scope.rs); a
-region-referencing module self-sig (`KType::Signature { sig: SelfOf(m), .. }`) seals via that same
-[`Scope::resident_type_carrier`](../src/machine/core/scope.rs)
-under the child-scope reach minted once at construction from the child scope the birth site holds
-directly ([`Scope::child_module_reach`](../src/machine/core/scope.rs)) — the same token the module
-*value*'s own bind ([`Scope::bind_module`](../src/machine/core/scope.rs)) derives, never recovered by
+type the register door ([`register_sig_slot_delivered`](../src/machine/core/scope.rs)) installs. It
+carries no reach: a `KType` owns all its content, including a signature's schema, so a sealed type
+borrows nothing beyond the region it was stored into. The reach discipline below is therefore the
+*value* channel's alone — a module value's bind ([`Scope::bind_module`](../src/machine/core/scope.rs))
+derives its token from the child scope held directly at construction
+([`Scope::child_module_reach`](../src/machine/core/scope.rs)), never recovered by
 walking the built value. A relocated module therefore names every region it reaches on its own witness, read
 back at the consumer rather than reconstructed from the value. No finish reads a live
 value out to rebuild its reach: the relocate-into-consumer seam is a plain
@@ -320,19 +318,23 @@ adopted into a scope arrives as its delivery envelope; the bind mints its reach 
 everything the value reaches under the scope's own liveness, and the reference-only carrier it stores
 holds no pin into a producer frame.
 
-The minted reach is stored **per binding**, so a later read hands its carrier back structurally.
-[`Bindings`](../src/machine/core/bindings.rs)' `data` and `types` entries each carry the bound value's
+The minted reach is stored **per binding** on the value channel, so a later read hands its carrier back
+structurally. [`Bindings`](../src/machine/core/bindings.rs)' `data` entries carry the bound value's
 home-omitted foreign `Option<&FrameSet>` alongside the reference — minted at bind time from the
 delivered carrier for a value or alias ([`Scope::host_reach_of`](../src/machine/core/scope.rs)), and
 minted from the child scope's binding-entry reaches, held directly at construction, for a module
 ([`Scope::child_module_reach`](../src/machine/core/scope.rs)). A carrier-oriented lookup
-(`lookup_value_carrier` / `lookup_type_carrier`) or an `ATTR` member read hands that stored reach back —
+(`lookup_value_carrier`) or an `ATTR` member read hands that stored reach back —
 copying the thin reference, never cloning the set — and the read builds a self-contained terminal —
 home frame fetched fresh, ∪ the stored foreign reach — through
-[`Scope::resident_value_carrier`](../src/machine/core/scope.rs) / `resident_type_carrier`, witnessing
-the existing `&'a KObject` / `&'a KType` **in place**. A bare type leaf rides the reach through the
-whole resolve chain (the `type_identifier_memo` and `resolve_type_identifier`), recomputing it at the
-memo miss by name ([`Scope::resolve_type_stored`](../src/machine/core/scope.rs)). The stored reach is
+[`Scope::resident_value_carrier`](../src/machine/core/scope.rs), witnessing
+the existing `&'a KObject` **in place**.
+
+The `types` channel stores no reach: a `KType` owns all its content, so a bound type borrows nothing
+beyond the region it was allocated into. A type read witnesses the existing `&'a KType` in place under
+the home-frame pin alone (`resident_type_carrier`), and a bare type leaf rides the resolve chain (the
+`type_identifier_memo` and `resolve_type_identifier`) as a bare reference with nothing to replay at a
+memo miss. The value-side stored reach is
 home-omitted for the same cycle-safety rule every mint obeys — the region's own home frame `Rc` never
 lands in-region, so no `frame → region → scope → bindings → frame` strong cycle forms. A freshly-built
 FN-def / LET-object registers its reference through the scope's frame-lifetime `&'a` and seals only its

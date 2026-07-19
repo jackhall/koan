@@ -25,7 +25,7 @@ use super::recursive_set::{NominalMember, RecursiveSet};
 mod tests;
 
 /// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: model uses
-/// `TypeResolution<KType>`, execute uses `TypeResolution<TypeHit>`. `Park` carries the producer
+/// `TypeResolution<KType>`, execute uses `TypeResolution<&KType>`. `Park` carries the producer
 /// `NodeId`s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]

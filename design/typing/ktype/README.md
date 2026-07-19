@@ -109,7 +109,7 @@
   nothing on its own; `TYPE OF` is the door that surfaces that self-sig as a type
   value (`m :(TYPE OF int_ord)`, `-> :(TYPE OF er)`) — see
   [modules.md § Modules in type position](../modules.md#modules-in-type-position-type-of).
-  `Signature { content: Rc<SigContent<'a>>, pinned_slots: Vec<(String, KType)> }`
+  `Signature { content: Rc<SigContent>, pinned_slots: Vec<(String, KType)> }`
   serves both signature roles in one variant. Its
   [`SigContent`](../../../src/machine/model/types/sig_schema.rs) is **owned data** —
   `{ path, sig_id, schema, schema_digest }` — so a `SIG`-declared interface, a module's

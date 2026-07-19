@@ -286,10 +286,10 @@ Three consequences:
 
 - `-> :(TYPE OF er)`, where `er` is a module-valued parameter, is a deferred return
   meaning "returns a module satisfying `er`'s interface". The per-call contract is
-  the argument module's self-sig, homed into the captured-scope region against the
-  **delivered carrier** of the resolved return type
-  ([`home_delivered_return_type`](../../src/machine/core/kfunction/exec.rs)), whose
-  reach names every region that type borrows. The argument module need not live in
+  the argument module's self-sig, cloned into the captured-scope region through the
+  single type door ([`home_return_type`](../../src/machine/core/kfunction/exec.rs)) —
+  a `KType` owns all its content, so the clone borrows only its destination and
+  needs no reach evidence. The argument module need not live in
   the captured region: a module minted in a functor's per-call
   region rides the return like a root-bound one (see
   [per-call-region/lifecycle.md](../per-call-region/lifecycle.md)).

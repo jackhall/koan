@@ -428,9 +428,10 @@ as a single positional value; ATTR then projects a field through the `Wrapped` l
 `:(Number AS Wrapper)` is a `ConstructorApply` slot; a value satisfies it when the two
 ctors' `(set, index)` match via `same_nominal` (both are `SetRef`s) and the stamped args
 agree pairwise — an `Any` slot arg admits anything, otherwise the args must be structurally
-equal. The rule lives in one cross-lifetime helper
+equal. The rule lives in one helper
 ([`constructor_apply_admits`](../../src/machine/model/types/ktype_predicates.rs)) shared by
-both the same-lifetime `KType::matches_value` `Wrapped` arm and the heterogeneous
-`KType::accepts_carried` dispatch arm, so a FN parameter typed `:(Number AS Wrapper)` and a
+both the `KType::matches_value` `Wrapped` arm and the
+`KType::accepts_carried` dispatch arm — types are owned, so neither arm constrains the
+value's lifetime — so a FN parameter typed `:(Number AS Wrapper)` and a
 value-position match apply the identical admission. Two `Wrapper (v)` values compare `==`
 through the ordinary `Wrapped` structural-equality path.

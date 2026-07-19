@@ -109,8 +109,10 @@ clears an in-flight type producer's placeholder (nor the reverse).
   `placeholders`, surfacing the result as the same
   [`NameLookup`](../../src/machine/core/bindings.rs) shape instantiated for the type
   channel (`NameLookup<&KType>`) — `Bound(&KType)`, `Parked(NodeId)`, or `None`. Every
-  single-scope lookup — value, type, and the reach-carrying `NameLookup<ValueHit>` /
-  `NameLookup<TypeHit>` reads — shares this one bound-or-parked-or-miss shape. The
+  single-scope lookup — value, type, and the reach-carrying `NameLookup<ValueHit>`
+  read — shares this one bound-or-parked-or-miss shape. There is no type-side
+  reach-carrying twin: a `KType` owns all its content, so a type lookup hands back the
+  bare `&KType`. The
   finalize gate that must park on an
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` reads the placeholder directly through
