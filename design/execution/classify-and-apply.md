@@ -351,7 +351,7 @@ record, so a park-edge install is one atomic +1 across the three vectors.
 `free()` recurses only into `Owned` arms, so a consumer's reclamation
 cannot transit a park edge into a sibling producer's subtree. Same-scope
 rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
-duplicating an existing exact signature surfaces as
+indistinguishable from an existing one surfaces as
 `KErrorKind::DuplicateOverload`. Type bindings share this placeholder
 mechanism: a type-binding site registers in `Scope::placeholders` exactly
 like a value binding, external lookups park the same way, and

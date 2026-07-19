@@ -219,7 +219,7 @@ impl<'a> Scope<'a> {
     /// The mutable run scope: the direct child of the immutable run-global root. Unlike the
     /// generic [`Self::child_under`] — which copies the parent's *own* `root` handle — this stamps
     /// `root` to `run_root` itself, because the run-global root carries no `root` of its own
-    /// (`root: None` marks "I am the root"). The only caller is `default_scope`, which holds the
+    /// (`root: None` marks "I am the root"). The only caller is `unseeded_scopes`, which holds the
     /// root as a genuine `&'a`.
     pub fn run_child(run_root: &'a Scope<'a>) -> Scope<'a> {
         let mut child = Self::child_under(run_root);

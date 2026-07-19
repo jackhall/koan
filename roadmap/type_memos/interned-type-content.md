@@ -48,6 +48,10 @@ several surfaces:
   is deleted.
 - Type digest values are unchanged — the existing digest test suite passes
   unmodified.
+- `seed_builtins` ([builtins.rs](../../src/builtins.rs)) consumes the run frame's
+  registry it already receives: the `types` operand is threaded into every
+  per-module `register(scope, types)` so the builtins' own `KType` construction
+  interns against the run's graph.
 
 **Directions.**
 
@@ -84,11 +88,7 @@ The value-side counterpart is
 [Region-store record values](../refactor/region-store-records.md), which homes a
 record's field substrate in the region; this item owns every type-side clone.
 
-**Requires:**
-
-- [Run registry through bind doors and builtin seeding](registry-through-bind-doors.md) —
-  builtin seeding constructs types, so interning them needs the run frame's registry
-  established and threaded first.
+**Requires:** none — the run-frame registry and its builtin-seeding handoff are shipped.
 
 **Unblocks:**
 

@@ -99,10 +99,6 @@ order-sensitively (they are syntax, not the values they would evaluate to). A
 the value walk — the one place expression equality reaches back into
 `value_equal` (and the reason it is cross-lifetime).
 
-The deferred-return duplicate-overload check compares its captured expressions
-through this same walk; a banned-shape splice inside a deferred return
-conservatively counts as a distinct overload.
-
 ## Key normalization
 
 Dict keys are the concrete `KKey`

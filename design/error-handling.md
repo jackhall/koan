@@ -38,7 +38,8 @@ with these `KErrorKind` variants:
 - `TypeClassBindingExpectsType` — `LET <Type-class> = <non-type>` rejected at
   bind time rather than at downstream elaboration.
 - `Rebind` — a second `LET` of a name already bound in the same scope.
-- `DuplicateOverload` — an `FN` whose signature exactly matches a registered overload.
+- `DuplicateOverload` — an `FN` indistinguishable from a registered overload: same
+  element shape, same type in every argument slot.
 - `SchedulerDeadlock` — the scheduler reached a fixed point with work still outstanding.
 - `User` — landing pad for user-side error construction; see open work.
 

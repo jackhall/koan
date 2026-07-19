@@ -59,5 +59,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Function-typed return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
-- [Run registry through bind doors and builtin seeding](type_memos/registry-through-bind-doors.md)
+- [Interned type content behind Copy handles](type_memos/interned-type-content.md)
 

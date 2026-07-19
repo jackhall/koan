@@ -195,13 +195,36 @@ admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../..
 wraps the filter-then-`most_specific` dance over a single scope's
 visibility-pre-filtered bucket.
 
+### Overload identity
+
+Two overloads in one bucket are **indistinguishable** when they have the same element
+shape and a type-equal `Argument` slot at every position. That is the definition-time
+duplicate gate
+([`ExpressionSignature::indistinguishable_from`](../../src/machine/model/types/signature.rs)),
+raising `KErrorKind::DuplicateOverload` from the bind door
+([`bindings.rs`](../../src/machine/core/bindings.rs)) rather than admitting a pair no
+call could ever resolve.
+
+The gate is the exact complement of the specificity tournament above, and lives
+adjacent to it for that reason: per-slot type equality makes every mutual
+`is_more_specific_than` probe false, so such a pair ties as `Equal` on every call and
+poisons the bucket with unresolvable ambiguity. Parameter names do not participate —
+they are not part of the call. Neither do return types: dispatch selects on argument
+slots alone, so two definitions differing only in their declared return are the same
+overload, and the second is a duplicate. (Return types do participate in a function
+*type*'s identity, which is a different relation — see
+[ktype/slots-and-signatures.md](ktype/slots-and-signatures.md).)
+
 ## The immutable root and unshadowable builtins
 
 The builtins live once, in a distinctly-typed run-global root
 ([`ScopeKind::Root`](../../src/machine/core/scope.rs)) that holds them and accepts no
-user bindings. [`default_scope`](../../src/builtins.rs) registers the builtins into that
-root and returns a mutable `RunScope` child of it, so top-level Koan bindings land in the
-`RunScope` and the root stays builtin-only. Every [`Scope`](../../src/machine/core/scope.rs)
+user bindings. [`unseeded_scopes`](../../src/builtins.rs) allocates that root together with
+a mutable `RunScope` child of it, and [`seed_builtins`](../../src/builtins.rs) registers the
+builtins into the root, so top-level Koan bindings land in the `RunScope` and the root stays
+builtin-only. The two are split because seeding takes the run frame's
+[type registry](type-registry.md): the run frame is established against the `RunScope` first,
+and its registry is what the builtins are seeded against. Every [`Scope`](../../src/machine/core/scope.rs)
 carries a direct `root` handle (`None` iff it *is* the root), so any frame, however deeply
 nested, reaches the builtins in one hop through
 [`Scope::root_scope`](../../src/machine/core/scope.rs) rather than walking `outer` to the
