@@ -95,18 +95,30 @@ lives as long as the run.
 A strongly-connected group of mutually-recursive nominal types interns as one node per
 member. Sibling references are ordinary composition edges, and those edges may form
 cycles: the registry does not reclaim by refcount, so a cycle is not a leak hazard
-and needs no special sibling encoding to break it. A member's identity stays
-`(set digest, index-in-set)` folded into one digest, exactly as
-[type-identity.md](type-identity.md) specifies — two independently built groups with
-the same content intern to the same nodes.
+and needs no special sibling encoding to break it. A member's identity is
+`(SCC digest, index)` folded into one digest, exactly as
+[type-identity.md](type-identity.md) specifies — the digest unit is the member's own
+strongly-connected component, not its declaration group, so two independently built
+components with the same content intern to the same nodes and co-declared types that
+never reference each other digest independently.
 
-Construction is two-phase, and the registry only ever sees phase two. A **builder**
-type accumulates the group while member schemas are still being elaborated (the
-pre-seal window — members exist, schemas fill in as each finalizes). At **seal**, the
-builder digests the finished group, interns each member as a node, rewrites
-intra-group references into composition edges, and hands back handles. Pre-seal state
-never enters the registry, so every node's digest is a true content digest and no
-insert-time purity guard is needed.
+Construction is two-phase. A scope-carried **window record** fixes the group's
+membership up front and accumulates each member's schema as it finalizes (the
+pre-seal window); riding the scope chain is what lets scheduler-interleaved windows
+coexist. Inside the window a sibling reference interns as a **relative** node — the
+sibling's bare index, deterministic and immutable like any other content, meaningful
+against an ambient set — so window elaboration is ordinary interning, building
+composites over relative children. At **seal**, the record extracts each member's
+sibling references, partitions the members into strongly-connected components, and
+digests the condensation bottom-up: each component is presented canonically — members
+in name order, intra-component references as relative indices (which is what makes
+digesting a cycle terminate), references outside the component folding the referent's
+finished digest. Each member's handle derives from `(SCC digest, index)`, and the
+member nodes intern with every relative reference rebuilt to the absolute member
+handle — the cyclic composition edges. Relative nodes remain as inert relative
+content: they never appear in a sealed schema, never reach the predicates, and never
+ride a value. Nothing pointer-transient ever digests, so every node's digest is a
+true content digest and no insert-time purity guard is needed.
 
 ## Verdict edges memoize subtyping
 

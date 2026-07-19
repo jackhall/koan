@@ -51,7 +51,11 @@ which resolves a member's reference to a variant of *its own* union.
 
 Surfaced while shipping MATCH-as-ordinary-type-dispatch (the sibling-variant
 sigil under seal); the two share the qualified-sigil surface but the fault is
-independent — it lives in group finalize ordering, not arm dispatch.
+independent — it lives in group finalize ordering, not arm dispatch. The
+[interned-type-content](../type_memos/interned-type-content.md) flip rewrites group
+sealing wholesale (per-SCC seal over a scope-carried window) and carries this
+reproduction as a phase gate, so this item retires with the flip unless the panic
+warrants a standalone fix sooner.
 
 **Requires:** none — the fault is in existing `RECURSIVE TYPES` group sealing.
 

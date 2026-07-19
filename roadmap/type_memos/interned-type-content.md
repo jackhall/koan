@@ -38,16 +38,32 @@ several surfaces:
   handles (the composition edges *are* the content), and building the same content
   twice in a run dedups to one node. Content nodes and verdict edges ride the one
   registry.
-- `RecursiveSet` members are individual graph nodes referencing each other through
-  ordinary (cyclic) composition edges; `SetLocal`, `RecursiveRef`, and the `Rc`
-  transport are gone; the pre-seal window is carried by a builder type that converts
-  to interned nodes at seal, so pre-seal state never enters the registry and the
-  verdict-recording digest guard is deleted.
+- `RecursiveSet` is deleted: members are individual graph nodes whose schemas hold
+  absolute (cyclic) member handles; the `SetLocal` and `RecursiveRef` variants and
+  the `Rc` transport are gone, the set-relative sibling encoding surviving only as
+  an interned relative node kind confined to window elaboration and the SCC-digest
+  recipe; the pre-seal window is a scope-carried record of membership and fills, so
+  nothing pointer-transient ever digests and the verdict-recording digest guard is
+  deleted.
+- A member's identity is `(digest of its own strongly-connected component, index)`:
+  seal extracts sibling references, partitions the window's members into SCCs, and
+  digests the condensation bottom-up — each component presented canonically in
+  member-name order, intra-component references as relative indices, references
+  outside the component folding the referent's finished digest as external content.
 - The record field-type memo, the `alloc_ktype(kt.clone())` re-allocation sites, and
   the lift path's type clones all reduce to handle copies; the `alloc_ktype` family
   is deleted.
-- Type digest values are unchanged — the existing digest test suite passes
-  unmodified.
+- Singleton digest values are unchanged — every standalone `NEWTYPE`/`UNION`/opaque
+  mint is a singleton SCC whose canonical presentation reproduces today's set recipe
+  byte-for-byte, so every singleton pin and relation in the digest suite holds.
+  Multi-member group digests move to the per-SCC recipe, with tests pinning the new
+  invariants: an unreferenced co-declared member does not perturb a sibling's digest,
+  a non-recursive member unifies with its standalone twin, and member declaration
+  order is immaterial.
+- `KType::Unresolved` no longer exists: the synchronous bind seam carries an
+  unresolved bare type name as its `TypeIdentifier` on a dedicated `Held`/`Carried`
+  arm, consumed by the park-capable resolver, so no type handle can denote an
+  unresolved name.
 - `seed_builtins` ([builtins.rs](../../src/builtins.rs)) consumes the run frame's
   registry it already receives: the `types` operand is threaded into every
   per-module `register(scope, types)` so the builtins' own `KType` construction
@@ -69,12 +85,27 @@ several surfaces:
 - *Leaf handles as constants — decided.* Leaf digests are pure functions of nothing,
   so they are hardcoded constants guarded by a test asserting each equals its freshly
   computed node digest; primitive values' `.ktype()` reads stay context-free, and no
-  lazy statics or globals appear.
-- *Builder over interned transients — decided.* Pre-seal recursive-group schemas
-  hold an explicit sibling reference form inside the builder (resolved through the
-  ambient builder during the elaboration window), never placeholder nodes in the
-  registry; at seal the builder computes every member handle first, then interns the
-  member nodes with cyclic edges already resolved.
+  lazy statics or globals appear. The constant set includes every
+  pure-function-of-nothing type `from_name` lowers to — the five `OfKind` values,
+  `List<Any>`, `Dict<Any, Any>`, and the empty signature — so the synchronous bind
+  seam stays context-free.
+- *Relative sibling nodes over a builder overlay — decided.* A sibling reference
+  interns as a relative index node (today's `SetLocal` digest recipe), so window
+  elaboration is ordinary interning; the scope-carried window record fixes
+  membership, accumulates fills, and at seal digests each SCC of the condensation
+  from the relative digests, then interns member nodes with every sibling rebuilt to
+  its absolute handle. See
+  [type-registry.md § Recursive sets](../../design/typing/type-registry.md#recursive-sets-are-cyclic-subgraphs).
+- *Member identity: computed SCC, name-order canonical — decided.* Identity follows
+  the reference structure, not the declaration boundary: the declared group has no
+  identity role, so co-declared but unreferencing types digest independently. Names
+  are unique within a window, so canonicalization is a sort — no iterative
+  refinement. Rejected en route: per-member iterated "incomplete digests" (the hash
+  sequence never stabilizes, so identity would hang on an arbitrary stopping round).
+- *Node storage: persistent map — decided.* Nodes live in a HAMT (`imbl`) keyed by
+  digest through an identity hasher; reads clone nodes out of a short borrow (never
+  held across an intern), bulk walks may take an O(1) snapshot, and the persistent
+  map keeps the cross-thread merge candidate live.
 - *Cross-thread transfer — deferred.* Punted to this project's
   [Unplanned work](README.md#unplanned-work) entry (cross-thread type-content
   transfer); it is exercisable only once concurrency ships. This item must not
@@ -88,9 +119,16 @@ The value-side counterpart is
 [Region-store record values](../refactor/region-store-records.md), which homes a
 record's field substrate in the region; this item owns every type-side clone.
 
-**Requires:** none — the run-frame registry and its builtin-seeding handoff are shipped.
+**Requires:**
+
+- [Abstract members carry arity](abstract-member-arity.md) — interning collapses
+  digest-equal sets to one node, so allocation-carried sentinel classification must
+  die first.
 
 **Unblocks:**
 
 - [Module element-type join](module-element-type-join.md) — supplies the
   owned-schema signature nodes a synthesized join result needs.
+- [Module bodies announce type groups](../type_language/module-announced-type-groups.md)
+  — computed-SCC identity makes announced-set membership identity-neutral, which the
+  module-wide announcement needs.

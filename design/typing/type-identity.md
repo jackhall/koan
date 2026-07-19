@@ -10,9 +10,12 @@ companion; [type-registry.md](type-registry.md) is the storage story.
 
 Every `KType` carries a wide digest, computed bottom-up when the type is
 constructed — children carry theirs, so each node's digest is shallow work at
-build time. A recursive set digests at seal, over its finite SCC presentation
-(sibling references canonicalized to their index literal); a member's identity
-is `(set digest, index)`.
+build time. A recursive member digests at seal, over the canonical presentation
+of its own strongly-connected component — members in name order, intra-component
+sibling references as index literals, references outside the component folding
+the referent's finished digest; a member's identity is `(SCC digest, index)`.
+Identity follows the reference structure, not the declaration boundary: types
+co-declared in one group that do not reference each other digest independently.
 
 The digest is a pure function of type content, so it is order-independent: two
 independently built types with the same content have the same digest, with no
@@ -30,10 +33,12 @@ which content-addressed systems like git treat hash equality as identity.
 Because identity is content, two declarations with the same structure denote
 the same type: a `NEWTYPE` in an FN body elaborated on every call yields the
 *same* type each time, and equal record, union, or function types built in
-different corners of a program compare equal by digest. Signatures share the
-rule: a `SIG` digests over its schema content and a module over its sealed
-self-sig, so identical interfaces denote one signature type. Dispatch, matching,
-and memo caches all inherit this unification.
+different corners of a program compare equal by digest. The rule reaches across
+declaration groupings: a non-recursive nominal declared alongside others is a
+singleton component, so it unifies with the same nominal declared alone.
+Signatures share the rule: a `SIG` digests over its schema content and a module
+over its sealed self-sig, so identical interfaces denote one signature type.
+Dispatch, matching, and memo caches all inherit this unification.
 
 ## Opaque ascription is the generative exception
 
@@ -84,8 +89,9 @@ The verdict edges are a cache, never a soundness mechanism:
   dropping an edge — or asking in a fresh registry — costs a re-walk, never a
   wrong answer; the walk stays the source of truth. No verdict is observable
   to a koan program.
-- Pre-seal recursive-set state never reaches the registry (the builder interns
-  only sealed content — [type-registry.md § Recursive sets are cyclic
+- Nothing pointer-transient ever digests: window elaboration interns only
+  content-derived nodes (relative sibling references included), and member
+  handles are minted at seal ([type-registry.md § Recursive sets are cyclic
   subgraphs](type-registry.md#recursive-sets-are-cyclic-subgraphs)), so every
   recorded verdict is keyed by true content digests and no insert guard is
   needed.
