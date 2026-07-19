@@ -904,7 +904,7 @@ impl<'a> Bindings<'a> {
     ///
     /// Dedupe when `fn_part.is_some()`: `ptr::eq` is a silent-success
     /// short-circuit (preserves intentional aliases like `LET g = (f)`);
-    /// `exact_equal` raises `DuplicateOverload`.
+    /// `indistinguishable_from` raises `DuplicateOverload`.
     fn try_apply(
         &self,
         name: &str,
@@ -979,7 +979,7 @@ impl<'a> Bindings<'a> {
                     already_present = true;
                     break;
                 }
-                if existing.signature.exact_equal(&f_ref.signature) {
+                if existing.signature.indistinguishable_from(&f_ref.signature) {
                     return Err(KError::new(KErrorKind::DuplicateOverload {
                         name: name.to_string(),
                         signature: existing.summarize(),

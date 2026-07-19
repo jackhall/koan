@@ -84,11 +84,10 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "USE");
-    assert_eq!(
-        f.signature.return_type,
-        ReturnType::Resolved(KType::list(Box::new(KType::Number))),
-        "USE return type should resolve to List<Number> after dep-finish wake",
-    );
+    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+        panic!("USE return type should resolve to List<Number> after dep-finish wake");
+    };
+    assert_eq!(*kt, KType::list(Box::new(KType::Number)));
 }
 
 /// A bare forward-LET return type with no parameters parks on the LET's placeholder
@@ -103,11 +102,10 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
          LET MyT = Number",
     );
     let f = lookup_fn(scope, "NOP");
-    assert_eq!(
-        f.signature.return_type,
-        ReturnType::Resolved(KType::Number),
-        "NOP return type should resolve to Number after LET wakes",
-    );
+    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+        panic!("NOP return type should resolve to Number after LET wakes");
+    };
+    assert_eq!(*kt, KType::Number);
 }
 
 /// A parens-form parameter type that sub-dispatches to a non-`KTypeValue` must

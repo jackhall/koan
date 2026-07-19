@@ -88,9 +88,8 @@ pub enum DeferredReturn<'a> {
 /// Hashable type-language shadow of a [`DeferredReturn`], stored inside
 /// `KType::DeferredReturn`. The `Expression` carrier holds the canonical `summarize()`
 /// render — NOT the live `KExpression`, which impls neither `Eq` nor `Hash`. Identity is
-/// syntactic, matching `DeferredReturn`'s own `PartialEq` (`Type` by name, `Expression`
-/// by canonical render), so a synthesized `KType::DeferredReturn` ret slot compares,
-/// hashes, and ranks by the same surface form `ExpressionSignature::exact_equal` uses.
+/// syntactic — `Type` by name, `Expression` by canonical render — so a synthesized
+/// `KType::DeferredReturn` ret slot compares, hashes, and ranks by surface form.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DeferredReturnSurface {
     Type(TypeIdentifier),
@@ -127,36 +126,6 @@ impl<'a> Clone for DeferredReturn<'a> {
         match self {
             DeferredReturn::Type(t) => DeferredReturn::Type(t.clone()),
             DeferredReturn::Expression(e) => DeferredReturn::Expression(e.clone()),
-        }
-    }
-}
-
-impl<'a> PartialEq for ReturnType<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ReturnType::Resolved(a), ReturnType::Resolved(b)) => a == b,
-            (ReturnType::Deferred(a), ReturnType::Deferred(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl<'a> Eq for ReturnType<'a> {}
-
-impl<'a> PartialEq for DeferredReturn<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (DeferredReturn::Type(a), DeferredReturn::Type(b)) => a == b,
-            (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
-                // Structural syntax equality over the two captured expressions — the same walk
-                // `==` runs on a quoted value. A banned-shape splice inside a deferred return
-                // conservatively counts as a distinct overload (`Err` → not equal).
-                // Overload identity is a syntax compare, so a cold registry is exact: a verdict
-                // is never load-bearing, it only saves a re-walk (`registry.rs`).
-                let types = TypeRegistry::new();
-                crate::machine::model::values::expression_equal(a, b, &types).unwrap_or(false)
-            }
-            _ => false,
         }
     }
 }
@@ -295,13 +264,14 @@ impl<'a> ExpressionSignature<'a> {
             .map(|(i, _)| i)
     }
 
-    /// Structural equality on shape + per-`Argument` `KType` + return type. Independent of
-    /// `Argument::name` — two overloads with matching shape and types collide for dispatch
-    /// regardless of parameter naming.
-    pub fn exact_equal(&self, other: &ExpressionSignature<'a>) -> bool {
-        if self.return_type != other.return_type {
-            return false;
-        }
+    /// Definition-time duplicate gate: true iff `other` has the same element shape and a
+    /// type-equal `Argument` slot at every position. Pairing invariant with the tournament
+    /// above: this must reject exactly the signatures `specificity_vs` can never split —
+    /// per-slot type equality makes every mutual `is_more_specific_than` probe false, so the
+    /// two would tie as `Equal` on every call and poison the bucket with unresolvable
+    /// ambiguity. Return types are deliberately excluded: dispatch never selects on them, so
+    /// they distinguish nothing. Independent of `Argument::name`.
+    pub fn indistinguishable_from(&self, other: &ExpressionSignature<'a>) -> bool {
         if self.elements.len() != other.elements.len() {
             return false;
         }

@@ -988,7 +988,10 @@ fn object_field_reach_fold_survives_producer_frame_free() {
         other => panic!("expected a KFunction, got {}", other.ktype().name()),
     };
     let dep: DeliveredCarried = Delivered::seal(
-        Witnessed::from_erased(Erased::erase(Carried::Object(obj)), CarrierWitness::default()),
+        Witnessed::from_erased(
+            Erased::erase(Carried::Object(obj)),
+            CarrierWitness::default(),
+        ),
         producer_frame.storage_rc(),
     );
 

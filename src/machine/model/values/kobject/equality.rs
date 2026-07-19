@@ -195,7 +195,7 @@ fn held_equal<'a, 'b>(
 /// Structural equality of quoted code: same part count, pairwise [`part_equal`]. Syntax equality, not
 /// value equality — literal parts compare by their written form, and list/dict/record *literals*
 /// compare order-sensitively (they are syntax, not the values they would evaluate to).
-pub(crate) fn expression_equal<'a, 'b>(
+fn expression_equal<'a, 'b>(
     a: &KExpression<'a>,
     b: &KExpression<'b>,
     types: &TypeRegistry,

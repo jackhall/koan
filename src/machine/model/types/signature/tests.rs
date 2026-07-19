@@ -44,39 +44,11 @@ fn most_specific_returns_none_when_tied() {
 #[test]
 fn return_type_clone_round_trips_all_arms() {
     let r = ReturnType::Resolved(KType::Number);
-    assert_eq!(r, r.clone());
+    assert_eq!(r.name(), r.clone().name());
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert_eq!(d, d.clone());
+    assert_eq!(d.name(), d.clone().name());
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
-    assert_eq!(e, e.clone());
-}
-
-#[test]
-fn return_type_eq_deferred_match_and_variant_mismatch() {
-    let r = ReturnType::Resolved(KType::Number);
-    let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert_ne!(r, d);
-    let d2 = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert_eq!(d, d2);
-    let d3 = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Other".into())));
-    assert_ne!(d, d3);
-}
-
-#[test]
-fn deferred_return_eq_matches_per_carrier() {
-    let t1 = DeferredReturn::Type(TypeIdentifier::leaf("er".into()));
-    let t2 = DeferredReturn::Type(TypeIdentifier::leaf("er".into()));
-    let t3 = DeferredReturn::Type(TypeIdentifier::leaf("Other".into()));
-    assert_eq!(t1, t2);
-    assert_ne!(t1, t3);
-
-    let e1 = DeferredReturn::Expression(expr_with_keyword("FOO"));
-    let e2 = DeferredReturn::Expression(expr_with_keyword("FOO"));
-    let e3 = DeferredReturn::Expression(expr_with_keyword("BAR"));
-    assert_eq!(e1, e2);
-    assert_ne!(e1, e3);
-
-    assert_ne!(t1, e1);
+    assert_eq!(e.name(), e.clone().name());
 }
 
 #[test]
@@ -133,32 +105,53 @@ fn return_type_name_covers_all_arms() {
     assert_eq!(e.name(), "FOO");
 }
 
-/// `exact_equal` (the duplicate-overload gate) keeps reading `ReturnType`'s structure-aware
-/// `PartialEq`, so synthesizing a precision-aware `KType::DeferredReturn` elsewhere does not
-/// alter routing: two same-shape signatures differing only in their deferred return are
-/// unequal, and identical deferred returns are equal.
-#[test]
-fn exact_equal_unaffected_by_deferred_return_synthesis() {
-    fn sig_with<'a>(ret: ReturnType<'a>) -> ExpressionSignature<'a> {
-        ExpressionSignature {
-            return_type: ret,
-            elements: vec![SignatureElement::Argument(Argument {
-                name: "v".into(),
-                ktype: KType::Number,
-            })],
-        }
+fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {
+    ExpressionSignature {
+        return_type: ret,
+        elements: vec![SignatureElement::Argument(Argument {
+            name: "v".into(),
+            ktype: slot,
+        })],
     }
-    let er = sig_with(ReturnType::Deferred(DeferredReturn::Type(
-        TypeIdentifier::leaf("er".into()),
-    )));
-    let er2 = sig_with(ReturnType::Deferred(DeferredReturn::Type(
-        TypeIdentifier::leaf("er".into()),
-    )));
-    let ar = sig_with(ReturnType::Deferred(DeferredReturn::Type(
-        TypeIdentifier::leaf("Ar".into()),
-    )));
-    assert!(er.exact_equal(&er2));
-    assert!(!er.exact_equal(&ar));
+}
+
+/// Return types never distinguish overloads: dispatch selects on argument slots alone, so
+/// two same-shape signatures differing only in their return — deferred or resolved — are
+/// indistinguishable and collide at definition.
+#[test]
+fn indistinguishable_ignores_return_type() {
+    let er = sig_with(
+        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
+        KType::Number,
+    );
+    let ar = sig_with(
+        ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar".into()))),
+        KType::Number,
+    );
+    assert!(er.indistinguishable_from(&ar));
+
+    let num = sig_with(ReturnType::Resolved(KType::Number), KType::Number);
+    let text = sig_with(ReturnType::Resolved(KType::Str), KType::Number);
+    assert!(num.indistinguishable_from(&text));
+}
+
+#[test]
+fn indistinguishable_splits_on_argument_type_and_keywords() {
+    let num = sig_with(ReturnType::Resolved(KType::Any), KType::Number);
+    let text = sig_with(ReturnType::Resolved(KType::Any), KType::Str);
+    assert!(!num.indistinguishable_from(&text));
+
+    let kw = |token: &str| ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![SignatureElement::Keyword(token.into())],
+    };
+    assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
+    assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
+    assert!(!kw("FOO").indistinguishable_from(&num));
+    assert!(!kw("FOO").indistinguishable_from(&ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![],
+    }));
 }
 
 #[test]

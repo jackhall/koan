@@ -9,7 +9,6 @@ use crate::machine::model::types::{KType, Parseable, Record, RecursiveSet, Signa
 use super::{Held, KKey, Module};
 
 mod equality;
-pub(crate) use equality::expression_equal;
 pub use equality::ValueEqualityError;
 
 #[cfg(test)]

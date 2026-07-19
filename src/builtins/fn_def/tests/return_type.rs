@@ -16,7 +16,10 @@ fn fn_parses_declared_return_type_onto_signature() {
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
-    assert_eq!(f.signature.return_type, ReturnType::Resolved(KType::Number));
+    let ReturnType::Resolved(kt) = &f.signature.return_type else {
+        panic!("declared return type should land resolved on the signature");
+    };
+    assert_eq!(*kt, KType::Number);
 }
 
 /// Missing `-> Type`: the FN call doesn't match the registered signature, so no user-fn
@@ -35,6 +38,29 @@ fn fn_without_return_type_annotation_does_not_register() {
     assert!(
         !fn_is_registered(scope, "DOUBLE"),
         "DOUBLE should not be registered without -> Type"
+    );
+}
+
+/// Dispatch never selects on the return type, so two overloads whose shape and argument
+/// types agree are indistinguishable at every call site no matter how their returns
+/// differ — the second definition is a duplicate, not a new overload.
+#[test]
+fn return_type_only_difference_is_a_duplicate_overload() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let mut runtime = KoanRuntime::new();
+    runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Number = (x)"), scope);
+    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"), scope);
+    runtime
+        .execute()
+        .expect("execute does not surface per-node errors");
+    let err = match runtime.result_error(id) {
+        Err(e) => e,
+        Ok(()) => panic!("return-type-only overload should be rejected as a duplicate"),
+    };
+    assert!(
+        matches!(err.kind, KErrorKind::DuplicateOverload { ref name, .. } if name == "DOUBLE"),
+        "expected DuplicateOverload for DOUBLE, got {err}",
     );
 }
 
