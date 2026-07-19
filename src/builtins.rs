@@ -1,5 +1,6 @@
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::{BinderNameFn, Body, KFunction};
 use crate::machine::{BindingIndex, FrameStorageExt, Scope};
@@ -151,22 +152,30 @@ pub(crate) fn register_overload_at<'a>(
         .expect("register_overload_at: user-index overload should not collide with a builtin");
 }
 
-/// Build the run-global root populated with the language's builtin `KFunction`s, then
-/// return a mutable `RunScope` child of it for top-level Koan bindings. The root stays
-/// builtin-only and immutable; a top-level bind lands in the `RunScope`, leaving the
-/// root binding-free. Builtins resolve from any scope by walking `outer` to the root
+/// Allocate the run-global root scope and the mutable `RunScope` child of it that carries
+/// top-level Koan bindings. Neither is seeded — [`seed_builtins`] populates the root. The
+/// root stays builtin-only and immutable; a top-level bind lands in the `RunScope`, leaving
+/// the root binding-free. Builtins resolve from any scope by walking `outer` to the root
 /// (the [`Scope::shadows_builtin_value`] no-shadow consult does the same).
+pub fn unseeded_scopes<'a>(
+    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
+    out: Box<dyn std::io::Write + 'a>,
+) -> (&'a Scope<'a>, &'a Scope<'a>) {
+    let root = run_storage
+        .brand()
+        .alloc_scope(Scope::run_root(run_storage, None, out));
+    let child = run_storage.brand().alloc_scope(Scope::run_child(root));
+    (root, child)
+}
+
+/// Register every builtin type and `KFunction` onto the run root. `types` is the run
+/// frame's registry, the home the seeded types answer from.
 ///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
-pub fn default_scope<'a>(
-    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
-    out: Box<dyn std::io::Write + 'a>,
-) -> &'a Scope<'a> {
-    let scope = run_storage
-        .brand()
-        .alloc_scope(Scope::run_root(run_storage, None, out));
-
+pub fn seed_builtins<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
+    // TODO(interned-type-content): `_types` is the interning operand for seeding's own
+    // KType construction; the per-module `register` fan-out lands with that item.
     scope.register_builtin_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_builtin_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
     scope.register_builtin_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
@@ -230,6 +239,17 @@ pub fn default_scope<'a>(
     arithmetic::register(scope);
     arithmetic::register_builtin_operator_groups(scope);
     equality::register(scope);
+}
 
-    run_storage.brand().alloc_scope(Scope::run_child(scope))
+/// One-call constructor for tests and integration tests: allocate the scope pair, seed the
+/// root, and hand back the `RunScope` child. Production ([`crate::machine::execute`]'s
+/// `interpret`) sequences [`unseeded_scopes`] and [`seed_builtins`] itself so seeding
+/// receives the run frame's own registry rather than a cold one.
+pub fn default_scope<'a>(
+    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
+    out: Box<dyn std::io::Write + 'a>,
+) -> &'a Scope<'a> {
+    let (root, child) = unseeded_scopes(run_storage, out);
+    seed_builtins(root, &TypeRegistry::new());
+    child
 }

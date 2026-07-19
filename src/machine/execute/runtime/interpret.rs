@@ -1,11 +1,12 @@
 //! The program entry points. [`interpret`] and its writer-carrying siblings parse Koan source,
-//! stand up a fresh [`KoanRegion`] and root [`Scope`], then drive the whole program through
+//! stand up a fresh [`KoanRegion`] and root [`Scope`], establish the run frame, seed the builtins
+//! against that frame's type registry, then drive the whole program through
 //! [`KoanRuntime::run_program`] — the harness method that enters every top-level statement, runs
 //! the scheduler to quiescence, and rejects a bare top-level expression that resolved to an
 //! unstamped empty container. All values allocated by the program die when these return.
 
 use super::{DestHandleFamily, KoanRuntime};
-use crate::builtins::default_scope;
+use crate::builtins::{seed_builtins, unseeded_scopes};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::KExpression;
 use crate::machine::{CarrierWitness, KError, KErrorKind, Scope};
@@ -40,9 +41,18 @@ pub fn interpret_with_writer_path(
     // and an escaping value bound at top level retains its per-call region on this run-root frame (the
     // drain below).
     let run_storage = run_root_storage();
-    let root = default_scope(&run_storage, out);
+    let (root, top) = unseeded_scopes(&run_storage, out);
     let mut runtime = KoanRuntime::new();
-    runtime.run_program(root, exprs)
+    // The run frame adopts `top`: `run_program` dispatches top-level statements against it, and
+    // `resolve_node_scope` requires pointer-equality between the run frame's scope and the
+    // dispatch target. Establishing it before seeding means the builtins are registered against
+    // the run's own registry — the only registry in the tree.
+    runtime.ensure_run_frame(top);
+    let types = runtime
+        .type_registry()
+        .expect("run frame was just established");
+    seed_builtins(root, &types);
+    runtime.run_program(top, exprs)
 }
 
 impl<'run> KoanRuntime<'run> {

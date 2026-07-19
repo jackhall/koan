@@ -15,6 +15,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::*;
+use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::Scope;
 
