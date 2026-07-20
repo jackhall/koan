@@ -355,6 +355,38 @@ mod tests {
         );
     }
 
+    /// Two `UNION`s of one name in one scope are two declarations, not one, even at equal arity:
+    /// `recover_union`'s identity check reads the stored `BindingIndex`, which belongs to the first
+    /// statement, so the second re-mints Fresh and the install raises `Rebind`. `enter_block` is
+    /// what gives the statements their distinct lexical indices.
+    #[test]
+    fn same_scope_union_redeclare_rebinds() {
+        use crate::machine::KoanRuntime;
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let exprs = crate::parse::parse(
+            "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
+        )
+        .expect("parse should succeed");
+        let mut runtime = KoanRuntime::new();
+        let ids = runtime.enter_block(scope.id, exprs, scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        assert!(
+            runtime.result_error(ids[0]).is_ok(),
+            "the first declaration should succeed, got {:?}",
+            runtime.result_error(ids[0]).err(),
+        );
+        let err = runtime
+            .result_error(ids[1])
+            .expect_err("redeclaring Maybe in the same scope should error");
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
+            "expected Rebind naming Maybe, got {err}",
+        );
+    }
+
     #[test]
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are

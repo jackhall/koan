@@ -485,6 +485,35 @@ mod tests {
         );
     }
 
+    /// Two record-repr `NEWTYPE`s of one name in one scope are two declarations, not one: the
+    /// second statement's own `BindingIndex` differs from the index stored beside the installed
+    /// identity, so the seal mints a fresh singleton and the install raises `Rebind`.
+    /// `enter_block` is what gives the statements their distinct lexical indices.
+    #[test]
+    fn same_scope_record_repr_redeclare_rebinds() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let exprs = crate::parse::parse("NEWTYPE Foo = :{x :Number}\nNEWTYPE Foo = :{x :Str}")
+            .expect("parse should succeed");
+        let mut runtime = KoanRuntime::new();
+        let ids = runtime.enter_block(scope.id, exprs, scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        assert!(
+            runtime.result_error(ids[0]).is_ok(),
+            "the first declaration should succeed, got {:?}",
+            runtime.result_error(ids[0]).err(),
+        );
+        let err = runtime
+            .result_error(ids[1])
+            .expect_err("redeclaring Foo in the same scope should error");
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
+            "expected Rebind naming Foo, got {err}",
+        );
+    }
+
     /// A self-recursive record repr seals its self-reference to a `SetLocal` back-edge into the
     /// declaring member's singleton set — the binder name is threaded through the field-list
     /// elaboration. (`next :Node` has no base case, so the type is uninhabited by a finite value;

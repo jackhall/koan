@@ -84,6 +84,97 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     );
 }
 
+/// A `RECURSIVE TYPES` block pre-installs every member's `SetRef` over one shared set at
+/// `BindingIndex::value(0)`, below any statement's own index. `finalize_nominal_member`
+/// recovers that pre-install by its *unfilled* member and seals into the shared set rather
+/// than minting a singleton; a parallel finalize of the same declaration (equal
+/// `BindingIndex`) short-circuits on the installed identity without rebuilding the schema;
+/// and a different statement declaring the same name with different content is a
+/// redeclaration — `Rebind`.
+#[test]
+fn block_member_seals_shared_set_then_short_circuits_before_rebind() {
+    use crate::machine::model::types::NominalSchema;
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    let set = std::rc::Rc::new(RecursiveSet::new(vec![
+        NominalMember::pending("Node".into(), KKind::NewType),
+        NominalMember::pending("Leaf".into(), KKind::NewType),
+    ]));
+    for (index, member) in ["Node", "Leaf"].iter().enumerate() {
+        scope.preinstall_identity(
+            (*member).to_string(),
+            KType::SetRef {
+                set: std::rc::Rc::clone(&set),
+                index,
+            },
+            BindingIndex::value(0),
+        );
+    }
+    // Member 0's own declaration finalizes at its statement index: the pre-install's unfilled
+    // member is this declaration's contribution, so the schema fills the shared set.
+    let sealed = match finalize_nominal_member(
+        scope,
+        "Node",
+        KKind::NewType,
+        |_| SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Number))),
+        BindingIndex::value(2),
+    ) {
+        SealOutcome::Sealed(kt) => kt,
+        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
+        SealOutcome::Rebind(e) => panic!("a block member's first seal must not Rebind: {e}"),
+    };
+    match sealed {
+        KType::SetRef {
+            set: installed,
+            index,
+        } => {
+            assert!(
+                std::rc::Rc::ptr_eq(installed, &set),
+                "the seal must fill the block's shared set, not a fresh singleton",
+            );
+            assert_eq!(*index, 0, "Node is the shared set's member 0");
+        }
+        other => panic!("expected a SetRef identity, got {other:?}"),
+    }
+    assert!(
+        !set.member(1).is_filled(),
+        "sibling member `Leaf` seals at its own declaration, not this one",
+    );
+    // Parallel finalize of the same declaration: the stored index equals this one, so the
+    // installed identity comes straight back — the schema builder never runs.
+    let again = match finalize_nominal_member(
+        scope,
+        "Node",
+        KKind::NewType,
+        |_| panic!("a parallel finalize must short-circuit before building the schema"),
+        BindingIndex::value(2),
+    ) {
+        SealOutcome::Sealed(kt) => kt,
+        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
+        SealOutcome::Rebind(e) => panic!("a parallel finalize must not Rebind: {e}"),
+    };
+    assert!(
+        std::ptr::eq(sealed, again),
+        "a parallel finalize returns the installed identity itself",
+    );
+    // A different statement declaring `Node` over different content is a redeclaration: the
+    // filled member and the differing index route it to a fresh singleton, whose install collides.
+    match finalize_nominal_member(
+        scope,
+        "Node",
+        KKind::NewType,
+        |_| SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Str))),
+        BindingIndex::value(3),
+    ) {
+        SealOutcome::Rebind(e) => assert!(
+            matches!(&e.kind, crate::machine::KErrorKind::Rebind { name } if name == "Node"),
+            "expected Rebind naming Node, got {e}",
+        ),
+        SealOutcome::Sealed(kt) => panic!("expected Rebind on redeclaration, got Sealed({kt:?})"),
+        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
+    }
+}
+
 #[test]
 fn constructor_apply_name_renders_surface_form() {
     use crate::machine::model::types::NominalSchema;
