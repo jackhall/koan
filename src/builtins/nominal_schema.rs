@@ -9,7 +9,8 @@
 
 use crate::machine::model::KType;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, KKind,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
+    FieldNameKind, KKind,
 };
 use crate::machine::PendingTypeEntry;
 use crate::machine::{defer_field_list_action, StepCarried};
@@ -35,7 +36,7 @@ pub(crate) fn nominal_schema_action<'a>(
     name: String,
     schema_expr: crate::machine::model::KExpression<'a>,
     kind: KKind,
-    context: &'static str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     error_frame: TraceFrame,
     finalize: SchemaFinalize<'a>,

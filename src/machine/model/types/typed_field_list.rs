@@ -14,6 +14,45 @@ pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
 use std::collections::HashSet;
 
+/// The two nouns a field-list diagnostic needs. `list` names the whole schema, for errors about
+/// the list as a unit ("UNION schema: forward type reference still unresolved…"); `member` names
+/// one entry of it in the singular, for errors about a single slot ("the type of UNION variant
+/// `Circle` must be a proper type"). Every caller states both, so a slot-level diagnostic names
+/// the construct the user actually wrote rather than the walker they happen to share.
+#[derive(Clone, Copy)]
+pub struct FieldListContext {
+    pub list: &'static str,
+    pub member: &'static str,
+}
+
+impl FieldListContext {
+    /// A `UNION`'s variant schema: `UNION Shape = (Circle :Number …)`.
+    pub const UNION_SCHEMA: Self = Self {
+        list: "UNION schema",
+        member: "UNION variant",
+    };
+
+    /// A `NEWTYPE`'s record representation: `NEWTYPE Boxed = :{v :Str}`.
+    pub const NEWTYPE_RECORD_REPR: Self = Self {
+        list: "NEWTYPE record repr",
+        member: "NEWTYPE repr field",
+    };
+
+    /// The parameter list of an `:(FN …)` function type.
+    pub const FN_TYPE_PARAMETERS: Self = Self {
+        list: "FN parameters",
+        member: "FN parameter",
+    };
+
+    /// A structural record type `:{x :Number}` — standalone, or nested inside another field list.
+    /// The anonymous-FN signature `FN :{x :Number} -> …` elaborates through this one: its `:{…}`
+    /// resolves as an ordinary record type before `FN` ever sees it.
+    pub const RECORD_TYPE: Self = Self {
+        list: "record fields",
+        member: "record-type field",
+    };
+}
+
 pub enum FieldListOutcome<'e> {
     Done(Vec<(String, KType)>),
     /// `sub_dispatches` carries each sigil field's wrapped expression in DFS walk
@@ -65,24 +104,42 @@ impl<'b, 'a> ResultFeed<'b, 'a> {
 /// slot index and nested field-lists fall out for free.
 pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
     expr: &KExpression<'e>,
-    context: &str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'a>>,
 ) -> FieldListOutcome<'e> {
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<KExpression<'e>> = Vec::new();
-    let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
+    let FieldListContext {
+        list: context_list,
+        member: context_member,
+    } = context;
+    let parsed = parse_pair_list(expr, context_list, name_kind, |part, name| {
+        // Every field types a value, so each field type must be a proper type; a bare
+        // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
+        // elaborated field on the way out, so the four arms below share one verdict — the
+        // `KType::Any` placeholders a `Pending` walk yields are proper and pass, and the
+        // re-walk checks the resolved type they stand for.
+        let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
+            &kt,
+            &format!("the type of {context_member} `{name}`"),
+        ) {
+            Some(message) => Err(message),
+            None => Ok(kt),
+        };
         match part {
             ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
-                TypeResolution::Done(kt) => Ok(kt),
+                TypeResolution::Done(kt) => checked(kt),
                 TypeResolution::Park(producers) => {
                     parks.extend(producers);
                     // Placeholder, discarded under Pending; lets the walk collect every
                     // parking producer in one pass.
                     Ok(KType::Any)
                 }
-                TypeResolution::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),
+                TypeResolution::Unbound(msg) => {
+                    Err(format!("{msg} in {context_list} for `{}`", name))
+                }
             },
             // Sigils sub-Dispatch through the standalone dispatcher, which carries no SCC
             // context, so self-references are pre-resolved to `RecursiveRef` carriers first
@@ -104,14 +161,14 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                 match results.as_mut().and_then(|feed| feed.pop()) {
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that
                     // resolved to a value-by-expression.
-                    Some(Carried::Type(kt)) => Ok(kt.clone()),
+                    Some(Carried::Type(kt)) => checked(kt.clone()),
                     Some(Carried::Object(other)) => Err(format!(
-                        "{context} type for `{}` resolved to non-type value `{}`",
+                        "{context_list} type for `{}` resolved to non-type value `{}`",
                         name,
                         other.summarize(),
                     )),
                     None if results.is_some() => Err(format!(
-                        "{context}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
+                        "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                     )),
                     None => {
                         let rewritten = rewrite_threaded_self_refs(
@@ -132,7 +189,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             ExpressionPart::RecordType(boxed) => {
                 match parse_typed_field_list_via_elaborator(
                     boxed,
-                    "record fields",
+                    FieldListContext::RECORD_TYPE,
                     FieldNameKind::Identifier,
                     elaborator,
                     results.as_deref_mut(),
@@ -154,15 +211,15 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
             ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
-                Carried::Type(kt) => Ok(kt.clone()),
+                Carried::Type(kt) => checked(kt.clone()),
                 Carried::Object(other) => Err(format!(
-                    "{context} type for `{}` resolved to non-type value `{}`",
+                    "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
                     other.summarize(),
                 )),
             },
             other => Err(format!(
-                "{context} type for `{}` must be a type name token, got {}",
+                "{context_list} type for `{}` must be a type name token, got {}",
                 name,
                 other.summarize()
             )),

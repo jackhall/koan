@@ -11,7 +11,8 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
+    FieldNameKind,
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -19,9 +20,8 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 use crate::machine::{defer_field_list_action_composed, BrandCompose};
 
-/// Diagnostic context string for the shared field-list parser when it walks an `:(FN …)`
-/// parameter list.
-const FN_PARAMS_CONTEXT: &str = "FN parameters";
+/// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
+const FN_PARAMS_CONTEXT: FieldListContext = FieldListContext::FN_TYPE_PARAMETERS;
 
 /// Field-name policy for an `:(FN …)` parameter list: capitalized `Type` param names like
 /// `Ty` are admitted alongside ordinary identifiers.
@@ -33,11 +33,22 @@ fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType) -> KType {
     KType::function_type(Record::from_pairs(fields), Box::new(ret))
 }
 
+/// Reject a bare type constructor in a type-language argument position that demands kind `*`:
+/// a list's element, a dict's key and value, a function type's return. Each names the type of a
+/// value, so each must be a proper type. The parameter list of an `:(FN …)` is checked inside the
+/// shared field-list walker instead, alongside every other record-shaped schema.
+fn require_proper_type(kt: &KType, position: &str) -> Result<(), KError> {
+    match crate::machine::model::unsaturated_constructor_message(kt, position) {
+        Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
+        None => Ok(()),
+    }
+}
+
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS compose from resolved type
 /// args directly (`Done`); FN routes the parameter list through [`build_carrier`], which either
 /// resolves synchronously or defers via `defer_field_list_action_composed`.
 mod action_bodies {
-    use super::build_carrier;
+    use super::{build_carrier, require_proper_type};
     use crate::machine::model::constructor_param_names;
     use crate::machine::{require_ktype, Action, BodyCtx};
 
@@ -49,12 +60,15 @@ mod action_bodies {
     /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
+        crate::try_action!(require_proper_type(&elem, "the element type of `LIST OF`"));
         Action::Done(Ok(ctx.ctx.alloc_type(KType::list(Box::new(elem)))))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let k = crate::try_action!(require_ktype(ctx.args, "k"));
         let v = crate::try_action!(require_ktype(ctx.args, "v"));
+        crate::try_action!(require_proper_type(&k, "the key type of `MAP`"));
+        crate::try_action!(require_proper_type(&v, "the value type of `MAP`"));
         Action::Done(Ok(ctx
             .ctx
             .alloc_type(KType::dict(Box::new(k), Box::new(v)))))
@@ -110,6 +124,10 @@ fn build_carrier<'a>(
     use crate::machine::{require_kexpression, require_ktype, Action};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
     let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
+    crate::try_action!(require_proper_type(
+        &ret,
+        "the return type of an `:(FN …)` type"
+    ));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
         &sig_expr,

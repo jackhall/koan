@@ -189,11 +189,24 @@ fn capture_type_slot<'a>(
     }
 }
 
+/// An operand and a result each type a value, so each must be a proper type; a bare constructor
+/// of kind `* -> *` standing unapplied is a kind error. Guards both readback paths, so the
+/// synchronous and dep-finished builds share one verdict.
+///
+/// The kind diagnostic reads `label` as the subject of "must be a proper type", so the bare slot
+/// noun takes its definite article here.
+fn checked_value_type(kt: KType, label: &str) -> Result<KType, KError> {
+    match crate::machine::model::unsaturated_constructor_message(&kt, &format!("the {label}")) {
+        Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
+        None => Ok(kt),
+    }
+}
+
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
 fn done_type(capture: TypeCapture, label: &str) -> Result<KType, KError> {
     match capture {
-        TypeCapture::Done(kt) => Ok(kt),
+        TypeCapture::Done(kt) => checked_value_type(kt, label),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} is unresolved with no dependency to wait on"
         )))),
@@ -209,16 +222,14 @@ fn resolve_capture<'a>(
     results: &DepResults<'_, &DepTerminal<'a>>,
     label: &str,
 ) -> Result<KType, KError> {
-    match capture {
-        TypeCapture::Done(kt) => Ok(kt),
+    let kt = match capture {
+        TypeCapture::Done(kt) => kt,
         TypeCapture::Park(te) => resolve_at_wake(fctx.scope, label, |s| {
             classify_resolved_type(s.resolve_type_identifier(&te, None))
-        }),
-        TypeCapture::Sub { owned_pos } => {
-            let kt = expect_type_terminal(results, owned_pos, label)?;
-            Ok(kt)
-        }
-    }
+        })?,
+        TypeCapture::Sub { owned_pos } => expect_type_terminal(results, owned_pos, label)?,
+    };
+    checked_value_type(kt, label)
 }
 
 // ---------- body ----------

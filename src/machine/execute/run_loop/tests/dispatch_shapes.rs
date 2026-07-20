@@ -301,18 +301,6 @@ fn fast_lane_legacy_paren_args_rejected() {
     );
 }
 
-/// A duplicate named arg never reaches dispatch: the record literal carrying it fails to
-/// parse. `NamedPairs::from_fields` keeps its own guard for caller-assembled fields, unit-
-/// tested alongside it.
-#[test]
-fn fast_lane_duplicate_named_arg() {
-    let error = crate::parse::parse("f {x = 1, x = 2}").unwrap_err();
-    assert!(
-        error.to_string().contains("duplicate field `x`"),
-        "expected a duplicate-field parse error, got {error}",
-    );
-}
-
 /// Non-function head resolves to a value-side carrier the fast lane refuses with
 /// `TypeMismatch { arg: "verb", expected: "KFunction or Type" }`. Verb-precedence
 /// (verb resolves before pair parsing) holds because head resolution is the first

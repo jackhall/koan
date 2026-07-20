@@ -181,6 +181,35 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
     }
 }
 
+/// Reject a bare type constructor in either of a function's value type positions. A parameter
+/// annotation and a resolved return type each name the type of a value, so each must be a proper
+/// type; a constructor of kind `* -> *` standing unapplied is a kind error. The single gate for
+/// every FN surface — keyworded and anonymous, synchronous and dep-finished — since all of them
+/// reach [`finalize_fn_with_kind`]. A [`ReturnType::Deferred`] carrier names a parameter and
+/// elaborates per call, so it is checked at that boundary, not here.
+fn check_value_type_kinds(
+    elements: &[SignatureElement],
+    return_type: &ReturnType<'_>,
+) -> Result<(), KError> {
+    use crate::machine::model::unsaturated_constructor_message;
+    for element in elements {
+        if let SignatureElement::Argument(argument) = element {
+            if let Some(message) = unsaturated_constructor_message(
+                &argument.ktype,
+                &format!("the type of FN parameter `{}`", argument.name),
+            ) {
+                return Err(KError::new(KErrorKind::ShapeError(message)));
+            }
+        }
+    }
+    if let ReturnType::Resolved(kt) = return_type {
+        if let Some(message) = unsaturated_constructor_message(kt, "the FN return type") {
+            return Err(KError::new(KErrorKind::ShapeError(message)));
+        }
+    }
+    Ok(())
+}
+
 /// Build the `KFunction` and, for a keyworded `Function`, register it under its lead
 /// keyword. `Anonymous` skips registration entirely — the value it returns is the
 /// function's only handle.
@@ -192,6 +221,8 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
+    check_value_type_kinds(&elements, &return_type)?;
+
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
     // shadow-by-name, neither of which has a single right answer for a

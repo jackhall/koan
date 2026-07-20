@@ -22,7 +22,7 @@ minted constructor as a first-class type value from `mo.Wrap` in expression posi
 
 **Acceptance criteria.**
 
-- A VAL slot typed with an applied sentinel constructor (`:(Number AS Wrap)`), read
+- A VAL slot typed with an applied abstract constructor (`:(Number AS Wrap)`), read
   through an opaque view, reports the view's per-call applied type; passing the read
   value where the source constructor's applied type is expected fails dispatch — the
   barrier holds in both directions.
@@ -35,7 +35,7 @@ minted constructor as a first-class type value from `mo.Wrap` in expression posi
 **Directions.**
 
 - *Re-tag mechanism — open.* (a) Extend the `slot_type_tags` mint loop to slots whose
-  declared type *contains* a sentinel-constructor application, storing the substituted
+  declared type *contains* an abstract-constructor application, storing the substituted
   applied type, with ATTR re-tagging the read's `type_id` to it — the mirror of the
   existing `AbstractType` path; (b) rely solely on self-sig substitution and teach
   dispatch to translate at the slot check. Recommended: (a).

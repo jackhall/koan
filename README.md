@@ -164,7 +164,7 @@ src/
 │   ├── type_union.rs         `|` — the `:(A | B)` anonymous-union type constructor
 │   ├── record_projection.rs  FROM — `(x y) FROM r` re-tags a record value's carried type to the named fields
 │   ├── nominal_schema.rs     shared Action-harness field-list elaboration for UNION / NEWTYPE record repr
-│   ├── newtype_def.rs        NEWTYPE — scalar repr and the `:{…}` record repr (the product-side nominal form)
+│   ├── newtype_def.rs        NEWTYPE — scalar repr, the `:{…}` record repr, and the `(Param… AS Name)` constructor-family mint
 │   ├── recursive_types.rs    RECURSIVE TYPES — co-declare a mutually-recursive nominal group
 │   ├── module_def.rs         MODULE
 │   ├── op_def.rs             OP / UNARY OP — declare a chainable operator over an operand type

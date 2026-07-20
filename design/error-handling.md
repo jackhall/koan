@@ -85,10 +85,11 @@ outer function's frame. This matches how other languages with TCO behave.
 
 ## User-side surface
 
-A user-written function that can fail returns `Result<Ty, Er>` for a
+A user-written function that can fail returns
+`:(Result {Ok = <Ty>, Error = <Er>})` for a
 user-defined error type `Er` — `Result` is a builtin parameterized type
-(like `List` / `Dict`) with `Ok :T` and `Error :E` variants (see
-[`Result`](#result)).
+(like `List` / `Dict`) with `Ok` and `Error` variants, each typed by the
+same-named type parameter (see [`Result`](#result)).
 Callers destructure the `Result` with a match-form and handle the `Ok`
 and `Error` arms locally. This is the primary error-handling idiom in
 user code: errors flow through the type system, signatures name what
@@ -101,7 +102,7 @@ propagate ambiently along the dependency edges through the notify-walk
 and surface at the top level. `TRY-WITH` (below) lets code that needs to
 recover from them — a REPL, a sandbox, a defensive wrapper — intercept
 the propagation and dispatch on the `KErrorKind`; `CATCH expr` lifts a
-single fault into a `Result<T, KError>` so the caller can bind it via
+single fault into a `Result` at `Error = KError` so the caller can bind it via
 `LET`, MATCH on `Ok` / `Error`, and (inside the `Error` arm) dispatch
 on the per-kind tag carried in the payload (see [`CATCH`](#catch)).
 The shared `Result` shape means a function that wraps a `CATCH` and a
@@ -119,27 +120,31 @@ errors carry the type discipline. `KErrorKind` itself is a closed set.
 ## `Result`
 
 `Result` is a builtin parameterized type — a two-variant tagged union over two
-type parameters, `Ok :T` and `Error :E`. It is the shared return-type shape for
-[`CATCH`](#catch) (`Result<T, KError>`) and for user functions with typed error
-returns (`Result<T, MyErr>`). It is *not* a functor — a module-returning
+type parameters named for their variants, `Ok` and `Error`. It is the shared
+return-type shape for
+[`CATCH`](#catch) (`:(Result {Ok = <Ty>, Error = KError})`) and for user functions
+with typed error
+returns (`:(Result {Ok = <Ty>, Error = MyErr})`). It is *not* a functor — a module-returning
 function — whereas `Result` is a type constructor producing a tagged-union
 value.
 
 It is registered once in the root scope by
 [`result::register`](../src/builtins/result.rs), **type-only** the way a `UNION`
 declaration is: `bindings.types["Result"]` holds a `TypeConstructor` identity
-whose payload carries both the parameter names `T` / `E` and the variant
-`schema` `{Ok, Error}` (both `Any`). `Result (Ok v)` / `Result (Error e)`
+whose payload carries both the parameter names `Ok` / `Error` and the variant
+`schema` `{Ok, Error}` (both `Any`). Each parameter is named for the tag whose
+payload it types, so the two agree by construction. `Result (Ok v)` /
+`Result (Error e)`
 construct by reading that schema off a fresh `types["Result"]` lookup — the
 same identity-borne path `UNION`-declared constructors use, with no value-side
-carrier. Type-position application of `Result`'s two parameters is not yet
-wired: the `AS` constructor-application form
-([functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots))
-is arity-1, and multi-parameter application is tracked in
-[modular implicits](../roadmap/predicate_typing/modular-implicits.md).
+carrier. Type-position application binds both parameters by name —
+`:(Result {Ok = Number, Error = MyError})`
+([functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots)).
+The arity-1 `AS` form does not apply to `Result`; it errors directing to the
+record form.
 
 The identity's `(name, scope_id)` fields use the root scope's `ScopeId` — the
-scope that owns the registration, not `ScopeId::SENTINEL` — so every `Result`
+scope that owns the registration — so every `Result`
 value shares one nominal identity and MATCHes uniformly. Because the name is
 registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
 the binder-placeholder install refuses a name already bound to a non-function
@@ -147,12 +152,14 @@ value.
 
 A `Result` value's type arguments are erased at construction — both `CATCH`
 and a `Result (Ok v)` / `Result (Error e)` constructor leave the carrier's
-`type_args` empty. A `:(Result T E)` slot is nonetheless runtime-checkable: the
+`type_args` empty. A `:(Result {Ok = …, Error = …})` slot is nonetheless
+runtime-checkable: the
 `matches_value(ConstructorApply, Tagged)` arm (see
 [ktype/parameterization-and-variance.md § Runtime type-parameter carriers](typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers))
 confirms the constructor identity and then checks the *inhabited* tag's payload
-against the type argument that field maps to (`Ok`→`T`, `Error`→`E`). So a caught
-`Result<_, KError>` is rejected where a `Result<_, MyErr>` is declared, because
+against the same-named type argument — a direct lookup, since tag name and
+parameter name coincide. So a caught
+`Result` at `Error = KError` is rejected where `Error = MyErr` is declared, because
 the `Error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
 annotated boundary stamps the carrier's `type_args` to the declared instantiation;
 the remaining per-call parameter-slot binding for generic value-slot functions is
@@ -239,7 +246,9 @@ are only catchable via `_`; `it` is then bound to a minimal
 `CATCH <expr>` lifts a single interpreter fault into a [`Result`](#result) value
 rather than letting it propagate. It is the opt-in, expression-position
 counterpart to [`TRY-WITH`](#try-with): where `TRY-WITH` forces the caller to
-spell out catch arms at the catch site, `CATCH` hands back a `Result<T, KError>`
+spell out catch arms at the catch site, `CATCH` hands back a `Result` at
+`Error = KError` — its declared return type is
+`:(Result {Ok = Any, Error = KError})` — which
 the caller binds with `LET`, passes as an argument, or returns:
 
 - `Ok(v)` on success, where `v` is the bare success value;

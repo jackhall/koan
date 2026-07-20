@@ -385,30 +385,33 @@ slot is type-channel-only and never matches a runtime value.
 `NEWTYPE (Type AS Wrapper)` declares a **type-constructor family** — the koan-source
 counterpart of the higher-kinded slot form `TYPE (Type AS Wrap)`
 ([functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)). It is
-declaration-by-example: the head mirrors the application surface `:(Number AS Wrapper)`
-with the concrete argument replaced by the parameter name. The declarator
+declaration-by-example: the head mirrors the application surface with the concrete
+arguments replaced by the parameter names. The declarator
 ([`body_constructor_family`](../../src/builtins/newtype_def.rs)) reuses the shared `TYPE`
-declaration parser (which rejects arity above 1), so the family is **arity 1 only**. It is
+declaration parser, so one or more parameters may be declared and a repeated name is a
+shape error. It is
 valid in any scope — top level or a `MODULE` body — with no SIG-body gate, so a module can
 declare the constructor member a higher-kinded signature slot demands.
 
-**Identity is a real singleton `TypeConstructor` set at the declaring scope.** The
+**Identity is a singleton `TypeConstructor` set at the declaring scope.** The
 declaration mints one `KKind::TypeConstructor` member —
-[`mint_type_constructor`](../../src/builtins/type_decl.rs), an empty variant schema plus the
-one `param_names` entry — and writes it to `bindings.types` only, no value-side carrier. The
-`scope_id` on the member is the **declaring scope's own id**, and that is the sole
-discriminant separating a NEWTYPE-declared family from the `TYPE` declarator's *sentinel*
-abstract slot ([`ScopeId::SENTINEL`](../../src/machine/execute/dispatch/single_poll.rs)):
-the sentinel names a kind but constructs nothing, while a real scope id constructs values.
+[`mint_type_constructor`](../../src/builtins/newtype_def.rs), an empty variant schema plus
+the declared `param_names` — and writes it to `bindings.types` only, no value-side carrier.
+The `scope_id` on the member is the declaring scope's own id, carried for diagnostics.
+What separates a NEWTYPE-declared family from the `TYPE` declarator's abstract constructor
+slot is the *variant*: the slot is a [`KType::AbstractType`](../../src/machine/model/types/ktype.rs)
+with non-empty `param_names`, which names a kind and constructs nothing, while a family is
+a `SetRef` and constructs values.
 The empty schema is the second discriminant, separating a constructor family from the
 builtin `Result`, whose non-empty variant schema routes construction down the sealed
 tagged-union path instead.
 
-**The family is the identity-wrapper over its argument** — `(T AS Wrapper)` is a newtype
-over `T` itself, so the applied argument *is* the representation; there is no type-variable
-substrate. Application through `AS` lowers `:(Number AS Wrapper)` to
-`KType::ConstructorApply { ctor: <the Wrapper SetRef>, args: [Number] }`, the same lowering
-the sentinel-slot form uses.
+**The family is the identity-wrapper over its argument** — `(Elem AS Wrapper)` is a newtype
+over `Elem` itself, so the applied argument *is* the representation; there is no
+type-variable substrate. Application binds the parameter by name —
+`:(Wrapper {Type = Number})`, or the arity-1 sugar `:(Number AS Wrapper)` — and lowers to
+`KType::ConstructorApply { ctor: <the Wrapper SetRef>, args: {Type = Number} }`, the same
+lowering an abstract constructor slot's application uses.
 
 **Construction stamps then collapses.** `Wrapper (v)` routes through
 [`dispatch_construct_apply`](../../src/machine/execute/dispatch/constructors.rs) (an
@@ -420,14 +423,19 @@ payload's own nominal identity — as the sole applied arg, then **collapses** b
 `Wrapped` layer off `v` so the stored `inner` is never itself `Wrapped` (the single-layer
 invariant the constructor path holds; the peeled identity is preserved *in the stamped
 arg*). The result is `KObject::Wrapped { inner, type_id: ConstructorApply(<ctor SetRef>,
-[arg]) }`, so the value's `ktype()` reports the applied type for free and inhabits
+{<param> = arg}) }` — the family's sole parameter names the stamped arg — so the value's
+`ktype()` reports the applied type for free and inhabits
 `:(<v's type> AS Wrapper)`. A record-literal payload (`Wrapper ({x = 1.0})`) rides through
 as a single positional value; ATTR then projects a field through the `Wrapped` layer.
+Value construction is arity-1 by nature — one wrapped value infers one argument — so
+constructing over a family declaring two or more parameters is a shape error naming the
+arity; such a family is applied in type position only.
 
-**Matching keys on the ctor nominal plus per-arg agreement.** A slot typed
+**Matching keys on the ctor nominal plus per-name agreement.** A slot typed
 `:(Number AS Wrapper)` is a `ConstructorApply` slot; a value satisfies it when the two
-ctors' `(set, index)` match via `same_nominal` (both are `SetRef`s) and the stamped args
-agree pairwise — an `Any` slot arg admits anything, otherwise the args must be structurally
+ctors' `(set, index)` match via `same_nominal` (both are `SetRef`s) and the two args
+records name the same parameters, each stamped arg agreeing with its same-named slot arg —
+an `Any` slot arg admits anything, otherwise the args must be structurally
 equal. The rule lives in one helper
 ([`constructor_apply_admits`](../../src/machine/model/types/ktype_predicates.rs)) shared by
 both the `KType::matches_value` `Wrapped` arm and the

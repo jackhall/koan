@@ -38,6 +38,9 @@ mod using_scope;
 mod val_decl;
 
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 pub(crate) mod test_support;
 
 /// Signature-element constructor for a keyword slot.

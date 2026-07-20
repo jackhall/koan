@@ -167,21 +167,22 @@ dispatch and slot admission see the full instantiation, not just the outer shape
 - `KObject::List(items, elem)` / `KObject::Dict(map, key, value)` memoize the
   element / key+value type at construction (`KObject::list` / `KObject::dict`).
 - `KObject::Tagged { type_args, .. }` carries the applied type arguments of a
-  parameterized union (`Result<T, E>`). Empty `type_args` means erased — `ktype()`
+  parameterized union as a `Record<KType>` keyed by the carrier's *parameter names*
+  (`Result` binds `Ok` and `Error`). Empty `type_args` means erased — `ktype()`
   reports the bare `SetRef`; a populated carrier makes `ktype()`
   synthesize `ConstructorApply { ctor, args: type_args }`. Construction
   (`tagged_union::construct`, `CATCH`) erases by default; the carrier is populated
   only by ascription stamping.
 
-A `ConstructorApply` slot (`:(Result T E)`) admits a `Tagged` value via the
-`matches_value` arm in
+A `ConstructorApply` slot (`:(Result {Ok = Number, Error = MyError})`) admits a
+`Tagged` value via the `matches_value` arm in
 [ktype_predicates.rs](../../../src/machine/model/types/ktype_predicates.rs): the
 declaring schema must be the same constructor, and then either the populated
-`type_args` are checked structurally against the declared args, or — for an erased
-carrier — the *inhabited* tag's payload is checked against the type argument that
-field maps to. The `Result` field→parameter linkage (`ok`→0 / `T`, `error`→1 /
-`E`) lives in the type layer as `result_field_param_index`, reading the ordering
-the builtin registration owns.
+`type_args` are checked per parameter name against the declared args, or — for an
+erased carrier — the *inhabited* tag's payload is checked against the same-named
+argument. `Result`'s tag names and its parameter names coincide by construction
+(`Ok`, `Error`), so the field→parameter linkage is a direct `args.get(tag)` lookup
+with no separate ordering table.
 
 **Ascription is authoritative at annotated boundaries.** A parameterized-carrier
 value crossing an annotated boundary is checked via `matches_value`. Where the
@@ -216,11 +217,15 @@ annotation. The three boundaries are:
   (see [Dispatch and slot-specificity](dispatch.md#dispatch-and-slot-specificity)).
 - **`LET`** ascription — same check-then-stamp on the bound value.
 
-**Parameter arity is fixed by the keyworded sigil shape.** `:(LIST OF X)`
-carries exactly one element slot and `:(MAP K -> V)` exactly two, so an
+**Parameter arity is fixed by the keyworded sigil shape.** `:(LIST OF <Elem>)`
+carries exactly one element slot and `:(MAP <Key> -> <Value>)` exactly two, so an
 arity mismatch isn't expressible at the surface — the type-constructor
 overloads only match the well-formed shape, and any other arrangement
-fails to resolve as a parameterized type at all. (See
+fails to resolve as a parameterized type at all. A *declared* constructor family
+instead applies by name (`:(Pair {Key = Number, Val = Str})`), where an arity or
+name mismatch is a shape error naming the missing and unknown keys — see
+[functors.md § Higher-kinded type slots](../functors.md#higher-kinded-type-slots).
+(See
 [elaboration.md § Layers](../elaboration.md#layers) § Layer 1 for where type
 elaboration sits in the pipeline.)
 

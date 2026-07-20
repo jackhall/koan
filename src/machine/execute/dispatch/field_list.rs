@@ -21,7 +21,8 @@ use crate::machine::core::{LexicalFrame, PendingBinderGuard, StepAllocator};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
+    FieldNameKind, ResultFeed,
 };
 use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
@@ -80,7 +81,7 @@ fn field_list_deps<'step>(
 /// second park is not a recoverable forward ref) and errors loudly.
 struct FieldListRewalk<'step> {
     expr: KExpression<'step>,
-    context: &'static str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
@@ -120,7 +121,7 @@ impl<'step> FieldListRewalk<'step> {
             }
             FieldListOutcome::Pending { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
                 "{}: forward type reference still unresolved after dep-finish wake",
-                self.context
+                self.context.list
             )))),
         }
     }
@@ -154,7 +155,7 @@ pub(crate) fn defer_field_list<'step>(
     expr: KExpression<'step>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'step>>,
-    context: &'static str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
@@ -210,7 +211,7 @@ pub(crate) fn defer_field_list_action<'a>(
     expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'a>>,
-    context: &'static str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
@@ -260,7 +261,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'a>>,
-    context: &'static str,
+    context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
@@ -307,7 +308,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     let mut elaborator = Elaborator::new(view.current_scope()).with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
         &fields,
-        "record fields",
+        FieldListContext::RECORD_TYPE,
         FieldNameKind::Identifier,
         &mut elaborator,
         None,
@@ -324,7 +325,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             fields,
             park_producers,
             sub_dispatches,
-            "record fields",
+            FieldListContext::RECORD_TYPE,
             FieldNameKind::Identifier,
             Vec::new(),
             chain,

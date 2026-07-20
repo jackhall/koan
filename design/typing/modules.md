@@ -57,8 +57,9 @@ SIG bodies accept three declarators, split by what a satisfying module must
 supply:
 
 - `TYPE <TypeName>` declares an **abstract** type member — a witness-less slot
-  the module supplies at any concrete type. `TYPE (<Param> AS <Name>)` is the
-  higher-kinded form (see [Higher-kinded type slots](functors.md#higher-kinded-type-slots)).
+  the module supplies at any concrete type. `TYPE (<Param>… AS <Name>)` is the
+  higher-kinded form, taking one or more named parameters
+  (see [Higher-kinded type slots](functors.md#higher-kinded-type-slots)).
   `TYPE` is meaningful only inside a SIG body; the implementation lives at
   [`type_decl.rs`](../../src/builtins/type_decl.rs).
 - `LET <TypeName> = <expr>` declares a **manifest** type member — a slot fixed
@@ -134,14 +135,16 @@ representation. Three sites cooperate.
 A `TYPE Carrier` declaration ([`type_decl.rs`](../../src/builtins/type_decl.rs)) binds
 the name-bearing `KType::AbstractType { source: <decl scope id>, name }`, so a
 later `VAL zero :Carrier` records that `zero` *names* the abstract member `Carrier`. The
-higher-kinded `TYPE (Type AS Wrap)` binds a sentinel `TypeConstructor` so
-ascription's per-call constructor mint preserves the parameterization. A manifest
+higher-kinded `TYPE (Elem AS Wrap)` binds an `AbstractType` too, its `param_names`
+carrying the declared parameters, so ascription's per-call constructor mint preserves
+the parameterization. A manifest
 `LET Tag = Number` binds the concrete `Number` — it carries no abstract identity,
 and a `VAL x :Tag` slot reads through concretely. Classification is by
 *representation*, not name class:
 [`sig_schema.rs`](../../src/machine/model/types/sig_schema.rs)'s `is_abstract_sig_member`
-reads the member's `KType` shape (an `AbstractType` or a sentinel constructor
-is abstract; everything else is manifest). Outer aliases and builtin annotations
+is exactly `matches!(kt, KType::AbstractType { .. })` — an abstract member of either
+order is that one variant, and everything else (a manifest binding, a minted
+constructor family) is manifest. Outer aliases and builtin annotations
 (`:Number`, an outer `LET MyAlias = Number`) stay concrete.
 
 Opaque ascription ([`ascribe.rs`](../../src/builtins/ascribe.rs)'s `body_opaque`)
@@ -162,8 +165,10 @@ a bare construction derives it lazily via `raw_self_sig`). A signature likewise 
 run for both `:|` and `:!`) holds iff `module.self_sig <: sig-schema` under `sig_subtype`:
 `Sub <: Super` iff `Sub` supplies every member `Super` names (width — extra `Sub` members are
 ignored), with each manifest member *equal*, each abstract member present at the matching
-kind/arity (a first-order slot needs a proper type or first-order member; a higher-kinded
-`TYPE (Type AS Wrap)` slot needs a constructor of the same arity), and each value slot
+kind and over the same parameter names (a first-order slot needs a proper type or
+first-order member; a higher-kinded `TYPE (Elem AS Wrap)` slot needs a constructor whose
+parameter-name *set* equals the slot's — see
+[functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)), and each value slot
 covariantly compatible — the module's member type must be `satisfied_by`-admissible for the
 slot's declared type, after the slot's references to `Super`'s abstract members are substituted
 with `Sub`'s bindings for them. Each ascription view seals its own self-sig recording those
@@ -316,13 +321,18 @@ structural type the satisfaction relation reads (see §"Satisfaction and `WITH`"
 kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the empty
 `:Module` interface differ only in the schema their content holds, not in variant. The content
 borrows nothing from a region, so `KType` holds no region pointer in any variant.
-`KType::AbstractType { source, name }` carries an abstract-type member, its
+`KType::AbstractType { source, name, param_names }` carries an abstract-type member, its
 `source` naming either the SIG decl scope (a declared member) or the per-call
-ascription module (an opaque mint). Module identity is by `module.scope_id()` — the
+ascription module (an opaque mint), and its `param_names` empty for a proper type or
+naming the parameters of a constructor slot. Module identity is by `module.scope_id()` — the
 key both a self-sig's `sig_id` and an `AbstractType` minted off that module digest on; signature
 identity is by schema *content* (`schema_digest`) + `pinned_slots`, so two textually identical
 declarations name one type and `sig_id` never enters identity; abstract-type identity by
-`(source, name)`. The value channel carries a module as `KObject::Module`; the type
+`(source, name)` — `param_names` is excluded, one source-and-name binding exactly one
+member, so the names are derivable payload. They are still *interface*: a schema's
+content digest feeds each abstract member's parameter names (sorted, so order is
+presentation), and satisfaction requires name agreement, so two otherwise identical SIG
+declarations whose constructor slot names its parameter differently are distinct types. The value channel carries a module as `KObject::Module`; the type
 channel never names one directly, only through the self-sig that types it.
 The type-position wildcard `KType::OfKind(KKind::Signature)` admits any
 first-class signature value; the surface keyword `Signature` lowers to it in

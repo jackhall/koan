@@ -22,8 +22,8 @@ use std::collections::HashMap;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    finalize_nominal_member, seal_recursive_refs, FieldNameKind, NominalSchema, Record,
-    RecursiveSet, SchemaSealResult, SealOutcome,
+    finalize_nominal_member, seal_recursive_refs, FieldListContext, FieldNameKind, NominalSchema,
+    Record, RecursiveSet, SchemaSealResult, SealOutcome,
 };
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::FinishCtx;
@@ -46,6 +46,14 @@ fn finalize_newtype<'a>(
     repr: KType,
     bind_index: BindingIndex,
 ) -> Result<StepCarried<'a>, KError> {
+    // The repr types the values the NEWTYPE wraps, so it must be a proper type; a bare
+    // constructor of kind `* -> *` standing unapplied is a kind error.
+    if let Some(message) = crate::machine::model::unsaturated_constructor_message(
+        &repr,
+        &format!("the representation type of NEWTYPE `{name}`"),
+    ) {
+        return Err(KError::new(KErrorKind::ShapeError(message)));
+    }
     let scope = fctx.scope;
     let scope_id = scope.id;
     let set = RecursiveSet::singleton(
@@ -190,7 +198,7 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         name,
         fields,
         KKind::NewType,
-        "NEWTYPE record repr",
+        FieldListContext::NEWTYPE_RECORD_REPR,
         FieldNameKind::Identifier,
         error_frame,
         finalize_record_newtype,

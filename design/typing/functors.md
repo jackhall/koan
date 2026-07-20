@@ -267,61 +267,91 @@ SIG Monad = (
 )
 ```
 
-`TYPE (<Param> AS <Name>)` is the declaration form (declaration-by-example:
-it mirrors the application surface `:(Number AS Wrap)` with the concrete
-argument replaced by the parameter name). Inside a SIG body it binds the
-slot name (`Wrap` above) to a sentinel `KType::SetRef` whose member is a
-`KKind::TypeConstructor` carrying the parameter symbol list. The declarator
+`TYPE (<Param>… AS <Name>)` is the declaration form (declaration-by-example:
+it mirrors the application surface with the concrete arguments replaced by
+the parameter names). Inside a SIG body it binds the slot name (`Wrap`
+above) to a `KType::AbstractType` whose `param_names` are the declared
+parameters — the same variant a first-order `TYPE Carrier` binds, which
+carries an empty list. One or more parameters may be declared, and a
+repeated name in one declaration is a shape error, since the names key the
+application record. `KType::kind_of` reads the list: empty is
+`KKind::ProperType`, non-empty `KKind::TypeConstructor`. The declarator
 lives in [`type_decl.rs`](../../src/builtins/type_decl.rs). The value-level
-counterpart `NEWTYPE (Type AS Wrap)` declares a *real* (non-sentinel)
-constructor family a module can supply as the witness for this slot, and
-constructs values inhabiting the applied type — see
+counterpart `NEWTYPE (Elem AS Wrap)` declares a constructor family a module
+can supply as the witness for this slot, and constructs values inhabiting
+the applied type — see
 [user-types.md § Constructor families](user-types.md#constructor-families-newtype-type-as-wrapper).
 
-Application uses the `AS` keyworded builtin through the type-expression sigil:
-`:(Number AS Wrap)` in a type-position slot lowers to
-`KType::ConstructorApply { ctor: <the Wrap SetRef>, args: [Number] }` —
-structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
-The constructor rides in as the `AS` right-hand `:Type` argument, not as a
-dispatch verb, so the call routes through the ordinary keyworded path the
-same way `:(LIST OF Number)` does; the
-[`AS` builtin](../../src/builtins/parameterized_types.rs) checks the right-hand
-side is a `TypeConstructor`-kind member and arity-checks against its
-`param_names.len()`. A forward reference to an in-flight `LET` constructor
-name parks on its producer through the same bare-name arg resolution every
-`:Type` slot uses.
+**Parameter names are interface.** They feed the SIG schema's content digest
+(sorted, so declaration order is presentation), and satisfaction requires
+name agreement: a module supplying `NEWTYPE (Item AS Wrap)` does *not* fill
+a `TYPE (Elem AS Wrap)` slot. The mismatch surfaces as
+`SigSubtypeFailure::KindMismatch`, naming the parameter set the slot
+declares. Renaming a type parameter is therefore a breaking change to
+satisfaction, exactly as renaming a `KFunction` parameter is.
+
+Application binds each parameter by name, through a record literal on the
+constructor identity: `:(Wrap {Elem = Number})`, `:(Result {Ok = Number,
+Error = MyError})`. It lowers to
+`KType::ConstructorApply { ctor: <the Wrap identity>, args: {Elem = Number} }` —
+structural identity by `(ctor, args)`, with `Record`'s order-blind
+identity, so the same name-to-type map is the same application however it
+was written. The arm lives in
+[`apply_callable.rs`](../../src/machine/execute/dispatch/apply_callable.rs):
+a constructor-kind head with a record-literal body launches one sub-dispatch
+per field, so a compound argument (`{Elem = (LIST OF Number)}`) elaborates
+through the ordinary type-expression lanes and the slot parks until it
+lands. The supplied key set must equal the parameter set; a mismatch names
+the missing and unknown keys. The args are stored in the constructor's
+declared order, which is what `KType::name()` renders and re-parses.
+
+`AS` survives as **arity-1 sugar**: `:(Number AS Wrap)` fills the
+constructor's sole parameter by that parameter's own name, so it elaborates
+to a type digest-equal to `:(Wrap {Elem = Number})`. The constructor rides
+in as the `AS` right-hand `:Type` argument, not as a dispatch verb, so the
+call routes through the ordinary keyworded path the same way
+`:(LIST OF Number)` does; the
+[`AS` builtin](../../src/builtins/parameterized_types.rs) reads the
+right-hand side's parameter names and errors when there is not exactly one,
+directing to the record form. A forward reference to an in-flight `LET`
+constructor name parks on its producer through the same bare-name arg
+resolution every `:Type` slot uses.
 
 Higher-kinded slots are **per-call generative on the same path as ordinary
 abstract type slots**. Two opaque ascriptions of the same source module
 against the same SIG mint distinct `TypeConstructor` carriers under each
 resulting module's `type_members[Wrap]` — they sit in distinct sets, so
-their `(set ptr, index)` identities differ and `First.Wrap<Number>` and
-`Second.Wrap<Number>` are incomparable types. The minting site is the same
-loop in `ascribe.rs:body_opaque` that mints `KType::AbstractType` slots; it
-inspects the SIG's `bindings.types[<slot>]` and matches a sentinel
-`TypeConstructor`-kind member so the slot inherits its declared kind
-(falling back to `AbstractType` for a plain `TYPE Carrier` slot).
+their `(set ptr, index)` identities differ and `First.Wrap` and
+`Second.Wrap` applied at `Number` are incomparable types. The minting site
+is the same loop in `ascribe.rs:body_opaque` that mints
+`KType::AbstractType` slots; it inspects the SIG's
+`bindings.types[<slot>]` and mints a fresh constructor family over the
+slot's own `param_names` whenever that list is non-empty (falling back to a
+fresh first-order `AbstractType` for a plain `TYPE Carrier` slot).
 
-The surface is **arity-1 only.** The `param_names` list always carries one
-entry; multi-parameter constructors are tracked in
-[open-work.md](open-work.md). The parameter symbol must be a Type-classified
-token (≥1 lowercase character): the parser rejects single-letter capitals
-(`T`, `E`) at lex time, so surface forms in this section using `T` are
-conceptual — real code writes `TYPE (Type AS Wrap)` or
-`TYPE (Elt AS Wrap)`. The [token-class rule](tokens.md) is the
-parser-level cause.
+The parameter symbol must be a Type-classified token (≥1 lowercase
+character): the parser rejects single-letter capitals (`T`, `E`) at lex
+time, so real code writes `TYPE (Type AS Wrap)` or `TYPE (Elem AS Wrap)`.
+The [token-class rule](tokens.md) is the parser-level cause, and it is why
+the builtin `Result` names its parameters `Ok` and `Error` rather than `T`
+and `E`.
 
 `ConstructorApply` flows through the type-position machinery (FN return-type
-elaboration, signature-body ascription) and now also names a **runtime value's**
+elaboration, signature-body ascription) and also names a **runtime value's**
 type: a value constructed over a `NEWTYPE (Type AS Wrapper)`-declared family
 reports a `ConstructorApply` `ktype()`, so wrapping a concrete value in
 `Wrapper (v)` and dispatching on `:(Number AS Wrapper)` both ship — see
 [user-types.md § Constructor families](user-types.md#constructor-families-newtype-type-as-wrapper).
-Still future and tracked in [open-work.md](open-work.md): re-tagging an
-applied-constructor-typed VAL slot read through an opaque view, and cross-module
-application (`:(Number AS mo.Wrap)` over another module's constructor member,
-reached via ATTR-then-apply). A bare `:(T AS Wrap)` in a signature body or against a
-root-scope-bound constructor is the path the test suite pins.
+*Value* construction stays an arity-1 surface: an identity wrapper wraps one
+value and infers one type argument from it, so constructing a value of a
+family declaring two or more parameters is a shape error naming the arity.
+The *type* surface has no such limit — a multi-parameter family applies by
+name like any other. Still future and tracked in
+[open-work.md](open-work.md): re-tagging an applied-constructor-typed VAL
+slot read through an opaque view, and cross-module application
+(`:(Number AS mo.Wrap)` over another module's constructor member, reached
+via ATTR-then-apply). A bare `:(Number AS Wrap)` in a signature body or
+against a root-scope-bound constructor is the path the test suite pins.
 
 ## Type expressions and constraints
 

@@ -57,8 +57,8 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
-- [Function-typed return annotations](type_language/function-typed-return-annotations.md)
+- [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Abstract members carry arity](type_memos/abstract-member-arity.md)
+- [Retire functional `NominalMember.scope_id` reads](type_memos/member-scope-id-functional-reads.md)
 

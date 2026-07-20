@@ -191,6 +191,43 @@ pub fn constructor_param_names(kt: &KType) -> Option<Vec<String>> {
     }
 }
 
+/// The diagnostic for a bare type constructor standing in a value type position, or `None` when
+/// `kt` is well-kinded there.
+///
+/// A value's type must be a proper type — kind `*`. The ill-kinded shapes are exactly the two
+/// [`constructor_param_names`] names: a declared family (`SetRef` at `TypeConstructor` kind) and
+/// a SIG's higher-kinded abstract member, each of kind `* -> *` and standing with none of its
+/// parameters supplied. A saturated application (`ConstructorApply`), a first-order abstract
+/// member, and every ground type are proper, so they yield `None`. A *type* position — the head
+/// of an application, a `TYPE (Elem AS Wrap)` declaration, a module's type-constructor member —
+/// takes a bare constructor legitimately and never consults this.
+///
+/// `position` is a noun phrase naming the *type slot* the constructor stands in — "the type of FN
+/// parameter `x`", "the FN return type", "the element type of `LIST OF`" — so it reads as the
+/// subject of "must be a proper type". It names the type, never the value or field whose type it
+/// is: "the type of SIG value slot `boxed`", not "SIG value slot `boxed`", since a slot is not
+/// itself a type. The constructor's parameter names follow, since supplying them is the fix.
+pub fn unsaturated_constructor_message(kt: &KType, position: &str) -> Option<String> {
+    let param_names = constructor_param_names(kt)?;
+    let name = kt.name();
+    let plural = if param_names.len() == 1 { "" } else { "s" };
+    let listed = param_names
+        .iter()
+        .map(|p| format!("`{p}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let applied = param_names
+        .iter()
+        .map(|p| format!("{p} = <Type>"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "`{name}` is a type constructor taking {arity} type parameter{plural} ({listed}), but \
+         {position} must be a proper type — apply it, as `:({name} {{{applied}}})`",
+        arity = param_names.len(),
+    ))
+}
+
 /// Order-blind comparison of two constructor parameter lists: identity is the name set, and
 /// declaration order is presentation.
 fn name_sets_equal(left: &[String], right: &[String]) -> bool {

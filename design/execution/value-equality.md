@@ -46,8 +46,8 @@ Per variant:
   declaration order does not matter.
 - **Tagged** values compare nominal identity first (`same_nominal` — set digest
   plus variant index); type arguments are a comparability gate (empty on either
-  side is erased and therefore comparable, both populated must agree on arity and
-  be pairwise related); then the payloads walk.
+  side is erased and therefore comparable, both populated must name the same type
+  parameters and be related per name); then the payloads walk.
 - **Wrapped** (newtype) values compare their nominal `type_id` via digest-based
   `KType` equality, then the inner payloads. A `Wrapped` value is never equal to
   its bare representation, and two distinct newtypes over the same representation

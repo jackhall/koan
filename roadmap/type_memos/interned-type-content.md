@@ -121,9 +121,9 @@ record's field substrate in the region; this item owns every type-side clone.
 
 **Requires:**
 
-- [Abstract members carry arity](abstract-member-arity.md) — interning collapses
-  digest-equal sets to one node, so allocation-carried sentinel classification must
-  die first.
+- [Retire functional `NominalMember.scope_id` reads](member-scope-id-functional-reads.md)
+  — interning collapses digest-equal sets to one node, so a member's digest-excluded
+  `scope_id` becomes first-interner-wins and cannot carry a decision.
 
 **Unblocks:**
 

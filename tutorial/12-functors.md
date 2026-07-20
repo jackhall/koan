@@ -184,8 +184,35 @@ one of type `:(Str AS Boxed)`, so the two `OPEN` overloads dispatch on the boxed
 type exactly as ordinary overloads dispatch on a plain argument type. Because the
 declaration is valid inside a `MODULE` body, a module can declare `Wrapper` as the
 concrete witness for a signature's `TYPE (Type AS Wrap)` slot — the missing piece
-that lets a module satisfy a higher-kinded signature. The form takes one parameter
-(arity 1).
+that lets a module satisfy a higher-kinded signature. The parameter names have to
+match: a module supplying `NEWTYPE (Item AS Wrap)` does *not* satisfy a
+`TYPE (Type AS Wrap)` slot, because the slot names its parameter `Type`.
+
+## More than one parameter: `:(Ctor {Name = Type, …})`
+
+A constructor can take several parameters — list them all before the `AS`. Applying
+one binds each parameter by name, in a brace literal:
+
+```koan
+NEWTYPE (Key Val AS Pair)
+LET NumToStr = :(Pair {Key = Number, Val = Str})
+PRINT NumToStr
+```
+
+```text
+:(Pair {Key = Number, Val = Str})
+```
+
+The names are what matter, not the order — writing `{Val = Str, Key = Number}` gives
+the same type. Supplying a key the constructor doesn't declare, or leaving one out,
+is an error that names the offending keys. The built-in `Result` is applied the same
+way: `:(Result {Ok = Number, Error = Str})`.
+
+`:(Number AS Boxed)` is shorthand for the one-parameter case — it fills the
+constructor's only parameter, so it means exactly `:(Boxed {Type = Number})`. A
+constructor with two or more parameters has to use the brace form, and it can only be
+used in *type* position: `Boxed (7)` wraps one value and infers one type argument, so
+there is nothing for a second parameter to be inferred from.
 
 ---
 

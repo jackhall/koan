@@ -32,7 +32,8 @@ pub use resolver::{
     TypeResolution,
 };
 pub use sig_schema::{
-    constructor_param_names, sig_subtype, substitute_sig_members, SigContent, SigSchema,
+    constructor_param_names, sig_subtype, substitute_sig_members, unsaturated_constructor_message,
+    SigContent, SigSchema,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;
@@ -42,5 +43,6 @@ pub use signature::{
 };
 pub(crate) use type_digest::TypeDigest;
 pub use typed_field_list::{
-    parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
+    parse_typed_field_list_via_elaborator, FieldListContext, FieldListOutcome, FieldNameKind,
+    ResultFeed,
 };

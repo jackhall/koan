@@ -127,6 +127,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// the slot's carrier as `Action::Done`, uniform with `type_decl::bind_abstract_member` and the
 /// `LET` type route.
 ///
+/// A slot declares the type of a value, so the declared type must be a proper type: a bare
+/// constructor (`VAL boxed :Wrapper` where `Wrapper` has kind `* -> *`) is a kind error here,
+/// while a first-order abstract member (`TYPE Elem` → `VAL zero :Elem`) is proper and admits.
+///
 /// `declared_kt` arrives as owned data — a bind-time `ty` argument or a leaf re-dispatch's dep
 /// terminal. [`Scope::register_sig_slot_delivered`] allocates it into the SIG decl scope's own
 /// region through the single storage door and installs it in the collector, handing back that
@@ -138,6 +142,12 @@ fn finalize_val<'a>(
     declared_kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
+    if let Some(message) = crate::machine::model::unsaturated_constructor_message(
+        &declared_kt,
+        &format!("the type of SIG value slot `{name}`"),
+    ) {
+        return Action::Done(Err(KError::new(KErrorKind::ShapeError(message))));
+    }
     let kt_ref = match fctx.scope.register_sig_slot_delivered(name, declared_kt) {
         Ok(kt_ref) => kt_ref,
         Err(e) => return Action::Done(Err(e)),

@@ -116,8 +116,12 @@
   self-sig, and the empty `:Module` top are one shape differing only in schema, and the
   variant is both the introspectable value *and* the dispatch constraint ("any module
   satisfying this signature"). No `KType` variant borrows region data.
-  `AbstractType { source: ScopeId, name: String }` is the per-abstract-type-member
-  tag — **owned data**, id-keyed, with no `&Module` inside it. The single variant has
+  `AbstractType { source: ScopeId, name: String, param_names: Vec<String> }` is the
+  per-abstract-type-member
+  tag — **owned data**, id-keyed, with no `&Module` inside it. `param_names` carries the
+  member's order: empty is a first-order proper type (`TYPE Elt`), non-empty a type
+  constructor over those named parameters (`TYPE (Elem AS Wrap)`), and `kind_of` reads
+  the list to classify the member `ProperType` or `TypeConstructor`. The single variant has
   two **minting sites**, and the distinction between them is load-bearing for
   generativity even though the representation is one shape: `source` is the SIG decl
   scope's id for a member named at SIG-declaration time (a SIG-local `TYPE Carrier`
@@ -125,7 +129,9 @@
   or the freshly-allocated ascription module's scope id for the per-call
   mint `:|` opaque ascription produces (`view.Carrier`). Because each `:|` application
   allocates a fresh child scope, the two never collide.
-  Manual `PartialEq` keys `KType::AbstractType` on `(source, name)`, while
+  Manual `PartialEq` keys `KType::AbstractType` on `(source, name)` — `param_names` is
+  excluded from equality, hashing and the digest, since one source-and-name binds exactly
+  one member, so the names are derivable payload rather than identity — while
   `KType::Signature` compares by its stored content
   digest (which folds the content's `schema_digest` and `pinned_slots`; its `path` and
   `sig_id` are diagnostic and specificity-refinement data, never identity) — so two
@@ -153,11 +159,14 @@
   same variant rides a live `&Signature`, a `WITH` result is
   introspectable too.
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
-  Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
-  / `Dict(_, _)`. `ctor` is a `SetRef` to a `TypeConstructor`-kind member.
-  Emitted by `elaborate_type_expr` when the outer name of a parameterized type
-  expression resolves to such a member; renders as `ctor<arg1, arg2>` in
-  diagnostics. See
+  Record<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
+  / `Dict(_, _)`, with `Record`'s order-blind identity. `args` maps each of the
+  constructor's parameter names to the elaborated argument type, stored in the
+  constructor's declared order. `ctor` is a `TypeConstructor`-kind identity — a
+  `SetRef` to a declared family, or an `AbstractType` naming a SIG's abstract
+  constructor slot. Emitted when a constructor identity is applied to a record of
+  named type arguments (`:(Wrap {Elem = Number})`) or through the arity-1 `AS`
+  sugar; renders as `:(ctor {Name = Type, …})` in diagnostics, which re-parses. See
   [functors.md § Higher-kinded type slots](../functors.md#higher-kinded-type-slots)
   for the surface form and per-call generativity.
 - `Any` — the no-op fast-path.

@@ -39,7 +39,8 @@ resolution keeps its lexically-scoped candidate set ([implicits.md](implicits.md
 structural satisfaction does not widen implicit search.
 
 A signature's type identity is its schema content: a `SIG` digests over its members
-(names, abstract-member arity, manifest and VAL-slot types, with references to the
+(names, each abstract member's parameter names, manifest and VAL-slot types, with
+references to the
 signature's own abstract members canonicalized by name), and a module's principal
 signature digests over its sealed self-sig. Two textually identical `SIG`
 declarations, and two unascribed modules with identical interfaces, are one type —

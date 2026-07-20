@@ -51,8 +51,9 @@ abstraction demands it and nowhere else.
 The sole remaining id-keyed leaf is `AbstractType`: its digest folds the
 minting scope id, is stable within a run, and the order-independence property
 above is scoped to types without such a leaf. A `Signature` is *not* id-keyed —
-it digests by its source's schema content (member names, abstract members'
-arity, and manifest-member / value-slot type digests), with references to the
+it digests by its source's schema content (member names, each abstract member's
+parameter names — sorted, so declaration order is presentation — and
+manifest-member / value-slot type digests), with references to the
 schema's own abstract members canonicalized to a name leaf. Two textually
 identical `SIG` declarations, and two modules with identical interfaces, are
 therefore one type. Opacity still rides `AbstractType`: the abstract-type slots

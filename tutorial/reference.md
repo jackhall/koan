@@ -75,6 +75,9 @@ the link in each section to the relevant chapter.
 | `:(MAP <Key> -> <Value>)`     | Map / dictionary type.                             |
 | `:(FN (<params>) -> <Result>)`| Function type.                                     |
 | `TYPE (Type AS Wrap)`         | A higher-kinded type member, inside a `SIG`.       |
+| `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
+| `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |
+| `:(Number AS Wrap)`           | Shorthand for applying a one-parameter constructor.|
 
 Token rule throughout: **keywords** are ≥2 uppercase letters with no lowercase;
 **type names** are uppercase-leading with ≥1 lowercase letter; **identifiers**

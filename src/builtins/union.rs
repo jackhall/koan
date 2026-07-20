@@ -1,6 +1,7 @@
 use crate::machine::model::KKind;
 use std::rc::Rc;
 
+use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
@@ -150,7 +151,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         name,
         schema_expr,
         KKind::NewType,
-        "UNION schema",
+        FieldListContext::UNION_SCHEMA,
         FieldNameKind::Type,
         error_frame,
         finalize_union,

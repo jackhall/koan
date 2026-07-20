@@ -165,6 +165,22 @@ on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs
 record, mixing the two is a parse error, and an empty `{}` is the empty record. Subtyping over
 record values is width/depth — see [ktype/parameterization-and-variance.md § Variance](ktype/parameterization-and-variance.md#variance).
 
+A `:` inside a brace frame is the pair separator **only in the positions that can still
+take one** — a dict frame awaiting its key. A record frame has committed to `=`, and a
+dict frame mid-value has spent its pair's one `:`, so in both a `:` opens an ordinary
+type sigil: `{x = :Number}` and `{a: :Number}` parse, and so does
+`(Setish WITH {Ord = :(TYPE OF int_ord)})`. When a diverted `:` then fails to parse as a
+sigil, the failure reports the pairing rule that declined it (`mixed ':' and '=' in a
+brace literal`) rather than a type-position complaint — the diagnostic lives on the
+error path, so the accepting path stays one predicate test with no lookahead
+([`dict_literal.rs`](../../src/parse/dict_literal.rs)'s `colon_is_separator` /
+`declined_colon_reason`).
+
+A **repeated field name in a record literal is a parse error**: a record's field list is
+a static shape, so a duplicate is a mistake rather than an override. Dict keys stay
+unchecked — they are arbitrary value expressions keyed at runtime, so `{"a": 1, "a": 2}`
+is a legal last-wins dict.
+
 `(x y) FROM r` projects a record value to the named fields
 ([record_projection.rs](../../src/builtins/record_projection.rs)). Unlike the
 type-returning `_OF` dispatcher ops, `FROM` is a plain value builtin: it returns a
@@ -203,6 +219,17 @@ inner expression's parts decide its shape:
   type; `bindings.types` holds no callable, so there is no function-application arm
   here.
 
+  The same tail carries **named type application**: a *type-constructor* head — a
+  declared family or a SIG's abstract constructor slot — with a record-literal body
+  binds each of the constructor's parameters to a type, yielding a
+  `KType::ConstructorApply` type value rather than constructing anything
+  (`:(Wrap {Elem = Number})`, `:(Result {Ok = Number, Error = MyError})`). The two
+  readings of a record body are disjoint by head kind: a struct or newtype head builds
+  a value, a constructor head applies. The arm launches one sub-dispatch per field, so
+  a compound argument (`{Elem = (LIST OF Number)}`) parks like any other type
+  expression, and the supplied key set must equal the parameter set. See
+  [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots).
+
 A single-part `:(...)` sigil wrapping the whole construction is the
 `SigiledTypeExpr` lane that tail-replaces with a `Dispatch` of the inner
 expression; a `:(...)` head *followed by* a call body
@@ -232,9 +259,10 @@ type, so it reaches type position only through `TYPE OF` (see
 The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
-Every parameterized type rides one surface: the keyworded sigil
-(`:(LIST OF Number)`, `:(MAP K -> V)`, `:(FN … -> R)`), served by the
-type-constructor overloads. The field-walker inside `typed_field_list`
+The builtin parameterized types ride one surface: the keyworded sigil
+(`:(LIST OF Number)`, `:(MAP Key -> Value)`, `:(FN … -> Ret)`), served by the
+type-constructor overloads; user- and prelude-declared constructor families ride the
+named-application arm above. The field-walker inside `typed_field_list`
 handles the sigil embedded in `NEWTYPE` / `UNION` field schemas through a
 single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
 sub-Dispatch through the standalone dispatcher, which carries no threaded

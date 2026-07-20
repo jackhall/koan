@@ -69,7 +69,10 @@ a sibling: records restrict keys to identifiers and admit heterogeneous per-fiel
 types, while dicts admit arbitrary value keys and one homogeneous value type. The two
 never share a key representation, and the value surfaces disambiguate at parse time —
 a brace literal with `=` pairs (`{x = 1}`) is a record, with `:` pairs (`{k: v}`) a
-dict (see [type-language-via-dispatch.md § Record-type sigil](../type-language-via-dispatch.md#record-type-sigil)).
+dict. Record field names are unique by *parse* rule, not only by the `IndexMap` key
+invariant: a repeated name in a record literal is a parse error, while a dict may repeat
+a key (last wins), since dict keys are runtime-evaluated value expressions rather than a
+static shape (see [type-language-via-dispatch.md § Record-type sigil](../type-language-via-dispatch.md#record-type-sigil)).
 
 ## Known limitations
 
