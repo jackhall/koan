@@ -4,7 +4,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::Record;
-use crate::machine::{BindingIndex, ScopeId};
+use crate::machine::BindingIndex;
 
 fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())
@@ -63,8 +63,8 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     let region = run_root_storage();
     let parent = run_root_silent(&region);
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), parent.id, KKind::NewType),
-        NominalMember::pending("B".into(), parent.id, KKind::NewType),
+        NominalMember::pending("A".into(), KKind::NewType),
+        NominalMember::pending("B".into(), KKind::NewType),
     ]));
     let child = region
         .brand()
@@ -89,7 +89,6 @@ fn constructor_apply_name_renders_surface_form() {
     use crate::machine::model::types::NominalSchema;
     let set = RecursiveSet::singleton(
         "Wrap".into(),
-        ScopeId::from_raw(0, 0xC0DE),
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: vec!["Type".into()],

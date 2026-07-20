@@ -404,23 +404,13 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     assert!(is_type_constructor(&b_wrap));
     // Identity is the content digest, but an opaque-ascription set is *generative*: each
     // application folds its per-call nonce (the view module's `scope_id`) into the set digest,
-    // so the two sets digest apart even though their member content is identical. The origin
-    // scope_ids differ because they ARE those distinct nonces.
+    // so the two sets digest apart even though their member content is identical.
     match (&a_wrap, &b_wrap) {
-        (
-            Some(KType::SetRef {
-                set: aset,
-                index: ai,
-            }),
-            Some(KType::SetRef {
-                set: bset,
-                index: bi,
-            }),
-        ) => {
+        (Some(KType::SetRef { set: aset, .. }), Some(KType::SetRef { set: bset, .. })) => {
             assert_ne!(
-                aset.member(*ai).scope_id,
-                bset.member(*bi).scope_id,
-                "two opaque ascriptions must mint TypeConstructor slots with distinct scope_id",
+                aset.generative_nonce(),
+                bset.generative_nonce(),
+                "two opaque ascriptions must mint TypeConstructor sets with distinct nonces",
             );
         }
         _ => unreachable!("matched above"),

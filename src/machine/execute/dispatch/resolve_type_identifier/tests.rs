@@ -57,13 +57,12 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     assert!(std::ptr::eq(kt, kt2));
 }
 
-/// A singleton record-repr newtype `SetRef` named `name` at `scope_id`.
-fn struct_setref(name: &str, scope_id: ScopeId) -> KType {
+/// A singleton record-repr newtype `SetRef` named `name`.
+fn struct_setref(name: &str) -> KType {
     use crate::machine::model::Record;
     use crate::machine::model::{NominalSchema, RecursiveSet};
     let set = RecursiveSet::singleton(
         name.into(),
-        scope_id,
         NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
@@ -72,8 +71,8 @@ fn struct_setref(name: &str, scope_id: ScopeId) -> KType {
 /// Pins recursion shape against a regression that skips nested structurals.
 #[test]
 fn ktype_user_refs_yields_nested_structural_refs_in_order() {
-    let user_a = struct_setref("A", ScopeId::next());
-    let user_b = struct_setref("B", ScopeId::next());
+    let user_a = struct_setref("A");
+    let user_b = struct_setref("B");
     let (set_a, set_b) = match (&user_a, &user_b) {
         (KType::SetRef { set: a, .. }, KType::SetRef { set: b, .. }) => {
             (std::rc::Rc::clone(a), std::rc::Rc::clone(b))
@@ -105,12 +104,9 @@ fn ktype_user_refs_yields_nested_structural_refs_in_order() {
 #[test]
 fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
     use crate::machine::model::{NominalSchema, RecursiveSet};
-    let inner = struct_setref("Inner", ScopeId::next());
-    let outer_set = RecursiveSet::singleton(
-        "Outer".into(),
-        ScopeId::next(),
-        NominalSchema::NewType(Box::new(inner)),
-    );
+    let inner = struct_setref("Inner");
+    let outer_set =
+        RecursiveSet::singleton("Outer".into(), NominalSchema::NewType(Box::new(inner)));
     let outer = KType::SetRef {
         set: std::rc::Rc::clone(&outer_set),
         index: 0,
@@ -188,7 +184,7 @@ mod bare_leaf_resolution {
         // Pre-install a singleton set whose one member is still `pending` (schema
         // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
         // `RECURSIVE TYPES` pre-install window.
-        let member = NominalMember::pending("Node".into(), scope.id, KKind::NewType);
+        let member = NominalMember::pending("Node".into(), KKind::NewType);
         let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
         scope.preinstall_identity(
             "Node".into(),

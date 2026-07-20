@@ -17,10 +17,9 @@ fn params(arity: usize) -> Vec<String> {
 }
 
 /// A declared constructor family: a `TypeConstructor`-kind `SetRef` of the given arity.
-fn ctor(name: &str, arity: usize, scope_id: ScopeId) -> KType {
+fn ctor(name: &str, arity: usize) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
-        scope_id,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names: params(arity),
@@ -139,7 +138,7 @@ fn abstract_fo_refused_by_constructor() {
         vec![],
         vec![],
     );
-    let sub = schema(None, vec![], vec![("Elt", ctor("Elt", 1, REAL_ID))], vec![]);
+    let sub = schema(None, vec![], vec![("Elt", ctor("Elt", 1))], vec![]);
     assert!(matches!(
         check(&sub, &sup),
         Err(SigSubtypeFailure::KindMismatch {
@@ -174,12 +173,7 @@ fn abstract_hk_arity_one_satisfied_by_matching_constructor() {
         vec![],
         vec![],
     );
-    let sub = schema(
-        None,
-        vec![],
-        vec![("Wrap", ctor("MyWrap", 1, REAL_ID))],
-        vec![],
-    );
+    let sub = schema(None, vec![], vec![("Wrap", ctor("MyWrap", 1))], vec![]);
     assert!(check(&sub, &sup).is_ok());
 }
 
@@ -201,12 +195,7 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
         })
     ));
     // An arity-2 constructor cannot fill an arity-1 slot.
-    let by_arity2 = schema(
-        None,
-        vec![],
-        vec![("Wrap", ctor("Pair", 2, REAL_ID))],
-        vec![],
-    );
+    let by_arity2 = schema(None, vec![], vec![("Wrap", ctor("Pair", 2))], vec![]);
     assert!(matches!(
         check(&by_arity2, &sup),
         Err(SigSubtypeFailure::KindMismatch {
@@ -501,7 +490,7 @@ fn substitute_top_level_and_nested() {
 #[test]
 fn substitute_constructor_apply_abstract_ctor_position() {
     let mut map: HashMap<String, KType> = HashMap::new();
-    let real = ctor("MyWrap", 1, REAL_ID);
+    let real = ctor("MyWrap", 1);
     map.insert("Wrap".into(), real.clone());
     let applied = KType::constructor_apply(
         Box::new(sig_abstract_ctor(SUP_ID, "Wrap", 1)),
@@ -538,10 +527,7 @@ fn constructor_param_names_probe() {
         constructor_param_names(&sig_abstract_ctor(SUP_ID, "Wrap", 1)),
         Some(params(1)),
     );
-    assert_eq!(
-        constructor_param_names(&ctor("Wrap", 2, REAL_ID)),
-        Some(params(2)),
-    );
+    assert_eq!(constructor_param_names(&ctor("Wrap", 2)), Some(params(2)),);
     assert_eq!(constructor_param_names(&KType::Number), None);
     assert_eq!(constructor_param_names(&sig_abstract(SUP_ID, "Elt")), None);
 }
@@ -559,7 +545,6 @@ fn abstract_hk_refused_by_differently_named_parameter() {
     let other_names = {
         let set = RecursiveSet::singleton(
             "MyWrap".into(),
-            REAL_ID,
             NominalSchema::TypeConstructor {
                 schema: HashMap::new(),
                 param_names: vec!["Item".to_string()],

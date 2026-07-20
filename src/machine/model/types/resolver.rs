@@ -189,7 +189,6 @@ pub fn finalize_nominal_member<'a>(
             // Non-recursive (or a redeclaration): a singleton over this one member.
             let set = Rc::new(RecursiveSet::new(vec![NominalMember::pending(
                 name.to_string(),
-                scope.id,
                 kind,
             )]));
             (set, 0)

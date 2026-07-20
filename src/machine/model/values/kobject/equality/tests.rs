@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Record, RecursiveSet,
@@ -19,11 +18,7 @@ fn part(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
 }
 
 fn newtype_singleton(name: &str, repr: KType) -> Rc<RecursiveSet> {
-    RecursiveSet::singleton(
-        name.into(),
-        ScopeId::from_raw(0, 0xAA),
-        NominalSchema::NewType(Box::new(repr)),
-    )
+    RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)))
 }
 
 // --- scalars ----------------------------------------------------------------------
@@ -208,8 +203,8 @@ fn record_field_value_differs() {
 fn two_member_set() -> Rc<RecursiveSet> {
     // A two-member set so distinct indices exist for the `same_nominal` identity check.
     let members = vec![
-        NominalMember::pending("None".into(), ScopeId::from_raw(0, 0xBB), KKind::NewType),
-        NominalMember::pending("Some".into(), ScopeId::from_raw(0, 0xBB), KKind::NewType),
+        NominalMember::pending("None".into(), KKind::NewType),
+        NominalMember::pending("Some".into(), KKind::NewType),
     ];
     let set = RecursiveSet::new(members);
     set.fill_member(0, NominalSchema::NewType(Box::new(KType::Null)));

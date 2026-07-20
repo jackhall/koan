@@ -201,11 +201,10 @@ fn assert_type_constructor(kt: &KType, expected: &[&str]) -> String {
     }
 }
 
-/// A root-scope-bound `Wrap` TypeConstructor `SetRef` with the given origin scope id.
-fn wrap_type_constructor(scope_id: ScopeId) -> KType {
+/// A root-scope-bound `Wrap` TypeConstructor `SetRef`.
+fn wrap_type_constructor() -> KType {
     let set = RecursiveSet::singleton(
         "Wrap".into(),
-        scope_id,
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: vec!["Type".into()],
@@ -223,7 +222,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     let scope = run_root_silent(&region);
     scope.register_builtin_type(
         "Wrap".into(),
-        wrap_type_constructor(ScopeId::from_raw(0, 0xC0DE)),
+        wrap_type_constructor(),
         BindingIndex::BUILTIN,
     );
     let mut runtime = KoanRuntime::new();

@@ -54,11 +54,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     for (name, kt) in &s.schema.abstract_members {
         let minted_kt = match kt {
             KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                let member = NominalMember::pending(
-                    name.clone(),
-                    new_module.scope_id(),
-                    KKind::TypeConstructor,
-                );
+                let member = NominalMember::pending(name.clone(), KKind::TypeConstructor);
                 // Generative: the per-application nonce (the minted module's `scope_id`)
                 // folds into the set digest, so two `:|` applications never unify.
                 let fresh = RecursiveSet::new_generative(vec![member], new_module.scope_id());

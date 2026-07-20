@@ -14,8 +14,8 @@ fn record(pairs: Vec<(&str, KType)>) -> KType {
     )))
 }
 
-fn newtype_singleton(name: &str, scope: ScopeId, repr: KType) -> std::rc::Rc<RecursiveSet> {
-    RecursiveSet::singleton(name.into(), scope, NominalSchema::NewType(Box::new(repr)))
+fn newtype_singleton(name: &str, repr: KType) -> std::rc::Rc<RecursiveSet> {
+    RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)))
 }
 
 #[test]
@@ -74,10 +74,10 @@ fn leaves_and_composites_digest_distinctly_by_shape() {
 }
 
 #[test]
-fn independently_built_sets_unify_and_exclude_scope_id() {
-    // Same name + schema, different scope ids: the digest excludes `scope_id`, so they unify.
-    let s1 = newtype_singleton("Foo", ScopeId::from_raw(7, 1), KType::Number);
-    let s2 = newtype_singleton("Foo", ScopeId::from_raw(9, 2), KType::Number);
+fn independently_built_sets_unify() {
+    // Same name + schema, separate allocations: the digest is pure content, so they unify.
+    let s1 = newtype_singleton("Foo", KType::Number);
+    let s2 = newtype_singleton("Foo", KType::Number);
     assert!(s1.digest().is_some());
     assert_eq!(
         s1.digest(),
@@ -93,7 +93,7 @@ fn independently_built_sets_unify_and_exclude_scope_id() {
     );
 
     // A different member name is different content.
-    let bar = newtype_singleton("Bar", ScopeId::from_raw(7, 1), KType::Number);
+    let bar = newtype_singleton("Bar", KType::Number);
     assert_ne!(s1.digest(), bar.digest());
 }
 
@@ -101,7 +101,7 @@ fn independently_built_sets_unify_and_exclude_scope_id() {
 fn generative_sets_never_unify() {
     let generative = |nonce: ScopeId| {
         let set = RecursiveSet::new_generative(
-            vec![NominalMember::pending("Op".into(), nonce, KKind::NewType)],
+            vec![NominalMember::pending("Op".into(), KKind::NewType)],
             nonce,
         );
         set.fill_member(0, NominalSchema::NewType(Box::new(KType::Number)));
@@ -116,15 +116,15 @@ fn generative_sets_never_unify() {
     );
 
     // A content-addressed set of the same shape is distinct from any generative mint.
-    let plain = newtype_singleton("Op", ScopeId::from_raw(1, 1), KType::Number);
+    let plain = newtype_singleton("Op", KType::Number);
     assert_ne!(g1.digest(), plain.digest());
 }
 
 #[test]
 fn multi_member_set_seals_digest_on_last_fill() {
     let set = RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), ScopeId::SENTINEL, KKind::NewType),
-        NominalMember::pending("B".into(), ScopeId::SENTINEL, KKind::NewType),
+        NominalMember::pending("A".into(), KKind::NewType),
+        NominalMember::pending("B".into(), KKind::NewType),
     ]);
     assert!(set.digest().is_none(), "unsealed before any fill");
     set.fill_member(0, NominalSchema::NewType(Box::new(KType::Number)));
@@ -139,10 +139,9 @@ fn multi_member_set_seals_digest_on_last_fill() {
 #[test]
 fn schema_embedding_external_setref_digests_deterministically() {
     let build = || {
-        let inner = newtype_singleton("Inner", ScopeId::from_raw(3, 3), KType::Number);
+        let inner = newtype_singleton("Inner", KType::Number);
         let outer = newtype_singleton(
             "Outer",
-            ScopeId::from_raw(4, 4),
             KType::SetRef {
                 set: inner,
                 index: 0,

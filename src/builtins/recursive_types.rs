@@ -104,11 +104,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "RECURSIVE TYPES", "body"));
     let members = crate::try_action!(discover_members(&body_expr));
 
-    let scope_id = ctx.scope.id;
     let set = Rc::new(RecursiveSet::new(
         members
             .iter()
-            .map(|(name, kind)| NominalMember::pending(name.clone(), scope_id, *kind))
+            .map(|(name, kind)| NominalMember::pending(name.clone(), *kind))
             .collect(),
     ));
     let child = ctx

@@ -6,10 +6,9 @@ use crate::machine::model::Module;
 
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
-fn record_newtype_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
+fn record_newtype_set(name: &str) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
-        scope_id,
         NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     )
 }
@@ -167,7 +166,6 @@ fn hash_of(t: &KType) -> u64 {
 /// built independently so a stray identity-from-pointer bug would surface.
 #[test]
 fn hash_agrees_with_eq_for_region_free_variants() {
-    let sid = ScopeId::from_raw(0, 0xBEEF);
     let pairs: Vec<(KType, KType)> = vec![
         (KType::Number, KType::Number),
         (KType::Str, KType::Str),
@@ -212,7 +210,7 @@ fn hash_agrees_with_eq_for_region_free_variants() {
     ];
     // A `SetRef` pair sharing one `Rc` — identity is `(set ptr, index)`, so the same
     // allocation must hash and compare equal.
-    let shared = record_newtype_set("Point", sid);
+    let shared = record_newtype_set("Point");
     let set_ref_a = KType::SetRef {
         set: Rc::clone(&shared),
         index: 0,
@@ -241,8 +239,7 @@ fn hash_agrees_with_eq_for_region_free_variants() {
 /// agree. Two over *distinct* allocations of the same name compare unequal.
 #[test]
 fn set_ref_identity_unifies_by_content_digest() {
-    let sid = ScopeId::from_raw(0, 0x1234);
-    let set = record_newtype_set("Point", sid);
+    let set = record_newtype_set("Point");
     let a = KType::SetRef {
         set: Rc::clone(&set),
         index: 0,
@@ -257,7 +254,7 @@ fn set_ref_identity_unifies_by_content_digest() {
     // A separate allocation with the same content unifies: identity is the content digest,
     // not the allocation (content-addressed identity — structurally identical
     // declarations denote one type).
-    let other = record_newtype_set("Point", sid);
+    let other = record_newtype_set("Point");
     let c = KType::SetRef {
         set: other,
         index: 0,
@@ -266,7 +263,7 @@ fn set_ref_identity_unifies_by_content_digest() {
     assert_eq!(hash_of(&a), hash_of(&c));
 
     // A different member name is different content, so it stays a distinct type.
-    let line = record_newtype_set("Line", sid);
+    let line = record_newtype_set("Line");
     let d = KType::SetRef {
         set: line,
         index: 0,
@@ -282,10 +279,10 @@ fn set_ref_identity_unifies_by_content_digest() {
 /// is pinned here at the Rust level.
 #[test]
 fn set_ref_pre_seal_window_pointer_then_digest() {
-    let pending_pair = |session| {
+    let pending_pair = || {
         Rc::new(RecursiveSet::new(vec![
-            NominalMember::pending("Aa".into(), ScopeId::from_raw(session, 1), KKind::NewType),
-            NominalMember::pending("Bb".into(), ScopeId::from_raw(session, 2), KKind::NewType),
+            NominalMember::pending("Aa".into(), KKind::NewType),
+            NominalMember::pending("Bb".into(), KKind::NewType),
         ]))
     };
     let seal = |set: &Rc<RecursiveSet>| {
@@ -294,7 +291,7 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
     };
 
     // Unsealed: pointer rule. Same set + index equal; same set + different index distinct.
-    let set = pending_pair(1);
+    let set = pending_pair();
     assert!(set.digest().is_none());
     let a0 = KType::SetRef {
         set: Rc::clone(&set),
@@ -313,7 +310,7 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
     assert_eq!(hash_of(&a0), hash_of(&a0_again));
 
     // A SetRef into a *different* unsealed set has no digest to compare, so it is not equal.
-    let other = pending_pair(1);
+    let other = pending_pair();
     let other0 = KType::SetRef {
         set: other,
         index: 0,
@@ -321,10 +318,9 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
     assert_ne!(a0, other0);
 
     // Seal both this set and an independently built same-content set: the digest rule now
-    // governs and the two unify across allocations (the `session` half of each `scope_id`
-    // differs, proving `scope_id` is excluded from identity).
+    // governs and the two unify across allocations.
     seal(&set);
-    let twin = pending_pair(42);
+    let twin = pending_pair();
     seal(&twin);
     assert!(set.digest().is_some() && twin.digest().is_some());
     let sealed_a0 = KType::SetRef {
@@ -346,7 +342,7 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
 fn set_ref_name_renders_member_name() {
     // Renders the member's declared `name`, not the kind keyword: a `Point` struct
     // slot shows `Point`, not `Struct`.
-    let set = record_newtype_set("Point", ScopeId::from_raw(0, 0x1234));
+    let set = record_newtype_set("Point");
     let t = KType::SetRef { set, index: 0 };
     assert_eq!(t.name(), "Point");
 }

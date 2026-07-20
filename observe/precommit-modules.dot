@@ -444,7 +444,6 @@ digraph {
     "koan::machine::core::kerror" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
-    "koan::machine::core::kerror" -> "koan::machine::core::scope_id" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::core::kerror" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::core::kfunction" -> "koan" [label="uses", style="dashed"];
@@ -766,7 +765,6 @@ digraph {
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
-    "koan::machine::model::types::registry" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::registry" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::registry" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::registry" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];

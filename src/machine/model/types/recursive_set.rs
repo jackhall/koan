@@ -16,8 +16,8 @@
 //! Identity is `(set digest, index)` — the set's content digest, sealed at fill (see
 //! [`set_digest`](super::type_digest::set_digest)), so two independently built sets with the
 //! same content denote the same type. A member's `name` and `kind` join the digested content;
-//! `scope_id` stays diagnostics-only, excluded from identity so the same declaration
-//! elaborated twice unifies. The `Rc` remains solely as content transport — `Rc::clone` shares
+//! nothing outside that content distinguishes members, so the same declaration elaborated twice
+//! unifies. The `Rc` remains solely as content transport — `Rc::clone` shares
 //! the allocation on lift, and [`same_nominal`] keeps a pointer fast path for that shared case
 //! and for the pre-seal window before a digest exists.
 //!
@@ -54,8 +54,6 @@ pub enum NominalSchema {
 pub struct NominalMember {
     /// Diagnostics / rendering only — never identity.
     pub name: String,
-    /// Origin scope, diagnostics only — never identity.
-    pub scope_id: ScopeId,
     /// Always one of the three nominal families `Tagged` / `NewType` / `TypeConstructor`.
     pub kind: KKind,
     schema: RefCell<Option<NominalSchema>>,
@@ -63,10 +61,9 @@ pub struct NominalMember {
 
 impl NominalMember {
     /// A member whose schema is not yet filled — created before its declaration finalizes.
-    pub fn pending(name: String, scope_id: ScopeId, kind: KKind) -> Self {
+    pub fn pending(name: String, kind: KKind) -> Self {
         Self {
             name,
-            scope_id,
             kind,
             schema: RefCell::new(None),
         }
@@ -178,8 +175,8 @@ impl RecursiveSet {
     }
 
     /// A singleton set whose one member carries `schema`. The common non-recursive case.
-    pub fn singleton(name: String, scope_id: ScopeId, schema: NominalSchema) -> Rc<Self> {
-        let member = NominalMember::pending(name, scope_id, schema.kind());
+    pub fn singleton(name: String, schema: NominalSchema) -> Rc<Self> {
+        let member = NominalMember::pending(name, schema.kind());
         let set = RecursiveSet::new(vec![member]);
         set.fill_member(0, schema);
         Rc::new(set)

@@ -240,12 +240,11 @@ mod tests {
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::{KKind, NominalSchema, RecursiveSet};
-        use crate::machine::{BindingIndex, ScopeId};
+        use crate::machine::BindingIndex;
         let region = run_root_storage();
         let scope = run_root_silent(&region);
         let wrap_set = RecursiveSet::singleton(
             "Wrap".into(),
-            ScopeId::from_raw(0, 0xC0DE),
             NominalSchema::TypeConstructor {
                 schema: std::collections::HashMap::new(),
                 param_names: vec!["Type".into()],

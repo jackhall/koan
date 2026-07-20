@@ -28,7 +28,7 @@ use crate::machine::model::{
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, ScopeId, TraceFrame};
+use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -55,12 +55,7 @@ fn finalize_newtype<'a>(
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
     let scope = fctx.scope;
-    let scope_id = scope.id;
-    let set = RecursiveSet::singleton(
-        name.clone(),
-        scope_id,
-        NominalSchema::NewType(Box::new(repr)),
-    );
+    let set = RecursiveSet::singleton(name.clone(), NominalSchema::NewType(Box::new(repr)));
     let identity = KType::SetRef { set, index: 0 };
     // Fused alloc + register: the identity is allocated into this scope's own region through the
     // single storage door and registered — one call returns the resident `&KType`.
@@ -204,16 +199,11 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
 }
 
 /// Mint a type-constructor family: a singleton [`RecursiveSet`] of one
-/// [`KKind::TypeConstructor`] member declared at `scope_id`, filled with an empty variant schema
-/// (identity ignores it) and the declared `param_names`.
-pub(crate) fn mint_type_constructor(
-    member_name: String,
-    param_names: Vec<String>,
-    scope_id: ScopeId,
-) -> KType {
+/// [`KKind::TypeConstructor`] member, filled with an empty variant schema (identity ignores it)
+/// and the declared `param_names`.
+pub(crate) fn mint_type_constructor(member_name: String, param_names: Vec<String>) -> KType {
     let set = RecursiveSet::singleton(
         member_name,
-        scope_id,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names,
@@ -241,7 +231,7 @@ pub fn body_constructor_family<'a>(
         Ok(pair) => pair,
         Err(e) => return Action::Done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name.clone(), param_names, ctx.scope.id);
+    let kt = mint_type_constructor(member_name.clone(), param_names);
     // Bind through the fused alloc + register path, mirroring `type_decl::bind_abstract_member`.
     let bind_index = ctx.bind_index();
     let kt_ref = match ctx
@@ -745,8 +735,8 @@ mod tests {
     }
 
     /// `NEWTYPE (Type AS Wrapper)` mints a `TypeConstructor` `SetRef` in the declaring scope's
-    /// type table: kind `TypeConstructor`, member `scope_id` the declaring scope's own id,
-    /// `param_names == ["Type"]`, empty schema, and no value-side entry.
+    /// type table: kind `TypeConstructor`, `param_names == ["Type"]`, empty schema, and no
+    /// value-side entry.
     #[test]
     fn constructor_family_mints_declared_identity() {
         let region = run_root_storage();
@@ -761,7 +751,6 @@ mod tests {
                 let member = set.member(index);
                 assert_eq!(member.name, "Wrapper");
                 assert_eq!(member.kind, KKind::TypeConstructor);
-                assert_eq!(member.scope_id, scope.id);
                 let borrow = member.schema();
                 match borrow.as_ref() {
                     Some(NominalSchema::TypeConstructor {

@@ -164,7 +164,6 @@ fn dict_relocation_shares_inner_rc() {
 #[test]
 fn tagged_relocation_shares_value_and_set_rc() {
     use crate::machine::model::{NominalSchema, RecursiveSet};
-    use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
@@ -173,7 +172,6 @@ fn tagged_relocation_shares_value_and_set_rc() {
     let inner = Rc::new(KObject::Number(42.0));
     let set = RecursiveSet::singleton(
         "Maybe".into(),
-        ScopeId::next(),
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: Vec::new(),
@@ -259,7 +257,6 @@ fn kfunction_borrow_preserved_verbatim() {
 #[test]
 fn type_recursive_setref_relocates_and_navigates() {
     use crate::machine::model::{NominalSchema, Record, RecursiveSet};
-    use crate::machine::ScopeId;
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let dest = CallFrame::new(scope);
@@ -268,7 +265,6 @@ fn type_recursive_setref_relocates_and_navigates() {
     // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
     let set = RecursiveSet::singleton(
         "Tree".into(),
-        ScopeId::next(),
         NominalSchema::NewType(Box::new(KType::record(Box::new(Record::from_pairs(vec![
             ("children".into(), KType::list(Box::new(KType::SetLocal(0)))),
         ]))))),

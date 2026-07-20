@@ -1,17 +1,12 @@
 use super::*;
-use crate::machine::core::ScopeId;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::values::KKey;
 use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 /// A singleton newtype-set `Rc` named `name` over `repr`.
-fn newtype_singleton(name: &str, scope_id: ScopeId, repr: KType) -> std::rc::Rc<RecursiveSet> {
-    RecursiveSet::singleton(
-        name.into(),
-        scope_id,
-        NominalSchema::NewType(Box::new(repr)),
-    )
+fn newtype_singleton(name: &str, repr: KType) -> std::rc::Rc<RecursiveSet> {
+    RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)))
 }
 
 #[test]
@@ -108,10 +103,8 @@ fn list_with_type_carrier_is_authoritative_for_ktype() {
 #[test]
 fn type_constructor_ktype_erased_vs_applied() {
     use std::rc::Rc;
-    let sid = ScopeId::from_raw(0, 0x55);
     let set = RecursiveSet::singleton(
         "Result".into(),
-        sid,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names: vec!["Ok".into(), "Error".into()],
@@ -181,7 +174,7 @@ fn wrapped_ktype_reports_clone_of_type_id() {
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let set = newtype_singleton("Distance", KType::Number);
     let type_id: &KType = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),
@@ -190,7 +183,6 @@ fn wrapped_ktype_reports_clone_of_type_id() {
     match w.ktype() {
         KType::SetRef { set, index } => {
             assert_eq!(set.member(index).name, "Distance");
-            assert_eq!(set.member(index).scope_id, ScopeId::from_raw(0, 0xAA));
         }
         other => panic!("expected NewType SetRef identity, got {other:?}"),
     }
@@ -203,7 +195,7 @@ fn wrapped_summarize_renders_surface_form() {
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let set = newtype_singleton("Distance", KType::Number);
     let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let w = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),
@@ -220,7 +212,7 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let set = newtype_singleton("Distance", KType::Number);
     let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
     let original = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),

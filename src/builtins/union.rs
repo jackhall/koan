@@ -77,7 +77,6 @@ fn finalize_union<'a>(
         )));
     }
     let scope = fctx.scope;
-    let scope_id = scope.id;
     let n = fields.len();
 
     let set = match recover_union(scope, &name, bind_index, n) {
@@ -91,7 +90,7 @@ fn finalize_union<'a>(
         UnionRecovery::Fresh => Rc::new(RecursiveSet::new(
             fields
                 .iter()
-                .map(|(tag, _)| NominalMember::pending(tag.clone(), scope_id, KKind::NewType))
+                .map(|(tag, _)| NominalMember::pending(tag.clone(), KKind::NewType))
                 .collect(),
         )),
     };

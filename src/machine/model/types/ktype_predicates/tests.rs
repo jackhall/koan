@@ -1,6 +1,5 @@
 use super::*;
 use crate::builtins::test_support::spliced_part;
-use crate::machine::core::ScopeId;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{NominalSchema, RecursiveSet};
 use crate::machine::model::Carried;
@@ -10,22 +9,17 @@ use std::rc::Rc;
 /// A singleton-set `KType::SetRef` for a record-repr newtype (an ex-struct) named `name`
 /// (empty record repr is fine — the predicates key on the nominal `(set digest, index)` +
 /// `kind`, never a schema descent).
-fn record_newtype_setref(name: &str, scope_id: ScopeId) -> KType {
+fn record_newtype_setref(name: &str) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
-        scope_id,
         NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
     );
     KType::SetRef { set, index: 0 }
 }
 
 /// A singleton-set `KType::SetRef` for a newtype named `name` over `repr`.
-fn newtype_setref(name: &str, scope_id: ScopeId, repr: KType) -> KType {
-    let set = RecursiveSet::singleton(
-        name.into(),
-        scope_id,
-        NominalSchema::NewType(Box::new(repr)),
-    );
+fn newtype_setref(name: &str, repr: KType) -> KType {
+    let set = RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)));
     KType::SetRef { set, index: 0 }
 }
 
@@ -38,13 +32,13 @@ fn is_more_specific_concrete_beats_any() {
 
 /// Dispatch treats two structurally identical nominal declarations interchangeably — the
 /// content-digest identity a `NEWTYPE` elaborated twice (an FN body called twice) yields. Two
-/// independently built same-content newtype sets (distinct allocations, distinct `scope_id`s)
-/// satisfy each other's slot, so a value of one is admitted where the other is declared.
+/// independently built same-content newtype sets (distinct allocations) satisfy each other's
+/// slot, so a value of one is admitted where the other is declared.
 #[test]
 fn dispatch_unifies_structurally_identical_nominals() {
     let types = TypeRegistry::new();
-    let slot = newtype_setref("Wrapper", ScopeId::from_raw(1, 1), KType::Number);
-    let carried = newtype_setref("Wrapper", ScopeId::from_raw(2, 2), KType::Number);
+    let slot = newtype_setref("Wrapper", KType::Number);
+    let carried = newtype_setref("Wrapper", KType::Number);
     assert_eq!(
         slot, carried,
         "same content unifies regardless of allocation"
@@ -53,7 +47,7 @@ fn dispatch_unifies_structurally_identical_nominals() {
     assert!(carried.satisfied_by(&slot, &types));
 
     // A different declared name is genuinely different content, so it is not admitted.
-    let other = newtype_setref("Boxer", ScopeId::from_raw(1, 1), KType::Number);
+    let other = newtype_setref("Boxer", KType::Number);
     assert!(!slot.satisfied_by(&other, &types));
 }
 
@@ -313,16 +307,13 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
     let newtype_set = RecursiveSet::singleton(
         "Some".into(),
-        ScopeId::SENTINEL,
         NominalSchema::NewType(Box::new(KType::Number)),
     );
     let newtype_token: &KType = region.brand().alloc_ktype(KType::SetRef {
         set: newtype_set,
         index: 0,
     });
-    let struct_token: &KType = region
-        .brand()
-        .alloc_ktype(record_newtype_setref("Point", ScopeId::SENTINEL));
+    let struct_token: &KType = region.brand().alloc_ktype(record_newtype_setref("Point"));
     assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token)), &types));
     let child = region
@@ -385,7 +376,7 @@ fn of_kind_nominal_is_type_channel_only() {
     let newtype_ty = KType::OfKind(KKind::NewType);
 
     // The NewType *type value* — admitted in the type channel.
-    let newtype_tv = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let newtype_tv = newtype_setref("Distance", KType::Number);
     assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
     assert!(KType::OfKind(KKind::ProperType)
         .accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
@@ -394,7 +385,6 @@ fn of_kind_nominal_is_type_channel_only() {
     let ctor_tv = KType::SetRef {
         set: RecursiveSet::singleton(
             "Result".into(),
-            ScopeId::SENTINEL,
             NominalSchema::TypeConstructor {
                 schema: std::collections::HashMap::new(),
                 param_names: Vec::new(),
@@ -424,7 +414,7 @@ fn user_type_newtype_specificity_lattice() {
     let types = TypeRegistry::new();
     let newtype_kind = KType::OfKind(KKind::NewType);
     let ctor_kind = KType::OfKind(KKind::TypeConstructor);
-    let dist = newtype_setref("Distance", ScopeId::from_raw(0, 0xAA), KType::Number);
+    let dist = newtype_setref("Distance", KType::Number);
     assert!(dist.is_more_specific_than(&newtype_kind, &types));
     assert!(!newtype_kind.is_more_specific_than(&dist, &types));
     assert!(!dist.is_more_specific_than(&ctor_kind, &types));
@@ -440,7 +430,7 @@ fn user_type_specificity_lattice() {
     let types = TypeRegistry::new();
     let newtype_kind = KType::OfKind(KKind::NewType);
     let ctor_kind = KType::OfKind(KKind::TypeConstructor);
-    let point = record_newtype_setref("Point", ScopeId::from_raw(0, 0xAA));
+    let point = record_newtype_setref("Point");
     // A nominal kind strictly under `Any` and under `OfKind(Proper)`.
     assert!(newtype_kind.is_more_specific_than(&KType::Any, &types));
     assert!(!KType::Any.is_more_specific_than(&newtype_kind, &types));
@@ -519,10 +509,9 @@ fn is_more_specific_for_pinned_signature_bound() {
 /// A shared `Result` `TypeConstructor` set. Identity is now `(set ptr, index)`, so a
 /// `ConstructorApply` ctor and a `Tagged` carrier only match when they reference the *same*
 /// `Rc` — every test below threads this one set through both the slot ctor and the value.
-fn result_set(result_sid: ScopeId) -> Rc<RecursiveSet> {
+fn result_set() -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         "Result".into(),
-        result_sid,
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: vec!["Ok".into(), "Error".into()],
@@ -560,10 +549,9 @@ fn error_carrier<'a>(set: &Rc<RecursiveSet>) -> KObject<'a> {
 }
 
 /// A singleton `TypeConstructor`-kind set named `name`, for an error-type identity.
-fn error_type_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
+fn error_type_set(name: &str) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         name.into(),
-        scope_id,
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: Vec::new(),
@@ -580,17 +568,14 @@ fn error_type_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
     let types = TypeRegistry::new();
-    let result_sid = ScopeId::from_raw(0, 0x9001);
-    let kerror_sid = ScopeId::from_raw(0, 0x9002);
-    let my_error_sid = ScopeId::from_raw(0, 0x9003);
 
-    let r_set = result_set(result_sid);
+    let r_set = result_set();
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,
     });
-    let kerror_set = error_type_set("KError", kerror_sid);
-    let my_error_set = error_type_set("MyError", my_error_sid);
+    let kerror_set = error_type_set("KError");
+    let my_error_set = error_type_set("MyError");
     let my_error_ty = KType::SetRef {
         set: Rc::clone(&my_error_set),
         index: 0,
@@ -619,15 +604,13 @@ fn constructor_apply_result_checks_inhabited_error_param() {
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
     let types = TypeRegistry::new();
-    let result_sid = ScopeId::from_raw(0, 0x9001);
-    let my_error_sid = ScopeId::from_raw(0, 0x9003);
-    let r_set = result_set(result_sid);
+    let r_set = result_set();
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,
     });
     let my_error_ty = KType::SetRef {
-        set: error_type_set("MyError", my_error_sid),
+        set: error_type_set("MyError"),
         index: 0,
     };
     let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
@@ -644,15 +627,13 @@ fn constructor_apply_result_ok_admits_any_error_param() {
 #[test]
 fn constructor_apply_covariant_admission_and_specificity() {
     let types = TypeRegistry::new();
-    let result_sid = ScopeId::from_raw(0, 0x9001);
-    let my_error_sid = ScopeId::from_raw(0, 0x9003);
-    let r_set = result_set(result_sid);
+    let r_set = result_set();
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,
     });
     let my_error = KType::SetRef {
-        set: error_type_set("MyError", my_error_sid),
+        set: error_type_set("MyError"),
         index: 0,
     };
     let stamped = KObject::Tagged {
@@ -675,8 +656,7 @@ fn constructor_apply_covariant_admission_and_specificity() {
 #[test]
 fn constructor_apply_stamped_type_args_checked_structurally() {
     let types = TypeRegistry::new();
-    let result_sid = ScopeId::from_raw(0, 0x9001);
-    let r_set = result_set(result_sid);
+    let r_set = result_set();
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,

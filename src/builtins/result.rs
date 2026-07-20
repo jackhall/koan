@@ -19,13 +19,11 @@ use crate::machine::model::{KType, NominalSchema, RecursiveSet};
 use crate::machine::{BindingIndex, Scope};
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let scope_id = scope.id;
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::Any);
     schema.insert("Error".into(), KType::Any);
     let set = RecursiveSet::singleton(
         "Result".into(),
-        scope_id,
         NominalSchema::TypeConstructor {
             schema,
             param_names: vec!["Ok".into(), "Error".into()],

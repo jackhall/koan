@@ -2,7 +2,6 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::KExpression;
 use crate::machine::model::{KKind, KType, NominalSchema, Parseable, Record, RecursiveSet};
 use crate::machine::model::{KObject, WrappedPayload};
@@ -163,7 +162,7 @@ impl KError {
     /// `KObject::Wrapped` mirroring the variant's fields plus `frames :List<Str>`, so TRY's
     /// `it.field` ATTR reads through the `Wrapped` arm. The payload's `type_id` and the
     /// wrapping `Tagged`'s `set` are synthetic singleton [`RecursiveSet`]s (named after the
-    /// variant / `"KError"`, scope [`ScopeId::SENTINEL`]) because TRY's branch walker reads
+    /// variant / `"KError"`) because TRY's branch walker reads
     /// `tag` and `value` directly without going through dispatch — these carriers never need
     /// real nominal identity.
     ///
@@ -224,7 +223,7 @@ fn synthetic_singleton(name: String, kind: KKind) -> Rc<RecursiveSet> {
             param_names: Vec::new(),
         },
     };
-    RecursiveSet::singleton(name, ScopeId::SENTINEL, schema)
+    RecursiveSet::singleton(name, schema)
 }
 
 /// The `KError` carrier type — the `TypeConstructor`-kind `SetRef` a `to_tagged` value reports

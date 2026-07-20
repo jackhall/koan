@@ -2,7 +2,6 @@
 //! pointer-transient (unsealed `RecursiveSet`) hazard.
 
 use super::*;
-use crate::machine::core::ScopeId;
 use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 
 #[test]
@@ -109,7 +108,6 @@ fn a_fresh_registry_shares_nothing_with_another() {
 fn unsealed_set() -> std::rc::Rc<RecursiveSet> {
     std::rc::Rc::new(RecursiveSet::new(vec![NominalMember::pending(
         "Pending".into(),
-        ScopeId::SENTINEL,
         KKind::NewType,
     )]))
 }
@@ -117,7 +115,6 @@ fn unsealed_set() -> std::rc::Rc<RecursiveSet> {
 fn sealed_set() -> std::rc::Rc<RecursiveSet> {
     RecursiveSet::singleton(
         "Sealed".into(),
-        ScopeId::SENTINEL,
         NominalSchema::NewType(Box::new(KType::Number)),
     )
 }
