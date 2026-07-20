@@ -114,7 +114,7 @@ fn type_constructor_ktype_erased_vs_applied() {
         sid,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
-            param_names: vec!["T".into(), "E".into()],
+            param_names: vec!["Ok".into(), "Error".into()],
         },
     );
     let erased = KObject::Tagged {
@@ -122,7 +122,7 @@ fn type_constructor_ktype_erased_vs_applied() {
         value: Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     match erased.ktype() {
         KType::SetRef { set: s, index } => assert_eq!(s.member(index).name, "Result"),
@@ -133,11 +133,20 @@ fn type_constructor_ktype_erased_vs_applied() {
         value: Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![KType::Number, KType::Str]),
+        type_args: Rc::new(Record::from_pairs([
+            ("Ok".to_string(), KType::Number),
+            ("Error".to_string(), KType::Str),
+        ])),
     };
     match applied.ktype() {
         KType::ConstructorApply { args, .. } => {
-            assert_eq!(args, vec![KType::Number, KType::Str]);
+            assert_eq!(
+                args,
+                Record::from_pairs([
+                    ("Ok".to_string(), KType::Number),
+                    ("Error".to_string(), KType::Str),
+                ])
+            );
         }
         other => panic!("expected ConstructorApply, got {other:?}"),
     }

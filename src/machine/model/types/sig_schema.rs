@@ -231,9 +231,7 @@ pub fn substitute_sig_members(
         ),
         KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
             Box::new(substitute_sig_members(ctor, sig_id, members)),
-            args.iter()
-                .map(|a| substitute_sig_members(a, sig_id, members))
-                .collect(),
+            args.map(|a| substitute_sig_members(a, sig_id, members)),
         ),
         _ => kt.clone(),
     }
@@ -443,7 +441,7 @@ fn references_sig_member(
         KType::ConstructorApply { ctor, args, .. } => {
             references_sig_member(ctor, sig_id, members)
                 || args
-                    .iter()
+                    .values()
                     .any(|a| references_sig_member(a, sig_id, members))
         }
         _ => false,
@@ -524,10 +522,10 @@ fn slot_satisfied_by(
         ) => {
             ad.len() == as_.len()
                 && slot_types_equal(cd, cs, members, sig_id)
-                && ad
-                    .iter()
-                    .zip(as_.iter())
-                    .all(|(d, s)| slot_satisfied_by(d, s, members, sig_id, types))
+                && ad.iter().all(|(name, d)| {
+                    as_.get(name)
+                        .is_some_and(|s| slot_satisfied_by(d, s, members, sig_id, types))
+                })
         }
         (
             KType::KFunction {
@@ -631,10 +629,10 @@ fn slot_more_specific_or_equal(
         ) => {
             ad.len() == at.len()
                 && slot_types_equal(cd, ct, members, sig_id)
-                && ad
-                    .iter()
-                    .zip(at.iter())
-                    .all(|(d, t)| slot_more_specific_or_equal(d, t, members, sig_id, types))
+                && ad.iter().all(|(name, d)| {
+                    at.get(name)
+                        .is_some_and(|t| slot_more_specific_or_equal(d, t, members, sig_id, types))
+                })
         }
         (
             KType::KFunction {
@@ -704,10 +702,10 @@ fn slot_types_equal(
         ) => {
             ad.len() == ao.len()
                 && slot_types_equal(cd, co, members, sig_id)
-                && ad
-                    .iter()
-                    .zip(ao.iter())
-                    .all(|(d, o)| slot_types_equal(d, o, members, sig_id))
+                && ad.iter().all(|(name, d)| {
+                    ao.get(name)
+                        .is_some_and(|o| slot_types_equal(d, o, members, sig_id))
+                })
         }
         (
             KType::KFunction {

@@ -141,7 +141,7 @@ impl<'b> Iterator for KTypeUserRefs<'b> {
                     }
                 }
                 KType::ConstructorApply { ctor, args, .. } => {
-                    for a in args.iter().rev() {
+                    for a in args.values().rev() {
                         self.stack.push(a);
                     }
                     self.stack.push(ctor);

@@ -326,7 +326,7 @@ mod tests {
         binds_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
     };
     use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
-    use crate::machine::model::{KObject, KType};
+    use crate::machine::model::{KObject, KType, Record};
     use crate::machine::run_root_storage;
     use crate::machine::KoanRuntime;
     use crate::machine::{KErrorKind, Scope, ScopeId};
@@ -766,7 +766,8 @@ mod tests {
     }
 
     /// After `NEWTYPE (Type AS Wrapper)`, applying it with `:(Number AS Wrapper)` lowers to a
-    /// `ConstructorApply { ctor: <Wrapper SetRef>, args: [Number] }`.
+    /// `ConstructorApply { ctor: <Wrapper SetRef>, args: {Type = Number} }` — `AS` fills the
+    /// constructor's sole parameter by name.
     #[test]
     fn constructor_family_applies_with_as() {
         let region = run_root_storage();
@@ -781,7 +782,10 @@ mod tests {
                     }
                     other => panic!("expected a SetRef ctor, got {other:?}"),
                 }
-                assert_eq!(*args, vec![KType::Number]);
+                assert_eq!(
+                    *args,
+                    Record::from_pairs([("Type".to_string(), KType::Number)]),
+                );
             }
             other => panic!("expected ConstructorApply, got {other:?}"),
         }
@@ -841,7 +845,7 @@ mod tests {
 
     /// `Wrapper (3.0)` over a `NEWTYPE (Type AS Wrapper)` family constructs a `Wrapped`
     /// whose payload is the bare `Number` and whose `type_id` is
-    /// `ConstructorApply(Wrapper, [Number])` — the value inhabits `:(Number AS Wrapper)`.
+    /// `ConstructorApply(Wrapper, {Type = Number})` — the value inhabits `:(Number AS Wrapper)`.
     #[test]
     fn apply_construct_wraps_and_stamps() {
         let region = run_root_storage();
@@ -861,7 +865,10 @@ mod tests {
                             }
                             other => panic!("expected a SetRef ctor, got {other:?}"),
                         }
-                        assert_eq!(*args, vec![KType::Number]);
+                        assert_eq!(
+                            *args,
+                            Record::from_pairs([("Type".to_string(), KType::Number)]),
+                        );
                     }
                     ref other => panic!("expected a ConstructorApply type_id, got {other:?}"),
                 }
@@ -895,8 +902,8 @@ mod tests {
                     KType::ConstructorApply { ref args, .. } => {
                         assert_eq!(args.len(), 1);
                         // The stamped arg keeps the Distance identity (a NewType SetRef).
-                        match &args[0] {
-                            KType::SetRef { set, index } => {
+                        match args.get("Type") {
+                            Some(KType::SetRef { set, index }) => {
                                 assert_eq!(set.member(*index).name, "Distance");
                                 assert_eq!(set.member(*index).kind, KKind::NewType);
                             }

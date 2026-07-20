@@ -769,6 +769,7 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::resolver" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];

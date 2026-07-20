@@ -525,9 +525,14 @@ fn result_set(result_sid: ScopeId) -> Rc<RecursiveSet> {
         result_sid,
         NominalSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
-            param_names: vec!["T".into(), "E".into()],
+            param_names: vec!["Ok".into(), "Error".into()],
         },
     )
+}
+
+/// The args record for a `Result` application, keyed by the carrier's parameter names.
+fn result_args(ok: KType, error: KType) -> Record<KType> {
+    Record::from_pairs([("Ok".to_string(), ok), ("Error".to_string(), error)])
 }
 
 /// Build a `Result`-carrier `Tagged` value occupying `tag` with `payload`, referencing
@@ -539,7 +544,7 @@ fn result_value<'a>(set: &Rc<RecursiveSet>, tag: &str, payload: KObject<'a>) -> 
         value: std::rc::Rc::new(payload),
         set: Rc::clone(set),
         index: 0,
-        type_args: std::rc::Rc::new(vec![]),
+        type_args: std::rc::Rc::new(Record::new()),
     }
 }
 
@@ -550,7 +555,7 @@ fn error_carrier<'a>(set: &Rc<RecursiveSet>) -> KObject<'a> {
         value: std::rc::Rc::new(KObject::Number(0.0)),
         set: Rc::clone(set),
         index: 0,
-        type_args: std::rc::Rc::new(vec![]),
+        type_args: std::rc::Rc::new(Record::new()),
     }
 }
 
@@ -566,17 +571,18 @@ fn error_type_set(name: &str, scope_id: ScopeId) -> Rc<RecursiveSet> {
     )
 }
 
-/// `:(Result T E)` slot admission: a `ConstructorApply` slot whose ctor identity matches
-/// the `Result` carrier admits an `error(...)` value iff the inhabited `error` payload
-/// (param index 1) satisfies the slot's `E`. A caught `error(KError)` is rejected where
-/// `E = MyErr` and accepted where `E = KError` / `Any`. Identity is now allocation-based, so
-/// the slot's `E` and the value's payload carrier share one set per error type.
+/// `:(Result {Ok = …, Error = …})` slot admission: a `ConstructorApply` slot whose ctor
+/// identity matches the `Result` carrier admits an `Error(...)` value iff the inhabited
+/// `Error` payload satisfies the slot's same-named arg. A caught `Error(KError)` is rejected
+/// where that arg is `MyError` and accepted where it is `KError` / `Any`. Identity is
+/// allocation-based, so the slot's arg and the value's payload carrier share one set per
+/// error type.
 #[test]
 fn constructor_apply_result_checks_inhabited_error_param() {
     let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let kerror_sid = ScopeId::from_raw(0, 0x9002);
-    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+    let my_error_sid = ScopeId::from_raw(0, 0x9003);
 
     let r_set = result_set(result_sid);
     let ctor = Box::new(KType::SetRef {
@@ -584,9 +590,9 @@ fn constructor_apply_result_checks_inhabited_error_param() {
         index: 0,
     });
     let kerror_set = error_type_set("KError", kerror_sid);
-    let myerr_set = error_type_set("MyErr", myerr_sid);
-    let myerr_ty = KType::SetRef {
-        set: Rc::clone(&myerr_set),
+    let my_error_set = error_type_set("MyError", my_error_sid);
+    let my_error_ty = KType::SetRef {
+        set: Rc::clone(&my_error_set),
         index: 0,
     };
     let kerror_ty = KType::SetRef {
@@ -594,67 +600,59 @@ fn constructor_apply_result_checks_inhabited_error_param() {
         index: 0,
     };
 
-    let slot_myerr = KType::constructor_apply(ctor.clone(), vec![KType::Any, myerr_ty.clone()]);
+    let slot_my_error =
+        KType::constructor_apply(ctor.clone(), result_args(KType::Any, my_error_ty.clone()));
     let caught = result_value(&r_set, "Error", error_carrier(&kerror_set));
-    assert!(!slot_myerr.matches_value(&caught, &types));
+    assert!(!slot_my_error.matches_value(&caught, &types));
 
-    let slot_kerror = KType::constructor_apply(ctor.clone(), vec![KType::Any, kerror_ty.clone()]);
+    let slot_kerror =
+        KType::constructor_apply(ctor.clone(), result_args(KType::Any, kerror_ty.clone()));
     assert!(slot_kerror.matches_value(&caught, &types));
 
-    let my_error = result_value(&r_set, "Error", error_carrier(&myerr_set));
-    assert!(slot_myerr.matches_value(&my_error, &types));
+    let my_error = result_value(&r_set, "Error", error_carrier(&my_error_set));
+    assert!(slot_my_error.matches_value(&my_error, &types));
 }
 
-/// The `Ok` field maps to param 0, so `:(Result Number E)` checks the `Ok` payload
-/// against `Number` regardless of `E`: an `Ok(42)` value admits any `E` (the absent
-/// `Error` parameter is unconstrained at the value).
+/// The `Ok` tag names the `Ok` parameter, so a slot checks the `Ok` payload against its
+/// `Ok` arg regardless of the `Error` arg: an `Ok(42)` value admits any `Error` arg (the
+/// uninhabited tag's parameter is unconstrained at the value).
 #[test]
 fn constructor_apply_result_ok_admits_any_error_param() {
     let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
-    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+    let my_error_sid = ScopeId::from_raw(0, 0x9003);
     let r_set = result_set(result_sid);
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,
     });
-    let myerr_ty = KType::SetRef {
-        set: error_type_set("MyErr", myerr_sid),
+    let my_error_ty = KType::SetRef {
+        set: error_type_set("MyError", my_error_sid),
         index: 0,
     };
     let ok_value = result_value(&r_set, "Ok", KObject::Number(42.0));
-    let slot = KType::constructor_apply(ctor.clone(), vec![KType::Number, myerr_ty]);
+    let slot = KType::constructor_apply(ctor.clone(), result_args(KType::Number, my_error_ty));
     assert!(slot.matches_value(&ok_value, &types));
-    let slot_str = KType::constructor_apply(ctor, vec![KType::Str, KType::Any]);
+    let slot_str = KType::constructor_apply(ctor, result_args(KType::Str, KType::Any));
     assert!(!slot_str.matches_value(&ok_value, &types));
 }
 
-/// `result_field_param_index` is the field→param linkage source of truth: `Ok`→0,
-/// `Error`→1, `None` for any other carrier or tag.
-#[test]
-fn result_field_param_index_table() {
-    assert_eq!(super::result_field_param_index("Result", "Ok"), Some(0));
-    assert_eq!(super::result_field_param_index("Result", "Error"), Some(1));
-    assert_eq!(super::result_field_param_index("Result", "Other"), None);
-    assert_eq!(super::result_field_param_index("Maybe", "Ok"), None);
-}
-
-/// Covariance for `ConstructorApply` carriers: a `Result<Number, MyErr>` value is
-/// admitted by the coarser `:(Result Any Any)` slot, and the refined
-/// `:(Result Number MyErr)` slot is strictly more specific, so dispatch tie-breaks
-/// toward the refined overload.
+/// Covariance for `ConstructorApply` carriers: a value stamped
+/// `{Ok = Number, Error = MyError}` is admitted by the coarser `{Ok = Any, Error = Any}`
+/// slot, and the refined slot is strictly more specific, so dispatch tie-breaks toward the
+/// refined overload.
 #[test]
 fn constructor_apply_covariant_admission_and_specificity() {
     let types = TypeRegistry::new();
     let result_sid = ScopeId::from_raw(0, 0x9001);
-    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+    let my_error_sid = ScopeId::from_raw(0, 0x9003);
     let r_set = result_set(result_sid);
     let ctor = Box::new(KType::SetRef {
         set: Rc::clone(&r_set),
         index: 0,
     });
-    let myerr = KType::SetRef {
-        set: error_type_set("MyErr", myerr_sid),
+    let my_error = KType::SetRef {
+        set: error_type_set("MyError", my_error_sid),
         index: 0,
     };
     let stamped = KObject::Tagged {
@@ -662,10 +660,10 @@ fn constructor_apply_covariant_admission_and_specificity() {
         value: std::rc::Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&r_set),
         index: 0,
-        type_args: std::rc::Rc::new(vec![KType::Number, myerr.clone()]),
+        type_args: std::rc::Rc::new(result_args(KType::Number, my_error.clone())),
     };
-    let coarse = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
-    let refined = KType::constructor_apply(ctor, vec![KType::Number, myerr]);
+    let coarse = KType::constructor_apply(ctor.clone(), result_args(KType::Any, KType::Any));
+    let refined = KType::constructor_apply(ctor, result_args(KType::Number, my_error));
     assert!(coarse.matches_value(&stamped, &types));
     assert!(refined.matches_value(&stamped, &types));
     assert!(refined.is_more_specific_than(&coarse, &types));
@@ -688,13 +686,13 @@ fn constructor_apply_stamped_type_args_checked_structurally() {
         value: std::rc::Rc::new(KObject::Number(1.0)),
         set: Rc::clone(&r_set),
         index: 0,
-        type_args: std::rc::Rc::new(vec![KType::Number, KType::Str]),
+        type_args: std::rc::Rc::new(result_args(KType::Number, KType::Str)),
     };
-    let slot_ok = KType::constructor_apply(ctor.clone(), vec![KType::Number, KType::Str]);
+    let slot_ok = KType::constructor_apply(ctor.clone(), result_args(KType::Number, KType::Str));
     assert!(slot_ok.matches_value(&stamped, &types));
-    let slot_any = KType::constructor_apply(ctor.clone(), vec![KType::Any, KType::Any]);
+    let slot_any = KType::constructor_apply(ctor.clone(), result_args(KType::Any, KType::Any));
     assert!(slot_any.matches_value(&stamped, &types));
-    let slot_bad = KType::constructor_apply(ctor, vec![KType::Bool, KType::Str]);
+    let slot_bad = KType::constructor_apply(ctor, result_args(KType::Bool, KType::Str));
     assert!(!slot_bad.matches_value(&stamped, &types));
 }
 

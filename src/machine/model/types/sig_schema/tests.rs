@@ -489,11 +489,14 @@ fn substitute_constructor_apply_sentinel_ctor_position() {
     map.insert("Wrap".into(), real.clone());
     let applied = KType::constructor_apply(
         Box::new(ctor("Wrap", 1, ScopeId::SENTINEL)),
-        vec![KType::Number],
+        Record::from_pairs([("Type".to_string(), KType::Number)]),
     );
     assert_eq!(
         substitute_sig_members(&applied, SUP_ID, &map),
-        KType::constructor_apply(Box::new(real), vec![KType::Number])
+        KType::constructor_apply(
+            Box::new(real),
+            Record::from_pairs([("Type".to_string(), KType::Number)])
+        )
     );
 }
 

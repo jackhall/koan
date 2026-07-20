@@ -135,17 +135,15 @@ impl<'a> KObject<'a> {
                 if !same_nominal(set_a, *index_a, set_b, *index_b) {
                     return Ok(false);
                 }
-                // Empty args on either side = erased = comparable; both populated must agree on
-                // arity and be pairwise related.
+                // Empty args on either side = erased = comparable; both populated must name the
+                // same parameters and be related per name.
                 if !args_a.is_empty() && !args_b.is_empty() {
                     if args_a.len() != args_b.len() {
                         return Ok(false);
                     }
-                    if !args_a
-                        .iter()
-                        .zip(args_b.iter())
-                        .all(|(x, y)| types_related(x, y, types))
-                    {
+                    if !args_a.iter().all(|(name, x)| {
+                        args_b.get(name).is_some_and(|y| types_related(x, y, types))
+                    }) {
                         return Ok(false);
                     }
                 }

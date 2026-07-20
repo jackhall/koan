@@ -16,15 +16,15 @@ use crate::machine::model::values::{Carried, Held, KObject};
 use crate::machine::DeliveredCarried;
 
 /// Whether a value reporting a `ConstructorApply` `ktype()` satisfies a `ConstructorApply`
-/// slot: the ctor nominal `(set, index)` matches via [`same_nominal`], the arities agree, and
-/// each arg matches pairwise (`Any` slot admits anything, else structural equality). Both ctors
-/// must be `SetRef`s. Drives both [`KType::matches_value`]'s `Wrapped` arm and
-/// [`KType::accepts_carried`]'s dispatch arm.
+/// slot: the ctor nominal `(set, index)` matches via [`same_nominal`], the two args records
+/// name the same parameters, and each arg matches its same-named counterpart (`Any` slot
+/// admits anything, else structural equality). Both ctors must be `SetRef`s. Drives both
+/// [`KType::matches_value`]'s `Wrapped` arm and [`KType::accepts_carried`]'s dispatch arm.
 fn constructor_apply_admits(
     slot_ctor: &KType,
-    slot_args: &[KType],
+    slot_args: &Record<KType>,
     value_ctor: &KType,
-    value_args: &[KType],
+    value_args: &Record<KType>,
 ) -> bool {
     let ctor_matches = matches!(
         (slot_ctor, value_ctor),
@@ -35,10 +35,11 @@ fn constructor_apply_admits(
     );
     ctor_matches
         && value_args.len() == slot_args.len()
-        && value_args
-            .iter()
-            .zip(slot_args.iter())
-            .all(|(value_arg, slot_arg)| matches!(slot_arg, KType::Any) || value_arg == slot_arg)
+        && slot_args.iter().all(|(name, slot_arg)| {
+            value_args
+                .get(name)
+                .is_some_and(|value_arg| matches!(slot_arg, KType::Any) || value_arg == slot_arg)
+        })
 }
 
 impl KType {
@@ -230,15 +231,16 @@ impl KType {
                 ConstructorApply {
                     ctor: cb, args: ab, ..
                 },
-            ) if **ca == **cb && aa.len() == ab.len() => {
-                let any_more = aa
-                    .iter()
-                    .zip(ab.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y, types));
-                let all_eq_or_more = aa
-                    .iter()
-                    .zip(ab.iter())
-                    .all(|(x, y)| x == y || x.is_more_specific_than(y, types));
+            ) if **ca == **cb
+                && aa.len() == ab.len()
+                && aa.keys().all(|name| ab.get(name).is_some()) =>
+            {
+                // Same constructor, same parameter names: compare each arg against its
+                // same-named counterpart.
+                let pairs = || aa.iter().map(|(name, x)| (x, ab.get(name).unwrap()));
+                let any_more = pairs().any(|(x, y)| x.is_more_specific_than(y, types));
+                let all_eq_or_more =
+                    pairs().all(|(x, y)| x == y || x.is_more_specific_than(y, types));
                 any_more && all_eq_or_more
             }
             // Union subset: `a` refines `b` iff they are not the same set and every member of
@@ -340,9 +342,9 @@ impl KType {
                 _ => false,
             },
             // A stamped `type_args` carrier (from ascription) takes precedence and is
-            // checked structurally per-arg; an erased carrier falls back to checking the
-            // inhabited tag's payload against the arg that field maps to (see
-            // `result_field_param_index`).
+            // checked structurally per parameter name; an erased carrier falls back to
+            // checking the inhabited tag's payload against the same-named arg — a tag name
+            // and its carrier's parameter name agree by construction.
             KType::ConstructorApply { ctor, args, .. } => match obj {
                 KObject::Tagged {
                     tag,
@@ -361,15 +363,15 @@ impl KType {
                     if !ctor_matches {
                         return false;
                     }
-                    let name = set.member(*index).name.as_str();
                     if !type_args.is_empty() {
                         return type_args.len() == args.len()
-                            && type_args
-                                .iter()
-                                .zip(args.iter())
-                                .all(|(a, b)| matches!(b, KType::Any) || a == b);
+                            && args.iter().all(|(name, slot)| {
+                                type_args
+                                    .get(name)
+                                    .is_some_and(|a| matches!(slot, KType::Any) || a == slot)
+                            });
                     }
-                    match result_field_param_index(name, tag).and_then(|i| args.get(i)) {
+                    match args.get(tag) {
                         Some(arg) => arg.matches_value(value, types),
                         None => true,
                     }
@@ -726,19 +728,6 @@ fn record_value_more_specific(a: &Record<KType>, b: &Record<KType>, types: &Type
     });
     let width_strict = a.len() > b.len();
     depth_ok && (width_strict || depth_more)
-}
-
-/// Field→type-parameter linkage for the builtin `Result` parameterized union:
-/// `Ok`→0 (`T`), `Error`→1 (`E`), mirroring the `param_names: ["T", "E"]` registered
-/// in [`crate::builtins::result`]. Returns `None` for any other carrier — user UNIONs
-/// don't yet carry runtime type arguments, so their `ConstructorApply` admission
-/// falls back to a ctor-identity-only check.
-pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> {
-    match (carrier_name, tag) {
-        ("Result", "Ok") => Some(0),
-        ("Result", "Error") => Some(1),
-        _ => None,
-    }
 }
 
 /// Sound, order-blind, name-keyed function subtyping: does the value function `sig`

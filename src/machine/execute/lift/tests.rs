@@ -9,6 +9,7 @@ use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
 use crate::machine::model::Held;
 use crate::machine::model::KType;
+use crate::machine::model::Record;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
 use crate::witnessed::FoldedPlacement;
@@ -185,7 +186,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
             value: Rc::clone(&inner),
             set: Rc::clone(&set),
             index: 0,
-            type_args: Rc::new(vec![]),
+            type_args: Rc::new(Record::new()),
         })
         .expect("a fresh owned Tagged is always resident-in-self");
 

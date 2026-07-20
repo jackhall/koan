@@ -229,14 +229,12 @@ pub(crate) fn union_digest(members: &[KType]) -> TypeDigest {
     h.finish()
 }
 
-/// `ConstructorApply(ctor, args)` — positional over `args`.
-pub(crate) fn constructor_apply_digest(ctor: TypeDigest, args: &[KType]) -> TypeDigest {
+/// `ConstructorApply(ctor, args)` — the args feed name-keyed and name-sorted (see
+/// [`feed_record`]), matching the order-blind identity of the args `Record`.
+pub(crate) fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
     h.digest(ctor);
-    h.count(args.len());
-    for a in args {
-        h.digest(a.digest());
-    }
+    feed_record(&mut h, args);
     h.finish()
 }
 
@@ -368,10 +366,7 @@ fn canonical_type_digest(kt: &KType, schema: &SigSchema) -> TypeDigest {
         KType::ConstructorApply { ctor, args, .. } => {
             let mut h = DigestHasher::new(TAG_CONSTRUCTOR_APPLY);
             h.digest(canonical_type_digest(ctor, schema));
-            h.count(args.len());
-            for a in args {
-                h.digest(canonical_type_digest(a, schema));
-            }
+            feed_record_canonical(&mut h, args, schema);
             h.finish()
         }
         _ => kt.digest(),

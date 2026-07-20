@@ -1,6 +1,7 @@
 use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
+use crate::machine::model::Record;
 use crate::machine::model::{KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet};
 use crate::machine::run_root_storage;
 use crate::machine::KoanRuntime;
@@ -214,7 +215,10 @@ fn fn_return_type_constructor_apply_root_scope() {
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::ConstructorApply { args, .. }) => {
-            assert_eq!(*args, vec![KType::Number]);
+            assert_eq!(
+                *args,
+                Record::from_pairs([("Type".to_string(), KType::Number)]),
+            );
         }
         other => panic!("expected Resolved(ConstructorApply), got {:?}", other),
     }
@@ -269,10 +273,13 @@ fn monad_signature_smoke() {
             match ret.as_ref() {
                 KType::ConstructorApply { ctor, args, .. } => {
                     assert_type_constructor(ctor.as_ref(), &["Type"]);
-                    assert_eq!(*args, vec![KType::Number]);
+                    assert_eq!(
+                        *args,
+                        Record::from_pairs([("Type".to_string(), KType::Number)]),
+                    );
                 }
                 other => panic!(
-                    "pure return type must be ConstructorApply(Wrap, [Number]), got {:?}",
+                    "pure return type must be ConstructorApply(Wrap, {{Type = Number}}), got {:?}",
                     other,
                 ),
             }

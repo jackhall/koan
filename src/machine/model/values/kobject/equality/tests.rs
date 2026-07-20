@@ -226,21 +226,21 @@ fn tagged_same_nominal_compares_payload() {
         value: Rc::new(num(3.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     let b = KObject::Tagged {
         tag: "Distance".into(),
         value: Rc::new(num(3.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     let c = KObject::Tagged {
         tag: "Distance".into(),
         value: Rc::new(num(4.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
@@ -256,14 +256,14 @@ fn tagged_erased_vs_stamped_is_comparable() {
         value: Rc::new(num(1.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     let stamped = KObject::Tagged {
         tag: "Box".into(),
         value: Rc::new(num(1.0)),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![KType::Number]),
+        type_args: Rc::new(Record::from_pairs([("Type".to_string(), KType::Number)])),
     };
     assert_eq!(erased.value_equal(&stamped, &types), Ok(true));
 }
@@ -277,14 +277,14 @@ fn tagged_distinct_index_is_unequal() {
         value: Rc::new(KObject::Null),
         set: Rc::clone(&set),
         index: 0,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     let some = KObject::Tagged {
         tag: "Some".into(),
         value: Rc::new(num(1.0)),
         set: Rc::clone(&set),
         index: 1,
-        type_args: Rc::new(vec![]),
+        type_args: Rc::new(Record::new()),
     };
     assert_eq!(none.value_equal(&some, &types), Ok(false));
 }

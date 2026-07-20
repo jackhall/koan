@@ -1,11 +1,13 @@
-//! `Result` — a builtin two-variant tagged union (`ok :T`, `error :E`),
-//! registered once at prelude build like `List`/`Dict`, not via `UNION`/`NEWTYPE`.
+//! `Result` — a builtin two-variant tagged union, registered once at prelude build like
+//! `List`/`Dict`, not via `UNION`/`NEWTYPE`.
 //!
 //! Type-only: `bindings.types["Result"]` holds a `KType::SetRef` into a singleton
 //! [`RecursiveSet`] whose one [`KKind::TypeConstructor`] member carries the variant
-//! schema (`{Ok: Any, Error: Any}`) and `param_names`. `:(Result Number MyErr)` drives the
-//! resolver's `ConstructorApply` arm; `(Result (Ok v))` constructs by reading the projected
-//! schema off the member. No value-side carrier.
+//! schema (`{Ok: Any, Error: Any}`) and the matching `param_names` `["Ok", "Error"]` — each
+//! tag's payload type is the arg bound to the same-named parameter.
+//! `:(Result {Ok = Number, Error = MyError})` drives the resolver's `ConstructorApply` arm;
+//! `(Result (Ok v))` constructs by reading the projected schema off the member. No
+//! value-side carrier.
 //!
 //! Type parameters are erased at runtime (as for `List`/`Dict`): `SetRef` identity is
 //! `(set ptr, index)` and never descends the schema, so every `:(Result …)` resolves to
@@ -26,7 +28,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope_id,
         NominalSchema::TypeConstructor {
             schema,
-            param_names: vec!["T".into(), "E".into()],
+            param_names: vec!["Ok".into(), "Error".into()],
         },
     );
     let identity = KType::SetRef { set, index: 0 };

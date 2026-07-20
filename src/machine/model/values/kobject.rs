@@ -76,16 +76,17 @@ pub enum KObject<'a> {
     /// member; `ktype()` synthesizes `KType::SetRef { set, index }` so dispatch on type
     /// identity sees the declared union, and lift shares the set by `Rc::clone`.
     ///
-    /// `type_args` carries the value's runtime type arguments for a parameterized union
-    /// (`Result<T, E>`): empty means erased; populated, `ktype()` synthesizes
-    /// `KType::ConstructorApply` so dispatch and slot admission see the full
-    /// instantiation. Populated by ascription stamping at annotated boundaries.
+    /// `type_args` carries the value's runtime type arguments for a parameterized union,
+    /// keyed by the carrier's type-parameter names (`Result` binds `Ok` and `Error`): empty
+    /// means erased; populated, `ktype()` synthesizes `KType::ConstructorApply` so dispatch
+    /// and slot admission see the full instantiation. Populated by ascription stamping at
+    /// annotated boundaries.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
         set: Rc<RecursiveSet>,
         index: usize,
-        type_args: Rc<Vec<KType>>,
+        type_args: Rc<Record<KType>>,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
     /// `Rc`-shared field record (identifier-keyed, declaration-ordered, order-blind

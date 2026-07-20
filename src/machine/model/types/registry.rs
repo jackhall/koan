@@ -127,7 +127,7 @@ pub(crate) fn digest_is_content(kt: &KType) -> bool {
         }
         KType::Union { members, .. } => members.iter().all(digest_is_content),
         KType::ConstructorApply { ctor, args, .. } => {
-            digest_is_content(ctor) && args.iter().all(digest_is_content)
+            digest_is_content(ctor) && args.values().all(digest_is_content)
         }
         // `content` is owned schema data with no nested `KType` of its own; only the
         // `WITH`-pinned slot types need recursing.

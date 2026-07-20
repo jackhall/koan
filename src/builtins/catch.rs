@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Record};
 use crate::machine::Scope;
 use crate::machine::StepCarried;
 use crate::machine::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
@@ -23,8 +23,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(kt @ KType::SetRef { .. }) => kt.clone(),
         _ => panic!("Result must be registered before CATCH"),
     };
-    let return_type =
-        KType::constructor_apply(Box::new(result_ctor), vec![KType::Any, kerror_ktype()]);
+    let return_type = KType::constructor_apply(
+        Box::new(result_ctor),
+        Record::from_pairs([
+            ("Ok".to_string(), KType::Any),
+            ("Error".to_string(), kerror_ktype()),
+        ]),
+    );
     let signature = sig(
         return_type,
         vec![kw("CATCH"), arg("expr", KType::KExpression)],
@@ -62,7 +67,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 value: Rc::new(payload),
                 set,
                 index,
-                type_args: Rc::new(vec![]),
+                type_args: Rc::new(Record::new()),
             }
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the

@@ -55,7 +55,7 @@ impl<V> Record<V> {
         self.fields.keys()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn values(&self) -> impl DoubleEndedIterator<Item = &V> {
         self.fields.values()
     }
 

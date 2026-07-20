@@ -53,7 +53,8 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
     /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
     /// expression; the finish stamps the value's full type as the sole applied arg, peels any
-    /// `Wrapped` layer, and wraps the payload with a fresh `ConstructorApply(Wrapper, [<arg>])`
+    /// `Wrapped` layer, and wraps the payload with a fresh
+    /// `ConstructorApply(Wrapper, {<param> = <arg>})`
     /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
     ApplyConstructor { set: Rc<RecursiveSet>, index: usize },
 }

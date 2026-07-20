@@ -41,7 +41,7 @@ mod action_bodies {
     use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
     use crate::machine::{require_ktype, Action, BodyCtx};
 
-    use crate::machine::model::KType;
+    use crate::machine::model::{KType, Record};
     use crate::machine::{KError, KErrorKind};
 
     /// LIST / MAP / AS read each embedded arg (`elem` / `k` / `v` / `applied` / `ctor`) as an
@@ -63,10 +63,10 @@ mod action_bodies {
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let applied = crate::try_action!(require_ktype(ctx.args, "applied"));
         let ctor = crate::try_action!(require_ktype(ctx.args, "ctor"));
-        let param_count = match &ctor {
+        let param_names = match &ctor {
             KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
                 match RecursiveSet::projected_schema(set, *index) {
-                    ProjectedSchema::TypeConstructor { param_names, .. } => param_names.len(),
+                    ProjectedSchema::TypeConstructor { param_names, .. } => param_names,
                     _ => unreachable!(
                         "TypeConstructor-kind member projects a TypeConstructor schema"
                     ),
@@ -79,16 +79,20 @@ mod action_bodies {
                 )))))
             }
         };
-        if param_count != 1 {
+        let [param_name] = &param_names[..] else {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "`{}` takes {param_count} type arguments; the `AS` form supplies one, so \
+                "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
                 ctor.name(),
+                param_names.len(),
             )))));
-        }
+        };
+        // `AS` is arity-1 sugar: the applied type fills the constructor's sole parameter, so
+        // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
+        let args = Record::from_pairs([(param_name.clone(), applied)]);
         Action::Done(Ok(ctx
             .ctx
-            .alloc_type(KType::constructor_apply(Box::new(ctor), vec![applied]))))
+            .alloc_type(KType::constructor_apply(Box::new(ctor), args))))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -223,7 +227,7 @@ mod tests {
     }
 
     // A root-scope-bound `Wrap` TypeConstructor applied with `:(Number AS Wrap)`
-    // lowers to `ConstructorApply(Wrap, [Number])`.
+    // lowers to `ConstructorApply(Wrap, {Type = Number})` — `AS` fills the sole parameter.
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::{KKind, NominalSchema, RecursiveSet};
@@ -255,7 +259,10 @@ mod tests {
                     }
                     other => panic!("expected SetRef ctor, got {other:?}"),
                 }
-                assert_eq!(*args, vec![KType::Number]);
+                assert_eq!(
+                    *args,
+                    Record::from_pairs([("Type".to_string(), KType::Number)]),
+                );
             }
             other => panic!("expected ConstructorApply, got {other:?}"),
         }

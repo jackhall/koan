@@ -207,7 +207,7 @@ impl KError {
             value: Rc::new(payload),
             set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
             index: 0,
-            type_args: Rc::new(vec![]),
+            type_args: Rc::new(Record::new()),
         }
     }
 }
@@ -228,7 +228,8 @@ fn synthetic_singleton(name: String, kind: KKind) -> Rc<RecursiveSet> {
 }
 
 /// The `KError` carrier type — the `TypeConstructor`-kind `SetRef` a `to_tagged` value reports
-/// its family from. Used as the `Error` arm of `CATCH`'s declared `:(Result Any KError)` return
+/// its family from. Used as the `Error` arm of `CATCH`'s declared
+/// `:(Result {Ok = Any, Error = KError})` return
 /// (a documentary contract — `KError` is not a registered prelude type, and the synthetic set
 /// is identity-throwaway, but `CATCH`'s return is never validated against the runtime value).
 pub(crate) fn kerror_ktype() -> KType {

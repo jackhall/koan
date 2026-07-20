@@ -151,11 +151,13 @@ pub enum KType {
         name: String,
     },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
-    /// to a `TypeConstructor`-kind member; `args` are the elaborated arg types. Structural
-    /// equality by `(ctor, args)`.
+    /// to a `TypeConstructor`-kind member; `args` maps each of the constructor's parameter
+    /// names to the elaborated arg type, built in the constructor's declared parameter order.
+    /// Structural equality by `(ctor, args)`, with `Record`'s order-blind identity: the same
+    /// name-to-type map is the same application however it was written.
     ConstructorApply {
         ctor: Box<KType>,
-        args: Vec<KType>,
+        args: Record<KType>,
         digest: TypeDigest,
     },
     /// Definition-time transient: a reference to a not-yet-sealed nominal (self or forward
@@ -223,8 +225,9 @@ impl KType {
         }
     }
 
-    /// Application of a higher-kinded type constructor `ctor` to `args`.
-    pub fn constructor_apply(ctor: Box<KType>, args: Vec<KType>) -> KType {
+    /// Application of a higher-kinded type constructor `ctor` to the parameter-name-keyed
+    /// `args`, which the caller builds in `ctor`'s declared parameter order.
+    pub fn constructor_apply(ctor: Box<KType>, args: Record<KType>) -> KType {
         let digest = type_digest::constructor_apply_digest(ctor.digest(), &args);
         KType::ConstructorApply { ctor, args, digest }
     }
@@ -301,8 +304,11 @@ impl KType {
             KType::RecursiveRef(name) => name.clone(),
             KType::Unresolved(t) => t.render(),
             KType::ConstructorApply { ctor, args, .. } => {
-                let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
-                format!(":({} {})", ctor.name(), arg_names.join(" "))
+                let bindings: Vec<String> = args
+                    .iter()
+                    .map(|(name, kt)| format!("{name} = {}", kt.name()))
+                    .collect();
+                format!(":({} {{{}}})", ctor.name(), bindings.join(", "))
             }
             KType::Any => "Any".into(),
         }

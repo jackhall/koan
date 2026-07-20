@@ -3,6 +3,7 @@ use crate::builtins::test_support::run_root_silent;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
+use crate::machine::model::Record;
 use crate::machine::BindingIndex;
 
 fn leaf(n: &str) -> TypeIdentifier {
@@ -95,6 +96,9 @@ fn constructor_apply_name_renders_surface_form() {
         },
     );
     let ctor = KType::SetRef { set, index: 0 };
-    let app = KType::constructor_apply(Box::new(ctor), vec![KType::Number]);
-    assert_eq!(app.name(), ":(Wrap Number)");
+    let app = KType::constructor_apply(
+        Box::new(ctor),
+        Record::from_pairs([("Type".to_string(), KType::Number)]),
+    );
+    assert_eq!(app.name(), ":(Wrap {Type = Number})");
 }

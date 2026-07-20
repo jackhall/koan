@@ -160,7 +160,7 @@ fn check_newtype_repr<'a>(
 /// group unwraps so `(Wrapper 3.0)` / `Wrapper (3.0)` construct identically and `Wrapper ()` is
 /// arity-zero; a single part dispatches directly, a multi-part value wraps as one value cell. The
 /// finish ([`finish_witnessed`]'s `ApplyConstructor` arm) stamps the value's type as the applied
-/// arg and wraps it with a `ConstructorApply(<ctor SetRef>, [arg])` identity.
+/// arg and wraps it with a `ConstructorApply(<ctor SetRef>, {<param> = arg})` identity.
 pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     set: Rc<RecursiveSet>,
     index: usize,
@@ -419,7 +419,7 @@ fn finish_witnessed<'step>(
                             value: Rc::new(value.object().deep_clone()),
                             set,
                             index,
-                            type_args: Rc::new(vec![]),
+                            type_args: Rc::new(Record::new()),
                         }))
                     },
                 ))
@@ -434,6 +434,15 @@ fn finish_witnessed<'step>(
                 set: Rc::clone(set),
                 index: *index,
             });
+            // An identity wrapper takes exactly one type parameter; its name keys the applied
+            // arg in the built `ConstructorApply`.
+            let param_name = match RecursiveSet::projected_schema(set, *index) {
+                ProjectedSchema::TypeConstructor { param_names, .. } => param_names
+                    .first()
+                    .cloned()
+                    .expect("an identity-wrapper family declares one type parameter"),
+                _ => unreachable!("a ConstructorApply ctor is a TypeConstructor-kind member"),
+            };
             let home = build_type_operand(scope, view.dest_frame(), identity);
             Ok(terminals[0]
                 .delivered
@@ -453,11 +462,12 @@ fn finish_witnessed<'step>(
                         } else {
                             WrappedPayload::hold(value.object())
                         };
-                        // The type id is a fresh `ConstructorApply(<ctor SetRef>, [arg])`, allocated
-                        // at the fold brand — `arg` may borrow the value's region, folded in here.
+                        // The type id is a fresh `ConstructorApply(<ctor SetRef>, {<param> = arg})`,
+                        // allocated at the fold brand — `arg` may borrow the value's region, folded
+                        // in here.
                         let type_id = region.alloc_ktype(KType::constructor_apply(
                             Box::new(identity_ty.clone()),
-                            vec![arg],
+                            Record::from_pairs([(param_name, arg)]),
                         ));
                         Carried::Object(
                             region.alloc_object_folded(KObject::Wrapped { inner, type_id }),
