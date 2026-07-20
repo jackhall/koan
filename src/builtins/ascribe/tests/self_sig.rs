@@ -215,8 +215,7 @@ fn manifest_member_mismatch_names_the_member() {
 
 /// Opacity survives content identity: two `:|` ascriptions of the same module against the same
 /// SIG mint distinct per-call abstract identities, so their `TYPE OF` types stay distinct even
-/// though both self-sigs digest by content. This is the sole generative exception (`AbstractType`
-/// stays id-keyed).
+/// though both self-sigs digest by content — each mint carries its own generativity `nonce`.
 #[test]
 fn opaque_views_have_distinct_type_of() {
     let region = run_root_storage();

@@ -43,6 +43,7 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
                 source: module.scope_id(),
                 name: "Type".into(),
                 param_names: Vec::new(),
+                nonce: None,
             },
         );
     }
@@ -72,6 +73,7 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
                 source: module.scope_id(),
                 name: "Type".into(),
                 param_names: Vec::new(),
+                nonce: None,
             },
         );
     }

@@ -223,7 +223,8 @@ fn access_type_member<'a>(
     }
 }
 
-/// A [`KType::AbstractType`] is an identity — a `(source scope, name)` pair — not a receiver. The
+/// A [`KType::AbstractType`] is an identity — a binder scope, a name, and a generativity nonce —
+/// not a receiver. The
 /// module it names rides the value channel, and further members project off *that* value, so a
 /// member access whose lhs is a bare abstract identity has nowhere to look.
 fn abstract_type_has_no_members(name: &str) -> KError {
@@ -306,8 +307,8 @@ fn access_field<'a>(
 ///
 /// On a value-side hit, an opaque-ascription `slot_type_tags` entry re-tags the read: the
 /// raw value is rewrapped in a `KObject::Wrapped` carrier whose `ktype()` is the per-call
-/// abstract identity the SIG named (so `(int_ord.zero)` reads as `AbstractType{int_ord,
-/// "Type"}`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
+/// abstract identity the SIG named (so `(int_ord.zero)` reads as the view's nonced
+/// `AbstractType` for `Type`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
 /// so transparent reads stay concrete.
 ///
 /// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s region, not the

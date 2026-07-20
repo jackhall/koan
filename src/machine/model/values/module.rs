@@ -30,7 +30,7 @@ use super::super::types::{
 /// First-class module value. `path` is the lexical-source label (`"int_ord"`,
 /// `"outer.inner"`). The module value rides the value channel as `KObject::Module(self)` and is
 /// typed by its principal signature (`KType::Signature { content: self.self_sig_content(), .. }`);
-/// opaque-ascription members mint `KType::AbstractType { source: self.scope_id(), name }`.
+/// opaque-ascription members mint `KType::AbstractType { name, nonce: Some(self.scope_id()), .. }`.
 pub struct Module<'a> {
     pub path: String,
     child_scope_ref: &'a Scope<'a>,
@@ -137,10 +137,10 @@ impl<'a> Module<'a> {
         self.child_scope_ref
     }
 
-    /// Stable identity: the key every module-keyed `KType` compares and digests on (an
-    /// `AbstractType` minted from this module). Two distinct opaque ascriptions of the same source
-    /// module compare distinct because each allocates a fresh child scope (and thus a fresh
-    /// `ScopeId`).
+    /// Stable identity: the generativity nonce every opaque-ascription mint out of this module
+    /// carries (an `AbstractType`'s `nonce`, a generative set's `generative_nonce`). Two distinct
+    /// opaque ascriptions of the same source module compare distinct because each allocates a
+    /// fresh child scope (and thus a fresh `ScopeId`).
     pub fn scope_id(&self) -> ScopeId {
         self.child_scope().id
     }

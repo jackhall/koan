@@ -34,6 +34,7 @@ fn sig_abstract(id: ScopeId, name: &str) -> KType {
         source: id,
         name: name.into(),
         param_names: Vec::new(),
+        nonce: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn sig_abstract_ctor(id: ScopeId, name: &str, arity: usize) -> KType {
         source: id,
         name: name.into(),
         param_names: params(arity),
+        nonce: None,
     }
 }
 
@@ -440,6 +442,27 @@ fn sig_to_sig_entailment_over_shared_abstract() {
 }
 
 // --- substitute_sig_members units -----------------------------------------------------
+
+/// An opaque ascription's generative mint shares its declaring binder's `source` and name — only
+/// the nonce separates them — and must not be mistaken for a reference to that declaration.
+#[test]
+fn substitute_leaves_a_generative_mint_alone() {
+    let mut map: HashMap<String, KType> = HashMap::new();
+    map.insert("Type".into(), KType::Number);
+
+    let mint = KType::AbstractType {
+        source: SUP_ID,
+        name: "Type".into(),
+        param_names: Vec::new(),
+        nonce: Some(ScopeId::from_raw(0, 0xBEEF)),
+    };
+    assert_eq!(substitute_sig_members(&mint, SUP_ID, &map), mint);
+    // The declaration it was minted from still substitutes.
+    assert_eq!(
+        substitute_sig_members(&sig_abstract(SUP_ID, "Type"), SUP_ID, &map),
+        KType::Number
+    );
+}
 
 #[test]
 fn substitute_top_level_and_nested() {

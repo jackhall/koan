@@ -58,10 +58,10 @@ impl ScopeId {
         self.idx
     }
 
-    /// Content bytes for a type digest: `session` then `idx`, each little-endian. A minted
-    /// leaf (`AbstractType`, an opaque-ascription nonce) folds its `ScopeId` into the digested
-    /// type content through this — a `Signature`'s `sig_id` is diagnostic/specificity-only and
-    /// never folded in.
+    /// Content bytes for a type digest: `session` then `idx`, each little-endian. An
+    /// `AbstractType`'s binder and its generativity nonce, and a generative set's nonce, fold
+    /// their `ScopeId` into the digested type content through this — a `Signature`'s `sig_id` is
+    /// diagnostic/specificity-only and never folded in.
     pub fn digest_bytes(self) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[..8].copy_from_slice(&self.session.to_le_bytes());

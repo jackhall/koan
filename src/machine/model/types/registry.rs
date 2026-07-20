@@ -107,8 +107,8 @@ impl TypeRegistry {
 
 /// The record guard: `false` if `kt` contains any `SetRef` / `RecursiveGroup` over an unsealed set
 /// (a pointer-transient digest, unsafe to record — see the module doc), else recurses into every
-/// composite child position. All other variants — every leaf, every id-keyed variant (`Module`,
-/// `AbstractType`), and a `SetRef`/`RecursiveGroup` over a *sealed* set — carry content digests.
+/// composite child position. All other variants — every leaf, every nonced variant
+/// (`AbstractType`), and a `SetRef`/`RecursiveGroup` over a *sealed* set — carry content digests.
 /// The guard runs only on record; a lookup needs no guard, since an unsafe verdict is never
 /// recorded in the first place.
 pub(crate) fn digest_is_content(kt: &KType) -> bool {

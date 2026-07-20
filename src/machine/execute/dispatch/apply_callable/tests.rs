@@ -273,6 +273,7 @@ fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
         source: ScopeId::from_raw(0, 0xB0B),
         name: "Wrap".into(),
         param_names: vec!["Elem".into()],
+        nonce: None,
     };
     let applied = KType::constructor_apply(
         Box::new(ctor),

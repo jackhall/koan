@@ -347,12 +347,13 @@ fn set_ref_name_renders_member_name() {
     assert_eq!(t.name(), "Point");
 }
 
-/// `AbstractType` identity is `(source, name)`: two mints naming the same module and the same
-/// abstract member compare (and hash) equal, while a mint against another module — what a second
-/// `:|` application of the same SIG produces, since each ascription allocates a fresh child scope —
-/// stays distinct. Renaming the member also separates them.
+/// `AbstractType` identity keys on its whole content, generativity included: two mints carrying
+/// the same nonce and the same abstract member compare (and hash) equal, while a mint nonced
+/// against another module — what a second `:|` application of the same SIG produces, since each
+/// ascription allocates a fresh child scope — stays distinct. Renaming the member also separates
+/// them.
 #[test]
-fn abstract_type_identity_keys_on_source_and_name() {
+fn abstract_type_identity_keys_on_full_content() {
     let storage = run_root_storage();
     // Each `:|` allocates its own child scope, so the two views carry distinct `ScopeId`s.
     let first = storage.brand().alloc_module(Module::new(
@@ -365,10 +366,13 @@ fn abstract_type_identity_keys_on_source_and_name() {
     ));
     assert_ne!(first.scope_id(), second.scope_id());
 
+    // The declaring SIG's binder is shared; the per-application nonce is what separates the views.
+    let declaring = ScopeId::from_raw(0, 0x51C0);
     let mint = |m: &Module<'_>, name: &str| KType::AbstractType {
-        source: m.scope_id(),
+        source: declaring,
         name: name.into(),
         param_names: Vec::new(),
+        nonce: Some(m.scope_id()),
     };
 
     assert_eq!(mint(first, "Carrier"), mint(first, "Carrier"));

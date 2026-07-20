@@ -1084,6 +1084,7 @@ mod tests {
             source: scope.id,
             name: "Abstract".into(),
             param_names: vec!["Type".into()],
+            nonce: None,
         };
         scope.register_builtin_type("Abstract".into(), kt, BindingIndex::BUILTIN);
         let err = run_one_err(scope, parse_one("Abstract (3.0)"));

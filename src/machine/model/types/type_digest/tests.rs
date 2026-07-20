@@ -1,6 +1,6 @@
 //! Content-addressing invariants for [`digest_of`] / [`set_digest`]: same content digests
-//! equal regardless of allocation and field/member order, distinct content digests apart, the
-//! two generative exceptions stay distinct, and a set seals its digest on the last member fill.
+//! equal regardless of allocation and field/member order, distinct content digests apart, nonced
+//! content stays distinct, and a set seals its digest on the last member fill.
 
 use super::*;
 use crate::machine::core::ScopeId;
@@ -156,38 +156,73 @@ fn schema_embedding_external_setref_digests_deterministically() {
     );
 }
 
-/// `AbstractType` identity is `(source, name)`: two members differing only in their declared
-/// parameter names — one first-order, one a constructor — digest and compare equal, so a
-/// first-order abstract type's digest is a pure function of the pair it always was.
+/// `AbstractType` digests its whole content: the generativity `nonce`, the binder `source`, the
+/// name, and the parameter names as a *set*. Two same-named members at different orders — `TYPE
+/// Elt` versus `TYPE (X AS Elt)` — are different declarations and stay distinct, while parameter
+/// *order* is presentation.
 #[test]
-fn abstract_type_digest_excludes_param_names() {
+fn abstract_type_digest_keys_on_full_content() {
     let source = ScopeId::from_raw(0, 0xA11C);
-    let first_order = KType::AbstractType {
+    let member = |param_names: Vec<&str>| KType::AbstractType {
         source,
-        name: "Wrap".into(),
-        param_names: Vec::new(),
+        name: "Elt".into(),
+        param_names: param_names.into_iter().map(str::to_string).collect(),
+        nonce: None,
     };
-    let higher_kinded = KType::AbstractType {
-        source,
-        name: "Wrap".into(),
-        param_names: vec!["Elem".into()],
-    };
-    let renamed = KType::AbstractType {
-        source,
-        name: "Wrap".into(),
-        param_names: vec!["Item".into()],
-    };
-    assert_eq!(digest_of(&first_order), digest_of(&higher_kinded));
-    assert_eq!(digest_of(&higher_kinded), digest_of(&renamed));
-    assert_eq!(first_order, higher_kinded);
+
+    // Order separates a first-order member from a same-named constructor.
+    assert_ne!(digest_of(&member(vec![])), digest_of(&member(vec!["X"])));
+    assert_ne!(member(vec![]), member(vec!["X"]));
+    // Arity separates two constructors.
+    assert_ne!(
+        digest_of(&member(vec!["X"])),
+        digest_of(&member(vec!["X", "Y"])),
+    );
+    // A renamed parameter is a different interface.
+    assert_ne!(digest_of(&member(vec!["X"])), digest_of(&member(vec!["Y"])));
+    // Parameter *order* is immaterial — identity is the name set.
+    assert_eq!(
+        digest_of(&member(vec!["X", "Y"])),
+        digest_of(&member(vec!["Y", "X"])),
+    );
+    assert_eq!(member(vec!["X", "Y"]), member(vec!["Y", "X"]));
+
     // A different name is a different member.
     assert_ne!(
-        digest_of(&first_order),
+        digest_of(&member(vec![])),
         digest_of(&KType::AbstractType {
             source,
             name: "Other".into(),
             param_names: Vec::new(),
+            nonce: None,
         }),
+    );
+}
+
+/// Generativity rides `nonce`, not `source`: an opaque-ascription mint folds the per-application
+/// module id in, so two applications of one SIG member — same `source`, same name — stay distinct,
+/// and both stay distinct from the SIG-body declaration they were threaded from.
+#[test]
+fn abstract_type_nonce_is_generative() {
+    let source = ScopeId::from_raw(0, 0xA11C);
+    let mint = |nonce: Option<ScopeId>| KType::AbstractType {
+        source,
+        name: "Elt".into(),
+        param_names: Vec::new(),
+        nonce,
+    };
+    let declared = mint(None);
+    let first = mint(Some(ScopeId::from_raw(0, 0x01)));
+    let second = mint(Some(ScopeId::from_raw(0, 0x02)));
+
+    assert_ne!(digest_of(&first), digest_of(&second));
+    assert_ne!(first, second);
+    assert_ne!(digest_of(&declared), digest_of(&first));
+    assert_ne!(declared, first);
+    // The nonce is the only difference that matters — same nonce, same identity.
+    assert_eq!(
+        digest_of(&first),
+        digest_of(&mint(Some(ScopeId::from_raw(0, 0x01))))
     );
 }
 
@@ -208,6 +243,7 @@ fn schema_digest_binds_abstract_member_param_names() {
                 source: sig_id,
                 name: "Wrap".into(),
                 param_names: param_names.into_iter().map(str::to_string).collect(),
+                nonce: None,
             },
         )]
         .into_iter()
@@ -245,6 +281,7 @@ fn constructor_apply_digest_is_order_blind() {
         source: ScopeId::from_raw(0, 0xC70A),
         name: "Both".into(),
         param_names: vec!["Ok".into(), "Error".into()],
+        nonce: None,
     };
     let apply = |pairs: Vec<(&str, KType)>| {
         KType::constructor_apply(

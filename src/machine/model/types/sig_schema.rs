@@ -230,7 +230,7 @@ pub fn unsaturated_constructor_message(kt: &KType, position: &str) -> Option<Str
 
 /// Order-blind comparison of two constructor parameter lists: identity is the name set, and
 /// declaration order is presentation.
-fn name_sets_equal(left: &[String], right: &[String]) -> bool {
+pub(super) fn name_sets_equal(left: &[String], right: &[String]) -> bool {
     if left.len() != right.len() {
         return false;
     }
@@ -244,18 +244,23 @@ fn name_sets_equal(left: &[String], right: &[String]) -> bool {
 /// Rewrite `kt`, replacing references to `sig_id`'s abstract members with the caller's bindings
 /// for them. Returns a plain value used only for comparison — never region-allocated.
 ///
-/// One reference shape substitutes: an `AbstractType { source: sig_id, name }` of either order —
-/// a first-order slot type, or a higher-kinded member in the ctor position of a
-/// `ConstructorApply`. Compound types recurse; every other variant is a clone.
+/// One reference shape substitutes: a nonce-free `AbstractType { source: sig_id, name }` of either
+/// order — a first-order slot type, or a higher-kinded member in the ctor position of a
+/// `ConstructorApply`. Compound types recurse; every other variant is a clone. A nonced
+/// `AbstractType` is an opaque ascription's generative mint, not a reference to a declaration, so
+/// it never substitutes even when it shares its binder's `source` and name.
 pub fn substitute_sig_members(
     kt: &KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
 ) -> KType {
     match kt {
-        KType::AbstractType { source, name, .. } if *source == sig_id => {
-            members.get(name).cloned().unwrap_or_else(|| kt.clone())
-        }
+        KType::AbstractType {
+            source,
+            name,
+            nonce: None,
+            ..
+        } if *source == sig_id => members.get(name).cloned().unwrap_or_else(|| kt.clone()),
         KType::List { element, .. } => {
             KType::list(Box::new(substitute_sig_members(element, sig_id, members)))
         }
@@ -474,7 +479,12 @@ fn references_sig_member(
     members: &HashMap<String, KType>,
 ) -> bool {
     match declared {
-        KType::AbstractType { source, name, .. } => *source == sig_id && members.contains_key(name),
+        KType::AbstractType {
+            source,
+            name,
+            nonce: None,
+            ..
+        } => *source == sig_id && members.contains_key(name),
         KType::List { element, .. } => references_sig_member(element, sig_id, members),
         KType::Dict { key, value, .. } => {
             references_sig_member(key, sig_id, members)
@@ -510,7 +520,12 @@ fn substitution_binding<'m>(
     members: &'m HashMap<String, KType>,
 ) -> Option<&'m KType> {
     match declared {
-        KType::AbstractType { source, name, .. } if *source == sig_id => members.get(name),
+        KType::AbstractType {
+            source,
+            name,
+            nonce: None,
+            ..
+        } if *source == sig_id => members.get(name),
         _ => None,
     }
 }

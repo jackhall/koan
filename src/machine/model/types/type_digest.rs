@@ -7,13 +7,15 @@
 //! [design/typing/type-identity.md](../../../../design/typing/type-identity.md) pins.
 //!
 //! The digest is a pure function of type content, so two independently built types with the
-//! same content digest equal with no shared interner. The two generative exceptions fold a
-//! minted `ScopeId` into the content — opaque ascription's per-application nonce (a set's
-//! `generative_nonce`) and the sole id-keyed leaf, `AbstractType` — so distinct abstractions
-//! stay distinct. A `Signature` digests by its content's schema (see
+//! same content digest equal with no shared interner. Generativity is one explicit mechanism
+//! applied in two places: a minted `ScopeId` nonce folded into the content ahead of everything
+//! else, carried by a set (`RecursiveSet::generative_nonce`) and by an abstract member
+//! (`KType::AbstractType`'s `nonce`). Opaque ascription mints the nonce per application, so two
+//! `:|` applications of one SIG never unify; a SIG-body declaration carries no nonce and is
+//! purely content-keyed. A `Signature` digests by its content's schema (see
 //! [`schema_content_digest`]), so two textually identical declarations minted against
 //! different scope ids digest identically; the order-independence property is scoped to
-//! types without a minted leaf.
+//! types without a nonce.
 //!
 //! **The hasher lives here and only here.** Swapping the hash function or width is a
 //! one-file change (the roadmap marks the exact function open, recommending 128-bit
@@ -178,11 +180,32 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             feed_set_identity(&mut h, set);
             h.finish()
         }
-        // `param_names` is excluded, matching `PartialEq`: one source-and-name binds one member.
-        KType::AbstractType { source, name, .. } => DigestHasher::new(TAG_ABSTRACT_TYPE)
-            .scope_id(*source)
-            .string(name)
-            .finish(),
+        // Every field, matching `PartialEq`: the generativity `nonce` first, then the binder
+        // `source`, the name, and the parameter names fed sorted so the encoding is order-blind
+        // (identity is the name set, as in `schema_content_digest`).
+        KType::AbstractType {
+            source,
+            name,
+            param_names,
+            nonce,
+        } => {
+            let mut h = DigestHasher::new(TAG_ABSTRACT_TYPE);
+            match nonce {
+                Some(id) => {
+                    h.byte(1).scope_id(*id);
+                }
+                None => {
+                    h.byte(0);
+                }
+            }
+            h.scope_id(*source).string(name).count(param_names.len());
+            let mut sorted: Vec<&str> = param_names.iter().map(String::as_str).collect();
+            sorted.sort_unstable();
+            for param in sorted {
+                h.string(param);
+            }
+            h.finish()
+        }
     }
 }
 
@@ -386,14 +409,19 @@ fn canonical_type_digest(kt: &KType, schema: &SigSchema) -> TypeDigest {
 }
 
 /// `Some(member name)` iff `kt` references one of `schema`'s own abstract members — an
-/// `AbstractType` sourced at the schema's `sig_id`, of either order (a first-order slot type, or
-/// the ctor position of a `ConstructorApply` / a bare higher-kinded slot). The shape
+/// nonce-free `AbstractType` sourced at the schema's `sig_id`, of either order (a first-order slot
+/// type, or the ctor position of a `ConstructorApply` / a bare higher-kinded slot). The shape
 /// `substitute_sig_members` rewrites. `None` for a self-sig (no `sig_id`, no abstract members), so
 /// a self-sig's member digests are its content unchanged — including any generative
-/// `AbstractType` mints, which correctly stay id-keyed.
+/// `AbstractType` mints, which carry a nonce and stay id-keyed.
 fn schema_self_ref<'k>(kt: &'k KType, schema: &SigSchema) -> Option<&'k str> {
     match kt {
-        KType::AbstractType { source, name, .. } if schema.sig_id == Some(*source) => Some(name),
+        KType::AbstractType {
+            source,
+            name,
+            nonce: None,
+            ..
+        } if schema.sig_id == Some(*source) => Some(name),
         _ => None,
     }
 }

@@ -5,12 +5,12 @@
 //! Two overloads share the keyword `TYPE`:
 //!
 //! - the bare form `TYPE Elt` binds a first-order abstract member as
-//!   [`KType::AbstractType`] `{ source: <decl_scope id>, name }` — no witness, open for a
-//!   client to share via a `WITH` constraint;
+//!   [`KType::AbstractType`] `{ source: <decl_scope id>, name, nonce: None }` — no witness, open
+//!   for a client to share via a `WITH` constraint;
 //! - the higher-kinded form `TYPE (Elem AS Wrap)` binds an abstract type *constructor* as an
 //!   [`KType::AbstractType`] carrying the declared parameter names, mirroring the application
 //!   surface with the concrete arguments replaced by the parameter names. Opaque ascription
-//!   re-mints it as a fresh per-call constructor carrying the view module's scope id.
+//!   re-mints it as a fresh per-call constructor nonced on the view module's scope id.
 //!
 //! Both bind through the same fused `register_user_type_delivered` + `resident_type_carrier`
 //! path the `LET` type route uses, so a `TYPE`-declared member rides the same
@@ -66,6 +66,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::A
         source: ctx.scope.id,
         name: name.clone(),
         param_names: Vec::new(),
+        nonce: None,
     };
     bind_abstract_member(ctx, name, kt)
 }
@@ -91,6 +92,7 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Act
         source: ctx.scope.id,
         name: member_name.clone(),
         param_names,
+        nonce: None,
     };
     bind_abstract_member(ctx, member_name, kt)
 }

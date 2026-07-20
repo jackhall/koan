@@ -60,6 +60,7 @@ fn hk_type_binds_abstract_constructor() {
             source,
             name,
             param_names,
+            ..
         } => {
             assert_eq!(name, "Wrap");
             assert_eq!(source, sig_id);
@@ -155,7 +156,8 @@ fn val_slot_after_type_records_abstract_member() {
 }
 
 /// End-to-end: a module ascribed to a SIG with a `TYPE Elt` member mints a per-call
-/// `AbstractType` keyed on the view module's own `ScopeId` for `Elt` in its `type_members` — a
+/// `AbstractType` for `Elt` in its `type_members`, nonced on the view module's own `ScopeId`. The
+/// `source` binder stays the declaring SIG's — generativity rides `nonce` alone — so the mint is a
 /// distinct identity from the SIG-decl-time member it was threaded from.
 #[test]
 fn opaque_ascription_mints_module_abstract_for_type_member() {
@@ -169,14 +171,55 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
     );
     let view = lookup_module(scope, "view");
     let elt = view.type_members.borrow().get("Elt").cloned();
+    let declared = member_type(scope, "Container", "Elt");
     match elt {
-        Some(KType::AbstractType { source, name, .. }) => {
+        Some(minted @ KType::AbstractType { .. }) => {
+            let KType::AbstractType {
+                source,
+                name,
+                nonce,
+                ..
+            } = &minted
+            else {
+                unreachable!()
+            };
             assert_eq!(name, "Elt");
-            assert_eq!(source, view.scope_id());
-            assert_ne!(source, sig_decl_scope_id(scope, "Container"));
+            assert_eq!(*source, sig_decl_scope_id(scope, "Container"));
+            assert_eq!(*nonce, Some(view.scope_id()));
+            assert_ne!(minted, declared, "the mint is not the declaration");
         }
         other => panic!("Elt must mint an abstract type keyed on the view module, got {other:?}"),
     }
+}
+
+/// Two `:|` applications of one SIG mint distinct opaque slot types: each ascription allocates a
+/// fresh child scope, so the per-application `nonce` differs even though `source` and name agree.
+#[test]
+fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(
+        scope,
+        "MODULE implementation = ((LET Elt = Number) (LET item = 0))\n\
+         SIG Container = ((TYPE Elt) (VAL item :Number))\n\
+         LET one = (implementation :| Container)\n\
+         LET two = (implementation :| Container)",
+    );
+    let elt = |view_name: &str| {
+        lookup_module(scope, view_name)
+            .type_members
+            .borrow()
+            .get("Elt")
+            .cloned()
+            .expect("each view mints Elt")
+    };
+    let (one, two) = (elt("one"), elt("two"));
+    assert!(matches!(one, KType::AbstractType { .. }));
+    assert_ne!(
+        one, two,
+        "each `:|` application mints its own opaque Elt identity",
+    );
+    assert_ne!(one.digest(), two.digest());
 }
 
 /// The `ScopeId` a SIG's decl-time abstract members are sourced at.

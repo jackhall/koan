@@ -70,11 +70,19 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
                     index: 0,
                 }
             }
-            _ => KType::AbstractType {
-                source: new_module.scope_id(),
+            // Generative by the same mechanism as the higher-kinded arm above: the per-application
+            // nonce (the minted module's `scope_id`) folds into the digest, so two `:|`
+            // applications never unify. `source` stays the declaring SIG's binder — the two
+            // meanings ride separate fields.
+            KType::AbstractType { source, .. } => KType::AbstractType {
+                source: *source,
                 name: name.clone(),
                 param_names: Vec::new(),
+                nonce: Some(new_module.scope_id()),
             },
+            // Unreachable: `is_abstract_sig_member` admits only `AbstractType` into
+            // `abstract_members`, so the two arms above are exhaustive over this map.
+            other => other.clone(),
         };
         minted.push((name.clone(), minted_kt));
     }

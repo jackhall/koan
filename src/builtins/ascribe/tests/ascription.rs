@@ -65,7 +65,7 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     let a_t = a.type_members.borrow().get("Carrier").cloned();
     let b_t = b.type_members.borrow().get("Carrier").cloned();
     // An opaque-ascription abstract-type member mints as
-    // `KType::AbstractType { source: <view module's scope id>, name }`.
+    // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
         &a_t,
         Some(KType::AbstractType { name, .. }) if name == "Carrier"

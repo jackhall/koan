@@ -14,7 +14,7 @@
 use super::kkind::KKind;
 use super::record::Record;
 use super::recursive_set::{same_nominal, RecursiveSet};
-use super::sig_schema::SigContent;
+use super::sig_schema::{name_sets_equal, SigContent};
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, TypeDigest};
 use crate::machine::core::ScopeId;
@@ -140,22 +140,26 @@ pub enum KType {
         digest: TypeDigest,
     },
     /// Abstract type member named by a SIG slot or minted by opaque ascription. `source` is the
-    /// root scope the member is named against: a SIG decl_scope's id for the decl-time member
-    /// (bound when a SIG-local `LET Carrier = ...` would otherwise collapse to the underlying
-    /// type), or the per-call ascription module's id for the mint `:|` produces (`Foo.Carrier`).
-    /// Owned data — the variant holds no region pointer. Identity keys on `(source, name)`, so two
-    /// opaque ascriptions of the same source module with the same abstract name compare equal, and
-    /// a per-call module mint stays distinct from the SIG-decl-time member it was threaded from.
+    /// binder the member is named against — the SIG decl_scope's id, bound when a SIG-local
+    /// `LET Carrier = ...` would otherwise collapse to the underlying type. Owned data — the
+    /// variant holds no region pointer.
+    ///
+    /// `nonce` is the generativity mechanism, the same one a generative
+    /// [`RecursiveSet`](super::recursive_set::RecursiveSet) carries: `None` for a SIG-body
+    /// declaration, and `Some(<per-application module scope id>)` for the mint `:|` produces
+    /// (`Foo.Carrier`), so two opaque ascriptions of one SIG never unify while a declaration
+    /// stays purely content-keyed.
     ///
     /// `param_names` carries the member's order: empty is a first-order proper type (`TYPE Elt`),
     /// non-empty is a type constructor taking those named parameters (`TYPE (Elem AS Wrap)`).
-    /// The names are interface — a satisfying family must declare the same set — but they are
-    /// derivable payload for identity: one source-and-name binds exactly once, so `PartialEq`,
-    /// `Hash` and [`digest_of`](super::type_digest::digest_of) all exclude them.
+    /// The names are interface — a satisfying family must declare the same set — and they are
+    /// identity: they feed `PartialEq`, `Hash` and
+    /// [`digest_of`](super::type_digest::digest_of) as a *set*, order-blind.
     AbstractType {
         source: ScopeId,
         name: String,
         param_names: Vec<String>,
+        nonce: Option<ScopeId>,
     },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
     /// to a `TypeConstructor`-kind member; `args` maps each of the constructor's parameter
@@ -373,9 +377,9 @@ fn render_param_record(params: &Record<KType>) -> String {
 /// Manual `PartialEq`. The eight composite variants compare by their stored content
 /// [`TypeDigest`] — one `u128` compare, no structural descent and no fallback: the
 /// digest is the truth. A member reference (`SetRef` / `RecursiveGroup`) goes through
-/// [`same_nominal`] (set-pointer fast path, else content digest + index). `AbstractType`, the
-/// remaining id-keyed variant, compares by its source [`ScopeId`] plus its name, so two
-/// `AbstractType` values minted from the same source-and-name compare equal.
+/// [`same_nominal`] (set-pointer fast path, else content digest + index). `AbstractType` compares
+/// by its whole content — generativity `nonce`, source [`ScopeId`], name, and parameter-name set —
+/// so two mints unify exactly when they agree on all four.
 impl PartialEq for KType {
     fn eq(&self, other: &KType) -> bool {
         use KType::*;
@@ -411,17 +415,19 @@ impl PartialEq for KType {
                 AbstractType {
                     source: s1,
                     name: n1,
-                    ..
+                    param_names: p1,
+                    nonce: g1,
                 },
                 AbstractType {
                     source: s2,
                     name: n2,
-                    ..
+                    param_names: p2,
+                    nonce: g2,
                 },
             ) => {
-                // `param_names` is excluded: one source-and-name binds one member, so the names
-                // are derivable payload, not identity.
-                s1 == s2 && n1 == n2
+                // Every field is identity, matching `digest_of`'s arm. `param_names` compares as a
+                // set: declaration order is presentation.
+                g1 == g2 && s1 == s2 && n1 == n2 && name_sets_equal(p1, p2)
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             (Unresolved(a), Unresolved(b)) => a == b,
@@ -434,8 +440,8 @@ impl Eq for KType {}
 
 /// Manual `Hash`, kept consistent with the hand-written `PartialEq` above
 /// (`a == b` ⟹ `hash(a) == hash(b)`). The eight composite variants hash their stored content
-/// digest (one `u128`); `AbstractType` hashes its stable source [`ScopeId`] plus its
-/// name. A member reference hashes its set's sealed digest (+ index), matching
+/// digest (one `u128`); `AbstractType` hashes its `nonce`, its source [`ScopeId`], its name and
+/// its sorted parameter names. A member reference hashes its set's sealed digest (+ index), matching
 /// [`same_nominal`]'s digest path — falling back to `Rc::as_ptr` only in the pre-seal window,
 /// where the pointer path is also what settles equality. A set's hash therefore changes at
 /// seal, which is sound because no `KType`-keyed map exists in the crate.
@@ -460,10 +466,20 @@ impl std::hash::Hash for KType {
             }
             RecursiveGroup(set) => hash_set_identity(set, state),
             SetLocal(i) => i.hash(state),
-            AbstractType { source, name, .. } => {
-                // `param_names` is excluded, matching `PartialEq`.
+            AbstractType {
+                source,
+                name,
+                param_names,
+                nonce,
+            } => {
+                // Every field, matching `PartialEq`; the parameter names hash sorted so the
+                // order-blind equality holds `a == b ⟹ hash(a) == hash(b)`.
+                nonce.hash(state);
                 source.hash(state);
                 name.hash(state);
+                let mut sorted: Vec<&str> = param_names.iter().map(String::as_str).collect();
+                sorted.sort_unstable();
+                sorted.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
             Unresolved(t) => t.hash(state),
