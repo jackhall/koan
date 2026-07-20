@@ -37,7 +37,7 @@ impl<'a> Scope<'a> {
         evidence: &StoredReach<'_>,
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name(types);
+        let kt = o.ktype();
         let sets: &[&FrameSet] = match &evidence.foreign {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
@@ -51,8 +51,9 @@ impl<'a> Scope<'a> {
             )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination, evidence reach, \
-                     or the destination scope's ambient coverage"
+                    "{}: borrows a region other than its seal's destination, evidence reach, \
+                     or the destination scope's ambient coverage",
+                    kt.name(types)
                 )))
             })
     }
@@ -74,7 +75,7 @@ impl<'a> Scope<'a> {
         evidence: &[StoredReach<'_>],
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name(types);
+        let kt = o.ktype();
         let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
         let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
@@ -85,8 +86,9 @@ impl<'a> Scope<'a> {
             )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region not covered by dest, the supplied evidence, or \
-                     the destination scope's ambient coverage"
+                    "{}: borrows a region not covered by dest, the supplied evidence, or \
+                     the destination scope's ambient coverage",
+                    kt.name(types)
                 )))
             })
     }
@@ -130,7 +132,7 @@ impl<'a> Scope<'a> {
         value: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let name = value.ktype().name(types);
+        let kt = value.ktype();
         let seen = Cell::new(false);
         let obj = self
             .brand()
@@ -141,7 +143,8 @@ impl<'a> Scope<'a> {
             )
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination"
+                    "{}: borrows a region other than its seal's destination",
+                    kt.name(types)
                 )))
             })?;
         Ok((

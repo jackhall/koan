@@ -136,12 +136,15 @@ impl<'a> RegionBrand<'a> {
         o: KObject<'_>,
         types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name(types);
+        // The audit consumes `o`, so its type is read before the call — but rendering that type is
+        // the diagnostic's cost alone, so it stays inside the failure closure.
+        let kt = o.ktype();
         self.0
             .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::dest_only())
             .ok_or_else(|| {
                 KError::new(KErrorKind::ShapeError(format!(
-                    "{name}: borrows a region other than its seal's destination"
+                    "{}: borrows a region other than its seal's destination",
+                    kt.name(types)
                 )))
             })
     }
