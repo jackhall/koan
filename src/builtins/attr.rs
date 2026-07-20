@@ -204,7 +204,7 @@ fn access_type_member<'a>(
                 .schema
                 .manifest_members
                 .get(field)
-                .or_else(|| content.schema.abstract_members.get(field).map(|(kt, _)| kt))
+                .or_else(|| content.schema.abstract_members.get(field))
                 .or_else(|| content.schema.value_slots.get(field));
             match member {
                 Some(kt) => Ok(StepCarried::born(scope.seal_fresh_ktype(kt.clone()))),

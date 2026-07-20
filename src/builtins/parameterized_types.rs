@@ -38,7 +38,7 @@ fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType) -> KType {
 /// resolves synchronously or defers via `defer_field_list_action_composed`.
 mod action_bodies {
     use super::build_carrier;
-    use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::constructor_param_names;
     use crate::machine::{require_ktype, Action, BodyCtx};
 
     use crate::machine::model::{KType, Record};
@@ -63,21 +63,12 @@ mod action_bodies {
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         let applied = crate::try_action!(require_ktype(ctx.args, "applied"));
         let ctor = crate::try_action!(require_ktype(ctx.args, "ctor"));
-        let param_names = match &ctor {
-            KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
-                match RecursiveSet::projected_schema(set, *index) {
-                    ProjectedSchema::TypeConstructor { param_names, .. } => param_names,
-                    _ => unreachable!(
-                        "TypeConstructor-kind member projects a TypeConstructor schema"
-                    ),
-                }
-            }
-            other => {
-                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "right-hand side of `AS` must be a type constructor, got `{}`",
-                    other.name(),
-                )))))
-            }
+        // A declared family and a SIG's abstract constructor slot both name their parameters.
+        let Some(param_names) = constructor_param_names(&ctor) else {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "right-hand side of `AS` must be a type constructor, got `{}`",
+                ctor.name(),
+            )))));
         };
         let [param_name] = &param_names[..] else {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(

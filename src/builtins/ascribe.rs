@@ -3,18 +3,19 @@
 //!
 //! Satisfaction is checked through the signature-subtyping relation: the source module's
 //! self-sig must be a subtype of the signature's schema (manifest members equal, abstract
-//! members at the right kind/arity, value slots covariantly compatible). Each view also seals
-//! its own self-sig at creation.
+//! members at the right kind and over the same parameter names, value slots covariantly
+//! compatible). Each view also seals its own self-sig at creation.
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, ProjectedSchema,
-    RecursiveSet, SigContent, SigSchema,
+    sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, RecursiveSet,
+    SigContent, SigSchema,
 };
 use crate::machine::model::{KObject, Module};
 use crate::machine::StepCarried;
-use crate::machine::{KError, KErrorKind, Scope, ScopeId};
+use crate::machine::{KError, KErrorKind, Scope};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{arg, kw, sig};
@@ -46,23 +47,13 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     new_scope.close();
 
     let new_module: &'a Module<'a> = region.alloc_module(Module::new(m.path.clone(), new_scope));
-    // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Type AS Wrap)`) mints a fresh
-    // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
-    // higher-kinded shape across the ascription barrier.
+    // Per-slot kind: a SIG-declared higher-kinded slot (`TYPE (Elem AS Wrap)`) mints a fresh
+    // `TypeConstructor` family over the slot's declared parameter names rather than the default
+    // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType)> = Vec::new();
-    for (name, (kt, _arity)) in &s.schema.abstract_members {
+    for (name, kt) in &s.schema.abstract_members {
         let minted_kt = match kt {
-            KType::SetRef { set, index }
-                if set.member(*index).kind == KKind::TypeConstructor
-                    && set.member(*index).scope_id == ScopeId::SENTINEL =>
-            {
-                let ProjectedSchema::TypeConstructor {
-                    schema,
-                    param_names,
-                } = RecursiveSet::projected_schema(set, *index)
-                else {
-                    unreachable!("TypeConstructor-kind member projects a TypeConstructor schema")
-                };
+            KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
                 let member = NominalMember::pending(
                     name.clone(),
                     new_module.scope_id(),
@@ -74,8 +65,8 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
                 fresh.fill_member(
                     0,
                     NominalSchema::TypeConstructor {
-                        schema,
-                        param_names,
+                        schema: HashMap::new(),
+                        param_names: param_names.clone(),
                     },
                 );
                 KType::SetRef {
@@ -86,6 +77,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
             _ => KType::AbstractType {
                 source: new_module.scope_id(),
                 name: name.clone(),
+                param_names: Vec::new(),
             },
         };
         minted.push((name.clone(), minted_kt));
@@ -247,7 +239,7 @@ fn resolve_module_and_signature<'a>(
 
 /// Verify a module satisfies `c` through the signature-subtyping relation: the module's
 /// self-sig must be a subtype of the signature's bare schema (every member present, manifest
-/// members equal, abstract members at the right kind/arity, value slots covariantly compatible
+/// members equal, abstract members at the right kind and parameter names, value slots covariantly compatible
 /// after abstract-member substitution). The decision (and its memoization) lives in
 /// [`Module::satisfies_sig_content`], the shared entry point dispatch also routes through; this
 /// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.

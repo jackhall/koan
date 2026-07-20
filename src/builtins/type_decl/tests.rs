@@ -2,7 +2,7 @@ use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_sile
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
-use crate::machine::model::{KKind, KType, NominalSchema, ProjectedSchema, RecursiveSet};
+use crate::machine::model::{constructor_param_names, KKind, KType, NominalSchema, RecursiveSet};
 use crate::machine::run_root_storage;
 use crate::machine::KoanRuntime;
 use crate::machine::{BindingIndex, ScopeId};
@@ -15,7 +15,7 @@ fn member_type<'a>(scope: &'a crate::machine::Scope<'a>, sig_name: &str, member:
         Some(KType::Signature { content, .. }) => content,
         other => panic!("{sig_name} must bind a Signature, got {other:?}"),
     };
-    if let Some((kt, _arity)) = content.schema.abstract_members.get(member) {
+    if let Some(kt) = content.schema.abstract_members.get(member) {
         return kt.clone();
     }
     content
@@ -37,7 +37,7 @@ fn bare_type_binds_abstract_member() {
         other => panic!("Container must bind a Signature, got {other:?}"),
     };
     match member_type(scope, "Container", "Elt") {
-        KType::AbstractType { source, name } => {
+        KType::AbstractType { source, name, .. } => {
             assert_eq!(name, "Elt");
             assert_eq!(source, sig_id);
         }
@@ -47,26 +47,43 @@ fn bare_type_binds_abstract_member() {
     }
 }
 
-/// `TYPE (Type AS Wrap)` binds a sentinel `TypeConstructor` `SetRef` named `Wrap` with
-/// `param_names == ["Type"]`.
+/// `TYPE (Type AS Wrap)` binds an `AbstractType` named `Wrap`, sourced at the SIG decl scope,
+/// carrying `param_names == ["Type"]`.
 #[test]
-fn hk_type_binds_sentinel_constructor() {
+fn hk_type_binds_abstract_constructor() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Monad = ((TYPE (Type AS Wrap)))");
+    let sig_id = sig_decl_scope_id(scope, "Monad");
     match member_type(scope, "Monad", "Wrap") {
-        KType::SetRef { set, index } if set.member(index).kind == KKind::TypeConstructor => {
-            assert_eq!(set.member(index).scope_id, ScopeId::SENTINEL);
-            assert_eq!(set.member(index).name, "Wrap");
-            match RecursiveSet::projected_schema(&set, index) {
-                ProjectedSchema::TypeConstructor { param_names, .. } => {
-                    assert_eq!(param_names, vec!["Type".to_string()]);
-                }
-                _ => panic!("expected a TypeConstructor schema"),
-            }
+        KType::AbstractType {
+            source,
+            name,
+            param_names,
+        } => {
+            assert_eq!(name, "Wrap");
+            assert_eq!(source, sig_id);
+            assert_eq!(param_names, vec!["Type".to_string()]);
         }
-        other => panic!("Wrap must be a sentinel TypeConstructor SetRef, got {other:?}"),
+        other => panic!("Wrap must be an abstract constructor member, got {other:?}"),
     }
+}
+
+/// An abstract constructor member classifies as `KKind::TypeConstructor`; its first-order
+/// sibling as `KKind::ProperType`.
+#[test]
+fn abstract_member_kind_tracks_parameters() {
+    let region = run_root_storage();
+    let scope = run_root_silent(&region);
+    run(scope, "SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
+    assert_eq!(
+        member_type(scope, "Monad", "Wrap").kind_of(),
+        KKind::TypeConstructor,
+    );
+    assert_eq!(
+        member_type(scope, "Monad", "Elt").kind_of(),
+        KKind::ProperType,
+    );
 }
 
 /// `TYPE Elt` outside a SIG body errors.
@@ -81,19 +98,35 @@ fn bare_type_outside_sig_errors() {
     );
 }
 
-/// `TYPE (Key Val AS Dict)` — two parameters before `AS` — hits the arity-above-1 error.
+/// `TYPE (Key Val AS Dict)` — two parameters before `AS` — declares an arity-2 constructor.
 #[test]
-fn hk_arity_above_one_errors() {
-    let expr = parse_one("TYPE (Key Val AS Dict)");
-    let inner = match &expr.parts.get(1).expect("TYPE decl part").value {
+fn hk_arity_above_one_declares() {
+    let inner = hk_decl_body("TYPE (Key Val AS Dict)");
+    let (param_names, member_name) =
+        super::parse_hk_decl(&inner).expect("arity above 1 must declare");
+    assert_eq!(param_names, vec!["Key".to_string(), "Val".to_string()]);
+    assert_eq!(member_name, "Dict");
+}
+
+/// A parameter name repeated in one declaration is a shape error — the names key the
+/// application record, so they must be distinct.
+#[test]
+fn hk_duplicate_parameter_name_errors() {
+    let inner = hk_decl_body("TYPE (Key Key AS Dict)");
+    let error = super::parse_hk_decl(&inner).expect_err("a duplicate parameter name must error");
+    assert!(
+        error.to_string().contains("duplicate parameter name `Key`"),
+        "expected the duplicate-name message, got {error}",
+    );
+}
+
+/// The parenthesized `(Param... AS Name)` group inside a parsed `TYPE` declaration.
+fn hk_decl_body(source: &str) -> crate::machine::model::KExpression<'static> {
+    let expr = parse_one(source);
+    match &expr.parts.get(1).expect("TYPE decl part").value {
         ExpressionPart::Expression(inner) => inner.as_ref().clone(),
         other => panic!("expected a parenthesized decl, got {other:?}"),
-    };
-    let error = super::parse_hk_decl(&inner).expect_err("arity above 1 must error");
-    assert!(
-        error.to_string().contains("arity above 1"),
-        "expected the arity message, got {error}",
-    );
+    }
 }
 
 /// A `VAL item :Elt` slot after `TYPE Elt` records the abstract member as its declared type. The
@@ -113,7 +146,7 @@ fn val_slot_after_type_records_abstract_member() {
         .get("item")
         .expect("item must live in Container's stored schema value_slots")
     {
-        KType::AbstractType { source, name } => {
+        KType::AbstractType { source, name, .. } => {
             assert_eq!(name, "Elt");
             assert_eq!(*source, sig_decl_scope_id(scope, "Container"));
         }
@@ -137,7 +170,7 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
     let view = lookup_module(scope, "view");
     let elt = view.type_members.borrow().get("Elt").cloned();
     match elt {
-        Some(KType::AbstractType { source, name }) => {
+        Some(KType::AbstractType { source, name, .. }) => {
             assert_eq!(name, "Elt");
             assert_eq!(source, view.scope_id());
             assert_ne!(source, sig_decl_scope_id(scope, "Container"));
@@ -154,21 +187,17 @@ fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> Scope
     }
 }
 
-/// Assert `kt` is a `TypeConstructor`-kind `SetRef` whose projected `param_names` equal
-/// `expected`; returns the member's name.
+/// Assert `kt` is a type constructor — a declared family (`SetRef`) or a SIG's abstract
+/// constructor slot (`AbstractType`) — whose parameter names equal `expected`; returns its name.
 fn assert_type_constructor(kt: &KType, expected: &[&str]) -> String {
+    let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+    let param_names = constructor_param_names(kt)
+        .unwrap_or_else(|| panic!("expected a type constructor, got {kt:?}"));
+    assert_eq!(param_names, want);
     match kt {
-        KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
-            match RecursiveSet::projected_schema(set, *index) {
-                ProjectedSchema::TypeConstructor { param_names, .. } => {
-                    let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
-                    assert_eq!(param_names, want);
-                }
-                _ => panic!("TypeConstructor-kind member must project a TypeConstructor schema"),
-            }
-            set.member(*index).name.clone()
-        }
-        other => panic!("expected a TypeConstructor SetRef, got {other:?}"),
+        KType::SetRef { set, index } => set.member(*index).name.clone(),
+        KType::AbstractType { name, .. } => name.clone(),
+        other => panic!("expected a type constructor, got {other:?}"),
     }
 }
 
@@ -253,7 +282,7 @@ fn monad_signature_smoke() {
         Some(KType::Signature { content, .. }) => content,
         other => panic!("Monad must bind a Signature KType, got {:?}", other),
     };
-    let (wrap_kt, _arity) = content
+    let wrap_kt = content
         .schema
         .abstract_members
         .get("Wrap")
@@ -291,7 +320,7 @@ fn monad_signature_smoke() {
 /// `(M.Wrap)` after opaque ascription resolves through the module's `type_members` to the
 /// per-call-minted constructor variant. The module supplies the higher-kinded abstract `Wrap`
 /// slot with a real arity-1 constructor (`LET Wrap = Wrapper`) — a proper type would fail the
-/// slot's kind/arity check.
+/// slot's kind and parameter-name check.
 #[test]
 fn module_attr_access_returns_type_constructor() {
     let region = run_root_storage();

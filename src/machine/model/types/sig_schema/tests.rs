@@ -10,24 +10,40 @@ use crate::machine::model::types::{NominalSchema, Record, RecursiveSet};
 
 // --- region-free builders -------------------------------------------------------------
 
-/// A `TypeConstructor`-kind `SetRef` of the given arity. `ScopeId::SENTINEL` marks a SIG's
-/// higher-kinded abstract slot; any other id marks a real constructor.
+/// The parameter names a constructor of the given arity declares, shared by the declared-family
+/// and abstract-slot builders so a sub binding and a sup slot agree by name.
+fn params(arity: usize) -> Vec<String> {
+    (0..arity).map(|i| format!("Param{i}")).collect()
+}
+
+/// A declared constructor family: a `TypeConstructor`-kind `SetRef` of the given arity.
 fn ctor(name: &str, arity: usize, scope_id: ScopeId) -> KType {
     let set = RecursiveSet::singleton(
         name.into(),
         scope_id,
         NominalSchema::TypeConstructor {
             schema: HashMap::new(),
-            param_names: (0..arity).map(|i| format!("Param{i}")).collect(),
+            param_names: params(arity),
         },
     );
     KType::SetRef { set, index: 0 }
 }
 
+/// A SIG's first-order abstract member.
 fn sig_abstract(id: ScopeId, name: &str) -> KType {
     KType::AbstractType {
         source: id,
         name: name.into(),
+        param_names: Vec::new(),
+    }
+}
+
+/// A SIG's higher-kinded abstract member, over `arity` parameters named as [`params`] names them.
+fn sig_abstract_ctor(id: ScopeId, name: &str, arity: usize) -> KType {
+    KType::AbstractType {
+        source: id,
+        name: name.into(),
+        param_names: params(arity),
     }
 }
 
@@ -40,7 +56,7 @@ fn fn_type(params: Vec<(&str, KType)>, ret: KType) -> KType {
 
 fn schema(
     sig_id: Option<ScopeId>,
-    abstract_members: Vec<(&str, KType, Option<usize>)>,
+    abstract_members: Vec<(&str, KType)>,
     manifest_members: Vec<(&str, KType)>,
     value_slots: Vec<(&str, KType)>,
 ) -> SigSchema {
@@ -48,7 +64,7 @@ fn schema(
         sig_id,
         abstract_members: abstract_members
             .into_iter()
-            .map(|(n, k, a)| (n.to_string(), (k, a)))
+            .map(|(n, k)| (n.to_string(), k))
             .collect(),
         manifest_members: manifest_members
             .into_iter()
@@ -98,7 +114,7 @@ fn width_extra_members_and_slots_still_subtype() {
 fn abstract_fo_satisfied_by_manifest_and_by_abstract() {
     let sup = schema(
         Some(SUP_ID),
-        vec![("Elt", sig_abstract(SUP_ID, "Elt"), None)],
+        vec![("Elt", sig_abstract(SUP_ID, "Elt"))],
         vec![],
         vec![],
     );
@@ -108,7 +124,7 @@ fn abstract_fo_satisfied_by_manifest_and_by_abstract() {
     // Sub supplies `Elt` as its own first-order abstract member.
     let sub_abstract = schema(
         Some(REAL_ID),
-        vec![("Elt", sig_abstract(REAL_ID, "Elt"), None)],
+        vec![("Elt", sig_abstract(REAL_ID, "Elt"))],
         vec![],
         vec![],
     );
@@ -119,7 +135,7 @@ fn abstract_fo_satisfied_by_manifest_and_by_abstract() {
 fn abstract_fo_refused_by_constructor() {
     let sup = schema(
         Some(SUP_ID),
-        vec![("Elt", sig_abstract(SUP_ID, "Elt"), None)],
+        vec![("Elt", sig_abstract(SUP_ID, "Elt"))],
         vec![],
         vec![],
     );
@@ -127,7 +143,7 @@ fn abstract_fo_refused_by_constructor() {
     assert!(matches!(
         check(&sub, &sup),
         Err(SigSubtypeFailure::KindMismatch {
-            expected_arity: None,
+            expected_params: None,
             ..
         })
     ));
@@ -137,7 +153,7 @@ fn abstract_fo_refused_by_constructor() {
 fn abstract_member_missing_fails() {
     let sup = schema(
         Some(SUP_ID),
-        vec![("Elt", sig_abstract(SUP_ID, "Elt"), None)],
+        vec![("Elt", sig_abstract(SUP_ID, "Elt"))],
         vec![],
         vec![],
     );
@@ -154,7 +170,7 @@ fn abstract_member_missing_fails() {
 fn abstract_hk_arity_one_satisfied_by_matching_constructor() {
     let sup = schema(
         Some(SUP_ID),
-        vec![("Wrap", ctor("Wrap", 1, ScopeId::SENTINEL), Some(1))],
+        vec![("Wrap", sig_abstract_ctor(SUP_ID, "Wrap", 1))],
         vec![],
         vec![],
     );
@@ -171,7 +187,7 @@ fn abstract_hk_arity_one_satisfied_by_matching_constructor() {
 fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
     let sup = schema(
         Some(SUP_ID),
-        vec![("Wrap", ctor("Wrap", 1, ScopeId::SENTINEL), Some(1))],
+        vec![("Wrap", sig_abstract_ctor(SUP_ID, "Wrap", 1))],
         vec![],
         vec![],
     );
@@ -180,7 +196,7 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
     assert!(matches!(
         check(&by_proper, &sup),
         Err(SigSubtypeFailure::KindMismatch {
-            expected_arity: Some(1),
+            expected_params: Some(_),
             ..
         })
     ));
@@ -194,21 +210,21 @@ fn abstract_hk_refused_by_proper_type_by_wrong_arity_and_by_abstract_fo() {
     assert!(matches!(
         check(&by_arity2, &sup),
         Err(SigSubtypeFailure::KindMismatch {
-            expected_arity: Some(1),
+            expected_params: Some(_),
             ..
         })
     ));
     // A first-order abstract member is not a constructor.
     let by_fo = schema(
         Some(REAL_ID),
-        vec![("Wrap", sig_abstract(REAL_ID, "Wrap"), None)],
+        vec![("Wrap", sig_abstract(REAL_ID, "Wrap"))],
         vec![],
         vec![],
     );
     assert!(matches!(
         check(&by_fo, &sup),
         Err(SigSubtypeFailure::KindMismatch {
-            expected_arity: Some(1),
+            expected_params: Some(_),
             ..
         })
     ));
@@ -242,7 +258,7 @@ fn manifest_requirement_refuses_abstract_sub_member() {
     let sup = schema(None, vec![], vec![("Tag", KType::Number)], vec![]);
     let sub = schema(
         Some(REAL_ID),
-        vec![("Tag", sig_abstract(REAL_ID, "Tag"), None)],
+        vec![("Tag", sig_abstract(REAL_ID, "Tag"))],
         vec![],
         vec![],
     );
@@ -310,7 +326,7 @@ fn value_slot_abstract_ref_substitutes_to_sub_manifest() {
     // Super: abstract `Type`, slot `compare :(FN (x :Type, y :Type) -> Number)`.
     let sup = schema(
         Some(SUP_ID),
-        vec![("Type", sig_abstract(SUP_ID, "Type"), None)],
+        vec![("Type", sig_abstract(SUP_ID, "Type"))],
         vec![],
         vec![(
             "compare",
@@ -345,7 +361,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
     // *nested* inside a container, so the walk must descend the `List` before comparing.
     let sup = schema(
         Some(SUP_ID),
-        vec![("Type", sig_abstract(SUP_ID, "Type"), None)],
+        vec![("Type", sig_abstract(SUP_ID, "Type"))],
         vec![],
         vec![("items", KType::list(Box::new(sig_abstract(SUP_ID, "Type"))))],
     );
@@ -483,12 +499,12 @@ fn substitute_top_level_and_nested() {
 }
 
 #[test]
-fn substitute_constructor_apply_sentinel_ctor_position() {
+fn substitute_constructor_apply_abstract_ctor_position() {
     let mut map: HashMap<String, KType> = HashMap::new();
     let real = ctor("MyWrap", 1, REAL_ID);
     map.insert("Wrap".into(), real.clone());
     let applied = KType::constructor_apply(
-        Box::new(ctor("Wrap", 1, ScopeId::SENTINEL)),
+        Box::new(sig_abstract_ctor(SUP_ID, "Wrap", 1)),
         Record::from_pairs([("Type".to_string(), KType::Number)]),
     );
     assert_eq!(
@@ -517,9 +533,45 @@ fn substitute_leaves_non_matching_sig_id_and_unknown_names() {
 }
 
 #[test]
-fn constructor_arity_probe() {
-    assert_eq!(constructor_arity(&ctor("W", 1, ScopeId::SENTINEL)), Some(1));
-    assert_eq!(constructor_arity(&ctor("W", 2, REAL_ID)), Some(2));
-    assert_eq!(constructor_arity(&KType::Number), None);
-    assert_eq!(constructor_arity(&sig_abstract(SUP_ID, "Elt")), None);
+fn constructor_param_names_probe() {
+    assert_eq!(
+        constructor_param_names(&sig_abstract_ctor(SUP_ID, "Wrap", 1)),
+        Some(params(1)),
+    );
+    assert_eq!(
+        constructor_param_names(&ctor("Wrap", 2, REAL_ID)),
+        Some(params(2)),
+    );
+    assert_eq!(constructor_param_names(&KType::Number), None);
+    assert_eq!(constructor_param_names(&sig_abstract(SUP_ID, "Elt")), None);
+}
+
+/// Parameter names are interface: a family declaring a differently-named parameter does not
+/// supply the slot, and the failure names the expected set.
+#[test]
+fn abstract_hk_refused_by_differently_named_parameter() {
+    let sup = schema(
+        Some(SUP_ID),
+        vec![("Wrap", sig_abstract_ctor(SUP_ID, "Wrap", 1))],
+        vec![],
+        vec![],
+    );
+    let other_names = {
+        let set = RecursiveSet::singleton(
+            "MyWrap".into(),
+            REAL_ID,
+            NominalSchema::TypeConstructor {
+                schema: HashMap::new(),
+                param_names: vec!["Item".to_string()],
+            },
+        );
+        KType::SetRef { set, index: 0 }
+    };
+    let sub = schema(None, vec![], vec![("Wrap", other_names)], vec![]);
+    let failure = check(&sub, &sup).expect_err("a differently-named parameter must fail");
+    assert!(
+        failure.render_fragment().contains("parameters {Param0}"),
+        "expected the failure to name the declared parameter set, got {}",
+        failure.render_fragment(),
+    );
 }

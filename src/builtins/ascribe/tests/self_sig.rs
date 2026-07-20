@@ -146,7 +146,7 @@ fn value_slot_type_mismatch_is_rejected() {
 fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
-    // A proper type cannot fill a `TYPE (Type AS Wrap)` arity-1 slot.
+    // A proper type cannot fill a `TYPE (Type AS Wrap)` constructor slot.
     run(
         scope,
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
@@ -155,8 +155,8 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
     let err = run_one_err(scope, parse_one("int_list :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("1 parameter")),
-        "expected a kind/arity error naming `Wrap`, got {err}",
+            if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("parameters {Type}")),
+        "expected a kind error naming `Wrap` and its parameter set, got {err}",
     );
 }
 

@@ -18,9 +18,9 @@ pub(crate) use ast::{
     classify_dispatch_shape, DispatchShape, ExpressionPart, KExpression, KLiteral, TypeIdentifier,
 };
 pub(crate) use types::{
-    elaborate_type_identifier, finalize_nominal_member, parse_typed_field_list_via_elaborator,
-    seal_recursive_refs, seal_union_refs, sig_subtype, substitute_sig_members, Elaborator,
-    FieldListOutcome, FieldNameKind, ResultFeed, SchemaSealResult, SealOutcome, SigContent,
-    SigSchema, TypeResolution,
+    constructor_param_names, elaborate_type_identifier, finalize_nominal_member,
+    parse_typed_field_list_via_elaborator, seal_recursive_refs, seal_union_refs, sig_subtype,
+    substitute_sig_members, Elaborator, FieldListOutcome, FieldNameKind, ResultFeed,
+    SchemaSealResult, SealOutcome, SigContent, SigSchema, TypeResolution,
 };
 pub(crate) use values::{CarriedFamily, Module, NamedPairs, WrappedPayload};

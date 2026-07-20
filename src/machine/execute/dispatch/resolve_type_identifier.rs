@@ -121,7 +121,7 @@ impl<'b> Iterator for KTypeUserRefs<'b> {
                     return Some((content.sig_id, content.path.as_str()));
                 }
                 KType::Signature { .. } => {}
-                KType::AbstractType { source, name } => {
+                KType::AbstractType { source, name, .. } => {
                     return Some((*source, name.as_str()));
                 }
                 KType::List { element, .. } => self.stack.push(element),

@@ -156,3 +156,38 @@ fn schema_embedding_external_setref_digests_deterministically() {
         "a set over an external SetRef is content-addressed"
     );
 }
+
+/// `AbstractType` identity is `(source, name)`: two members differing only in their declared
+/// parameter names — one first-order, one a constructor — digest and compare equal, so a
+/// first-order abstract type's digest is a pure function of the pair it always was.
+#[test]
+fn abstract_type_digest_excludes_param_names() {
+    let source = ScopeId::from_raw(0, 0xA11C);
+    let first_order = KType::AbstractType {
+        source,
+        name: "Wrap".into(),
+        param_names: Vec::new(),
+    };
+    let higher_kinded = KType::AbstractType {
+        source,
+        name: "Wrap".into(),
+        param_names: vec!["Elem".into()],
+    };
+    let renamed = KType::AbstractType {
+        source,
+        name: "Wrap".into(),
+        param_names: vec!["Item".into()],
+    };
+    assert_eq!(digest_of(&first_order), digest_of(&higher_kinded));
+    assert_eq!(digest_of(&higher_kinded), digest_of(&renamed));
+    assert_eq!(first_order, higher_kinded);
+    // A different name is a different member.
+    assert_ne!(
+        digest_of(&first_order),
+        digest_of(&KType::AbstractType {
+            source,
+            name: "Other".into(),
+            param_names: Vec::new(),
+        }),
+    );
+}

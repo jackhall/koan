@@ -42,13 +42,14 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
             KType::AbstractType {
                 source: module.scope_id(),
                 name: "Type".into(),
+                param_names: Vec::new(),
             },
         );
     }
     let bound = module.type_members.borrow().get("Type").cloned();
     assert!(matches!(
         &bound,
-        Some(KType::AbstractType { source, name })
+        Some(KType::AbstractType { source, name, .. })
             if *source == scope_id && name == "Type"
     ));
 }
@@ -70,13 +71,14 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
             KType::AbstractType {
                 source: module.scope_id(),
                 name: "Type".into(),
+                param_names: Vec::new(),
             },
         );
     }
     let bound = module.slot_type_tags.borrow().get("zero").cloned();
     assert!(matches!(
         &bound,
-        Some(KType::AbstractType { source, name })
+        Some(KType::AbstractType { source, name, .. })
             if *source == scope_id && name == "Type"
     ));
 }

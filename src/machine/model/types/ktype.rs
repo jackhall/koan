@@ -146,9 +146,16 @@ pub enum KType {
     /// Owned data — the variant holds no region pointer. Identity keys on `(source, name)`, so two
     /// opaque ascriptions of the same source module with the same abstract name compare equal, and
     /// a per-call module mint stays distinct from the SIG-decl-time member it was threaded from.
+    ///
+    /// `param_names` carries the member's order: empty is a first-order proper type (`TYPE Elt`),
+    /// non-empty is a type constructor taking those named parameters (`TYPE (Elem AS Wrap)`).
+    /// The names are interface — a satisfying family must declare the same set — but they are
+    /// derivable payload for identity: one source-and-name binds exactly once, so `PartialEq`,
+    /// `Hash` and [`digest_of`](super::type_digest::digest_of) all exclude them.
     AbstractType {
         source: ScopeId,
         name: String,
+        param_names: Vec<String>,
     },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a `SetRef`
     /// to a `TypeConstructor`-kind member; `args` maps each of the constructor's parameter
@@ -321,17 +328,22 @@ impl KType {
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
     /// `OfKind`. A signature is `Signature`, a user-declared nominal is its family (`Tagged` /
-    /// `NewType` / `TypeConstructor`, read off the set member it references), and every other
-    /// type is `Proper`. Never returns `KKind::AnyType` (a slot-only expectation). Applied to
-    /// the type a type value carries — or a runtime value's `ktype()` — to match it against an
-    /// `OfKind` slot.
+    /// `NewType` / `TypeConstructor`, read off the set member it references), an abstract member
+    /// is its declared order, and every other type is `Proper`. Never returns `KKind::AnyType` (a
+    /// slot-only expectation). Applied to the type a type value carries — or a runtime value's
+    /// `ktype()` — to match it against an `OfKind` slot.
     pub fn kind_of(&self) -> KKind {
         match self {
             KType::Signature { .. } => KKind::Signature,
             // A nominal carries its family on the set member; a `ConstructorApply` defers to
-            // its `ctor` (a `TypeConstructor`-kind `SetRef`).
+            // its `ctor` (a `TypeConstructor`-kind `SetRef` or an abstract constructor).
             KType::SetRef { set, index } => set.member(*index).kind,
             KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
+            // An abstract member with declared parameters is a constructor; without them it is a
+            // proper type.
+            KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
+                KKind::TypeConstructor
+            }
             // A union is a proper type value — it classifies against `OfKind(Proper)` slots
             // and never against a nominal-family kind.
             KType::Union { .. } => KKind::ProperType,
@@ -399,12 +411,18 @@ impl PartialEq for KType {
                 AbstractType {
                     source: s1,
                     name: n1,
+                    ..
                 },
                 AbstractType {
                     source: s2,
                     name: n2,
+                    ..
                 },
-            ) => s1 == s2 && n1 == n2,
+            ) => {
+                // `param_names` is excluded: one source-and-name binds one member, so the names
+                // are derivable payload, not identity.
+                s1 == s2 && n1 == n2
+            }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             (Unresolved(a), Unresolved(b)) => a == b,
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
@@ -442,7 +460,8 @@ impl std::hash::Hash for KType {
             }
             RecursiveGroup(set) => hash_set_identity(set, state),
             SetLocal(i) => i.hash(state),
-            AbstractType { source, name } => {
+            AbstractType { source, name, .. } => {
+                // `param_names` is excluded, matching `PartialEq`.
                 source.hash(state);
                 name.hash(state);
             }

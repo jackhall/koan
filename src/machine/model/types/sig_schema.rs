@@ -5,8 +5,8 @@
 //! a SIG declaration ([`SigSchema::project_decl`]) or a [`Module`]'s own body
 //! ([`SigSchema::raw_self_sig`], the self-sig). [`sig_subtype`] is the canonical relation:
 //! `Sub <: Super` iff `Sub` supplies every member `Super` names, with each manifest member
-//! equal, each abstract member present at the right kind/arity, and each value slot
-//! covariantly compatible after abstract-member substitution.
+//! equal, each abstract member present at the right kind and over the same parameter names, and
+//! each value slot covariantly compatible after abstract-member substitution.
 //!
 //! [`SigContent`] is the owned bundle a `KType::Signature` carries: a schema plus the
 //! diagnostic path and same-declaration `sig_id` a `KType::Signature` needs alongside it.
@@ -27,19 +27,19 @@ use crate::machine::model::values::Module;
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
 /// Members are split by *representation*, not by surface syntax: an abstract member carries no
-/// concrete witness (a [`KType::AbstractType`] or a sentinel type-constructor
-/// `SetRef`), a manifest member fixes a concrete type. A module self-sig never has abstract
-/// members — `TYPE` is a SIG-body-only construct.
+/// concrete witness (a [`KType::AbstractType`], of either order), a manifest member fixes a
+/// concrete type. A module self-sig never has abstract members — `TYPE` is a SIG-body-only
+/// construct.
 #[derive(Clone)]
 pub struct SigSchema {
     /// `Some(sig_id)` when derived from a SIG declaration — `Sig`-sourced abstract refs in
     /// value-slot types substitute against this id. `None` for a module self-sig (whose slot
     /// types name no SIG-decl-sourced refs).
     pub sig_id: Option<ScopeId>,
-    /// Abstract type members: name → (the bound representation as found in the decl scope —
-    /// the `AbstractType` or the sentinel constructor `SetRef` — and the constructor
-    /// arity: `None` = first-order, `Some(n)` = higher-kinded taking `n` parameters).
-    pub abstract_members: HashMap<String, (KType, Option<usize>)>,
+    /// Abstract type members: name → the bound `AbstractType` as found in the decl scope. Its
+    /// `param_names` carry the member's order (empty = first-order, non-empty = a constructor
+    /// over those parameters), read on demand through [`constructor_param_names`].
+    pub abstract_members: HashMap<String, KType>,
     /// Manifest type members: name → the fixed type.
     pub manifest_members: HashMap<String, KType>,
     /// Value slots: name → declared (SIG) or derived (self-sig) type.
@@ -57,7 +57,7 @@ impl SigSchema {
         let mut manifest_members = HashMap::new();
         for (name, kt) in decl_scope.bindings().iter_types() {
             if is_abstract_sig_member(kt) {
-                abstract_members.insert(name, (kt.clone(), constructor_arity(kt)));
+                abstract_members.insert(name, kt.clone());
             } else {
                 manifest_members.insert(name, kt.clone());
             }
@@ -172,14 +172,18 @@ impl SigContent {
     }
 }
 
-/// `Some(param count)` iff `kt` is a `TypeConstructor`-kind `SetRef` (sentinel or real); `None`
-/// for a first-order type. The arity is the length of the projected constructor's parameter
-/// list.
-pub(crate) fn constructor_arity(kt: &KType) -> Option<usize> {
+/// `Some(parameter names)` iff `kt` is a type constructor — a declared family (a
+/// `TypeConstructor`-kind `SetRef`, whose names come off the projected schema) or a SIG's abstract
+/// higher-kinded member (an [`KType::AbstractType`] carrying them directly). `None` for a
+/// first-order type. Arity is the returned list's length.
+pub fn constructor_param_names(kt: &KType) -> Option<Vec<String>> {
     match kt {
+        KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
+            Some(param_names.clone())
+        }
         KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             match RecursiveSet::projected_schema(set, *index) {
-                ProjectedSchema::TypeConstructor { param_names, .. } => Some(param_names.len()),
+                ProjectedSchema::TypeConstructor { param_names, .. } => Some(param_names),
                 ProjectedSchema::NewType(_) => None,
             }
         }
@@ -187,28 +191,33 @@ pub(crate) fn constructor_arity(kt: &KType) -> Option<usize> {
     }
 }
 
+/// Order-blind comparison of two constructor parameter lists: identity is the name set, and
+/// declaration order is presentation.
+fn name_sets_equal(left: &[String], right: &[String]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left: Vec<&str> = left.iter().map(String::as_str).collect();
+    let mut right: Vec<&str> = right.iter().map(String::as_str).collect();
+    left.sort_unstable();
+    right.sort_unstable();
+    left == right
+}
+
 /// Rewrite `kt`, replacing references to `sig_id`'s abstract members with the caller's bindings
 /// for them. Returns a plain value used only for comparison — never region-allocated.
 ///
-/// Two reference shapes substitute: a first-order `AbstractType { source: sig_id, name }`
-/// slot type, and a sentinel type-constructor `SetRef` naming a higher-kinded member (e.g. the
-/// ctor position of a `ConstructorApply`). Compound types recurse; every other variant is a
-/// clone.
+/// One reference shape substitutes: an `AbstractType { source: sig_id, name }` of either order —
+/// a first-order slot type, or a higher-kinded member in the ctor position of a
+/// `ConstructorApply`. Compound types recurse; every other variant is a clone.
 pub fn substitute_sig_members(
     kt: &KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
 ) -> KType {
     match kt {
-        KType::AbstractType { source, name } if *source == sig_id => {
+        KType::AbstractType { source, name, .. } if *source == sig_id => {
             members.get(name).cloned().unwrap_or_else(|| kt.clone())
-        }
-        KType::SetRef { set, index }
-            if set.member(*index).kind == KKind::TypeConstructor
-                && set.member(*index).scope_id == ScopeId::SENTINEL
-                && members.contains_key(&set.member(*index).name) =>
-        {
-            members[&set.member(*index).name].clone()
         }
         KType::List { element, .. } => {
             KType::list(Box::new(substitute_sig_members(element, sig_id, members)))
@@ -250,12 +259,12 @@ pub enum SigSubtypeFailure {
         got: String,
         expected: String,
     },
-    /// A type member's kind/arity disagreed. `expected_arity` is `Some(n)` when the super
-    /// signature declares a constructor taking `n` parameters, `None` when it declares a
-    /// first-order proper type; `got` is the rendered sub binding that failed to match.
+    /// A type member's kind or parameter names disagreed. `expected_params` is `Some(names)` when
+    /// the super signature declares a constructor over those parameters, `None` when it declares
+    /// a first-order proper type; `got` is the rendered sub binding that failed to match.
     KindMismatch {
         name: String,
-        expected_arity: Option<usize>,
+        expected_params: Option<Vec<String>>,
         got: String,
     },
     MissingValueSlot {
@@ -285,14 +294,19 @@ impl SigSubtypeFailure {
             ),
             SigSubtypeFailure::KindMismatch {
                 name,
-                expected_arity: Some(n),
+                expected_params: Some(params),
                 got,
-            } => format!(
-                "type member `{name}` must be a type constructor taking {n} parameter(s), got `{got}`"
-            ),
+            } => {
+                let mut sorted: Vec<&str> = params.iter().map(String::as_str).collect();
+                sorted.sort_unstable();
+                format!(
+                    "type member `{name}` must be a type constructor with parameters {{{}}}, got `{got}`",
+                    sorted.join(", ")
+                )
+            }
             SigSubtypeFailure::KindMismatch {
                 name,
-                expected_arity: None,
+                expected_params: None,
                 got,
             } => format!(
                 "type member `{name}` must be a proper type, got the type constructor `{got}`"
@@ -302,16 +316,16 @@ impl SigSubtypeFailure {
                 name,
                 got,
                 expected,
-            } => format!(
-                "member `{name}` has type `{got}` but the signature declares `{expected}`"
-            ),
+            } => {
+                format!("member `{name}` has type `{got}` but the signature declares `{expected}`")
+            }
         }
     }
 }
 
 /// The canonical signature-subtyping relation: `sub <: sup`. Ok iff `sub` supplies every member
 /// `sup` names (width — members `sup` does not name are ignored), with each manifest member
-/// equal, each abstract member present at the matching kind/arity, and each value slot
+/// equal, each abstract member present at the matching kind and parameter names, and each value slot
 /// covariantly compatible after substituting `sup`'s abstract members with `sub`'s bindings.
 ///
 /// The failure is boxed: `SigSubtypeFailure` carries `KType`s and is large relative to the
@@ -321,22 +335,31 @@ pub fn sig_subtype(
     sup: &SigSchema,
     types: &TypeRegistry,
 ) -> Result<(), Box<SigSubtypeFailure>> {
-    // 1. Abstract members: present at the matching kind/arity (manifest or abstract in `sub`).
-    for (name, (_, sup_arity)) in &sup.abstract_members {
-        let (sub_repr, sub_arity) = if let Some(kt) = sub.manifest_members.get(name) {
-            (kt.render(), constructor_arity(kt))
-        } else if let Some((kt, arity)) = sub.abstract_members.get(name) {
-            (kt.render(), *arity)
-        } else {
+    // 1. Abstract members: present at the matching kind, and — for a constructor — over the same
+    // parameter-name *set*. Parameter names are interface: a family declaring `{Item}` does not
+    // supply a slot declared over `{Elem}`. The sub binding may be manifest or abstract.
+    for (name, sup_repr) in &sup.abstract_members {
+        let sub_binding = sub
+            .manifest_members
+            .get(name)
+            .or_else(|| sub.abstract_members.get(name));
+        let Some(sub_binding) = sub_binding else {
             return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
                 name: name.clone(),
             }));
         };
-        if sub_arity != *sup_arity {
+        let sup_params = constructor_param_names(sup_repr);
+        let sub_params = constructor_param_names(sub_binding);
+        let agrees = match (&sup_params, &sub_params) {
+            (None, None) => true,
+            (Some(expected), Some(got)) => name_sets_equal(expected, got),
+            _ => false,
+        };
+        if !agrees {
             return Err(Box::new(SigSubtypeFailure::KindMismatch {
                 name: name.clone(),
-                expected_arity: *sup_arity,
-                got: sub_repr,
+                expected_params: sup_params,
+                got: sub_binding.render(),
             }));
         }
     }
@@ -354,7 +377,7 @@ pub fn sig_subtype(
             }
             None => {
                 // An abstract `sub` member supplies no witness for a manifest requirement.
-                if let Some((repr, _)) = sub.abstract_members.get(name) {
+                if let Some(repr) = sub.abstract_members.get(name) {
                     return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                         name: name.clone(),
                         got: repr.render(),
@@ -379,7 +402,7 @@ pub fn sig_subtype(
     for (name, kt) in &sub.manifest_members {
         sub_member_map.insert(name.clone(), kt.clone());
     }
-    for (name, (repr, _)) in &sub.abstract_members {
+    for (name, repr) in &sub.abstract_members {
         sub_member_map.insert(name.clone(), repr.clone());
     }
     for (name, declared) in &sup.value_slots {
@@ -405,22 +428,16 @@ pub fn sig_subtype(
 }
 
 /// True iff `declared` contains a reference to one of `sig_id`'s abstract members that
-/// [`substitute_sig_members`] would rewrite (a first-order `AbstractType`, or a sentinel
-/// type-constructor `SetRef`, whose name `members` binds). When false, substitution is the
-/// identity and a plain compare on `declared` is exact.
+/// [`substitute_sig_members`] would rewrite (an `AbstractType` sourced at `sig_id` whose name
+/// `members` binds). When false, substitution is the identity and a plain compare on `declared`
+/// is exact.
 fn references_sig_member(
     declared: &KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
 ) -> bool {
     match declared {
-        KType::AbstractType { source, name } => *source == sig_id && members.contains_key(name),
-        KType::SetRef { set, index } => {
-            let m = set.member(*index);
-            m.kind == KKind::TypeConstructor
-                && m.scope_id == ScopeId::SENTINEL
-                && members.contains_key(&m.name)
-        }
+        KType::AbstractType { source, name, .. } => *source == sig_id && members.contains_key(name),
         KType::List { element, .. } => references_sig_member(element, sig_id, members),
         KType::Dict { key, value, .. } => {
             references_sig_member(key, sig_id, members)
@@ -456,15 +473,7 @@ fn substitution_binding<'m>(
     members: &'m HashMap<String, KType>,
 ) -> Option<&'m KType> {
     match declared {
-        KType::AbstractType { source, name } if *source == sig_id => members.get(name),
-        KType::SetRef { set, index } => {
-            let m = set.member(*index);
-            if m.kind == KKind::TypeConstructor && m.scope_id == ScopeId::SENTINEL {
-                members.get(&m.name)
-            } else {
-                None
-            }
-        }
+        KType::AbstractType { source, name, .. } if *source == sig_id => members.get(name),
         _ => None,
     }
 }
@@ -738,20 +747,12 @@ fn slot_types_equal(
 }
 
 /// Classify a SIG type-table entry by its *representation*: an abstract member carries no
-/// concrete witness. Two abstract shapes — a [`KType::AbstractType`] (the first-order `TYPE Elt`
-/// slot, sourced at the SIG decl scope) and a sentinel [`KKind::TypeConstructor`] `SetRef` (the
-/// higher-kinded `TYPE (Type AS Wrap)` slot, `ScopeId::SENTINEL` marking it "awaiting per-call
-/// mint"). Everything else — a manifest `LET Tag = Number` binding a concrete type, a real
-/// minted constructor — is manifest.
+/// concrete witness, which is exactly a [`KType::AbstractType`] — the first-order `TYPE Elt` slot
+/// and the higher-kinded `TYPE (Elem AS Wrap)` slot alike, both sourced at the SIG decl scope.
+/// Everything else — a manifest `LET Tag = Number` binding a concrete type, a minted constructor
+/// family — is manifest.
 pub(crate) fn is_abstract_sig_member(kt: &KType) -> bool {
-    match kt {
-        KType::AbstractType { .. } => true,
-        KType::SetRef { set, index } => {
-            let member = set.member(*index);
-            member.kind == KKind::TypeConstructor && member.scope_id == ScopeId::SENTINEL
-        }
-        _ => false,
-    }
+    matches!(kt, KType::AbstractType { .. })
 }
 
 #[cfg(test)]

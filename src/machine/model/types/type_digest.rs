@@ -178,7 +178,8 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
             feed_set_identity(&mut h, set);
             h.finish()
         }
-        KType::AbstractType { source, name } => DigestHasher::new(TAG_ABSTRACT_TYPE)
+        // `param_names` is excluded, matching `PartialEq`: one source-and-name binds one member.
+        KType::AbstractType { source, name, .. } => DigestHasher::new(TAG_ABSTRACT_TYPE)
             .scope_id(*source)
             .string(name)
             .finish(),
@@ -256,7 +257,7 @@ pub(crate) fn signature_digest(
 }
 
 /// The content digest of a normalized signature schema — a pure function of its members:
-/// abstract members `(name, arity)`, manifest members `(name, type)`, and value slots
+/// abstract members `(name, parameter names)`, manifest members `(name, type)`, and value slots
 /// `(name, type)`, each group fed in name-sorted order (the maps are unordered). References to
 /// the schema's *own* abstract members are canonicalized to a `(TAG_SIG_SELF_REF, name)` leaf, so
 /// two textually identical declarations — whose members are minted against different scope ids —
@@ -267,21 +268,32 @@ pub(crate) fn signature_digest(
 pub(crate) fn schema_content_digest(schema: &SigSchema) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIG_CONTENT);
 
-    let mut abstracts: Vec<(&str, Option<usize>)> = schema
+    // Each abstract member feeds its name, then its order: `0x00` for a first-order proper type,
+    // `0x01` + parameter count + the parameter names for a constructor. The names feed sorted, so
+    // the encoding is order-blind — parameter identity is the name set.
+    let mut abstracts: Vec<(&str, &[String])> = schema
         .abstract_members
         .iter()
-        .map(|(name, (_, arity))| (name.as_str(), *arity))
+        .map(|(name, kt)| {
+            let params: &[String] = match kt {
+                KType::AbstractType { param_names, .. } => param_names,
+                _ => &[],
+            };
+            (name.as_str(), params)
+        })
         .collect();
     abstracts.sort_by(|a, b| a.0.cmp(b.0));
     h.count(abstracts.len());
-    for (name, arity) in abstracts {
+    for (name, param_names) in abstracts {
         h.string(name);
-        match arity {
-            Some(n) => {
-                h.byte(1).count(n);
-            }
-            None => {
-                h.byte(0);
+        if param_names.is_empty() {
+            h.byte(0);
+        } else {
+            h.byte(1).count(param_names.len());
+            let mut sorted: Vec<&str> = param_names.iter().map(String::as_str).collect();
+            sorted.sort_unstable();
+            for param in sorted {
+                h.string(param);
             }
         }
     }
@@ -373,24 +385,15 @@ fn canonical_type_digest(kt: &KType, schema: &SigSchema) -> TypeDigest {
     }
 }
 
-/// `Some(member name)` iff `kt` references one of `schema`'s own abstract members — a first-order
-/// `AbstractType` sourced at the schema's `sig_id`, or a sentinel higher-kinded `TypeConstructor`
-/// `SetRef` naming one of the schema's abstract members (the ctor position of a `ConstructorApply`
-/// or a bare higher-kinded slot). The two shapes `substitute_sig_members` rewrites. `None` for a
-/// self-sig (no `sig_id`, no abstract members), so a self-sig's member digests are its content
-/// unchanged — including any generative `AbstractType` mints, which correctly stay id-keyed.
+/// `Some(member name)` iff `kt` references one of `schema`'s own abstract members — an
+/// `AbstractType` sourced at the schema's `sig_id`, of either order (a first-order slot type, or
+/// the ctor position of a `ConstructorApply` / a bare higher-kinded slot). The shape
+/// `substitute_sig_members` rewrites. `None` for a self-sig (no `sig_id`, no abstract members), so
+/// a self-sig's member digests are its content unchanged — including any generative
+/// `AbstractType` mints, which correctly stay id-keyed.
 fn schema_self_ref<'k>(kt: &'k KType, schema: &SigSchema) -> Option<&'k str> {
     match kt {
-        KType::AbstractType { source, name } if schema.sig_id == Some(*source) => Some(name),
-        KType::SetRef { set, index }
-            if set.member(*index).kind == KKind::TypeConstructor
-                && set.member(*index).scope_id == ScopeId::SENTINEL
-                && schema
-                    .abstract_members
-                    .contains_key(&set.member(*index).name) =>
-        {
-            Some(&set.member(*index).name)
-        }
+        KType::AbstractType { source, name, .. } if schema.sig_id == Some(*source) => Some(name),
         _ => None,
     }
 }

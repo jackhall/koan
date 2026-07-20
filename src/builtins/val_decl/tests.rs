@@ -41,7 +41,7 @@ fn val_resolves_sig_local_type_shadow() {
         .get("zero")
         .expect("zero must live in WithZero's stored schema value_slots");
     match zero {
-        KType::AbstractType { source, name } => {
+        KType::AbstractType { source, name, .. } => {
             assert_eq!(
                 name, "Carrier",
                 "VAL slot must record that it names the SIG-local abstract `Carrier`",
@@ -193,14 +193,14 @@ fn val_with_abstract_type_member_declaration() {
         _ => panic!("WithZero must bind a Signature KType"),
     };
     let decl_id = content.sig_id;
-    let (type_kt, _arity) = content
+    let type_kt = content
         .schema
         .abstract_members
         .get("Carrier")
         .expect("Carrier must live in WithZero's stored schema abstract_members");
     assert!(matches!(
         type_kt,
-        KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
+        KType::AbstractType { source, name, .. } if *source == decl_id && name == "Carrier"
     ));
     let zero = content
         .schema
@@ -209,7 +209,7 @@ fn val_with_abstract_type_member_declaration() {
         .expect("zero must live in WithZero's stored schema value_slots");
     assert!(matches!(
         zero,
-        KType::AbstractType { source, name } if *source == decl_id && name == "Carrier"
+        KType::AbstractType { source, name, .. } if *source == decl_id && name == "Carrier"
     ));
     assert_eq!(*type_kt, *zero, "both name the same abstract identity");
 }

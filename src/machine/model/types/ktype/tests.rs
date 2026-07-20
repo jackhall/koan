@@ -372,6 +372,7 @@ fn abstract_type_identity_keys_on_source_and_name() {
     let mint = |m: &Module<'_>, name: &str| KType::AbstractType {
         source: m.scope_id(),
         name: name.into(),
+        param_names: Vec::new(),
     };
 
     assert_eq!(mint(first, "Carrier"), mint(first, "Carrier"));

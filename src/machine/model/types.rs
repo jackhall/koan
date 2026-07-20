@@ -31,7 +31,9 @@ pub use resolver::{
     elaborate_type_identifier, finalize_nominal_member, Elaborator, SchemaSealResult, SealOutcome,
     TypeResolution,
 };
-pub use sig_schema::{sig_subtype, substitute_sig_members, SigContent, SigSchema};
+pub use sig_schema::{
+    constructor_param_names, sig_subtype, substitute_sig_members, SigContent, SigSchema,
+};
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use signature::{

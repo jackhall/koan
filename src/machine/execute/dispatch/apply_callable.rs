@@ -68,7 +68,8 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 /// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
 /// value expression, so `(Point {x = 1, y = 2})` builds a record and `(Point r)` /
 /// `(Distance 3.0)` wrap a value. Tagged / `TypeConstructor` take a positional `(value)` body
-/// (named is a loud `DispatchFailed`); a non-constructible identity is a `TypeMismatch`.
+/// (named is a loud `DispatchFailed`). A SIG's abstract constructor slot is a witness-less kind
+/// and rejects construction by name; any other non-constructible identity is a `TypeMismatch`.
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
     identity: &'step KType,
@@ -78,6 +79,19 @@ fn apply_constructor<'step>(
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
     if let KType::Union { members, .. } = identity {
         return apply_union_construct(ctx, members, expr);
+    }
+    // A SIG's abstract constructor slot names a kind; it has no representation to build values
+    // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
+    if let KType::AbstractType {
+        name, param_names, ..
+    } = identity
+    {
+        if !param_names.is_empty() {
+            return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{name}` is an abstract constructor slot declared by TYPE; only a \
+                 NEWTYPE-declared constructor can construct values"
+            )))));
+        }
     }
     let KType::SetRef { set, index } = identity else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
@@ -99,9 +113,8 @@ fn apply_constructor<'step>(
             _ => constructors::dispatch_construct_newtype(identity, expr.parts[1..].to_vec()),
         },
         // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
-        // empty schema is a user-declared constructor family (`NEWTYPE (Type AS Wrapper)`); it
-        // constructs an identity-wrapper `Wrapped` value, unless it is the `TYPE`-declared
-        // abstract slot (sentinel scope id), which names a kind but constructs nothing.
+        // empty schema is a declared constructor family (`NEWTYPE (Elem AS Wrapper)`); it
+        // constructs an identity-wrapper `Wrapped` value.
         ProjectedSchema::TypeConstructor { schema, .. } if !schema.is_empty() => {
             match extract_call_body(expr) {
                 Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
@@ -114,22 +127,13 @@ fn apply_constructor<'step>(
                 Err(e) => Outcome::Done(Err(e)),
             }
         }
-        ProjectedSchema::TypeConstructor { .. } => {
-            if set.member(*index).scope_id == crate::machine::ScopeId::SENTINEL {
-                return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "`{}` is an abstract constructor slot declared by TYPE; only a \
-                     NEWTYPE-declared constructor can construct values",
-                    set.member(*index).name
-                )))));
+        ProjectedSchema::TypeConstructor { .. } => match extract_call_body(expr) {
+            Ok(CallBody::Positional(parts)) => {
+                constructors::dispatch_construct_apply(Rc::clone(set), *index, parts)
             }
-            match extract_call_body(expr) {
-                Ok(CallBody::Positional(parts)) => {
-                    constructors::dispatch_construct_apply(Rc::clone(set), *index, parts)
-                }
-                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => Outcome::Done(Err(e)),
-            }
-        }
+            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+            Err(e) => Outcome::Done(Err(e)),
+        },
     }
 }
 
