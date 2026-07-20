@@ -10,25 +10,36 @@
 //! A [`ResolvedCallable`] has exactly two execution arms:
 //!
 //! - `Constructor(&KType)` — build a value from a type schema (struct / tagged /
-//!   newtype / `TypeConstructor` identity). Reuses the `constructors` module
-//!   (`CtorKind` + `launch`).
+//!   newtype / `TypeConstructor` identity), reusing the `constructors` module
+//!   (`CtorKind` + `launch`); or, when the head is a type constructor and the body is a
+//!   record literal, apply that constructor to named type arguments
+//!   (`:(Result {Ok = Number, Error = MyError})`) and yield the resulting
+//!   `KType::ConstructorApply` as a type value.
 //! - `Function(&KFunction)` — call a `KFunction` by name. Every function rides this
 //!   arm, whatever it returns.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::KFunction;
+use crate::machine::core::{DepPlacement, KFunction};
+use crate::machine::model::{constructor_param_names, Carried, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
 use crate::machine::{KError, KErrorKind};
+use crate::scheduler::Deps;
 use crate::source::Spanned;
 
+use super::super::outcome::dep_error_frame;
+use super::super::TerminalDepFinish;
 use super::ctx::SchedulerView;
-use super::Outcome;
 use super::{
     body_shape_err, constructors, extract_call_body, stage_all_eager_parts, CallBody, NAMED_ONLY,
     POSITIONAL_ONLY,
 };
+use super::{Await, DepRequest, Outcome};
+
+#[cfg(test)]
+mod tests;
 
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
@@ -64,7 +75,9 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
     }
 }
 
-/// Construct from a `KType::SetRef` member identity. A newtype bypasses the
+/// Construct from a `KType::SetRef` member identity, or apply a type constructor to named type
+/// arguments. A record-literal body on a constructor-kind head (`Wrap {Elem = Number}`) is *type
+/// application*, yielding a `ConstructorApply` type value. Otherwise a newtype bypasses the
 /// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
 /// value expression, so `(Point {x = 1, y = 2})` builds a record and `(Point r)` /
 /// `(Distance 3.0)` wrap a value. Tagged / `TypeConstructor` take a positional `(value)` body
@@ -79,6 +92,21 @@ fn apply_constructor<'step>(
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
     if let KType::Union { members, .. } = identity {
         return apply_union_construct(ctx, members, expr);
+    }
+    // Named type application: a type-constructor head — a declared family (`SetRef`, empty or
+    // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
+    // each of the family's parameters to a type. It precedes every construction arm: the two
+    // surfaces are disjoint, and the record body is a type-argument list here, not a value.
+    if let Some(param_names) = constructor_param_names(identity) {
+        if let Some(
+            [Spanned {
+                value: ExpressionPart::RecordLiteral(fields),
+                ..
+            }],
+        ) = expr.parts.get(1..)
+        {
+            return apply_named_type_args(ctx, identity, param_names, fields.clone());
+        }
     }
     // A SIG's abstract constructor slot names a kind; it has no representation to build values
     // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
@@ -127,6 +155,16 @@ fn apply_constructor<'step>(
                 Err(e) => Outcome::Done(Err(e)),
             }
         }
+        // An identity wrapper wraps one value and infers one type argument from it, so value
+        // construction is an arity-1 surface; a wider family applies by name only.
+        ProjectedSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
+            Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`{}` takes {} type parameters; constructing values of a multi-parameter \
+                 family is not yet supported",
+                set.member(*index).name,
+                param_names.len(),
+            )))))
+        }
         ProjectedSchema::TypeConstructor { .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
                 constructors::dispatch_construct_apply(Rc::clone(set), *index, parts)
@@ -135,6 +173,119 @@ fn apply_constructor<'step>(
             Err(e) => Outcome::Done(Err(e)),
         },
     }
+}
+
+/// Apply a type constructor to a record of named type arguments — `:(Result {Ok = Number, Error =
+/// MyError})`. Each field value rides its own sub-Dispatch (the same `DepRequest::Dispatch` shape
+/// construction launches), so a compound argument like `{Elem = (LIST OF Number)}` elaborates
+/// through the ordinary type-expression lanes and the slot parks until it lands. The finish checks
+/// the supplied keys against `param_names` and builds the args record in the constructor's declared
+/// order.
+fn apply_named_type_args<'step>(
+    ctx: &SchedulerView<'step, '_>,
+    identity: &'step KType,
+    param_names: Vec<String>,
+    fields: Vec<(String, ExpressionPart<'step>)>,
+) -> Outcome<'step> {
+    // An empty argument record supplies no dep to park on, so it decides here — against the same
+    // key check every other arity runs.
+    if fields.is_empty() {
+        return Outcome::Done(
+            build_apply_args(identity, &param_names, Vec::new()).map(|args| {
+                ctx.step_ctx()
+                    .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args))
+            }),
+        );
+    }
+    let (names, value_parts): (Vec<String>, Vec<ExpressionPart<'step>>) =
+        fields.into_iter().unzip();
+    let deps: Vec<DepRequest<'step>> = value_parts
+        .into_iter()
+        .map(|part| DepRequest::Dispatch {
+            expr: KExpression::new(vec![Spanned::bare(part)]),
+            placement: DepPlacement::OwnScope,
+        })
+        .collect();
+    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
+        // Each argument is a type value cloned out as owned data, so the applied type embeds no
+        // borrow of a producer's region and needs no carrier fold.
+        let supplied: Result<Vec<(String, KType)>, KError> = terminals
+            .owned_slice()
+            .iter()
+            .zip(&names)
+            .map(|(terminal, name)| match terminal.value {
+                Carried::Type(kt) => Ok((name.clone(), kt.clone())),
+                Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: name.clone(),
+                    expected: "Type".to_string(),
+                    got: object.ktype().name(),
+                })),
+            })
+            .collect();
+        Outcome::Done(supplied.and_then(|supplied| {
+            let args = build_apply_args(identity, &param_names, supplied)?;
+            Ok(view
+                .step_ctx()
+                .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args)))
+        }))
+    });
+    Await::on(Deps::from_owned(deps))
+        .error_frame(dep_error_frame())
+        .finish_terminal(finish)
+}
+
+/// Key-check the supplied type arguments against the constructor's declared parameters and
+/// re-order them into that declaration order. The supplied key set must equal the parameter set;
+/// a mismatch names the missing and the unknown keys. (`Record` identity is order-blind, so the
+/// declared order is presentation — it is what `KType::name()` renders and re-parses.)
+fn build_apply_args(
+    identity: &KType,
+    param_names: &[String],
+    supplied: Vec<(String, KType)>,
+) -> Result<Record<KType>, KError> {
+    let mut supplied: HashMap<String, KType> = supplied.into_iter().collect();
+    let missing: Vec<&str> = param_names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !supplied.contains_key(*name))
+        .collect();
+    let mut unknown: Vec<&str> = supplied
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !param_names.iter().any(|p| p == name))
+        .collect();
+    unknown.sort_unstable();
+    if !missing.is_empty() || !unknown.is_empty() {
+        let mut problems = Vec::new();
+        if !missing.is_empty() {
+            problems.push(format!("missing {}", quoted_list(&missing)));
+        }
+        if !unknown.is_empty() {
+            problems.push(format!("unknown {}", quoted_list(&unknown)));
+        }
+        let declared: Vec<&str> = param_names.iter().map(String::as_str).collect();
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "`{}` takes type parameters {} — {}",
+            identity.name(),
+            quoted_list(&declared),
+            problems.join(", "),
+        ))));
+    }
+    Ok(Record::from_pairs(param_names.iter().map(|name| {
+        let arg = supplied
+            .remove(name)
+            .expect("every declared parameter is supplied — the key check passed");
+        (name.clone(), arg)
+    })))
+}
+
+/// Backtick-quote and comma-join names for a parameter-mismatch diagnostic.
+fn quoted_list(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Construct from an anonymous union of per-variant newtype `SetRef`s (a user `UNION`). `Maybe Some`

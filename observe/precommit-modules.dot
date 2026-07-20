@@ -521,11 +521,15 @@ digraph {
     "koan::machine::execute::dispatch" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::apply_callable" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::apply_callable" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::constructors" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan" [label="uses", style="dashed"];

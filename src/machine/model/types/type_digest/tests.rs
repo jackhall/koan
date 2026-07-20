@@ -191,3 +191,75 @@ fn abstract_type_digest_excludes_param_names() {
         }),
     );
 }
+
+/// A SIG's abstract-member encoding feeds the member's parameter names, so two signatures
+/// differing only in what a higher-kinded member calls its parameter are distinct interfaces —
+/// the digest-side counterpart of `sig_subtype`'s name-agreement check. Order within one
+/// member's list is presentation: the names feed sorted, so a reordered declaration is the same
+/// interface.
+#[test]
+fn schema_digest_binds_abstract_member_param_names() {
+    use crate::machine::model::types::SigSchema;
+    let sig_id = ScopeId::from_raw(0, 0x51C0);
+    let schema = |param_names: Vec<&str>| SigSchema {
+        sig_id: Some(sig_id),
+        abstract_members: [(
+            "Wrap".to_string(),
+            KType::AbstractType {
+                source: sig_id,
+                name: "Wrap".into(),
+                param_names: param_names.into_iter().map(str::to_string).collect(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        manifest_members: HashMap::new(),
+        value_slots: HashMap::new(),
+    };
+    assert_ne!(
+        schema_content_digest(&schema(vec!["Elem"])),
+        schema_content_digest(&schema(vec!["Item"])),
+        "a renamed parameter is a different interface",
+    );
+    assert_ne!(
+        schema_content_digest(&schema(vec!["Elem"])),
+        schema_content_digest(&schema(vec![])),
+        "a first-order member and a constructor member are different interfaces",
+    );
+    assert_ne!(
+        schema_content_digest(&schema(vec!["Elem"])),
+        schema_content_digest(&schema(vec!["Elem", "Item"])),
+        "arity is part of the interface",
+    );
+    assert_eq!(
+        schema_content_digest(&schema(vec!["Elem", "Item"])),
+        schema_content_digest(&schema(vec!["Item", "Elem"])),
+        "a member's parameter identity is its name set, not its declaration order",
+    );
+}
+
+/// `ConstructorApply` identity is `(ctor, args)` with `Record`'s order-blind semantics: the same
+/// name-to-type map is one application however the args record was built.
+#[test]
+fn constructor_apply_digest_is_order_blind() {
+    let ctor = KType::AbstractType {
+        source: ScopeId::from_raw(0, 0xC70A),
+        name: "Both".into(),
+        param_names: vec!["Ok".into(), "Error".into()],
+    };
+    let apply = |pairs: Vec<(&str, KType)>| {
+        KType::constructor_apply(
+            Box::new(ctor.clone()),
+            Record::from_pairs(pairs.into_iter().map(|(n, t)| (n.to_string(), t))),
+        )
+    };
+    let declared = apply(vec![("Ok", KType::Number), ("Error", KType::Str)]);
+    let reversed = apply(vec![("Error", KType::Str), ("Ok", KType::Number)]);
+    assert_eq!(digest_of(&declared), digest_of(&reversed));
+    assert_eq!(declared, reversed);
+    // The name-to-type binding still holds: swapping which parameter takes which type differs.
+    assert_ne!(
+        digest_of(&declared),
+        digest_of(&apply(vec![("Ok", KType::Str), ("Error", KType::Number)])),
+    );
+}
