@@ -17,23 +17,23 @@ use super::{arg, kw, sig};
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
     // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
-    // the `Result` `SetRef` resolves here. This is a documentary contract: the catch finish
+    // the `Result` member resolves here. This is a documentary contract: the catch finish
     // produces an `Outcome::Done(Value)` (never a `ReturnContract`), so the declared return is not
     // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
     let result_ctor = match scope.resolve_type("Result") {
-        Some(kt @ KType::SetRef { .. }) => kt.clone(),
-        _ => panic!("Result must be registered before CATCH"),
+        Some(member) => *member,
+        None => panic!("Result must be registered before CATCH"),
     };
-    let return_type = KType::constructor_apply(
-        Box::new(result_ctor),
+    let return_type = types.constructor_apply(
+        result_ctor,
         Record::from_pairs([
-            ("Ok".to_string(), KType::Any),
-            ("Error".to_string(), kerror_ktype()),
+            ("Ok".to_string(), KType::ANY),
+            ("Error".to_string(), kerror_ktype(types)),
         ]),
     );
     let signature = sig(
         return_type,
-        vec![kw("CATCH"), arg("expr", KType::KExpression)],
+        vec![kw("CATCH"), arg("expr", KType::KEXPRESSION)],
     );
     crate::builtins::register_builtin(scope, "CATCH", signature, body, types);
 }
@@ -51,36 +51,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let expr_inner = crate::try_action!(require_kexpression(ctx.args, "CATCH", "expr"));
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
-    let (result_set, result_index) = match ctx.scope.resolve_type("Result") {
-        Some(KType::SetRef { set, index }) => (Rc::clone(set), *index),
-        _ => panic!("Result must be registered before CATCH"),
+    let result_member: KType = match ctx.scope.resolve_type("Result") {
+        Some(member) => *member,
+        None => panic!("Result must be registered before CATCH"),
     };
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
         // Wrap `payload` as a `Result` `Tagged` at the build brand `'x`. A free fn (no captured
         // lifetime) so both the `Ok` `transfer_into` and the `Err` `merge` brand closures can call it.
-        fn build_result<'x>(tag: &str, identity: &KType, payload: KObject<'x>) -> KObject<'x> {
-            let (set, index) = match identity {
-                KType::SetRef { set, index } => (Rc::clone(set), *index),
-                _ => unreachable!("the prelude Result identity is always a SetRef"),
-            };
+        fn build_result<'x>(tag: &str, identity: KType, payload: KObject<'x>) -> KObject<'x> {
             KObject::Tagged {
                 tag: tag.to_string(),
                 value: Rc::new(payload),
-                set,
-                index,
-                type_args: Rc::new(Record::new()),
+                identity,
             }
         }
         // Build the `Result` `Tagged` **inside the witness closure** so it names every region the
-        // wrapped value reaches. The `Result` `SetRef` identity — owned data allocated into the scope
-        // region — crosses the build brand as a [`RegionTypeFamily`] operand, `merge`d in under the
-        // scope's yoke rather than paired with an asserted singleton.
+        // wrapped value reaches. The `Result` member handle crosses the build brand as a
+        // [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke rather than paired with
+        // an asserted singleton; the handle itself borrows no region.
         let region = fctx.scope.brand();
         let frame = fctx.ctx.frame();
-        let identity: &KType = region.alloc_ktype(KType::SetRef {
-            set: Rc::clone(&result_set),
-            index: result_index,
-        });
+        let identity: &KType = region.alloc_ktype(result_member);
         let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity);
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
@@ -92,7 +83,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(build_result(
                         "Ok",
-                        identity,
+                        *identity,
                         value.object().deep_clone(),
                     )))
                 },
@@ -103,7 +94,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 let payload = KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
                     Carried::Object(
                         region
-                            .alloc_object_checked(e.to_tagged(region, fctx.types), fctx.types)
+                            .alloc_object_checked(e.to_tagged(fctx.types), fctx.types)
                             .expect("a freshly-built KError payload is always resident-in-self"),
                     )
                 });
@@ -117,7 +108,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                             let region = FoldingBrand::in_fold_closure(placement);
                             Carried::Object(region.alloc_object_folded(build_result(
                                 "Error",
-                                identity,
+                                *identity,
                                 payload.object().deep_clone(),
                             )))
                         },

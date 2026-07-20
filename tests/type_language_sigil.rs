@@ -8,7 +8,7 @@
 //! These exercise the *sigil boundary*: a `:(...)` expression evaluates its
 //! inner expression through the standard dispatch classifier and the result is
 //! a type-side carrier (`KTypeValue` for structural types, `Module` /
-//! `Signature` / `SetRef` for nominal identities) that downstream slots
+//! `Signature` / `SetMember` for nominal identities) that downstream slots
 //! type-check naturally.
 //!
 //! Companion design: [design/typing/type-language-via-dispatch.md].
@@ -16,7 +16,7 @@
 use std::rc::Rc;
 
 use koan::builtins::test_support::TestRun;
-use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::model::{KKind, KObject, KType, NodeSchema, TypeNode, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, Scope};
 use koan::parse::parse;
 
@@ -59,19 +59,23 @@ fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
 /// run-root scope's type side (`resolve_type`) to grab the Signature carrier, then reads the
 /// Signature's stored schema (`value_slots`) — where VAL value slots record their declared type
 /// under their value-class name.
-fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType {
-    let content = match scope.resolve_type(sig_name) {
-        Some(KType::Signature { content, .. }) => content,
-        other => panic!(
-            "`{sig_name}` should bind a Signature KType, got {:?}",
-            other
-        ),
+fn lookup_sig_value_kt(
+    scope: &Scope<'_>,
+    types: &TypeRegistry,
+    sig_name: &str,
+    name: &str,
+) -> KType {
+    let handle = *scope
+        .resolve_type(sig_name)
+        .unwrap_or_else(|| panic!("`{sig_name}` should bind a Signature KType, got nothing"));
+    let schema = match types.node(handle) {
+        TypeNode::Signature { schema, .. } => schema,
+        _ => panic!("`{sig_name}` should bind a Signature KType, got {handle:?}"),
     };
-    content
-        .schema
+    schema
         .value_slots
         .get(name)
-        .cloned()
+        .copied()
         .unwrap_or_else(|| panic!("`{name}` should be bound in the SIG's stored schema"))
 }
 
@@ -82,10 +86,10 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
 fn sigil_list_of_lowers_to_list_carrier() {
     let region = run_root_storage();
     let test_run = run(&region, "SIG Holder = ((VAL items :(LIST OF Number)))");
-    let items_kt = lookup_sig_value_kt(test_run.scope, "Holder", "items");
-    match items_kt {
-        KType::List { element: elem, .. } => assert_eq!(*elem, KType::Number),
-        other => panic!("items must be KType::List(Number), got {other:?}"),
+    let items_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "items");
+    match test_run.types.node(items_kt) {
+        TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
+        _ => panic!("items must be KType::List(Number), got {items_kt:?}"),
     }
 }
 
@@ -109,15 +113,13 @@ fn sigil_list_of_missing_of_keyword_errors() {
 fn sigil_map_lowers_to_dict_carrier() {
     let region = run_root_storage();
     let test_run = run(&region, "SIG Holder = ((VAL table :(MAP Str -> Number)))");
-    let table_kt = lookup_sig_value_kt(test_run.scope, "Holder", "table");
-    match table_kt {
-        KType::Dict {
-            key: k, value: v, ..
-        } => {
-            assert_eq!(*k, KType::Str);
-            assert_eq!(*v, KType::Number);
+    let table_kt = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "table");
+    match test_run.types.node(table_kt) {
+        TypeNode::Dict { key, value } => {
+            assert_eq!(key, KType::STR);
+            assert_eq!(value, KType::NUMBER);
         }
-        other => panic!("table must be KType::Dict(Str, Number), got {other:?}"),
+        _ => panic!("table must be KType::Dict(Str, Number), got {table_kt:?}"),
     }
 }
 
@@ -132,15 +134,15 @@ fn sigil_fn_lowers_to_kfunction_named() {
         &region,
         "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
-    let cmp = lookup_sig_value_kt(test_run.scope, "Holder", "compare");
-    match cmp {
-        KType::KFunction { params, ret, .. } => {
+    let cmp = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "compare");
+    match test_run.types.node(cmp) {
+        TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 2);
-            assert_eq!(params.get("x"), Some(&KType::Number));
-            assert_eq!(params.get("y"), Some(&KType::Str));
-            assert_eq!(*ret, KType::Bool);
+            assert_eq!(params.get("x"), Some(&KType::NUMBER));
+            assert_eq!(params.get("y"), Some(&KType::STR));
+            assert_eq!(ret, KType::BOOL);
         }
-        other => panic!("compare must be KType::KFunction, got {other:?}"),
+        _ => panic!("compare must be KType::KFunction, got {cmp:?}"),
     }
 }
 
@@ -149,13 +151,13 @@ fn sigil_fn_lowers_to_kfunction_named() {
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let region = run_root_storage();
     let test_run = run(&region, "SIG Holder = ((VAL gen :(FN () -> Number)))");
-    let gen = lookup_sig_value_kt(test_run.scope, "Holder", "gen");
-    match gen {
-        KType::KFunction { params, ret, .. } => {
+    let gen = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "gen");
+    match test_run.types.node(gen) {
+        TypeNode::KFunction { params, ret } => {
             assert!(params.is_empty());
-            assert_eq!(*ret, KType::Number);
+            assert_eq!(ret, KType::NUMBER);
         }
-        other => panic!("gen must be KType::KFunction, got {other:?}"),
+        _ => panic!("gen must be KType::KFunction, got {gen:?}"),
     }
 }
 
@@ -169,14 +171,14 @@ fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
         &region,
         "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
     );
-    let mk = lookup_sig_value_kt(test_run.scope, "Holder", "mk");
-    match mk {
-        KType::KFunction { params, ret, .. } => {
+    let mk = lookup_sig_value_kt(test_run.scope, &test_run.types, "Holder", "mk");
+    match test_run.types.node(mk) {
+        TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params.get("Ty"), Some(&KType::OfKind(KKind::Signature)));
-            assert_eq!(*ret, KType::empty_signature());
+            assert_eq!(params.get("Ty"), Some(&KType::of_kind(KKind::Signature)));
+            assert_eq!(ret, KType::EMPTY_SIGNATURE);
         }
-        other => panic!("mk must be KType::KFunction, got {other:?}"),
+        _ => panic!("mk must be KType::KFunction, got {mk:?}"),
     }
 }
 
@@ -211,22 +213,27 @@ fn sigil_functor_is_unbound() {
 fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let region = run_root_storage();
     let test_run = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
-    // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
-    let fields = match test_run.scope.resolve_type("Foo") {
-        Some(KType::SetRef { set, index }) => {
-            match RecursiveSet::projected_schema(set, *index, &test_run.types) {
-                ProjectedSchema::NewType(KType::Record { fields, .. }) => fields,
-                _ => panic!("Foo must project a record-repr NewType schema"),
-            }
-        }
-        other => panic!("Foo must be a NewType SetRef in types, got {other:?}"),
+    // NEWTYPE is type-only — its record repr rides the sealed `SetMember` in `types`.
+    let foo = *test_run
+        .scope
+        .resolve_type("Foo")
+        .expect("Foo must resolve to a type");
+    let fields = match test_run.types.node(foo) {
+        TypeNode::SetMember {
+            schema: NodeSchema::NewType(repr),
+            ..
+        } => match test_run.types.node(repr) {
+            TypeNode::Record { fields } => fields,
+            _ => panic!("Foo must project a record-repr NewType schema"),
+        },
+        _ => panic!("Foo must be a NewType SetMember in types, got {foo:?}"),
     };
     assert_eq!(fields.len(), 1);
     let (xs_name, xs_type) = fields.iter().next().expect("one field");
     assert_eq!(xs_name, "xs");
-    match xs_type {
-        KType::List { element: elem, .. } => assert_eq!(**elem, KType::Number),
-        other => panic!("xs must be KType::List(Number), got {other:?}"),
+    match test_run.types.node(*xs_type) {
+        TypeNode::List { element } => assert_eq!(element, KType::NUMBER),
+        _ => panic!("xs must be KType::List(Number), got {xs_type:?}"),
     }
 }
 
@@ -241,29 +248,30 @@ fn union_field_accepts_keyworded_map_sigil() {
     );
     // UNION is type-only — it binds an anonymous union of per-variant newtypes; the `Some`
     // variant's newtype repr is the keyworded `MAP` sigil that sub-Dispatched.
-    let some_repr = match test_run.scope.resolve_type("Maybe") {
-        Some(KType::Union { members, .. }) => members
+    let maybe = *test_run
+        .scope
+        .resolve_type("Maybe")
+        .expect("Maybe must resolve to a type");
+    let some_repr = match test_run.types.node(maybe) {
+        TypeNode::Union { members } => members
             .iter()
-            .find_map(|m| match m {
-                KType::SetRef { set, index } if set.member(*index).name == "Some" => {
-                    match RecursiveSet::projected_schema(set, *index, &test_run.types) {
-                        ProjectedSchema::NewType(repr) => Some(repr),
-                        _ => None,
-                    }
-                }
+            .find_map(|m| match test_run.types.node(*m) {
+                TypeNode::SetMember {
+                    name,
+                    schema: NodeSchema::NewType(repr),
+                    ..
+                } if name == "Some" => Some(repr),
                 _ => None,
             })
             .expect("Some variant must project a NewType repr"),
-        other => panic!("Maybe must be a Union in types, got {other:?}"),
+        _ => panic!("Maybe must be a Union in types, got {maybe:?}"),
     };
-    match some_repr {
-        KType::Dict {
-            key: k, value: v, ..
-        } => {
-            assert_eq!(*k, KType::Str);
-            assert_eq!(*v, KType::Number);
+    match test_run.types.node(some_repr) {
+        TypeNode::Dict { key, value } => {
+            assert_eq!(key, KType::STR);
+            assert_eq!(value, KType::NUMBER);
         }
-        other => panic!("Some repr must be KType::Dict(Str, Number), got {other:?}"),
+        _ => panic!("Some repr must be KType::Dict(Str, Number), got {some_repr:?}"),
     }
 }
 
@@ -290,22 +298,26 @@ fn sigil_fn_forward_reference_defers_via_combine() {
         "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let mk = lookup_sig_value_kt(test_run.scope, "Outer", "mk");
-    match mk {
-        KType::KFunction { params, ret, .. } => {
+    let mk = lookup_sig_value_kt(test_run.scope, &test_run.types, "Outer", "mk");
+    match test_run.types.node(mk) {
+        TypeNode::KFunction { params, ret } => {
             assert_eq!(params.len(), 1);
             // Ordered resolves to its `Signature { .. }` identity post-dep-finish.
-            // The carrier type's name (`Ordered`) is enough to confirm the
-            // forward reference resolved through the deferral path.
-            let ty = params.get("Ty").expect("param `Ty` must be present");
+            let ty = *params.get("Ty").expect("param `Ty` must be present");
+            // A resolved signature now renders structurally, not by declared name: Ordered's
+            // interface (its sole member `compare :Number`) renders `SIG (compare: Number)`.
+            // Seeing that member content confirms the forward reference resolved to Ordered's
+            // Signature identity through the deferral path (rather than a bare kind placeholder).
             assert!(
-                ty.name(&test_run.types).contains("Ordered")
-                    || *ty == KType::OfKind(KKind::Signature),
-                "param `Ty` should carry Ordered identity, got {ty:?}",
+                ty.name(&test_run.types).contains("compare")
+                    || ty == KType::of_kind(KKind::Signature),
+                "param `Ty` should carry Ordered's resolved interface, got {ty:?} \
+                 (name: {:?})",
+                ty.name(&test_run.types),
             );
-            assert_eq!(*ret, KType::empty_signature());
+            assert_eq!(ret, KType::EMPTY_SIGNATURE);
         }
-        other => panic!("mk must be KType::KFunction, got {other:?}"),
+        _ => panic!("mk must be KType::KFunction, got {mk:?}"),
     }
 }
 // --- User-functor application ---

@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::test_support::{SharedBuf, TestRun};
-use koan::machine::model::{KObject, KType, SignatureElement};
+use koan::machine::model::{KObject, SignatureElement, TypeNode};
 use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
 use koan::parse::parse;
 
@@ -85,8 +85,11 @@ fn functor_e2e_makeset_produces_module() {
     // not `data`), and its `ktype()` is an ordinary function type.
     let makeset = lookup_fn(scope, "MAKESET");
     assert!(
-        matches!(KObject::KFunction(makeset).ktype(), KType::KFunction { .. }),
-        "a module-returning FN types as KType::KFunction",
+        matches!(
+            test_run.types.node(KObject::KFunction(makeset).ktype()),
+            TypeNode::KFunction { .. }
+        ),
+        "a module-returning FN types as a function type",
     );
     // `int_set` landed as a module value: a module is a value, so LET binds it on the value
     // channel (`bindings.data`) under its Type-token name and nothing lands in `types`.
@@ -106,11 +109,12 @@ fn functor_e2e_makeset_produces_module() {
         "int_set's `tag` member should be 0, got {:?}",
         tag.map(|o| o.ktype()),
     );
-    // The module value's `ktype()` is its principal signature, whose name renders as the
-    // module path — the type a `:Signature` slot matches it against.
+    // The module value's `ktype()` is its principal signature. Ruling 12: a signature renders
+    // structurally (`SIG (tag: Number)`), not by the module name — the type a `:Signature` slot
+    // matches it against.
     assert_eq!(
         KObject::Module(m).ktype().name(&test_run.types),
-        m.path,
+        "SIG (tag: Number)",
         "a module value is typed by its self-sig",
     );
 }
@@ -214,8 +218,10 @@ fn signature_param_unsatisfied_via_named_args_errors() {
             (MODULE inner = ((LET tag = 0))))\n\
          LET got = (make_set {base = plain})",
     );
+    // Ruling 12: the slot signature renders structurally, so the mismatch names
+    // `SIG (compare: Number)` rather than "Ordered".
     assert!(
-        err.contains("type mismatch") && err.contains("Ordered"),
-        "non-satisfying module by name should be a TypeMismatch against Ordered, got: {err}",
+        err.contains("type mismatch") && err.contains("SIG (compare: Number)"),
+        "non-satisfying module by name should be a TypeMismatch against the signature, got: {err}",
     );
 }

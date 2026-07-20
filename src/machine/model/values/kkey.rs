@@ -72,9 +72,9 @@ impl Hash for KKey {
 impl Parseable for KKey {
     fn ktype(&self) -> KType {
         match self {
-            KKey::String(_) => KType::Str,
-            KKey::Number(_) => KType::Number,
-            KKey::Bool(_) => KType::Bool,
+            KKey::String(_) => KType::STR,
+            KKey::Number(_) => KType::NUMBER,
+            KKey::Bool(_) => KType::BOOL,
         }
     }
 }

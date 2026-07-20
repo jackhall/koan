@@ -29,11 +29,11 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
-    let slot = KType::OfKind(KKind::ProperType);
+    let slot = KType::of_kind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
         part.resolve_for(&slot, scope, &types),
-        Held::Type(KType::Number)
+        Held::Type(t) if t == KType::NUMBER
     ));
 }
 
@@ -46,7 +46,7 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let types = TypeRegistry::new();
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
-    let slot = KType::OfKind(KKind::ProperType);
+    let slot = KType::of_kind(KKind::ProperType);
     match part.resolve_for(&slot, scope, &types) {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
         other => panic!(
@@ -64,12 +64,9 @@ fn unresolved_carrier_classifies_as_a_proper_type() {
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let types = TypeRegistry::new();
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
-    let slot = KType::OfKind(KKind::ProperType);
+    let slot = KType::of_kind(KKind::ProperType);
     let held = part.resolve_for(&slot, scope, &types);
-    assert!(matches!(
-        held.ktype(&types),
-        KType::OfKind(KKind::ProperType)
-    ));
+    assert_eq!(held.ktype(&types), KType::of_kind(KKind::ProperType));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
 }
@@ -137,7 +134,7 @@ fn structural_equal_and_ktype_for_kexpression() {
     let c = KObject::KExpression(KExpression::new(parts_of(vec![kw("LET"), ident("y")])));
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
-    assert!(matches!(a.ktype(), KType::KExpression));
+    assert_eq!(a.ktype(), KType::KEXPRESSION);
 }
 
 #[test]
@@ -377,21 +374,21 @@ fn cached_key_agrees_with_expression_signature_untyped_key() {
         ident("c"),
     ]));
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
                 name: "x".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+".into()),
             SignatureElement::Argument(Argument {
                 name: "y".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
             SignatureElement::Keyword("+".into()),
             SignatureElement::Argument(Argument {
                 name: "z".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
         ],
     };

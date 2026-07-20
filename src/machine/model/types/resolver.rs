@@ -1,10 +1,11 @@
 //! Scheduler-aware type-name elaboration. Walks a [`TypeIdentifier`] against a [`Scope`], gating
 //! each bare leaf against a [`LexicalFrame`] so a type declared lexically later is invisible
-//! — a forward type reference is a position error, not a silent success. A self-reference
-//! short-circuits to the transient [`KType::RecursiveRef`] via the threaded binder name, and
-//! a co-declared `RECURSIVE TYPES` member via the scope's shared set; both seal to a
-//! [`KType::SetLocal`] index at finalize. A reference to an *earlier* type still finalizing
-//! returns [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
+//! — a forward type reference is a position error, not a silent success. A name announced by the
+//! ambient [`RecursiveGroupWindow`] short-circuits to that member's relative
+//! [`TypeNode::Sibling`] handle, which the window's seal rewrites to an absolute member handle; a
+//! window's own binder name (a `UNION`'s, which names no single member) resolves to the union of
+//! every announced member. A reference to an *earlier* type still finalizing returns
+//! [`TypeResolution::Park`] so the caller re-runs the elaboration on wake.
 //!
 //! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
 //! [`elaborate_type_identifier`] when scope-aware lookup is needed or [`KType::from_type_identifier`]
@@ -19,7 +20,8 @@ use crate::machine::NodeId;
 
 use super::kkind::KKind;
 use super::ktype::KType;
-use super::recursive_set::{NominalMember, RecursiveSet};
+use super::node::TypeNode;
+use super::recursive_group_window::{RecursiveGroupWindow, RelativeSchema};
 use super::registry::TypeRegistry;
 
 #[cfg(test)]
@@ -51,12 +53,17 @@ impl<T> TypeResolution<T> {
 
 /// Per-elaboration-walk state.
 ///
-/// - `threaded`: binder names currently being elaborated, so a self-reference becomes
-///   `RecursiveRef` instead of parking on its own placeholder.
+/// - `threaded`: binder names currently being elaborated, so a self-reference resolves through the
+///   ambient window instead of parking on its own placeholder.
+/// - `window`: the declarator's own open window, when it owns one. A `RECURSIVE TYPES` block's
+///   window rides the scope chain instead, because it spans several separately dispatched
+///   declarations; this field carries the window of a declarator that opens and seals one within a
+///   single elaboration.
 /// - `chain`: the lexical position the bare-leaf resolution is gated against.
 pub struct Elaborator<'b, 'a> {
     pub scope: &'b Scope<'a>,
     pub threaded: HashSet<String>,
+    pub window: Option<Rc<RecursiveGroupWindow>>,
     /// Lexical chain the bare-leaf resolution is gated against, so a type declared
     /// lexically later than this elaboration's position is invisible. `None` is the
     /// unfiltered mode (test/builtin scopes with no chain).
@@ -68,6 +75,7 @@ impl<'b, 'a> Elaborator<'b, 'a> {
         Self {
             scope,
             threaded: HashSet::new(),
+            window: None,
             chain: None,
         }
     }
@@ -75,6 +83,21 @@ impl<'b, 'a> Elaborator<'b, 'a> {
     pub fn with_threaded<I: IntoIterator<Item = String>>(mut self, names: I) -> Self {
         self.threaded.extend(names);
         self
+    }
+
+    /// Elaborate against `window` — the declarator's own, taking precedence over any window the
+    /// scope chain carries.
+    pub fn with_window(mut self, window: Rc<RecursiveGroupWindow>) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// The window a co-declared name resolves against: this walk's own, else the nearest one on
+    /// the scope chain (a `RECURSIVE TYPES` block's).
+    pub fn window(&self) -> Option<Rc<RecursiveGroupWindow>> {
+        self.window
+            .clone()
+            .or_else(|| self.scope.nearest_recursive_window())
     }
 
     /// Gate bare-leaf resolution against `chain`: a type binding lexically later than
@@ -98,22 +121,41 @@ pub fn elaborate_type_identifier(
     types: &TypeRegistry,
 ) -> TypeResolution<KType> {
     let name = t.as_str();
-    if el.threaded.contains(name) {
-        // Self / forward-sibling reference inside a type-definition body: a transient
-        // `RecursiveRef`, sealed into a `SetLocal` index when the member finalizes.
-        return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
-    }
-    if let Some(set) = el.scope.nearest_recursive_set() {
-        // A bare leaf naming an enclosing `RECURSIVE TYPES` member is a co-declared sibling
-        // (or self): the block's threading makes cross-references resolve independent of source
-        // order. Checked before `resolve_type_with_chain` so a member lowers to the back-edge
-        // rather than the set's pre-installed external `SetRef`.
-        if set.index_of(name).is_some() {
-            return TypeResolution::Done(KType::RecursiveRef(name.to_string()));
+    // The relative-`Sibling` back-edge applies only while the window is open. Once it seals, its
+    // members are bound to their absolute handles, and a member name resolves through the binding
+    // below — returning the sealed identity, not a window-scoped relative index.
+    if let Some(window) = el.window().filter(|w| !w.is_sealed()) {
+        // A bare leaf naming a member of the ambient window is a co-declared sibling (or a
+        // self-reference): it lowers to the relative `Sibling` handle, which the window's seal
+        // rewrites to the member's absolute handle. Checked before `resolve_type_with_chain` so a
+        // co-declared name takes the back-edge rather than any outer binding of the same name —
+        // this is the one cross-order type-name resolution that survives strict lexical lookup.
+        //
+        // Only a binder-less window (a `RECURSIVE TYPES` block or a self-recursive newtype, whose
+        // members are standalone types) resolves a bare member name this way. A `UNION`'s members
+        // are *variants*, not standalone types: a bare `Node :Leaf` is an unknown-type error, and a
+        // sibling variant is reached only through the binder (`:Tree`) or the qualified sigil
+        // `:(Tree Leaf)` (handled in `typed_field_list`).
+        if window.binder().is_none() {
+            if let Some(index) = window.index_of(name) {
+                return TypeResolution::Done(types.intern(TypeNode::Sibling(index)));
+            }
+        }
+        // The window's own binder names no single member — a `UNION`'s name denotes the union of
+        // every variant it declares (`Node :Tree` inside `UNION Tree = (…)`).
+        if window.binder().as_deref() == Some(name) {
+            return TypeResolution::Done(window.binder_union(types));
+        }
+        // A threaded binder the window has not announced yet: a forward reference inside a
+        // declarator that discovers its members as it walks its own schema. Announcing it here
+        // keeps the relative index stable, and the declarator's finalize reports any member left
+        // unfilled as a reference to a type the declaration never made.
+        if el.threaded.contains(name) {
+            return TypeResolution::Done(window.sibling(name, KKind::NewType, types));
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
-        Some(NameLookup::Bound(kt)) => return TypeResolution::Done(kt.clone()),
+        Some(NameLookup::Bound(kt)) => return TypeResolution::Done(*kt),
         // A visible placeholder is an earlier-declared type still finalizing: park on its
         // producer and re-elaborate when it terminalizes. A forward reference is filtered by the
         // chain before reaching here — a position error, not a park. Mutual recursion across the
@@ -134,90 +176,66 @@ pub fn elaborate_type_identifier(
 
 /// Outcome of [`finalize_nominal_member`].
 pub enum SealOutcome<'a> {
-    /// The member sealed (or was already sealed); the region reference is its `SetRef`
-    /// identity, ready to wrap in a `Carried::Type`.
+    /// The member sealed (or was already sealed); the region reference is its interned member
+    /// handle, ready to wrap in a `Carried::Type`.
     Sealed(&'a KType),
-    /// A transient `RecursiveRef(name)` named no set member — a sealing bug surfaced as a
-    /// shape error rather than a dangling reference.
+    /// The member's schema filled, but its window still holds unfilled members, so no member has
+    /// an identity yet. Only a `RECURSIVE TYPES` block reaches this: the block's own finish is the
+    /// seal barrier, and it binds every member once the last one fills.
+    Deferred,
+    /// A reference named no member of the window — a sealing bug surfaced as a shape error rather
+    /// than a dangling reference.
     DanglingRef(String),
     /// The name already binds a different type (a redeclaration); the install raised
     /// `Rebind`, propagated to the binder.
     Rebind(crate::machine::core::KError),
 }
 
-/// Seal a nominal type's elaborated schema into its [`RecursiveSet`] member and install the
-/// `SetRef` identity into `bindings.types[name]`. Three cases collapse here:
+/// Fill a nominal type's elaborated schema into its window member and, once the window seals,
+/// install the member's interned handle into `bindings.types[name]`. Three cases collapse here:
 ///
-/// 1. **Block member** — `bindings.types[name]` already holds a `SetRef` (pre-installed by
-///    the `RECURSIVE TYPES` block over its shared set); reuse that set + index.
-/// 2. **Non-recursive / self-recursive type** — no pre-install; mint a *singleton* set of
-///    one `pending` member at index 0 (a self-recursive type's own name is in the
-///    singleton's `index_of`, so its self-reference seals to `SetLocal(0)`).
-/// 3. **Already sealed** — this same declaration's `SetRef` is already installed (a parallel
-///    finalize ran first); short-circuit and return the existing identity.
-///
-/// In every case the schema's transient `RecursiveRef(name)` leaves are sealed to
-/// `SetLocal(index)` against the (singleton or shared) set before the member is filled.
+/// 1. **Block member** — the ambient `RECURSIVE TYPES` window already announces `name`; fill that
+///    slot. Unless this fill is the block's last, the window stays open and the outcome is
+///    [`SealOutcome::Deferred`] — no member has an identity until every member's content is known,
+///    because identity is computed over the whole reference structure.
+/// 2. **Standalone declaration** — no window announces `name`, so `window` is this declarator's
+///    own one-member window (or a fresh one for a declarator that needs no elaboration): filling
+///    its only member seals it, and a self-reference was already interned as `Sibling(0)`.
+/// 3. **Already sealed** — a parallel finalize of this same declaration ran first; the window
+///    hands back the same handles and the upsert is idempotent.
 #[allow(clippy::result_large_err)]
 pub fn finalize_nominal_member<'a>(
     scope: &Scope<'a>,
+    window: &Rc<RecursiveGroupWindow>,
     name: &str,
-    kind: KKind,
-    build_schema: impl FnOnce(&Rc<RecursiveSet>) -> SchemaSealResult,
+    build_schema: impl FnOnce(&Rc<RecursiveGroupWindow>) -> RelativeSchema,
     bind_index: crate::machine::core::BindingIndex,
+    types: &TypeRegistry,
 ) -> SealOutcome<'a> {
-    // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type by
-    // declaration identity — the stored `BindingIndex`:
-    // - `SetRef` with a pending (unfilled) member: the seal's contribution for this declaration
-    //   (pre-installed at index 0, below any statement's own index) — reuse its set + index. This
-    //   arm stays first: for a block member the stored index is the pre-install's, not this
-    //   declaration's.
-    // - `SetRef` installed by this same statement (equal `BindingIndex`): a parallel finalize of
-    //   this declaration — short-circuit (idempotent).
-    // - anything else: a genuine prior binding of this name; mint a fresh singleton so the
-    //   install path below raises the `Rebind` a redeclaration deserves.
-    let pre_installed = match scope.bindings().committed_type_binding(name) {
-        Some((KType::SetRef { set, index }, _)) if !set.member(*index).is_filled() => {
-            Some((Rc::clone(set), *index))
-        }
-        Some((kt @ KType::SetRef { .. }, installed_at)) if installed_at == bind_index => {
-            return SealOutcome::Sealed(kt);
-        }
-        _ => None,
+    let index = match window.index_of(name) {
+        Some(index) => index,
+        // The declarator handed a window that does not announce its own binder — a wiring bug, not
+        // a user error, but reported as a dangling reference rather than a panic.
+        None => return SealOutcome::DanglingRef(name.to_string()),
     };
-    let (set, index) = match pre_installed {
-        Some(pair) => pair,
-        None => {
-            // Non-recursive (or a redeclaration): a singleton over this one member.
-            let set = Rc::new(RecursiveSet::new(vec![NominalMember::pending(
-                name.to_string(),
-                kind,
-            )]));
-            (set, 0)
-        }
+    let schema = build_schema(window);
+    let sealed = match window.fill_member(index, schema, types) {
+        Some(sealed) => sealed,
+        None => return SealOutcome::Deferred,
     };
-    // Build + seal the schema (intra-set `RecursiveRef` / `SetRef` → `SetLocal`).
-    let schema = match build_schema(&set) {
-        SchemaSealResult::Ok(schema) => schema,
-        SchemaSealResult::Dangling(missing) => return SealOutcome::DanglingRef(missing),
-    };
-    set.fill_member(index, schema);
-    // Install the `SetRef` identity. A non-equal existing entry (a redeclaration) surfaces
-    // as `Rebind`, propagated to the binder.
-    let identity = KType::SetRef {
-        set: Rc::clone(&set),
-        index,
-    };
-    match scope.register_nominal_upsert(name.to_string(), identity, bind_index) {
+    // A non-equal existing entry (a redeclaration) surfaces as `Rebind`, propagated to the binder.
+    match scope.register_nominal_upsert(name.to_string(), sealed.members[index], bind_index) {
         Ok(kt_ref) => SealOutcome::Sealed(kt_ref),
         Err(e) => SealOutcome::Rebind(e),
     }
 }
 
-/// Outcome of the `build_schema` closure passed to [`finalize_nominal_member`].
-pub enum SchemaSealResult {
-    /// The schema sealed cleanly.
-    Ok(super::recursive_set::NominalSchema),
-    /// A transient `RecursiveRef` named no set member — a sealing bug.
-    Dangling(String),
+/// The window a declarator named `name` (of family `kind`) elaborates and seals against: the
+/// ambient `RECURSIVE TYPES` window when it announces the name, else a fresh one-member window
+/// this declaration owns outright.
+pub fn declarator_window(scope: &Scope<'_>, name: &str, kind: KKind) -> Rc<RecursiveGroupWindow> {
+    match scope.nearest_recursive_window() {
+        Some(window) if window.holds(name) => window,
+        _ => RecursiveGroupWindow::new(vec![(name.to_string(), kind)], None),
+    }
 }

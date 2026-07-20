@@ -3,7 +3,7 @@
 //! as the Object-arm module value and projects members off it.
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, TypeNode};
 use crate::machine::run_root_storage;
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
@@ -58,14 +58,14 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     let result = test_run.run_one_type(parse_one("USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
-    match result {
-        KType::AbstractType { name, .. } => {
+    match test_run.types.node(*result) {
+        TypeNode::AbstractType { name, .. } => {
             assert_eq!(
                 name, "Carrier",
                 "abstract type member should be named Carrier"
             );
         }
-        other => panic!("expected AbstractType {{ name = \"Carrier\", .. }}, got {other:?}"),
+        _ => panic!("expected AbstractType {{ name = \"Carrier\", .. }}, got {result:?}"),
     }
 }
 
@@ -91,12 +91,12 @@ fn functor_closure_escape_pins_type_class_bind() {
         test_run.run_one(parse_one("PRINT 1"));
     }
     let result = test_run.run_one_type(parse_one("LOOKUP"));
-    match result {
-        KType::AbstractType { name, .. } => {
+    match test_run.types.node(*result) {
+        TypeNode::AbstractType { name, .. } => {
             assert_eq!(name, "Carrier");
         }
-        other => panic!(
-            "expected AbstractType {{ name: \"Carrier\", .. }} after closure escape, got {other:?}",
+        _ => panic!(
+            "expected AbstractType {{ name: \"Carrier\", .. }} after closure escape, got {result:?}",
         ),
     }
 }
@@ -117,7 +117,9 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
     let result = test_run.run_one(parse_one("MAKESET ord_view"));
     match result {
         KObject::Module(module) => {
-            assert_eq!(module.path, "int_ord :! Ordered");
+            // Ruling 12: the ascribed signature renders structurally, so the transparent-view
+            // path label reads `int_ord :! SIG (compare: Number)`, not `:! Ordered`.
+            assert_eq!(module.path, "int_ord :! SIG (compare: Number)");
         }
         other => {
             panic!(

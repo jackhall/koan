@@ -2,7 +2,7 @@
 //! `design/typing/modules.md` § "Block-scoped opening".
 //!
 //! `m` is eager (a resolved module value), `body` is lazy
-//! ([`KType::KExpression`]) so it evaluates in the opened scope.
+//! (a [`KType::KEXPRESSION`] type) so it evaluates in the opened scope.
 //!
 //! The block runs in a transparent scope ([`Scope::child_transparent`])
 //! allocated in the **call-site region** — not a per-call frame — so forwarded
@@ -89,12 +89,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
-        KType::Any,
+        KType::ANY,
         vec![
             kw("USING"),
-            arg("m", KType::empty_signature()),
+            arg("m", KType::EMPTY_SIGNATURE),
             kw("SCOPE"),
-            arg("body", KType::KExpression),
+            arg("body", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "USING", signature, body, types);

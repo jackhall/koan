@@ -61,7 +61,7 @@ fn let_binds_a_dict_with_string_keys() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
@@ -82,7 +82,7 @@ fn let_binds_a_dict_with_number_keys() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a")
@@ -103,7 +103,7 @@ fn let_binds_a_dict_with_bool_keys() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0)
@@ -128,7 +128,7 @@ fn bare_identifier_key_is_looked_up() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert_eq!(entries.len(), 1);
             assert!(
                 matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0)
@@ -147,7 +147,7 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0)
             );
@@ -165,7 +165,7 @@ fn sub_expression_as_key_evaluates() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert!(
                 matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0)
             );
@@ -182,7 +182,7 @@ fn multiline_dict_binds_correctly() {
     let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
-        Some(KObject::Dict(entries, _, _)) => {
+        Some(KObject::Dict(entries, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(
                 matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
@@ -206,7 +206,7 @@ fn nested_dict_in_list_binds_correctly() {
         Some(KObject::List(outer, _)) => {
             assert_eq!(outer.len(), 2);
             match &outer[0] {
-                Held::Object(KObject::Dict(d, _, _)) => assert!(matches!(
+                Held::Object(KObject::Dict(d, _)) => assert!(matches!(
                     lookup_string_key(d, "a"),
                     Some(KObject::Number(n)) if *n == 1.0,
                 )),

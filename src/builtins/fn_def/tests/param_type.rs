@@ -19,7 +19,7 @@ fn fn_typed_param_records_ktype_on_signature() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
             assert_eq!(kw, "DOUBLE");
             assert_eq!(name, "x");
-            assert_eq!(*ktype, KType::Number);
+            assert_eq!(*ktype, KType::NUMBER);
         }
         _ => panic!("expected signature shape [Keyword(\"DOUBLE\"), Argument(x :Number)]"),
     }

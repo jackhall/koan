@@ -14,7 +14,7 @@ use crate::machine::BindingIndex;
 fn register_type_inserts_into_types_map_not_data() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type("Foo".into(), KType::NUMBER, BindingIndex::BUILTIN);
     assert!(scope.bindings().types().get("Foo").is_some());
     assert!(
         scope.bindings().data().get("Foo").is_none(),
@@ -26,9 +26,9 @@ fn register_type_inserts_into_types_map_not_data() {
 fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    root.register_type("Foo".into(), KType::Number, BindingIndex::BUILTIN);
+    root.register_type("Foo".into(), KType::NUMBER, BindingIndex::BUILTIN);
     let child = region.brand().alloc_scope(Scope::child_under(root));
-    assert!(matches!(child.resolve_type("Foo"), Some(KType::Number)));
+    assert!(matches!(child.resolve_type("Foo"), Some(kt) if *kt == KType::NUMBER));
     assert!(
         child.resolve_type("Nope").is_none(),
         "unbound name past run-root yields None, not panic",
@@ -41,11 +41,11 @@ fn resolve_type_inner_scope_shadows_outer() {
     let root = run_root_bare(&region);
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
-    root.register_type("Foo".into(), KType::Number, BindingIndex::value(1));
+    root.register_type("Foo".into(), KType::NUMBER, BindingIndex::value(1));
     let child = region.brand().alloc_scope(Scope::child_under(root));
-    child.register_type("Foo".into(), KType::Str, BindingIndex::value(1));
-    assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
-    assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));
+    child.register_type("Foo".into(), KType::STR, BindingIndex::value(1));
+    assert!(matches!(child.resolve_type("Foo"), Some(kt) if *kt == KType::STR));
+    assert!(matches!(root.resolve_type("Foo"), Some(kt) if *kt == KType::NUMBER));
 }
 
 /// `adopt_sealed` re-anchors a producer's sealed carrier at the consumer scope's brand **without

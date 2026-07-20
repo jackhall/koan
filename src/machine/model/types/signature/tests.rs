@@ -1,9 +1,12 @@
 use super::*;
 use crate::source::Spanned;
 
+// `KType` leaf constants replace the retired enum variants (`KType::NUMBER` etc.); these tests
+// build only ground types, so no registry is needed to name a slot type.
+
 fn one_slot<'a>(kt: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument {
             name: "v".into(),
             ktype: kt,
@@ -18,8 +21,8 @@ fn expr_with_keyword<'a>(kw: &str) -> KExpression<'a> {
 #[test]
 fn most_specific_picks_number_over_any() {
     let types = TypeRegistry::new();
-    let any = one_slot(KType::Any);
-    let num = one_slot(KType::Number);
+    let any = one_slot(KType::ANY);
+    let num = one_slot(KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&any, &num];
     assert_eq!(ExpressionSignature::most_specific(&cands, &types), Some(1));
 }
@@ -35,8 +38,8 @@ fn most_specific_returns_none_for_empty() {
 fn most_specific_returns_none_when_tied() {
     let types = TypeRegistry::new();
     // Ambiguity must surface, not a winner.
-    let a = one_slot(KType::Number);
-    let b = one_slot(KType::Number);
+    let a = one_slot(KType::NUMBER);
+    let b = one_slot(KType::NUMBER);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
     assert_eq!(ExpressionSignature::most_specific(&cands, &types), None);
 }
@@ -44,7 +47,7 @@ fn most_specific_returns_none_when_tied() {
 #[test]
 fn return_type_clone_round_trips_all_arms() {
     let types = TypeRegistry::new();
-    let r = ReturnType::Resolved(KType::Number);
+    let r = ReturnType::Resolved(KType::NUMBER);
     assert_eq!(r.name(&types), r.clone().name(&types));
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
     assert_eq!(d.name(&types), d.clone().name(&types));
@@ -65,7 +68,7 @@ fn type_name_eq_compares_leaf_names() {
 fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     let types = TypeRegistry::new();
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     };
     let empty: KExpression<'_> = KExpression::new(vec![]);
@@ -82,7 +85,7 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
 
 #[test]
 fn return_type_debug_renders_both_arms() {
-    let r = ReturnType::Resolved(KType::Number);
+    let r = ReturnType::Resolved(KType::NUMBER);
     assert!(format!("{:?}", r).contains("Resolved"));
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
     assert!(format!("{:?}", d).contains("Deferred"));
@@ -99,8 +102,8 @@ fn deferred_return_debug_renders_both_arms() {
 #[test]
 fn return_type_name_covers_all_arms() {
     let types = TypeRegistry::new();
-    let r = ReturnType::Resolved(KType::Number);
-    assert_eq!(r.name(&types), KType::Number.name(&types));
+    let r = ReturnType::Resolved(KType::NUMBER);
+    assert_eq!(r.name(&types), KType::NUMBER.name(&types));
     let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
     assert_eq!(t.name(&types), "er");
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
@@ -124,34 +127,34 @@ fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {
 fn indistinguishable_ignores_return_type() {
     let er = sig_with(
         ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into()))),
-        KType::Number,
+        KType::NUMBER,
     );
     let ar = sig_with(
         ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("Ar".into()))),
-        KType::Number,
+        KType::NUMBER,
     );
     assert!(er.indistinguishable_from(&ar));
 
-    let num = sig_with(ReturnType::Resolved(KType::Number), KType::Number);
-    let text = sig_with(ReturnType::Resolved(KType::Str), KType::Number);
+    let num = sig_with(ReturnType::Resolved(KType::NUMBER), KType::NUMBER);
+    let text = sig_with(ReturnType::Resolved(KType::STR), KType::NUMBER);
     assert!(num.indistinguishable_from(&text));
 }
 
 #[test]
 fn indistinguishable_splits_on_argument_type_and_keywords() {
-    let num = sig_with(ReturnType::Resolved(KType::Any), KType::Number);
-    let text = sig_with(ReturnType::Resolved(KType::Any), KType::Str);
+    let num = sig_with(ReturnType::Resolved(KType::ANY), KType::NUMBER);
+    let text = sig_with(ReturnType::Resolved(KType::ANY), KType::STR);
     assert!(!num.indistinguishable_from(&text));
 
     let kw = |token: &str| ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword(token.into())],
     };
     assert!(kw("FOO").indistinguishable_from(&kw("FOO")));
     assert!(!kw("FOO").indistinguishable_from(&kw("BAR")));
     assert!(!kw("FOO").indistinguishable_from(&num));
     assert!(!kw("FOO").indistinguishable_from(&ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![],
     }));
 }
@@ -165,9 +168,9 @@ fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
     assert!(d.matches_value(&obj, &types));
     assert!(!d.is_resolved());
-    let r_num = ReturnType::Resolved(KType::Number);
+    let r_num = ReturnType::Resolved(KType::NUMBER);
     assert!(r_num.matches_value(&obj, &types));
     assert!(r_num.is_resolved());
-    let r_bool = ReturnType::Resolved(KType::Bool);
+    let r_bool = ReturnType::Resolved(KType::BOOL);
     assert!(!r_bool.matches_value(&obj, &types));
 }

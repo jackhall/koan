@@ -3,9 +3,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KExpression;
-use crate::machine::model::{KKind, KType, NominalSchema, Record, RecursiveSet, TypeRegistry};
+use crate::machine::model::{
+    KKind, KType, Record, RecursiveGroupWindow, RelativeSchema, TypeRegistry,
+};
 use crate::machine::model::{KObject, WrappedPayload};
-use crate::machine::RegionBrand;
 use crate::source::{self, FileId, SourceLoc, Span};
 
 /// Structured runtime error propagated as a value via the `Err` arm of a node result. `frames` accumulate
@@ -161,18 +162,11 @@ impl KError {
     /// a valid type-token tag a TRY arm catches by name; the payload is a record-repr
     /// `KObject::Wrapped` mirroring the variant's fields plus `frames :List<Str>`, so TRY's
     /// `it.field` ATTR reads through the `Wrapped` arm. The payload's `type_id` and the
-    /// wrapping `Tagged`'s `set` are synthetic singleton [`RecursiveSet`]s (named after the
-    /// variant / `"KError"`) because TRY's branch walker reads
-    /// `tag` and `value` directly without going through dispatch — these carriers never need
-    /// real nominal identity.
-    ///
-    /// `region` homes the payload's `&'a` `type_id`. It is the call-site scope's region, like
-    /// any newtype's construction-site identity; unlike a declared NEWTYPE (whose identity
-    /// lives in its outer declaring scope), this synthetic identity is minted here, so a TRY
-    /// arm that returns the raw payload across a frame boundary inherits the general
-    /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
-    /// lift-safe).
-    pub fn to_tagged<'a>(&self, region: RegionBrand<'a>, types: &TypeRegistry) -> KObject<'a> {
+    /// wrapping `Tagged`'s `identity` are synthetic singleton members (named after the variant /
+    /// `"KError"`) because TRY's branch walker reads `tag` and `value` directly without going
+    /// through dispatch — these carriers never need real nominal identity. They intern like any
+    /// other member, so two errors of one variant carry one handle.
+    pub fn to_tagged<'a>(&self, types: &TypeRegistry) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
@@ -193,50 +187,40 @@ impl KError {
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
         let record = KObject::record(Record::from_pairs(pairs), types);
-        // A freshly-minted synthetic `Rc` every call — no external identity to preserve.
-        let type_id: &'a KType = region.alloc_ktype(KType::SetRef {
-            set: synthetic_singleton(name.clone(), KKind::NewType),
-            index: 0,
-        });
         let payload = KObject::Wrapped {
             inner: WrappedPayload::peel(&record),
-            type_id,
+            type_id: synthetic_singleton(name.clone(), KKind::NewType, types),
         };
         KObject::Tagged {
             tag: name,
             value: Rc::new(payload),
-            set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
-            index: 0,
-            type_args: Rc::new(Record::new()),
+            identity: synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types),
         }
     }
 }
 
-/// A throwaway singleton `RecursiveSet` for an unregistered carrier (the `KError`
-/// to-tagged payload `type_id` and union `set`). Its one member carries an empty schema —
-/// these carriers are read directly by the TRY branch walker, never dispatched on, so the
-/// schema is never consulted.
-fn synthetic_singleton(name: String, kind: KKind) -> Rc<RecursiveSet> {
+/// A synthetic singleton member for an unregistered carrier (the `KError` to-tagged payload's
+/// `type_id` and the wrapping `Tagged`'s `identity`). Its one member carries an empty schema —
+/// these carriers are read directly by the TRY branch walker, never dispatched on, so the schema
+/// is never consulted.
+fn synthetic_singleton(name: String, kind: KKind, types: &TypeRegistry) -> KType {
     let schema = match kind {
-        KKind::NewType => NominalSchema::NewType(Box::new(KType::Any)),
-        _ => NominalSchema::TypeConstructor {
+        KKind::NewType => RelativeSchema::NewType(KType::ANY),
+        _ => RelativeSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: Vec::new(),
         },
     };
-    RecursiveSet::singleton(name, schema)
+    RecursiveGroupWindow::seal_singleton(name, schema, None, types)
 }
 
-/// The `KError` carrier type — the `TypeConstructor`-kind `SetRef` a `to_tagged` value reports
-/// its family from. Used as the `Error` arm of `CATCH`'s declared
-/// `:(Result {Ok = Any, Error = KError})` return
-/// (a documentary contract — `KError` is not a registered prelude type, and the synthetic set
-/// is identity-throwaway, but `CATCH`'s return is never validated against the runtime value).
-pub(crate) fn kerror_ktype() -> KType {
-    KType::SetRef {
-        set: synthetic_singleton("KError".to_string(), KKind::TypeConstructor),
-        index: 0,
-    }
+/// The `KError` carrier type — the `TypeConstructor`-kind member a `to_tagged` value reports its
+/// family from. Used as the `Error` arm of `CATCH`'s declared
+/// `:(Result {Ok = Any, Error = KError})` return (a documentary contract — `KError` is not a
+/// registered prelude type, and the synthetic member is identity-throwaway, but `CATCH`'s return
+/// is never validated against the runtime value).
+pub(crate) fn kerror_ktype(types: &TypeRegistry) -> KType {
+    synthetic_singleton("KError".to_string(), KKind::TypeConstructor, types)
 }
 
 impl KErrorKind {

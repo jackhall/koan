@@ -12,14 +12,14 @@
 //! resting on the heterogeneous `KType` predicate suite ([`KType::satisfied_by`], `KType`'s
 //! cross-lifetime `PartialEq`).
 //!
-//! Container variants (`List`/`Dict`/`Record`/`Tagged`) gate on a *comparability* relation: contents
-//! are compared only when the memoized/ascribed type parameters are **related** (one `satisfied_by`
-//! the other, in either direction); unrelated parameters yield `Ok(false)` without descending. This
-//! makes `==` intentionally intransitive across ascriptions and is documented in the value-equality
+//! Container variants (`List`/`Dict`/`Record`) gate on a *comparability* relation: contents are
+//! compared only when the memoized/ascribed container types are **related** (one `satisfied_by` the
+//! other, in either direction); unrelated types yield `Ok(false)` without descending. This makes
+//! `==` intentionally intransitive across ascriptions and is documented in the value-equality
 //! design note.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::{same_nominal, KType, TypeRegistry};
+use crate::machine::model::types::{KType, TypeRegistry};
 use crate::machine::model::values::{Carried, Held};
 
 use super::KObject;
@@ -36,10 +36,10 @@ pub enum ValueEqualityError {
     Module,
 }
 
-/// Comparability gate for container type parameters: the two are compared iff one `satisfied_by` the
-/// other in either direction (an unrelated pair short-circuits the container to `Ok(false)`).
-/// Cross-lifetime — the slot and value type parameters carry independent lifetimes.
-fn types_related(a: &KType, b: &KType, types: &TypeRegistry) -> bool {
+/// Comparability gate for two containers' memoized types: the two are compared iff one
+/// `satisfied_by` the other in either direction (an unrelated pair short-circuits the container to
+/// `Ok(false)`).
+fn types_related(a: KType, b: KType, types: &TypeRegistry) -> bool {
     a.satisfied_by(b, types) || b.satisfied_by(a, types)
 }
 
@@ -70,8 +70,8 @@ impl<'a> KObject<'a> {
             (KObject::Bool(a), KObject::Bool(b)) => Ok(a == b),
             (KObject::Null, KObject::Null) => Ok(true),
 
-            (KObject::List(items_a, elem_a), KObject::List(items_b, elem_b)) => {
-                if !types_related(elem_a, elem_b, types) || items_a.len() != items_b.len() {
+            (KObject::List(items_a, type_a), KObject::List(items_b, type_b)) => {
+                if !types_related(*type_a, *type_b, types) || items_a.len() != items_b.len() {
                     return Ok(false);
                 }
                 for (a, b) in items_a.iter().zip(items_b.iter()) {
@@ -82,11 +82,8 @@ impl<'a> KObject<'a> {
                 Ok(true)
             }
 
-            (KObject::Dict(map_a, k_a, v_a), KObject::Dict(map_b, k_b, v_b)) => {
-                if !types_related(k_a, k_b, types)
-                    || !types_related(v_a, v_b, types)
-                    || map_a.len() != map_b.len()
-                {
+            (KObject::Dict(map_a, type_a), KObject::Dict(map_b, type_b)) => {
+                if !types_related(*type_a, *type_b, types) || map_a.len() != map_b.len() {
                     return Ok(false);
                 }
                 for (key, held_a) in map_a.iter() {
@@ -98,12 +95,8 @@ impl<'a> KObject<'a> {
                 Ok(true)
             }
 
-            (KObject::Record(fields_a, types_a), KObject::Record(fields_b, types_b)) => {
-                let ra = KType::record(types_a.clone());
-                let rb = KType::record(types_b.clone());
-                if !(ra.satisfied_by(&rb, types) || rb.satisfied_by(&ra, types))
-                    || fields_a.len() != fields_b.len()
-                {
+            (KObject::Record(fields_a, type_a), KObject::Record(fields_b, type_b)) => {
+                if !types_related(*type_a, *type_b, types) || fields_a.len() != fields_b.len() {
                     return Ok(false);
                 }
                 // Order-blind: same name set, per-name held equality.
@@ -119,33 +112,20 @@ impl<'a> KObject<'a> {
             (
                 KObject::Tagged {
                     value: value_a,
-                    set: set_a,
-                    index: index_a,
-                    type_args: args_a,
+                    identity: identity_a,
                     ..
                 },
                 KObject::Tagged {
                     value: value_b,
-                    set: set_b,
-                    index: index_b,
-                    type_args: args_b,
+                    identity: identity_b,
                     ..
                 },
             ) => {
-                if !same_nominal(set_a, *index_a, set_b, *index_b) {
+                // The whole nominal question — same member, same type arguments, erased-vs-stamped
+                // — is one handle compare: the identity handle folds the member reference and the
+                // runtime type arguments into a single interned type.
+                if identity_a != identity_b {
                     return Ok(false);
-                }
-                // Empty args on either side = erased = comparable; both populated must name the
-                // same parameters and be related per name.
-                if !args_a.is_empty() && !args_b.is_empty() {
-                    if args_a.len() != args_b.len() {
-                        return Ok(false);
-                    }
-                    if !args_a.iter().all(|(name, x)| {
-                        args_b.get(name).is_some_and(|y| types_related(x, y, types))
-                    }) {
-                        return Ok(false);
-                    }
                 }
                 value_a.value_equal(value_b, types)
             }
@@ -160,9 +140,9 @@ impl<'a> KObject<'a> {
                     type_id: type_id_b,
                 },
             ) => {
-                // Nominal identity via the digest-based `KType` equality; a `Wrapped` is never equal
-                // to its bare representation because that pair falls to the `Ok(false)` catch-all.
-                if **type_id_a != **type_id_b {
+                // Nominal identity via handle equality; a `Wrapped` is never equal to its bare
+                // representation because that pair falls to the `Ok(false)` catch-all.
+                if type_id_a != type_id_b {
                     return Ok(false);
                 }
                 inner_a.get().value_equal(inner_b.get(), types)

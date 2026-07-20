@@ -1,8 +1,6 @@
-//! [`TypeRegistry`] keying and verdict storage, plus [`digest_is_content`]'s coverage of the
-//! pointer-transient (unsealed `RecursiveSet`) hazard.
+//! [`TypeRegistry`]'s two maps: node interning and reads, and verdict keying and storage.
 
 use super::*;
-use crate::machine::model::types::{KKind, NominalMember, NominalSchema, RecursiveSet};
 
 #[test]
 fn record_then_read_returns_the_stored_verdict() {
@@ -102,74 +100,169 @@ fn a_fresh_registry_shares_nothing_with_another() {
     );
 }
 
-/// An unsealed set: created with pending members but never filled, so `digest()` stays `None`
-/// — the pointer-transient window `digest_is_content` must refuse. Mirrors the fixture shape in
-/// `type_digest/tests.rs::multi_member_set_seals_digest_on_last_fill`.
-fn unsealed_set() -> std::rc::Rc<RecursiveSet> {
-    std::rc::Rc::new(RecursiveSet::new(vec![NominalMember::pending(
-        "Pending".into(),
-        KKind::NewType,
-    )]))
+// --- Node interning ---
+
+/// Interning is insert-if-absent: the same content yields one node and two equal handles.
+#[test]
+fn interning_the_same_content_twice_yields_one_handle() {
+    let registry = TypeRegistry::new();
+    let first = registry.list(registry.intern(TypeNode::Number));
+    let second = registry.list(registry.intern(TypeNode::Number));
+    assert_eq!(first, second);
+    assert_eq!(registry.nodes_snapshot().len(), {
+        let baseline = TypeRegistry::new();
+        baseline.list(baseline.intern(TypeNode::Number));
+        baseline.nodes_snapshot().len()
+    });
 }
 
-fn sealed_set() -> std::rc::Rc<RecursiveSet> {
-    RecursiveSet::singleton(
-        "Sealed".into(),
-        NominalSchema::NewType(Box::new(KType::Number)),
-    )
+/// Distinct content lands on distinct handles.
+#[test]
+fn distinct_content_yields_distinct_handles() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    assert_ne!(number, string);
+    assert_ne!(registry.list(number), registry.list(string));
+}
+
+/// A handle reads back the content it was interned from.
+#[test]
+fn a_handle_reads_back_its_node() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let list = registry.list(number);
+    match registry.node(list) {
+        TypeNode::List { element } => assert_eq!(element, number),
+        _ => panic!("a list handle names a list node"),
+    }
+}
+
+/// The fixed handles are dereferenceable in a registry that has interned nothing else.
+#[test]
+fn the_constant_nodes_are_pre_seeded() {
+    let registry = TypeRegistry::new();
+    let snapshot = registry.nodes_snapshot();
+    let seeded = TypeRegistry::new();
+    for node in [
+        TypeNode::Number,
+        TypeNode::Str,
+        TypeNode::Bool,
+        TypeNode::Null,
+        TypeNode::Identifier,
+        TypeNode::KExpression,
+        TypeNode::SigiledTypeExpr,
+        TypeNode::RecordType,
+        TypeNode::Any,
+        TypeNode::OfKind(KKind::ProperType),
+        TypeNode::OfKind(KKind::Signature),
+        TypeNode::OfKind(KKind::AnyType),
+        TypeNode::OfKind(KKind::NewType),
+        TypeNode::OfKind(KKind::TypeConstructor),
+    ] {
+        let handle = seeded.intern(node);
+        assert!(
+            snapshot.contains_key(&handle.digest()),
+            "a fresh registry pre-seeds every constant node"
+        );
+    }
+    let any = seeded.intern(TypeNode::Any);
+    for handle in [
+        seeded.list(any),
+        seeded.dict(any, any),
+        seeded.signature(SigSchema::empty(), Vec::new()),
+    ] {
+        assert!(snapshot.contains_key(&handle.digest()));
+    }
+}
+
+/// A handle that names nothing is a bug, not a state.
+#[test]
+#[should_panic(expected = "names no interned node")]
+fn reading_an_uninterned_handle_panics() {
+    let registry = TypeRegistry::new();
+    registry.node(KType::from_digest(TypeDigest(0xdead_beef)));
+}
+
+/// A snapshot is taken against the table as it stood, so a walk over it is unaffected by
+/// interning that happens during the walk.
+#[test]
+fn a_snapshot_does_not_observe_later_interning() {
+    let registry = TypeRegistry::new();
+    let before = registry.nodes_snapshot();
+    let fresh = registry.record(Record::from_pairs(vec![(
+        "x".to_string(),
+        registry.intern(TypeNode::Number),
+    )]));
+    assert!(!before.contains_key(&fresh.digest()));
+    assert!(registry.nodes_snapshot().contains_key(&fresh.digest()));
+}
+
+// --- Union canonicalization ---
+
+/// A nested union flattens into its parent and duplicate members collapse.
+#[test]
+fn union_of_flattens_and_deduplicates() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    let inner = registry.union_of(vec![number, string]);
+    let outer = registry.union_of(vec![inner, number]);
+    assert_eq!(
+        outer, inner,
+        "flattening then deduplicating recovers `inner`"
+    );
+    match registry.node(outer) {
+        TypeNode::Union { members } => assert_eq!(members.len(), 2),
+        _ => panic!("a two-member union stays a union"),
+    }
+}
+
+/// A single surviving member is that member, not a one-member union.
+#[test]
+fn union_of_collapses_to_a_lone_member() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    assert_eq!(registry.union_of(vec![number, number]), number);
+}
+
+// --- Join ---
+
+#[test]
+fn join_of_equal_types_is_that_type() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    assert_eq!(registry.join(number, number), number);
 }
 
 #[test]
-fn digest_is_content_true_for_sealed_composites() {
-    assert!(digest_is_content(&KType::list(Box::new(KType::Number))));
-    assert!(digest_is_content(&KType::dict(
-        Box::new(KType::Str),
-        Box::new(KType::Number)
-    )));
-    assert!(digest_is_content(&KType::union_of(
-        vec![KType::Number, KType::Str],
-        &TypeRegistry::new()
-    )));
-    assert!(digest_is_content(&KType::function_type(
-        crate::machine::model::types::Record::from_pairs(vec![("x".to_string(), KType::Number)]),
-        Box::new(KType::Str)
-    )));
+fn join_of_lists_joins_element_wise() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    let any = registry.intern(TypeNode::Any);
+    assert_eq!(
+        registry.join(registry.list(number), registry.list(string)),
+        registry.list(any)
+    );
 }
 
 #[test]
-fn digest_is_content_true_for_leaves() {
-    assert!(digest_is_content(&KType::Number));
-    assert!(digest_is_content(&KType::Any));
-    assert!(digest_is_content(&KType::Identifier));
+fn join_of_unrelated_types_is_any() {
+    let registry = TypeRegistry::new();
+    let number = registry.intern(TypeNode::Number);
+    let string = registry.intern(TypeNode::Str);
+    assert_eq!(
+        registry.join(number, string),
+        registry.intern(TypeNode::Any)
+    );
 }
 
 #[test]
-fn digest_is_content_true_for_a_sealed_set_ref() {
-    let set = sealed_set();
-    assert!(set.digest().is_some());
-    assert!(digest_is_content(&KType::SetRef { set, index: 0 }));
-}
-
-#[test]
-fn digest_is_content_false_for_an_unsealed_set_ref() {
-    let set = unsealed_set();
-    assert!(set.digest().is_none());
-    assert!(!digest_is_content(&KType::SetRef { set, index: 0 }));
-}
-
-#[test]
-fn digest_is_content_false_for_an_unsealed_recursive_group() {
-    let set = unsealed_set();
-    assert!(!digest_is_content(&KType::RecursiveGroup(set)));
-}
-
-#[test]
-fn digest_is_content_false_for_a_composite_containing_an_unsealed_set_ref() {
-    let set = unsealed_set();
-    let inner = KType::SetRef { set, index: 0 };
-    let list = KType::list(Box::new(inner));
-    assert!(
-        !digest_is_content(&list),
-        "an unsealed set nested inside a composite still poisons the whole type"
+fn join_iter_over_nothing_is_any() {
+    let registry = TypeRegistry::new();
+    assert_eq!(
+        registry.join_iter(Vec::new()),
+        registry.intern(TypeNode::Any)
     );
 }

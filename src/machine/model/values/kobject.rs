@@ -4,9 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{
-    KType, Parseable, Record, RecursiveSet, SignatureElement, TypeRegistry,
-};
+use crate::machine::model::types::{KType, Parseable, Record, TypeNode, TypeRegistry};
 
 use super::{Held, KKey, Module};
 
@@ -61,65 +59,60 @@ pub enum KObject<'a> {
     Number(f64),
     KString(String),
     Bool(bool),
-    /// List value. The second field is the memoized/ascribed element type: at fresh
-    /// construction the join (LUB) of the contents under the immutable-`Rc` contract; at
-    /// an annotated boundary re-stamped to the declared element type (coarsening
-    /// included). Construct via [`KObject::list`] / [`KObject::list_with_type`]; never
-    /// the tuple directly outside this module.
-    List(Rc<Vec<Held<'a>>>, Box<KType>),
+    /// List value. The second field is the value's **own type handle** — the interned
+    /// `List<element>` — memoized at construction from the join (LUB) of the contents under
+    /// the immutable-`Rc` contract, or re-stamped at an annotated boundary to the declared
+    /// list type (coarsening included). Construct via [`KObject::list`] /
+    /// [`KObject::list_with_type`]; never the tuple directly outside this module.
+    List(Rc<Vec<Held<'a>>>, KType),
     /// Dict value. Each value cell is a [`Held`] (an object or a first-class type); keys
-    /// are the concrete scalar [`KKey`]. The second/third fields are the memoized/ascribed
-    /// key + value types, computed as the join of the keys / values at fresh construction
-    /// or re-stamped at an annotated boundary.
-    Dict(Rc<HashMap<KKey, Held<'a>>>, Box<KType>, Box<KType>),
+    /// are the concrete scalar [`KKey`]. The second field is the value's own type handle —
+    /// the interned `Dict<key, value>` over the join of the keys / values, or the declared
+    /// dict type after a stamp.
+    Dict(Rc<HashMap<KKey, Held<'a>>>, KType),
     KExpression(KExpression<'a>),
     KFunction(&'a KFunction<'a>),
-    /// Tagged-union value. `(set, index)` references the union's sealed `RecursiveSet`
-    /// member; `ktype()` synthesizes `KType::SetRef { set, index }` so dispatch on type
-    /// identity sees the declared union, and lift shares the set by `Rc::clone`.
-    ///
-    /// `type_args` carries the value's runtime type arguments for a parameterized union,
-    /// keyed by the carrier's type-parameter names (`Result` binds `Ok` and `Error`): empty
-    /// means erased; populated, `ktype()` synthesizes `KType::ConstructorApply` so dispatch
-    /// and slot admission see the full instantiation. Populated by ascription stamping at
-    /// annotated boundaries.
+    /// Tagged-union value. `identity` is the value's own type handle: the union member's
+    /// `SetMember` handle when the carrier's type arguments are erased, or the
+    /// `ConstructorApply` over that member when an ascription stamped a parameterized union's
+    /// arguments in. One handle carries what the member reference and the runtime type
+    /// arguments used to carry separately, so `ktype()` is a copy and identity comparison is
+    /// one `u128`.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
-        set: Rc<RecursiveSet>,
-        index: usize,
-        type_args: Rc<Record<KType>>,
+        identity: KType,
     },
     /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
     /// `Rc`-shared field record (identifier-keyed, declaration-ordered, order-blind
-    /// equality); the second is the memoized/ascribed per-field type record — the join
-    /// of each field's `ktype()` at fresh construction, re-stamped to a declared
-    /// `KType::Record` at an annotated boundary (mirrors `List` / `Dict`). Construct via
-    /// [`KObject::record`] / [`KObject::record_with_type`]. Distinct from the nominal
-    /// `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
-    /// Each field value is a [`Held`] (an object or a first-class type).
-    Record(Rc<Record<Held<'a>>>, Box<Record<KType>>),
+    /// equality); the second is the value's own type handle — the interned `Record` over
+    /// each field's `ktype()` at fresh construction, re-stamped to a declared record type at
+    /// an annotated boundary (mirrors `List` / `Dict`). Construct via [`KObject::record`] /
+    /// [`KObject::record_with_type`]. Distinct from the nominal `Struct`: a record carries no
+    /// `(name, scope_id)` identity, only its structure. Each field value is a [`Held`] (an
+    /// object or a first-class type).
+    Record(Rc<Record<Held<'a>>>, KType),
     /// NEWTYPE / union-variant carrier (and the ATTR abstract-type re-tag carrier): tags a
     /// representation value with a type identity. A re-tag collapses one wrapper layer
     /// ([`WrappedPayload::peel`]); a genuine construction preserves the payload verbatim
     /// ([`WrappedPayload::hold`]), so a union variant nesting another variant keeps every
-    /// layer. `type_id` is a declaration-stable `&'a KType` — for a NEWTYPE / union variant it
-    /// is a `KType::SetRef` into the sealed singleton set `bindings.types[name]` holds
-    /// (so the shared `Rc<RecursiveSet>` travels with it); for an opaque-ascription
-    /// abstract-type re-tag it is the per-call `AbstractType` identity.
+    /// layer. `type_id` is the declaration-stable identity handle — for a NEWTYPE / union
+    /// variant the sealed member's `SetMember` handle, for an identity-wrapper construction a
+    /// `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag the
+    /// per-call `AbstractType` identity.
     ///
-    /// `ktype()` reports `(*type_id).clone()` — the per-declaration identity. ATTR over a
-    /// `Wrapped` falls through to `inner`, so wrapping a struct in a NEWTYPE doesn't force
-    /// every field accessor to redo.
+    /// `ktype()` copies `type_id` — the per-declaration identity. ATTR over a `Wrapped` falls
+    /// through to `inner`, so wrapping a struct in a NEWTYPE doesn't force every field accessor
+    /// to redo.
     Wrapped {
         inner: WrappedPayload<'a>,
-        type_id: &'a KType,
+        type_id: KType,
     },
     /// First-class module value. A bare borrow into the region the module was minted in,
     /// pinned by the value carrier's witness set — the same contract as [`Self::KFunction`].
-    /// `ktype()` reports the module's principal signature (`Signature { content, .. }`, its
-    /// self-sig content), so a module in expression position dispatches and satisfies signature
-    /// slots on the value channel.
+    /// `ktype()` reports the module's principal signature (the handle its self-sig seal
+    /// interned), so a module in expression position dispatches and satisfies signature slots
+    /// on the value channel.
     Module(&'a Module<'a>),
     Null,
 }
@@ -135,15 +128,16 @@ impl<'a> KObject<'a> {
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
     /// a first-class type). Memoizes the element type as the join (LUB) of the cells.
     pub fn list_of_held(items: Vec<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
-        let elem = KType::join_iter(items.iter().map(|i| i.ktype(types)), types);
-        KObject::List(Rc::new(items), Box::new(elem))
+        let element = types.join_iter(items.iter().map(|i| i.ktype(types)));
+        KObject::List(Rc::new(items), types.list(element))
     }
 
-    /// `List` carrier with an explicitly supplied element type — for lift (preserve the
+    /// `List` carrier with an explicitly supplied **list type** — for lift (preserve the
     /// memoized type across a region-anchor rebuild) and ascription stamping (re-tag to
-    /// the declared element type, coarsening included).
-    pub fn list_with_type(items: Rc<Vec<Held<'a>>>, elem: KType) -> KObject<'a> {
-        KObject::List(items, Box::new(elem))
+    /// the declared list type, coarsening included). `list_type` is the whole `List<element>`
+    /// handle, already interned, not the element type.
+    pub fn list_with_type(items: Rc<Vec<Held<'a>>>, list_type: KType) -> KObject<'a> {
+        KObject::List(items, list_type)
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
@@ -157,18 +151,15 @@ impl<'a> KObject<'a> {
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value
     /// may be a first-class type; keys stay scalar).
     pub fn dict_of_held(map: HashMap<KKey, Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
-        let k = KType::join_iter(map.keys().map(|k| k.ktype()), types);
-        let v = KType::join_iter(map.values().map(|v| v.ktype(types)), types);
-        KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
+        let key = types.join_iter(map.keys().map(|k| k.ktype()));
+        let value = types.join_iter(map.values().map(|v| v.ktype(types)));
+        KObject::Dict(Rc::new(map), types.dict(key, value))
     }
 
-    /// `Dict` carrier with explicitly supplied key + value types. See [`Self::list_with_type`].
-    pub fn dict_with_type(
-        map: Rc<HashMap<KKey, Held<'a>>>,
-        key: KType,
-        value: KType,
-    ) -> KObject<'a> {
-        KObject::Dict(map, Box::new(key), Box::new(value))
+    /// `Dict` carrier with an explicitly supplied **dict type** — the whole `Dict<key, value>`
+    /// handle. See [`Self::list_with_type`].
+    pub fn dict_with_type(map: Rc<HashMap<KKey, Held<'a>>>, dict_type: KType) -> KObject<'a> {
+        KObject::Dict(map, dict_type)
     }
 
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
@@ -185,14 +176,14 @@ impl<'a> KObject<'a> {
     /// value may be a first-class type).
     pub fn record_of_held(fields: Record<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
         let field_types = fields.map(|v| v.ktype(types));
-        KObject::Record(Rc::new(fields), Box::new(field_types))
+        KObject::Record(Rc::new(fields), types.record(field_types))
     }
 
-    /// `Record` carrier with an explicitly supplied per-field type record — for
-    /// ascription stamping (re-tag to the declared field types, coarsening included).
-    /// See [`Self::list_with_type`].
-    pub fn record_with_type(fields: Rc<Record<Held<'a>>>, types: Record<KType>) -> KObject<'a> {
-        KObject::Record(fields, Box::new(types))
+    /// `Record` carrier with an explicitly supplied **record type** — the whole interned
+    /// record-type handle — for ascription stamping (re-tag to the declared field types,
+    /// coarsening included). See [`Self::list_with_type`].
+    pub fn record_with_type(fields: Rc<Record<Held<'a>>>, record_type: KType) -> KObject<'a> {
+        KObject::Record(fields, record_type)
     }
 
     /// Ascription stamping at an annotated boundary (FN return type, argument slot,
@@ -202,39 +193,24 @@ impl<'a> KObject<'a> {
     /// downstream dispatch sees the contract rather than the implementation's
     /// incidental precision.
     ///
-    /// Only the three parameterized carriers re-tag; every other shape passes through
-    /// (its `ktype()` is already its nominal identity). For a `Tagged` stamped against
-    /// a `ConstructorApply`, the constructor identity must already match; the
-    /// `type_args` are replaced with the declared args.
-    pub fn stamp_type(self, declared: &KType) -> KObject<'a> {
-        match (self, declared) {
-            (KObject::List(items, _), KType::List { element: elem, .. }) => {
-                KObject::List(items, elem.clone())
+    /// Only the four parameterized carriers re-tag, and each re-tags to `declared` itself —
+    /// the declared type IS the carrier's new identity handle. Every other shape passes through
+    /// (its `ktype()` is already its nominal identity). For a `Tagged` stamped against a
+    /// `ConstructorApply`, the constructor identity must already match, so adopting `declared`
+    /// wholesale supplies exactly the declared arguments.
+    pub fn stamp_type(self, declared: KType, types: &TypeRegistry) -> KObject<'a> {
+        match (self, types.node(declared)) {
+            (KObject::List(items, _), TypeNode::List { .. }) => KObject::List(items, declared),
+            (KObject::Dict(map, _), TypeNode::Dict { .. }) => KObject::Dict(map, declared),
+            (KObject::Record(fields, _), TypeNode::Record { .. }) => {
+                KObject::Record(fields, declared)
             }
-            (
-                KObject::Dict(map, _, _),
-                KType::Dict {
-                    key: k, value: v, ..
-                },
-            ) => KObject::Dict(map, k.clone(), v.clone()),
-            (
+            (KObject::Tagged { tag, value, .. }, TypeNode::ConstructorApply { .. }) => {
                 KObject::Tagged {
                     tag,
                     value,
-                    set,
-                    index,
-                    ..
-                },
-                KType::ConstructorApply { args, .. },
-            ) => KObject::Tagged {
-                tag,
-                value,
-                set,
-                index,
-                type_args: Rc::new(args.clone()),
-            },
-            (KObject::Record(fields, _), KType::Record { fields: types, .. }) => {
-                KObject::Record(fields, types.clone())
+                    identity: declared,
+                }
             }
             (other, _) => other,
         }
@@ -251,12 +227,8 @@ impl<'a> KObject<'a> {
     /// information and is legal where `:(LIST OF Any)` is declared).
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
-            KObject::List(items, elem) => items.is_empty() && matches!(elem.as_ref(), KType::Any),
-            KObject::Dict(map, k, v) => {
-                map.is_empty()
-                    && matches!(k.as_ref(), KType::Any)
-                    && matches!(v.as_ref(), KType::Any)
-            }
+            KObject::List(items, list_type) => items.is_empty() && *list_type == KType::LIST_OF_ANY,
+            KObject::Dict(map, dict_type) => map.is_empty() && *dict_type == KType::DICT_ANY_ANY,
             _ => false,
         }
     }
@@ -277,9 +249,9 @@ impl<'a> KObject<'a> {
 
     /// True when every region borrow in `self` points into `dest`. Only value-channel borrows
     /// are walked: `KFunction`, `Module`, `KExpression` splices, and the [`Held`] cells of the
-    /// composite carriers. The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged.type_args`,
-    /// `Wrapped { type_id }`) are not walked — a `KType` is owned data, and a stored `&KType`
-    /// always points into the storing scope's own region, so it can carry no foreign borrow.
+    /// composite carriers. The `KType` tags (`List`/`Dict`/`Record` memos, `Tagged { identity }`,
+    /// `Wrapped { type_id }`) are not walked — a handle is one `u128` naming registry-owned
+    /// content, so it borrows no region at all.
     pub(crate) fn resident_in(&self, dest: &KoanRegion) -> bool {
         self.resident_in_visiting(&Residence::dest_only(dest))
     }
@@ -299,7 +271,7 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f) => residence.owns_function(f),
             KObject::KExpression(e) => e.is_splice_free(),
             KObject::List(items, _) => items.iter().all(|h| held_resident_in(h, residence)),
-            KObject::Dict(map, _, _) => map.values().all(|h| held_resident_in(h, residence)),
+            KObject::Dict(map, _) => map.values().all(|h| held_resident_in(h, residence)),
             KObject::Record(fields, _) => {
                 fields.iter().all(|(_, h)| held_resident_in(h, residence))
             }
@@ -309,38 +281,24 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Runtime type tag.
+    /// Runtime type tag — context-free by construction (ruling 4). Every value memoizes its
+    /// full interned type handle where it is built, at a site that holds the registry, so this
+    /// only ever copies a stored handle or names a pre-seeded constant. It builds nothing and
+    /// needs no registry.
     pub fn ktype(&self) -> KType {
         match self {
-            KObject::Number(_) => KType::Number,
-            KObject::KString(_) => KType::Str,
-            KObject::Bool(_) => KType::Bool,
-            KObject::Null => KType::Null,
-            KObject::List(_, elem) => KType::list(elem.clone()),
-            KObject::Dict(_, k, v) => KType::dict(k.clone(), v.clone()),
-            KObject::KFunction(f) => function_value_ktype(f),
-            KObject::KExpression(_) => KType::KExpression,
-            // A `TypeConstructor` value keeps the ctor identity — bare `SetRef` when
-            // `type_args` is erased, else the applied form.
-            KObject::Tagged {
-                set,
-                index,
-                type_args,
-                ..
-            } => {
-                let bare = KType::SetRef {
-                    set: Rc::clone(set),
-                    index: *index,
-                };
-                if type_args.is_empty() {
-                    bare
-                } else {
-                    KType::constructor_apply(Box::new(bare), type_args.as_ref().clone())
-                }
-            }
-            KObject::Record(_, field_types) => KType::record(field_types.clone()),
-            KObject::Wrapped { type_id, .. } => (*type_id).clone(),
-            KObject::Module(m) => KType::signature(Rc::clone(m.self_sig_content()), Vec::new()),
+            KObject::Number(_) => KType::NUMBER,
+            KObject::KString(_) => KType::STR,
+            KObject::Bool(_) => KType::BOOL,
+            KObject::Null => KType::NULL,
+            KObject::KExpression(_) => KType::KEXPRESSION,
+            KObject::List(_, list_type) => *list_type,
+            KObject::Dict(_, dict_type) => *dict_type,
+            KObject::Record(_, record_type) => *record_type,
+            KObject::KFunction(f) => f.value_ktype(),
+            KObject::Tagged { identity, .. } => *identity,
+            KObject::Wrapped { type_id, .. } => *type_id,
+            KObject::Module(m) => m.ktype(),
         }
     }
 
@@ -352,29 +310,25 @@ impl<'a> KObject<'a> {
             KObject::KString(s) => KObject::KString(s.clone()),
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
-            KObject::List(items, elem) => KObject::List(Rc::clone(items), elem.clone()),
-            KObject::Dict(entries, k, v) => KObject::Dict(Rc::clone(entries), k.clone(), v.clone()),
+            KObject::List(items, list_type) => KObject::List(Rc::clone(items), *list_type),
+            KObject::Dict(entries, dict_type) => KObject::Dict(Rc::clone(entries), *dict_type),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFunction(f) => KObject::KFunction(f),
             KObject::Tagged {
                 tag,
                 value,
-                set,
-                index,
-                type_args,
+                identity,
             } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
-                set: Rc::clone(set),
-                index: *index,
-                type_args: Rc::clone(type_args),
+                identity: *identity,
             },
-            KObject::Record(fields, field_types) => {
-                KObject::Record(Rc::clone(fields), field_types.clone())
+            KObject::Record(fields, record_type) => {
+                KObject::Record(Rc::clone(fields), *record_type)
             }
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
                 inner: inner.clone(),
-                type_id,
+                type_id: *type_id,
             },
             KObject::Module(m) => KObject::Module(m),
         }
@@ -411,35 +365,6 @@ fn held_resident_in(h: &Held<'_>, residence: &Residence<'_>) -> bool {
     }
 }
 
-fn function_value_ktype<'a>(f: &'a KFunction<'a>) -> KType {
-    use crate::machine::model::types::{DeferredReturnSurface, ReturnType};
-    use crate::machine::model::Record;
-    // The parameter record keys each `Argument` by its declared name — the names the
-    // signature already holds, never the dispatch keywords. So a function value projects
-    // the same `(name → type)` record a `:(FN (name :Type) -> _)` slot declares.
-    let params: Record<KType> = f
-        .signature
-        .elements
-        .iter()
-        .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some((a.name.clone(), a.ktype.clone())),
-            _ => None,
-        })
-        .collect();
-    // A `Deferred(_)` source return projects into the confined `KType::DeferredReturn`
-    // carrier, holding the hashable surface shadow of the deferred form. Equality,
-    // hashing, and specificity over the structural `KType` then read the deferred shape
-    // directly instead of seeing it coarsened to `Any`. See
-    // [ktype/records-and-limits.md § Record fields](../../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
-    let ret = match &f.signature.return_type {
-        ReturnType::Resolved(kt) => Box::new(kt.clone()),
-        ReturnType::Deferred(d) => Box::new(KType::DeferredReturn(
-            DeferredReturnSurface::from_deferred(d),
-        )),
-    };
-    KType::function_type(params, ret)
-}
-
 impl<'a> Parseable for KObject<'a> {
     fn ktype(&self) -> KType {
         KObject::ktype(self)
@@ -449,44 +374,36 @@ impl<'a> Parseable for KObject<'a> {
 impl<'a> KObject<'a> {
     /// Canonical surface rendering of a value. Carried types render through the registry.
     pub fn summarize(&self, types: &TypeRegistry) -> String {
-        self.render_summary(Some(types))
-    }
-
-    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => s.clone(),
             KObject::Bool(b) => b.to_string(),
             KObject::List(items, _) => {
-                let parts: Vec<String> = items.iter().map(|i| i.render_summary(types)).collect();
+                let parts: Vec<String> = items.iter().map(|i| i.summarize(types)).collect();
                 format!("[{}]", parts.join(", "))
             }
-            KObject::Dict(entries, _, _) => {
+            KObject::Dict(entries, _) => {
                 let parts: Vec<String> = entries
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.render_summary(types)))
+                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(),
             KObject::KFunction(f) => f.summarize(),
             KObject::Tagged { tag, value, .. } => {
-                format!("{}({})", tag, value.render_summary(types))
+                format!("{}({})", tag, value.summarize(types))
             }
             KObject::Record(fields, _) => {
                 let parts: Vec<String> = fields
                     .iter()
-                    .map(|(field, value)| format!("{} = {}", field, value.render_summary(types)))
+                    .map(|(field, value)| format!("{} = {}", field, value.summarize(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::Null => "null".to_string(),
             KObject::Wrapped { inner, type_id } => {
-                format!(
-                    "{}({})",
-                    type_id.name_or_without_registry(types),
-                    inner.get().render_summary(types)
-                )
+                format!("{}({})", type_id.name(types), inner.get().summarize(types))
             }
             KObject::Module(m) => m.path.clone(),
         }

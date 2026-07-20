@@ -14,7 +14,7 @@
 //!   (`CtorKind` + `launch`); or, when the head is a type constructor and the body is a
 //!   record literal, apply that constructor to named type arguments
 //!   (`:(Result {Ok = Number, Error = MyError})`) and yield the resulting
-//!   `KType::ConstructorApply` as a type value.
+//!   `ConstructorApply` type as a type value.
 //! - `Function(&KFunction)` — call a `KFunction` by name. Every function rides this
 //!   arm, whatever it returns.
 
@@ -24,7 +24,7 @@ use std::rc::Rc;
 use crate::machine::core::{DepPlacement, KFunction};
 use crate::machine::model::{constructor_param_names, Carried, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, ProjectedSchema, RecursiveSet, TypeRegistry};
+use crate::machine::model::{KType, NodeSchema, TypeNode, TypeRegistry};
 use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
@@ -44,7 +44,7 @@ mod tests;
 /// A head resolved to something callable. The lane decides which arm; the tail
 /// branches on the body surface and launches.
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
-    /// Build from a sealed nominal member (`KType::SetRef` — struct / tagged / newtype /
+    /// Build from a sealed nominal member (a `SetMember` node — struct / tagged / newtype /
     /// `TypeConstructor`).
     Constructor { identity: &'step KType },
     /// Call a `KFunction` by name.
@@ -75,7 +75,7 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
     }
 }
 
-/// Construct from a `KType::SetRef` member identity, or apply a type constructor to named type
+/// Construct from a sealed nominal member identity, or apply a type constructor to named type
 /// arguments. A record-literal body on a constructor-kind head (`Wrap {Elem = Number}`) is *type
 /// application*, yielding a `ConstructorApply` type value. Otherwise a newtype bypasses the
 /// `{name = value}` / `(value)` body split — it takes the trailing parts directly as its
@@ -88,16 +88,16 @@ fn apply_constructor<'step>(
     identity: &'step KType,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
-    // A user `UNION` binds an anonymous union of per-variant newtype `SetRef`s. `Maybe Some`
+    // A user `UNION` binds an anonymous union of per-variant newtype members. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
-    if let KType::Union { members, .. } = identity {
+    if let TypeNode::Union { members } = ctx.types().node(*identity) {
         return apply_union_construct(ctx, members, expr);
     }
-    // Named type application: a type-constructor head — a declared family (`SetRef`, empty or
+    // Named type application: a type-constructor head — a declared family (`SetMember`, empty or
     // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
     // each of the family's parameters to a type. It precedes every construction arm: the two
     // surfaces are disjoint, and the record body is a type-argument list here, not a value.
-    if let Some(param_names) = constructor_param_names(identity, ctx.types()) {
+    if let Some(param_names) = constructor_param_names(*identity, ctx.types()) {
         if let Some(
             [Spanned {
                 value: ExpressionPart::RecordLiteral(fields),
@@ -110,9 +110,9 @@ fn apply_constructor<'step>(
     }
     // A SIG's abstract constructor slot names a kind; it has no representation to build values
     // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
-    if let KType::AbstractType {
+    if let TypeNode::AbstractType {
         name, param_names, ..
-    } = identity
+    } = ctx.types().node(*identity)
     {
         if !param_names.is_empty() {
             return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -121,17 +121,17 @@ fn apply_constructor<'step>(
             )))));
         }
     }
-    let KType::SetRef { set, index } = identity else {
+    let TypeNode::SetMember { schema, name, .. } = ctx.types().node(*identity) else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
             got: identity.name(ctx.types()),
         })));
     };
-    match RecursiveSet::projected_schema(set, *index, ctx.types()) {
+    match schema {
         // A record-literal body builds per-field (literal fields bind synchronously); any
         // other trailing expression is wrapped as a single positional value.
-        ProjectedSchema::NewType(_) => match expr.parts.get(1..) {
+        NodeSchema::NewType(_) => match expr.parts.get(1..) {
             Some(
                 [Spanned {
                     value: ExpressionPart::RecordLiteral(fields),
@@ -143,31 +143,29 @@ fn apply_constructor<'step>(
         // A non-empty schema is `Result`'s variant schema — the sealed tagged-union path. An
         // empty schema is a declared constructor family (`NEWTYPE (Elem AS Wrapper)`); it
         // constructs an identity-wrapper `Wrapped` value.
-        ProjectedSchema::TypeConstructor { schema, .. } if !schema.is_empty() => {
-            match extract_call_body(expr) {
-                Ok(CallBody::Positional(parts)) => constructors::dispatch_construct_tagged(
-                    Rc::clone(set),
-                    *index,
-                    Rc::new(schema),
-                    parts,
-                ),
-                Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
-                Err(e) => Outcome::Done(Err(e)),
+        NodeSchema::TypeConstructor {
+            schema: variant_schema,
+            ..
+        } if !variant_schema.is_empty() => match extract_call_body(expr) {
+            Ok(CallBody::Positional(parts)) => {
+                constructors::dispatch_construct_tagged(*identity, Rc::new(variant_schema), parts)
             }
-        }
+            Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
+            Err(e) => Outcome::Done(Err(e)),
+        },
         // An identity wrapper wraps one value and infers one type argument from it, so value
         // construction is an arity-1 surface; a wider family applies by name only.
-        ProjectedSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
+        NodeSchema::TypeConstructor { param_names, .. } if param_names.len() > 1 => {
             Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type parameters; constructing values of a multi-parameter \
                  family is not yet supported",
-                set.member(*index).name,
+                name,
                 param_names.len(),
             )))))
         }
-        ProjectedSchema::TypeConstructor { .. } => match extract_call_body(expr) {
+        NodeSchema::TypeConstructor { .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_apply(Rc::clone(set), *index, parts)
+                constructors::dispatch_construct_apply(*identity, parts)
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -193,7 +191,7 @@ fn apply_named_type_args<'step>(
         return Outcome::Done(
             build_apply_args(identity, &param_names, Vec::new(), ctx.types()).map(|args| {
                 ctx.step_ctx()
-                    .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args))
+                    .alloc_type(ctx.types().constructor_apply(*identity, args))
             }),
         );
     }
@@ -214,7 +212,7 @@ fn apply_named_type_args<'step>(
             .iter()
             .zip(&names)
             .map(|(terminal, name)| match terminal.value {
-                Carried::Type(kt) => Ok((name.clone(), kt.clone())),
+                Carried::Type(kt) => Ok((name.clone(), *kt)),
                 Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
                     arg: name.clone(),
                     expected: "Type".to_string(),
@@ -229,7 +227,7 @@ fn apply_named_type_args<'step>(
             let args = build_apply_args(identity, &param_names, supplied, view.types())?;
             Ok(view
                 .step_ctx()
-                .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args)))
+                .alloc_type(view.types().constructor_apply(*identity, args)))
         }))
     });
     Await::on(Deps::from_owned(deps))
@@ -292,14 +290,14 @@ fn quoted_list(names: &[&str]) -> String {
         .join(", ")
 }
 
-/// Construct from an anonymous union of per-variant newtype `SetRef`s (a user `UNION`). `Maybe Some`
+/// Construct from an anonymous union of per-variant newtype members (a user `UNION`). `Maybe Some`
 /// (a bare `Type` token body) yields the variant member's type value, reached through its union;
 /// `Maybe (Some v)` (a paren-group body) newtype-constructs the named member — an ordinary
-/// `KObject::Wrapped` over the member `SetRef`, never a `KObject::Tagged`. An unknown variant name in
+/// `KObject::Wrapped` over the member, never a `KObject::Tagged`. An unknown variant name in
 /// either form is a schema error listing the union's members.
 fn apply_union_construct<'step>(
     ctx: &SchedulerView<'step, '_>,
-    members: &'step [KType],
+    members: Vec<KType>,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // Bare variant-tag token with no payload (`Maybe Some`) names the variant *type*, reached
@@ -310,24 +308,29 @@ fn apply_union_construct<'step>(
     }] = expr.parts[1..].as_ref()
     {
         let name = t.render();
-        return match union_member(members, &name) {
-            Some(member) => Outcome::Done(Ok(ctx.step_ctx().alloc_type(member.clone()))),
-            None => Outcome::Done(Err(unknown_variant_error(members, &name))),
+        return match union_member(&members, &name, ctx.types()) {
+            Some(member) => Outcome::Done(Ok(ctx.step_ctx().alloc_type(member))),
+            None => Outcome::Done(Err(unknown_variant_error(&members, &name, ctx.types()))),
         };
     }
-    // Payload construction: `Maybe (Some v)` (paren-group body) newtype-constructs the member.
+    // Payload construction: `Maybe (Some v)` (paren-group body) builds the variant value. A
+    // user-union variant is a `Tagged` — the same value shape builtin `Result` produces — so
+    // `MATCH` dispatches user unions by tag string through the shared `TaggedByTag` path. The tag
+    // names which member; the value's `identity` is that member's own sealed handle.
     match extract_call_body(expr) {
         Ok(CallBody::Positional(parts)) => {
             let (tag, value_part) = match constructors::prepare_args(parts) {
                 Ok(v) => v,
                 Err(e) => return Outcome::Done(Err(e)),
             };
-            match union_member(members, &tag) {
-                Some(member) => constructors::dispatch_construct_newtype(
+            match union_member(&members, &tag, ctx.types()) {
+                Some(member) => constructors::construct_tagged(
                     member,
-                    vec![Spanned::bare(value_part)],
+                    Rc::new(union_variant_schema(&members, ctx.types())),
+                    tag,
+                    value_part,
                 ),
-                None => Outcome::Done(Err(unknown_variant_error(members, &tag))),
+                None => Outcome::Done(Err(unknown_variant_error(&members, &tag, ctx.types()))),
             }
         }
         Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
@@ -335,27 +338,47 @@ fn apply_union_construct<'step>(
     }
 }
 
-/// The union member whose newtype `SetRef` is named `name`, if any.
-fn union_member<'step>(members: &'step [KType], name: &str) -> Option<&'step KType> {
+/// The variant schema of an anonymous union of sealed newtype members: each member's tag mapped
+/// to its declared payload type (its `NewType` repr). This is the per-value type-check table the
+/// `Tagged` finish reads (`schema[tag]`), matching the shape builtin `Result` supplies.
+fn union_variant_schema(members: &[KType], types: &TypeRegistry) -> HashMap<String, KType> {
     members
         .iter()
-        .find(|m| matches!(m, KType::SetRef { set, index } if set.member(*index).name == name))
+        .filter_map(|m| match types.node(*m) {
+            TypeNode::SetMember {
+                name,
+                schema: NodeSchema::NewType(repr),
+                ..
+            } => Some((name, repr)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The union member whose sealed newtype is named `name`, if any.
+fn union_member(members: &[KType], name: &str, types: &TypeRegistry) -> Option<KType> {
+    members.iter().copied().find(|m| match types.node(*m) {
+        TypeNode::SetMember {
+            name: member_name, ..
+        } => member_name == name,
+        _ => false,
+    })
 }
 
 /// A schema error for a name that is not one of the union's variants, listing the members.
-fn unknown_variant_error(members: &[KType], name: &str) -> KError {
+fn unknown_variant_error(members: &[KType], name: &str, types: &TypeRegistry) -> KError {
     KError::new(KErrorKind::ShapeError(format!(
         "`{name}` is not a variant of the union (variants: {})",
-        union_member_names(members),
+        union_member_names(members, types),
     )))
 }
 
-/// Sorted, comma-joined member names of an anonymous union of newtype `SetRef`s.
-fn union_member_names(members: &[KType]) -> String {
-    let mut names: Vec<&str> = members
+/// Sorted, comma-joined member names of an anonymous union of sealed newtype members.
+fn union_member_names(members: &[KType], types: &TypeRegistry) -> String {
+    let mut names: Vec<String> = members
         .iter()
-        .filter_map(|m| match m {
-            KType::SetRef { set, index } => Some(set.member(*index).name.as_str()),
+        .filter_map(|m| match types.node(*m) {
+            TypeNode::SetMember { name, .. } => Some(name),
             _ => None,
         })
         .collect();

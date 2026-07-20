@@ -226,7 +226,7 @@ fn backward_let_type_alias_resolves_to_number() {
     let region = run_root_storage();
     let scope = run(&region, "LET Un = Number\nLET Ty = Un").scope;
     assert!(
-        matches!(scope.resolve_type("Ty"), Some(KType::Number)),
+        scope.resolve_type("Ty") == Some(&KType::NUMBER),
         "expected Ty to resolve to Number, got {:?}",
         scope.resolve_type("Ty"),
     );
@@ -245,7 +245,7 @@ fn let_alias_via_module_qualified_type_resolves() {
     let test_run = run(&region, "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty");
     let scope = test_run.scope;
     assert!(
-        matches!(scope.resolve_type("MyT"), Some(KType::Number)),
+        scope.resolve_type("MyT") == Some(&KType::NUMBER),
         "expected MyT to resolve to Number via mo.Ty, got {:?}",
         scope.resolve_type("MyT").map(|t| t.name(&test_run.types)),
     );
@@ -282,7 +282,7 @@ fn chained_module_qualified_type_resolves() {
     )
     .scope;
     assert!(
-        matches!(scope.resolve_type("MyT"), Some(KType::Number)),
+        scope.resolve_type("MyT") == Some(&KType::NUMBER),
         "expected MyT to resolve to Number via outer.inner.Ty, got {:?}",
         scope.resolve_type("MyT"),
     );

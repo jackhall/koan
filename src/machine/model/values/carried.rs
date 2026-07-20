@@ -55,8 +55,8 @@ impl<'a> Carried<'a> {
             Carried::Object(o) => o,
             Carried::Type(t) => {
                 panic!(
-                    "expected an Object value, got a Type arm: {}",
-                    t.name_without_registry()
+                    "expected an Object value, got a Type arm: 0x{:032x}",
+                    t.digest().0
                 )
             }
             Carried::UnresolvedType(ti) => {
@@ -71,20 +71,9 @@ impl<'a> Carried<'a> {
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
     pub fn summarize(&self, types: &TypeRegistry) -> String {
-        self.render_summary(Some(types))
-    }
-
-    /// The registry-free twin of [`Self::summarize`], for the `Formatter`-only renderers that
-    /// have no registry to hand: [`std::fmt::Debug`] and the surface-only
-    /// [`ExpressionPart::summarize`](crate::machine::model::ast::ExpressionPart::summarize).
-    pub fn summarize_without_registry(&self) -> String {
-        self.render_summary(None)
-    }
-
-    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
-            Carried::Object(o) => o.render_summary(types),
-            Carried::Type(t) => t.name_or_without_registry(types),
+            Carried::Object(o) => o.summarize(types),
+            Carried::Type(t) => t.name(types),
             Carried::UnresolvedType(ti) => ti.render(),
         }
     }
@@ -94,9 +83,9 @@ impl<'a> Carried<'a> {
     pub fn ktype(&self, types: &TypeRegistry) -> KType {
         match self {
             Carried::Object(o) => o.ktype(),
-            Carried::Type(t) => KType::OfKind(t.kind_of(types)),
+            Carried::Type(t) => KType::of_kind(t.kind_of(types)),
             // An unlowered name denotes a proper type once resolved.
-            Carried::UnresolvedType(_) => KType::OfKind(KKind::ProperType),
+            Carried::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
         }
     }
 }
@@ -118,7 +107,7 @@ impl<'a> Held<'a> {
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),
-            Carried::Type(t) => Held::Type(t.clone()),
+            Carried::Type(t) => Held::Type(*t),
             Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
         }
     }
@@ -145,8 +134,8 @@ impl<'a> Held<'a> {
         match self {
             Held::Object(o) => o,
             Held::Type(t) => panic!(
-                "expected an Object cell, got a Type arm: {}",
-                t.name_without_registry()
+                "expected an Object cell, got a Type arm: 0x{:032x}",
+                t.digest().0
             ),
             Held::UnresolvedType(ti) => panic!(
                 "expected an Object cell, got an unresolved type name: {}",
@@ -159,7 +148,7 @@ impl<'a> Held<'a> {
     pub fn deep_clone(&self) -> Held<'a> {
         match self {
             Held::Object(o) => Held::Object(o.deep_clone()),
-            Held::Type(t) => Held::Type(t.clone()),
+            Held::Type(t) => Held::Type(*t),
             Held::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
         }
     }
@@ -169,21 +158,17 @@ impl<'a> Held<'a> {
     pub fn ktype(&self, types: &TypeRegistry) -> KType {
         match self {
             Held::Object(o) => o.ktype(),
-            Held::Type(t) => KType::OfKind(t.kind_of(types)),
-            Held::UnresolvedType(_) => KType::OfKind(KKind::ProperType),
+            Held::Type(t) => KType::of_kind(t.kind_of(types)),
+            Held::UnresolvedType(_) => KType::of_kind(KKind::ProperType),
         }
     }
 
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
     pub fn summarize(&self, types: &TypeRegistry) -> String {
-        self.render_summary(Some(types))
-    }
-
-    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
-            Held::Object(o) => o.render_summary(types),
-            Held::Type(t) => t.name_or_without_registry(types),
+            Held::Object(o) => o.summarize(types),
+            Held::Type(t) => t.name(types),
             Held::UnresolvedType(ti) => ti.render(),
         }
     }

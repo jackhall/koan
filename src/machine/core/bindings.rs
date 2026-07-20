@@ -699,7 +699,7 @@ impl<'a> Bindings<'a> {
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
     /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
-    /// `index`) so the `SetRef` an SCC seal pre-installed (same set + index) is rewritten
+    /// `index`) so the `SetMember` an SCC seal pre-installed (same set + index) is rewritten
     /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`, as is a
     /// committed value at `data[name]` (the value/type partition is mutually exclusive).
     ///
@@ -735,7 +735,7 @@ impl<'a> Bindings<'a> {
                     name: name.to_string(),
                 }));
             }
-            // Absent, or identity-equal (the seal's pre-installed `SetRef`): write the
+            // Absent, or identity-equal (the seal's pre-installed `SetMember`): write the
             // identity, rewriting any pre-install in place.
             _ => {
                 types.insert(name.to_string(), (kt, index));

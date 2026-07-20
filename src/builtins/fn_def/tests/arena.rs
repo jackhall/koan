@@ -227,10 +227,10 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
     );
     let result = test_run.run_one(parse_one("FF"));
     match result {
-        KObject::List(_, elem) => assert!(
-            matches!(elem.as_ref(), KType::Any),
-            "FF -> (LIST OF Any) must coarsen the tail-chain result to List<Any>, got {:?}",
-            elem,
+        KObject::List(_, list_type) => assert_eq!(
+            *list_type,
+            test_run.types.list(KType::ANY),
+            "FF -> (LIST OF Any) must coarsen the tail-chain result to List<Any>, got {list_type:?}",
         ),
         other => panic!("expected a List from FF, got {:?}", other.ktype()),
     }

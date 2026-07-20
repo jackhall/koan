@@ -91,7 +91,7 @@ fn summarize_quotes_strings_only() {
 
 #[test]
 fn ktype_reports_variant() {
-    assert_eq!(KKey::String("a".into()).ktype(), KType::Str);
-    assert_eq!(KKey::Number(1.0).ktype(), KType::Number);
-    assert_eq!(KKey::Bool(false).ktype(), KType::Bool);
+    assert_eq!(KKey::String("a".into()).ktype(), KType::STR);
+    assert_eq!(KKey::Number(1.0).ktype(), KType::NUMBER);
+    assert_eq!(KKey::Bool(false).ktype(), KType::BOOL);
 }

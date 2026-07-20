@@ -196,7 +196,7 @@ fn check_value_type_kinds(
     for element in elements {
         if let SignatureElement::Argument(argument) = element {
             if let Some(message) = unsaturated_constructor_message(
-                &argument.ktype,
+                argument.ktype,
                 &format!("the type of FN parameter `{}`", argument.name),
                 types,
             ) {
@@ -205,7 +205,7 @@ fn check_value_type_kinds(
         }
     }
     if let ReturnType::Resolved(kt) = return_type {
-        if let Some(message) = unsaturated_constructor_message(kt, "the FN return type", types) {
+        if let Some(message) = unsaturated_constructor_message(*kt, "the FN return type", types) {
             return Err(KError::new(KErrorKind::ShapeError(message)));
         }
     }
@@ -247,6 +247,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
         scope,
         None,
         None,
+        types,
     ));
     // `frame: None` — the scheduler's lift-on-return populates the Rc if this
     // KFunction value escapes a per-call body; top-level FNs have no frame. `f` was just

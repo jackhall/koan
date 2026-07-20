@@ -110,6 +110,7 @@ pub(crate) fn register_builtin_full<'a>(
         scope,
         binder_name,
         binder_bucket,
+        types,
     ));
     let obj: &'a KObject<'a> = region
         .alloc_object_checked(KObject::KFunction(f), types)
@@ -148,6 +149,7 @@ pub(crate) fn register_overload_at<'a>(
         scope,
         None,
         None,
+        types,
     ));
     let obj: &'a KObject<'a> = region
         .alloc_object_checked(KObject::KFunction(f), types)
@@ -179,41 +181,33 @@ pub fn unseeded_scopes<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    scope.register_builtin_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
-    scope.register_builtin_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
-    scope.register_builtin_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
-    scope.register_builtin_type("Null".into(), KType::Null, BindingIndex::BUILTIN);
-    scope.register_builtin_type(
-        "List".into(),
-        KType::list(Box::new(KType::Any)),
-        BindingIndex::BUILTIN,
-    );
-    scope.register_builtin_type(
-        "Dict".into(),
-        KType::dict(Box::new(KType::Any), Box::new(KType::Any)),
-        BindingIndex::BUILTIN,
-    );
+    scope.register_builtin_type("Number".into(), KType::NUMBER, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Str".into(), KType::STR, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Bool".into(), KType::BOOL, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Null".into(), KType::NULL, BindingIndex::BUILTIN);
+    scope.register_builtin_type("List".into(), KType::LIST_OF_ANY, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Dict".into(), KType::DICT_ANY_ANY, BindingIndex::BUILTIN);
     scope.register_builtin_type(
         "KExpression".into(),
-        KType::KExpression,
+        KType::KEXPRESSION,
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(
         "Type".into(),
-        KType::OfKind(KKind::AnyType),
+        KType::of_kind(KKind::AnyType),
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(
         "Module".into(),
-        KType::empty_signature(),
+        KType::EMPTY_SIGNATURE,
         BindingIndex::BUILTIN,
     );
     scope.register_builtin_type(
         "Signature".into(),
-        KType::OfKind(KKind::Signature),
+        KType::of_kind(KKind::Signature),
         BindingIndex::BUILTIN,
     );
-    scope.register_builtin_type("Any".into(), KType::Any, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Any".into(), KType::ANY, BindingIndex::BUILTIN);
 
     let_binding::register(scope, types);
     print::register(scope, types);

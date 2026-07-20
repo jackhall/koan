@@ -79,8 +79,8 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let eq_sig = |op: &str| {
         sig(
-            KType::Bool,
-            vec![arg("left", KType::Any), kw(op), arg("right", KType::Any)],
+            KType::BOOL,
+            vec![arg("left", KType::ANY), kw(op), arg("right", KType::ANY)],
         )
     };
     crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, types);

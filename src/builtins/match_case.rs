@@ -84,14 +84,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
-        KType::Any,
+        KType::ANY,
         vec![
             kw("MATCH"),
-            arg("value", KType::Any),
+            arg("value", KType::ANY),
             kw("->"),
-            arg("return_type", KType::OfKind(KKind::ProperType)),
+            arg("return_type", KType::of_kind(KKind::ProperType)),
             kw("WITH"),
-            arg("branches", KType::KExpression),
+            arg("branches", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "MATCH", signature, body, types);
@@ -314,18 +314,19 @@ mod tests {
     }
 
     #[test]
-    fn match_bogus_head_over_variant_scrutinee_lists_variants() {
+    fn match_bogus_head_over_variant_scrutinee_is_inexhaustive() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
-        // `Bogus` is not a member name and resolves to no type; the error names the scrutinee's
-        // union variants in declaration order.
+        // A user-union value is a `Tagged` matched by tag string, so a head that is not the
+        // scrutinee's own tag is a silent non-match — leaving the match with no admitting arm.
+        // The error names the scrutinee's runtime variant type, `Some`.
         let err =
             test_run.run_one_err(parse_one("MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
-                if msg == "match arm type `Bogus` is not a known type; the scrutinee's union variants are `Some`, `None`"),
-            "expected the variants-hint message, got {err}",
+                if msg == "inexhaustive match = no branch for value of type `Some`"),
+            "expected the inexhaustive-match message naming `Some`, got {err}",
         );
     }
 

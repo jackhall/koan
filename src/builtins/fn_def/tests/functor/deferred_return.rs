@@ -1,7 +1,7 @@
 //! Return-type expressions that reference earlier parameters (`p.T`, bare param name, `sig WITH {S = p.T}`), resolved per-call.
 
 use crate::builtins::test_support::{binds_module, lookup_fn, parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::witnessed::region_metrics;
 
@@ -85,7 +85,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
-                matches!(type_id, KType::AbstractType { .. }),
+                matches!(test_run.types.node(*type_id), TypeNode::AbstractType { .. }),
                 "re-tagged slot read must carry an AbstractType identity, got {:?}",
                 type_id,
             );
@@ -154,10 +154,10 @@ fn functor_deferred_return_coarsens_list_carrier() {
     test_run.run("FN (ITEMS er :Seq) -> er.Carrier = (er.items)");
     let result = test_run.run_one(parse_one("ITEMS ints_view"));
     match result {
-        KObject::List(_, elem) => assert!(
-            matches!(elem.as_ref(), KType::Any),
-            "deferred return stamped to (LIST OF Any) must coarsen the element type to Any, got {:?}",
-            elem,
+        KObject::List(_, list_type) => assert_eq!(
+            *list_type,
+            test_run.types.list(KType::ANY),
+            "deferred return stamped to (LIST OF Any) must coarsen the element type to Any, got {list_type:?}",
         ),
         other => panic!(
             "expected a List from (ITEMS ints_view), got {:?}",

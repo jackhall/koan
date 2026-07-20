@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::core::ReturnContract;
 use crate::machine::core::{FoldingBrand, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Carried, KType, TypeRegistry};
+use crate::machine::model::{Carried, KType, TypeNode, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried, FrameSet, KError, KErrorKind};
 use crate::witnessed::{reattachable, RegionHandle, Residence, Sealed, SealedExtern, Witnessed};
 
@@ -118,16 +118,14 @@ impl NodeFinalize for KoanRuntime<'_> {
                             // A declared union return checks (above) but never re-tags: the value keeps
                             // its own runtime type, which is what union elimination dispatches on. Every
                             // other declared return re-stamps the value into the declared type.
-                            if matches!(declared_type, KType::Union { .. }) {
+                            if matches!(types.node(*declared_type), TypeNode::Union { .. }) {
                                 return Carried::Object(
                                     home_region.alloc_object_folded(object.deep_clone()),
                                 );
                             }
-                            Carried::Object(
-                                home_region.alloc_object_folded(
-                                    object.deep_clone().stamp_type(declared_type),
-                                ),
-                            )
+                            Carried::Object(home_region.alloc_object_folded(
+                                object.deep_clone().stamp_type(*declared_type, types),
+                            ))
                         },
                     );
                 return match mismatch {
@@ -226,7 +224,7 @@ fn match_declared_return<'c>(
         .open(pin, |(value, (_home_region, declared_type))| {
             let matched = match value {
                 Carried::Object(object) => declared_type.matches_value(object, types),
-                Carried::Type(t) => declared_type.matches_type(t, types),
+                Carried::Type(t) => declared_type.matches_type(*t, types),
                 // Every delivered result is resolved; an unlowered name satisfies no contract.
                 Carried::UnresolvedType(_) => false,
             };

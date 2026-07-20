@@ -74,17 +74,32 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // Ambient probe: every named field must exist in the record's type map (the error arm stays
     // here). The at-brand rebuild below re-reads the same map from the operand view, so the two
     // cannot disagree on which fields the narrowed carrier keeps.
-    let types = match record_obj {
-        KObject::Record(_, types) => types,
+    let record_fields = match record_obj {
+        KObject::Record(_, record_type) => match ctx.types.node(*record_type) {
+            crate::machine::model::TypeNode::Record { fields } => fields,
+            _ => unreachable!("a Record value's type is always a Record node"),
+        },
         _ => unreachable!("record_obj is shape-gated to a Record above"),
     };
     for name in &names {
-        if types.get(name).is_none() {
+        if record_fields.get(name).is_none() {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM: record has no field `{name}`",
             )))));
         }
     }
+    // The narrowed record type — interned once here where the registry is in scope, then copied
+    // into the at-brand rebuild below.
+    let narrowed_type = ctx
+        .types
+        .record(Record::from_pairs(names.iter().map(|name| {
+            (
+                name.clone(),
+                *record_fields
+                    .get(name)
+                    .expect("probed ambient: field exists in the record"),
+            )
+        })));
 
     // Cross the record as the projection's lhs operand. A carrier-less record literal (region-pure)
     // rebuilds into the read-site region and seals resident — coverage-equivalent to an empty-reach
@@ -114,21 +129,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 unreachable!("the `record` slot shape-gates to records")
             }
         };
-        let (fields, types) = match record {
-            KObject::Record(fields, types) => (fields, types),
+        let fields = match record {
+            KObject::Record(fields, _) => fields,
             _ => unreachable!("the `record` slot shape-gates to records"),
         };
-        let narrowed = Record::from_pairs(names.iter().map(|name| {
-            (
-                name.clone(),
-                types
-                    .get(name)
-                    .expect("probed ambient: field exists in the record")
-                    .clone(),
-            )
-        }));
         Carried::Object(
-            b.alloc_object_folded(KObject::record_with_type(Rc::clone(fields), narrowed)),
+            b.alloc_object_folded(KObject::record_with_type(Rc::clone(fields), narrowed_type)),
         )
     })))
 }
@@ -140,11 +146,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // `{x,y}` carrier. The `fields` slot is `KExpression` (captured unevaluated);
     // the `record` slot is `:{}`, which shape-gates the operand to records.
     let signature = sig(
-        KType::record(Box::new(Record::new())),
+        types.record(Record::new()),
         vec![
-            arg("fields", KType::KExpression),
+            arg("fields", KType::KEXPRESSION),
             kw("FROM"),
-            arg("record", KType::record(Box::new(Record::new()))),
+            arg("record", types.record(Record::new())),
         ],
     );
     crate::builtins::register_builtin(scope, "FROM", signature, body, types);
@@ -153,7 +159,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, TestRun};
-    use crate::machine::model::{KObject, KType};
+    use crate::machine::model::{KObject, KType, TypeNode};
     use crate::machine::run_root_storage;
 
     #[test]
@@ -162,13 +168,17 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
-            KObject::Record(fields, types) => {
+            KObject::Record(fields, record_type) => {
                 assert_eq!(fields.len(), 3);
                 assert!(fields.get("z").is_some());
-                assert_eq!(types.len(), 2);
-                assert_eq!(types.get("x"), Some(&KType::Number));
-                assert_eq!(types.get("y"), Some(&KType::Number));
-                assert!(types.get("z").is_none());
+                let field_types = match test_run.types().node(*record_type) {
+                    TypeNode::Record { fields } => fields,
+                    _ => panic!("record value's type must be a Record node, got {record_type:?}"),
+                };
+                assert_eq!(field_types.len(), 2);
+                assert_eq!(field_types.get("x").copied(), Some(KType::NUMBER));
+                assert_eq!(field_types.get("y").copied(), Some(KType::NUMBER));
+                assert!(field_types.get("z").is_none());
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }
@@ -183,11 +193,15 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
-            KObject::Record(fields, types) => {
+            KObject::Record(fields, record_type) => {
                 assert_eq!(fields.len(), 2);
-                assert_eq!(types.len(), 1);
-                assert_eq!(types.get("x"), Some(&KType::Number));
-                assert!(types.get("y").is_none());
+                let field_types = match test_run.types().node(*record_type) {
+                    TypeNode::Record { fields } => fields,
+                    _ => panic!("record value's type must be a Record node, got {record_type:?}"),
+                };
+                assert_eq!(field_types.len(), 1);
+                assert_eq!(field_types.get("x").copied(), Some(KType::NUMBER));
+                assert!(field_types.get("y").is_none());
             }
             other => panic!("expected Record, got {:?}", other.ktype()),
         }
@@ -199,9 +213,13 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one(parse_one("() FROM {x = 1}"));
         match result {
-            KObject::Record(fields, types) => {
+            KObject::Record(fields, record_type) => {
                 assert_eq!(fields.len(), 1);
-                assert_eq!(types.len(), 0);
+                let field_types = match test_run.types().node(*record_type) {
+                    TypeNode::Record { fields } => fields,
+                    _ => panic!("record value's type must be a Record node, got {record_type:?}"),
+                };
+                assert_eq!(field_types.len(), 0);
             }
             other => panic!("expected empty Record, got {:?}", other.ktype()),
         }

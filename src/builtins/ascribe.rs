@@ -9,14 +9,13 @@
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    sig_subtype, substitute_sig_members, KKind, NominalMember, NominalSchema, RecursiveSet,
-    SigContent, SigSchema,
+    sig_subtype, substitute_sig_members, KKind, RecursiveGroupWindow, RelativeSchema, SigSchema,
+    TypeNode,
 };
 use crate::machine::model::{KObject, Module};
 use crate::machine::StepCarried;
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use super::{arg, kw, sig};
 
@@ -28,11 +27,13 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
+    let (s_schema, s_digest) = signature_schema(s, ctx.types);
+    let s_name = s.name(ctx.types);
 
     let region = ctx.scope.brand();
     let new_scope = region.alloc_scope(Scope::child_under_module(
         ctx.scope,
-        format!("{} :| {}", m.path, s.path),
+        format!("{} :| {}", m.path, s_name),
     ));
 
     let src = m.child_scope();
@@ -51,49 +52,44 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // `TypeConstructor` family over the slot's declared parameter names rather than the default
     // `AbstractType` arm, preserving the higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType)> = Vec::new();
-    for (name, kt) in &s.schema.abstract_members {
-        let minted_kt = match kt {
-            KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
-                let member = NominalMember::pending(name.clone(), KKind::TypeConstructor);
-                // Generative: the per-application nonce (the minted module's `scope_id`)
-                // folds into the set digest, so two `:|` applications never unify.
-                let fresh = RecursiveSet::new_generative(vec![member], new_module.scope_id());
-                fresh.fill_member(
-                    0,
-                    NominalSchema::TypeConstructor {
+    for (name, kt) in &s_schema.abstract_members {
+        let minted_kt = match ctx.types.node(*kt) {
+            TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => {
+                // Generative: the per-application nonce (the minted module's `scope_id`) folds
+                // into the member's component digest, so two `:|` applications never unify.
+                RecursiveGroupWindow::seal_singleton(
+                    name.clone(),
+                    RelativeSchema::TypeConstructor {
                         schema: HashMap::new(),
-                        param_names: param_names.clone(),
+                        param_names,
                     },
-                );
-                KType::SetRef {
-                    set: std::rc::Rc::new(fresh),
-                    index: 0,
-                }
+                    Some(new_module.scope_id()),
+                    ctx.types,
+                )
             }
             // Generative by the same mechanism as the higher-kinded arm above: the per-application
             // nonce (the minted module's `scope_id`) folds into the digest, so two `:|`
             // applications never unify. `source` stays the declaring SIG's binder — the two
             // meanings ride separate fields.
-            KType::AbstractType { source, .. } => KType::AbstractType {
-                source: *source,
+            TypeNode::AbstractType { source, .. } => ctx.types.intern(TypeNode::AbstractType {
+                source,
                 name: name.clone(),
                 param_names: Vec::new(),
                 nonce: Some(new_module.scope_id()),
-            },
+            }),
             // Unreachable: `is_abstract_sig_member` admits only `AbstractType` into
             // `abstract_members`, so the two arms above are exhaustive over this map.
-            other => other.clone(),
+            _ => *kt,
         };
         minted.push((name.clone(), minted_kt));
     }
     // A manifest member reads concretely through the opaque view: the view scope carries no
     // type entries (`try_bulk_install_from` copies only the data table), so its fixed `KType`
     // is mirrored into `type_members` alongside the per-call abstract mints.
-    let manifest: Vec<(String, KType)> = s
-        .schema
+    let manifest: Vec<(String, KType)> = s_schema
         .manifest_members
         .iter()
-        .map(|(n, t)| (n.clone(), t.clone()))
+        .map(|(n, t)| (n.clone(), *t))
         .collect();
     if !minted.is_empty() || !manifest.is_empty() {
         let mut tm = new_module.type_members.borrow_mut();
@@ -108,10 +104,10 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     {
         let tm = new_module.type_members.borrow();
         let mut tags: Vec<(String, KType)> = Vec::new();
-        for (slot_name, kt) in &s.schema.value_slots {
-            if let KType::AbstractType { name: member, .. } = kt {
-                if let Some(per_call) = tm.get(member) {
-                    tags.push((slot_name.clone(), per_call.clone()));
+        for (slot_name, kt) in &s_schema.value_slots {
+            if let TypeNode::AbstractType { name: member, .. } = ctx.types.node(*kt) {
+                if let Some(per_call) = tm.get(&member) {
+                    tags.push((slot_name.clone(), *per_call));
                 }
             }
         }
@@ -125,9 +121,9 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     }
 
     // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
-    seal_view_self_sig(new_module, &s, ctx.types);
+    seal_view_self_sig(new_module, &s_schema, ctx.types);
 
-    if let Err(e) = check_satisfies(m, &s, ctx.types) {
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
         return Action::Done(Err(e));
     }
 
@@ -158,7 +154,9 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     use crate::machine::Action;
 
     let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
-    if let Err(e) = check_satisfies(m, &s, ctx.types) {
+    let (s_schema, s_digest) = signature_schema(s, ctx.types);
+    let s_name = s.name(ctx.types);
+    if let Err(e) = check_satisfies(m, &s_schema, s_digest, &s_name, ctx.types) {
         return Action::Done(Err(e));
     }
     // A transparent view reuses the source module's child scope directly (`m.child_scope()`), foreign
@@ -171,12 +169,12 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     // home frame frees once its retention hold releases.
     let stored = ctx.scope.child_module_reach(m.child_scope());
     let new_module: &'a Module<'a> = ctx.scope.alloc_module_reaching(
-        Module::new(format!("{} :! {}", m.path, s.path), m.child_scope()),
+        Module::new(format!("{} :! {}", m.path, s_name), m.child_scope()),
         &stored,
     );
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
-    seal_view_self_sig(new_module, &s, ctx.types);
+    seal_view_self_sig(new_module, &s_schema, ctx.types);
     // The view surfaces as the Object-arm module value under the same token that pins the reused
     // source's (foreign) child-scope region; a LET around it binds that value like any other.
     let obj = crate::try_action!(ctx.scope.alloc_object_reaching(
@@ -197,22 +195,41 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
 /// would not structurally satisfy its own signature.
 fn seal_view_self_sig<'a>(
     module: &Module<'a>,
-    content: &SigContent,
+    signature: &SigSchema,
     types: &crate::machine::model::TypeRegistry,
 ) {
     let mut view_sig = SigSchema::raw_self_sig(module);
     let member_map: std::collections::HashMap<String, KType> = view_sig
         .manifest_members
         .iter()
-        .map(|(n, t)| (n.clone(), t.clone()))
+        .map(|(n, t)| (n.clone(), *t))
         .collect();
-    for (slot_name, declared) in &content.schema.value_slots {
+    // SIG-own abstract members canonicalize to `ScopeId::SENTINEL`; the empty interface names no
+    // member, so its (empty) slot loop never substitutes.
+    let sig_id = signature.sig_id.unwrap_or(ScopeId::SENTINEL);
+    for (slot_name, declared) in &signature.value_slots {
         view_sig.value_slots.insert(
             slot_name.clone(),
-            substitute_sig_members(declared, content.sig_id, &member_map, types),
+            substitute_sig_members(*declared, sig_id, &member_map, types),
         );
     }
-    module.seal_self_sig(view_sig);
+    module.seal_self_sig(view_sig, types);
+}
+
+/// The bare schema and its content digest carried by the signature handle `s`. `s` rode the `s`
+/// slot typed `OfKind(Signature)`, so its node is always a `Signature`.
+fn signature_schema(
+    s: KType,
+    types: &TypeRegistry,
+) -> (SigSchema, crate::machine::model::TypeDigest) {
+    match types.node(s) {
+        TypeNode::Signature {
+            schema,
+            schema_digest,
+            ..
+        } => (schema, schema_digest),
+        _ => unreachable!("the `s` operand is `OfKind(Signature)`; only a signature handle admits"),
+    }
 }
 
 /// Read the `m:Module` / `s:Signature` operands from the `BodyCtx::args` record: the module off the
@@ -221,7 +238,7 @@ fn seal_view_self_sig<'a>(
 fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
     types: &crate::machine::model::TypeRegistry,
-) -> Result<(&'a crate::machine::model::Module<'a>, Rc<SigContent>), KError> {
+) -> Result<(&'a crate::machine::model::Module<'a>, KType), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
@@ -245,27 +262,34 @@ fn resolve_module_and_signature<'a>(
         _ => return Err(type_mismatch_or_missing(args, "m", "Module", types)),
     };
     let s = match arg_type(args, "s") {
-        Some(KType::Signature { content, .. }) => Rc::clone(content),
+        Some(kt) if matches!(types.node(*kt), TypeNode::Signature { .. }) => *kt,
         _ => return Err(type_mismatch_or_missing(args, "s", "Signature", types)),
     };
     Ok((m, s))
 }
 
-/// Verify a module satisfies `c` through the signature-subtyping relation: the module's
-/// self-sig must be a subtype of the signature's bare schema (every member present, manifest
-/// members equal, abstract members at the right kind and parameter names, value slots covariantly compatible
-/// after abstract-member substitution). The decision (and its memoization) lives in
-/// [`Module::satisfies_sig_content`], the shared entry point dispatch also routes through; this
-/// function only rebuilds the `ShapeError` diagnostic on the cold path when that check fails.
-fn check_satisfies<'a>(m: &Module<'a>, c: &SigContent, types: &TypeRegistry) -> Result<(), KError> {
-    if m.satisfies_sig_content(c, types) {
+/// Verify a module satisfies the interface `schema` (content digest `schema_digest`) through the
+/// signature-subtyping relation: the module's self-sig must be a subtype of the bare schema (every
+/// member present, manifest members equal, abstract members at the right kind and parameter names,
+/// value slots covariantly compatible after abstract-member substitution). The decision (and its
+/// memoization) lives in [`Module::satisfies_sig_schema`], the shared entry point dispatch also
+/// routes through; this function only rebuilds the `ShapeError` diagnostic on the cold path when
+/// that check fails. `sig_name` is the signature's rendered name for the diagnostic.
+fn check_satisfies<'a>(
+    m: &Module<'a>,
+    schema: &SigSchema,
+    schema_digest: crate::machine::model::TypeDigest,
+    sig_name: &str,
+    types: &TypeRegistry,
+) -> Result<(), KError> {
+    if m.satisfies_sig_schema(schema, schema_digest, types) {
         return Ok(());
     }
-    match sig_subtype(m.self_sig(), &c.schema, types) {
+    match sig_subtype(&m.self_sig(types), schema, types) {
         Ok(()) => unreachable!("a recorded false verdict must re-fail on the diagnostic walk"),
         Err(failure) => Err(KError::new(KErrorKind::ShapeError(format!(
             "module does not satisfy signature `{}`: {}",
-            c.path,
+            sig_name,
             failure.render_fragment()
         )))),
     }
@@ -276,19 +300,19 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Identifier that resolves value-side and rides the auto-wrap rails into a value-typed future,
     // so no parallel Type-Type overload is required.
     let opaque_sig = sig(
-        KType::empty_signature(),
+        KType::EMPTY_SIGNATURE,
         vec![
-            arg("m", KType::empty_signature()),
+            arg("m", KType::EMPTY_SIGNATURE),
             kw(":|"),
-            arg("s", KType::OfKind(KKind::Signature)),
+            arg("s", KType::of_kind(KKind::Signature)),
         ],
     );
     let transparent_sig = sig(
-        KType::empty_signature(),
+        KType::EMPTY_SIGNATURE,
         vec![
-            arg("m", KType::empty_signature()),
+            arg("m", KType::EMPTY_SIGNATURE),
             kw(":!"),
-            arg("s", KType::OfKind(KKind::Signature)),
+            arg("s", KType::of_kind(KKind::Signature)),
         ],
     );
     crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types);

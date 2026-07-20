@@ -59,26 +59,26 @@ fn unbound_leaf_names_unknown_type() {
     }
 }
 
-/// A bare leaf naming a member of the enclosing `RECURSIVE TYPES` group lowers to a
-/// transient `RecursiveRef` back-edge — the block's threading, independent of source order.
-/// A non-member falls through to ordinary resolution.
+/// A bare leaf naming a member of the enclosing `RECURSIVE TYPES` window lowers to that member's
+/// relative sibling handle — the block's cross-order resolution, independent of source order. A
+/// non-member falls through to ordinary resolution.
 #[test]
-fn recursive_group_member_lowers_to_recursive_ref() {
+fn recursive_group_member_lowers_to_sibling() {
     let region = run_root_storage();
     let parent_test_run = TestRun::silent(&region);
     let parent = parent_test_run.scope;
-    let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("A".into(), KKind::NewType),
-        NominalMember::pending("B".into(), KKind::NewType),
-    ]));
+    let window = RecursiveGroupWindow::new(
+        vec![("A".into(), KKind::NewType), ("B".into(), KKind::NewType)],
+        None,
+    );
     let child = region
         .brand()
-        .alloc_scope(Scope::child_recursive_group(parent, set));
+        .alloc_scope(Scope::child_recursive_group(parent, window));
     let types = parent_test_run.types.clone();
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
-        TypeResolution::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
-        other => panic!("expected a RecursiveRef back-edge for a group member, got {other:?}"),
+        TypeResolution::Done(kt) => assert_eq!(kt, types.intern(TypeNode::Sibling(1))),
+        other => panic!("expected a sibling back-edge for a window member, got {other:?}"),
     }
     let mut el2 = Elaborator::new(child);
     assert!(
@@ -90,113 +90,116 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     );
 }
 
-/// A `RECURSIVE TYPES` block pre-installs every member's `SetRef` over one shared set at
-/// `BindingIndex::value(0)`, below any statement's own index. `finalize_nominal_member`
-/// recovers that pre-install by its *unfilled* member and seals into the shared set rather
-/// than minting a singleton; a parallel finalize of the same declaration (equal
-/// `BindingIndex`) short-circuits on the installed identity without rebuilding the schema;
-/// and a different statement declaring the same name with different content is a
-/// redeclaration — `Rebind`.
+/// A `UNION`'s own binder names no single variant: it resolves to the union of every announced
+/// member, which is what a variant payload referencing the union's own name means.
 #[test]
-fn block_member_seals_shared_set_then_short_circuits_before_rebind() {
-    use crate::machine::model::types::NominalSchema;
+fn window_binder_resolves_to_the_union_of_its_members() {
+    let region = run_root_storage();
+    let test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    let window = RecursiveGroupWindow::new(
+        vec![
+            ("Leaf".into(), KKind::NewType),
+            ("Node".into(), KKind::NewType),
+        ],
+        Some("Tree".into()),
+    );
+    let mut el = Elaborator::new(test_run.scope).with_window(window.clone());
+    match elaborate_type_identifier(&mut el, &leaf("Tree"), &types) {
+        TypeResolution::Done(kt) => assert_eq!(kt, window.binder_union(&types)),
+        other => panic!("expected the binder union, got {other:?}"),
+    }
+}
+
+/// A member of a multi-member window has no identity until the whole window seals: identity is
+/// computed over the group's entire reference structure, so an intermediate fill defers. The last
+/// fill seals, and only then does the member's handle install.
+#[test]
+fn block_member_defers_until_the_window_seals() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    let set = std::rc::Rc::new(RecursiveSet::new(vec![
-        NominalMember::pending("Node".into(), KKind::NewType),
-        NominalMember::pending("Leaf".into(), KKind::NewType),
-    ]));
-    for (index, member) in ["Node", "Leaf"].iter().enumerate() {
-        scope.preinstall_identity(
-            (*member).to_string(),
-            KType::SetRef {
-                set: std::rc::Rc::clone(&set),
-                index,
-            },
-            BindingIndex::value(0),
-        );
-    }
-    // Member 0's own declaration finalizes at its statement index: the pre-install's unfilled
-    // member is this declaration's contribution, so the schema fills the shared set.
-    let sealed = match finalize_nominal_member(
-        scope,
-        "Node",
-        KKind::NewType,
-        |_| SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Number))),
-        BindingIndex::value(2),
-    ) {
-        SealOutcome::Sealed(kt) => kt,
-        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
-        SealOutcome::Rebind(e) => panic!("a block member's first seal must not Rebind: {e}"),
-    };
-    match sealed {
-        KType::SetRef {
-            set: installed,
+    let types = test_run.types.clone();
+    let window = RecursiveGroupWindow::new(
+        vec![
+            ("Node".into(), KKind::NewType),
+            ("Leaf".into(), KKind::NewType),
+        ],
+        None,
+    );
+    let fill = |name: &str, repr: KType, index: BindingIndex| {
+        finalize_nominal_member(
+            scope,
+            &window,
+            name,
+            |_| RelativeSchema::NewType(repr),
             index,
-        } => {
-            assert!(
-                std::rc::Rc::ptr_eq(installed, &set),
-                "the seal must fill the block's shared set, not a fresh singleton",
-            );
-            assert_eq!(*index, 0, "Node is the shared set's member 0");
-        }
-        other => panic!("expected a SetRef identity, got {other:?}"),
-    }
-    assert!(
-        !set.member(1).is_filled(),
-        "sibling member `Leaf` seals at its own declaration, not this one",
-    );
-    // Parallel finalize of the same declaration: the stored index equals this one, so the
-    // installed identity comes straight back — the schema builder never runs.
-    let again = match finalize_nominal_member(
-        scope,
-        "Node",
-        KKind::NewType,
-        |_| panic!("a parallel finalize must short-circuit before building the schema"),
-        BindingIndex::value(2),
-    ) {
-        SealOutcome::Sealed(kt) => kt,
-        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
-        SealOutcome::Rebind(e) => panic!("a parallel finalize must not Rebind: {e}"),
+            &types,
+        )
     };
-    assert!(
-        std::ptr::eq(sealed, again),
-        "a parallel finalize returns the installed identity itself",
+    match fill("Node", KType::NUMBER, BindingIndex::value(2)) {
+        SealOutcome::Deferred => {}
+        other => panic!(
+            "the first of two members must defer, got {}",
+            outcome_tag(&other)
+        ),
+    }
+    let sealed = match fill("Leaf", KType::STR, BindingIndex::value(3)) {
+        SealOutcome::Sealed(kt) => *kt,
+        other => panic!("the last fill must seal, got {}", outcome_tag(&other)),
+    };
+    assert_eq!(
+        sealed,
+        window.sealed().expect("sealed").members[1],
+        "the outcome is Leaf's own member handle",
     );
-    // A different statement declaring `Node` over different content is a redeclaration: the
-    // filled member and the differing index route it to a fresh singleton, whose install collides.
+
+    // A different statement declaring `Leaf` over different content is a redeclaration: the
+    // upsert collides with the identity this window installed.
+    let other_window = RecursiveGroupWindow::new(vec![("Leaf".into(), KKind::NewType)], None);
     match finalize_nominal_member(
         scope,
-        "Node",
-        KKind::NewType,
-        |_| SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::Str))),
-        BindingIndex::value(3),
+        &other_window,
+        "Leaf",
+        |_| RelativeSchema::NewType(KType::BOOL),
+        BindingIndex::value(4),
+        &types,
     ) {
         SealOutcome::Rebind(e) => assert!(
-            matches!(&e.kind, crate::machine::KErrorKind::Rebind { name } if name == "Node"),
-            "expected Rebind naming Node, got {e}",
+            matches!(&e.kind, crate::machine::KErrorKind::Rebind { name } if name == "Leaf"),
+            "expected Rebind naming Leaf, got {e}",
         ),
-        SealOutcome::Sealed(kt) => panic!("expected Rebind on redeclaration, got Sealed({kt:?})"),
-        SealOutcome::DanglingRef(missing) => panic!("unexpected dangling ref `{missing}`"),
+        other => panic!(
+            "expected Rebind on redeclaration, got {}",
+            outcome_tag(&other)
+        ),
+    }
+}
+
+fn outcome_tag(outcome: &SealOutcome<'_>) -> &'static str {
+    match outcome {
+        SealOutcome::Sealed(_) => "Sealed",
+        SealOutcome::Deferred => "Deferred",
+        SealOutcome::DanglingRef(_) => "DanglingRef",
+        SealOutcome::Rebind(_) => "Rebind",
     }
 }
 
 #[test]
 fn constructor_apply_name_renders_surface_form() {
-    use crate::machine::model::types::NominalSchema;
     let types = TypeRegistry::new();
-    let set = RecursiveSet::singleton(
+    let ctor = RecursiveGroupWindow::seal_singleton(
         "Wrap".into(),
-        NominalSchema::TypeConstructor {
+        RelativeSchema::TypeConstructor {
             schema: std::collections::HashMap::new(),
             param_names: vec!["Type".into()],
         },
+        None,
+        &types,
     );
-    let ctor = KType::SetRef { set, index: 0 };
-    let app = KType::constructor_apply(
-        Box::new(ctor),
-        Record::from_pairs([("Type".to_string(), KType::Number)]),
+    let app = types.constructor_apply(
+        ctor,
+        Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
     );
     assert_eq!(app.name(&types), ":(Wrap {Type = Number})");
 }

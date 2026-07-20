@@ -13,7 +13,7 @@ fn resolve_type_expr_builtin_leaf_caches() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
-    assert_eq!(*first, KType::Number);
+    assert_eq!(*first, KType::NUMBER);
     let second = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
@@ -37,8 +37,8 @@ fn resolve_type_expr_unbound_returns_unbound() {
     }
 }
 
-/// Pins the post-finalize memo path: a user type reached after STRUCT
-/// finalize lands in the cache.
+/// Pins the post-finalize memo path: a user type reached after a declaration finalizes lands in
+/// the cache as its sealed member handle.
 #[test]
 fn resolve_type_expr_user_struct_caches_after_finalize() {
     let region = run_root_storage();
@@ -49,11 +49,11 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     let te = TypeIdentifier::leaf("Point".into());
     let kt = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
-        _ => panic!("expected Done after STRUCT declaration"),
+        _ => panic!("expected Done after the declaration"),
     };
-    match kt {
-        KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Point"),
-        _ => panic!("expected SetRef for Point"),
+    match types.node(*kt) {
+        TypeNode::SetMember { name, .. } => assert_eq!(name, "Point"),
+        _ => panic!("expected a sealed member node for Point"),
     }
     let kt2 = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
@@ -62,75 +62,47 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     assert!(std::ptr::eq(kt, kt2));
 }
 
-/// A singleton record-repr newtype `SetRef` named `name`.
-fn struct_setref(name: &str) -> KType {
-    use crate::machine::model::Record;
-    use crate::machine::model::{NominalSchema, RecursiveSet};
-    let set = RecursiveSet::singleton(
-        name.into(),
-        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::new())))),
+/// Pins the walk shape against a regression that skips nested structurals: a relative sibling at
+/// any depth is a dependency the gate must see.
+#[test]
+fn user_type_refs_yields_nested_siblings_in_order() {
+    let types = crate::machine::model::TypeRegistry::new();
+    let first = types.intern(TypeNode::Sibling(0));
+    let second = types.intern(TypeNode::Sibling(1));
+    // Dict<Sibling(0), List<Sibling(1)>>
+    let kt = types.dict(first, types.list(second));
+    let refs = user_type_refs(kt, &types);
+    match refs.as_slice() {
+        [UserTypeRef::Sibling { index: a }, UserTypeRef::Sibling { index: b }] => {
+            assert_eq!((*a, *b), (0, 1), "siblings come back in walk order");
+        }
+        _ => panic!("expected two sibling refs in order"),
+    }
+}
+
+/// Member discipline: a sealed member is finished, so it is not a dependency — and the walk must
+/// not descend its schema, which holds absolute handles and may be cyclic.
+#[test]
+fn user_type_refs_does_not_recurse_into_a_sealed_member() {
+    use crate::machine::model::{RecursiveGroupWindow, RelativeSchema};
+    let types = crate::machine::model::TypeRegistry::new();
+    let sealed = RecursiveGroupWindow::seal_singleton(
+        "Chain".into(),
+        RelativeSchema::NewType(types.list(types.intern(TypeNode::Sibling(0)))),
+        None,
+        &types,
     );
-    KType::SetRef { set, index: 0 }
-}
-
-/// Pins recursion shape against a regression that skips nested structurals.
-#[test]
-fn ktype_user_refs_yields_nested_structural_refs_in_order() {
-    let user_a = struct_setref("A");
-    let user_b = struct_setref("B");
-    let (set_a, set_b) = match (&user_a, &user_b) {
-        (KType::SetRef { set: a, .. }, KType::SetRef { set: b, .. }) => {
-            (std::rc::Rc::clone(a), std::rc::Rc::clone(b))
-        }
-        _ => panic!("expected SetRefs"),
-    };
-    // Dict<A, List<B>>
-    let kt = KType::dict(Box::new(user_a), Box::new(KType::list(Box::new(user_b))));
-    let refs: Vec<_> = KTypeUserRefs::of(&kt).collect();
-    match refs.as_slice() {
-        [UserTypeRef::Member {
-            set: first,
-            name: first_name,
-        }, UserTypeRef::Member {
-            set: second,
-            name: second_name,
-        }] => {
-            assert!(std::rc::Rc::ptr_eq(first, &set_a), "first ref is A's set");
-            assert_eq!(*first_name, "A");
-            assert!(std::rc::Rc::ptr_eq(second, &set_b), "second ref is B's set");
-            assert_eq!(*second_name, "B");
-        }
-        _ => panic!("expected two Member refs in order"),
-    }
-}
-
-/// SCC discipline: the iterator must not descend into a `SetRef` member's schema —
-/// the outer `SetRef` is yielded, the inner stays invisible.
-#[test]
-fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
-    use crate::machine::model::{NominalSchema, RecursiveSet};
-    let inner = struct_setref("Inner");
-    let outer_set =
-        RecursiveSet::singleton("Outer".into(), NominalSchema::NewType(Box::new(inner)));
-    let outer = KType::SetRef {
-        set: std::rc::Rc::clone(&outer_set),
-        index: 0,
-    };
-    let refs: Vec<_> = KTypeUserRefs::of(&outer).collect();
-    match refs.as_slice() {
-        [UserTypeRef::Member { set, name }] => {
-            assert!(std::rc::Rc::ptr_eq(set, &outer_set), "yields the outer set");
-            assert_eq!(*name, "Outer");
-        }
-        _ => panic!("expected exactly the outer Member ref"),
-    }
+    assert!(
+        user_type_refs(sealed, &types).is_empty(),
+        "a sealed member is finished and its schema is not walked",
+    );
 }
 
 /// Pin against a regression that would push a spurious leaf onto the stack.
 #[test]
-fn ktype_user_refs_yields_nothing_for_leaf() {
-    let mut iter = KTypeUserRefs::of(&KType::Number);
-    assert!(iter.next().is_none());
+fn user_type_refs_yields_nothing_for_leaf() {
+    let types = crate::machine::model::TypeRegistry::new();
+    assert!(user_type_refs(KType::NUMBER, &types).is_empty());
 }
 
 mod bare_leaf_resolution {
@@ -141,16 +113,17 @@ mod bare_leaf_resolution {
     use crate::machine::model::TypeIdentifier;
     use crate::machine::model::TypeRegistry;
     use crate::machine::model::TypeResolution;
+    use crate::machine::model::{KKind, RecursiveGroupWindow, RelativeSchema};
 
     #[test]
     fn builtin_synthesizes_type_carrier() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
-        scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+        scope.register_type("Number".into(), KType::NUMBER, BindingIndex::BUILTIN);
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(resolved) if *resolved == KType::Number => {}
+            TypeResolution::Done(resolved) if *resolved == KType::NUMBER => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
     }
@@ -172,37 +145,25 @@ mod bare_leaf_resolution {
         }
     }
 
-    /// A bare leaf naming a member caught mid-seal — its `SetRef` identity is
-    /// pre-installed but the member is still `pending` and a value-side placeholder
-    /// stands in for the producer — parks rather than handing back the half-sealed
-    /// identity, then resolves once the member fills and the placeholder clears. This
-    /// is the regression the bridge-routed leaf closes: the prior synchronous resolver
-    /// returned the pre-installed `SetRef` while the schema was still empty.
+    /// A bare leaf naming a member of an open window resolves to that member's relative sibling
+    /// handle, which the gate refuses to memoize: it parks on the declaration's producer instead,
+    /// then admits once the window seals and the in-flight guard clears. Caching the relative
+    /// handle would leak a window-scoped index into a later, window-free lookup.
     #[test]
-    fn mid_seal_member_parks_then_resolves() {
-        use crate::machine::core::BindingIndex;
+    fn mid_window_member_parks_then_resolves() {
         use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
+        use crate::machine::core::Scope;
         use crate::machine::model::Record;
-        use crate::machine::model::{KKind, NominalMember, NominalSchema, RecursiveSet};
 
         let region = run_root_storage();
-        let scope = run_root_bare(&region);
-        // Pre-install a singleton set whose one member is still `pending` (schema
-        // unfilled) and bind its external `SetRef` into `bindings.types`, mirroring the
-        // `RECURSIVE TYPES` pre-install window.
-        let member = NominalMember::pending("Node".into(), KKind::NewType);
-        let set = std::rc::Rc::new(RecursiveSet::new(vec![member]));
-        scope.preinstall_identity(
-            "Node".into(),
-            KType::SetRef {
-                set: std::rc::Rc::clone(&set),
-                index: 0,
-            },
-            BindingIndex::value(0),
-        );
-        // Mark the binder in-flight (the `pending_types` name the finalize gate reads)
-        // and install a value-side placeholder for the producer node to park on.
+        let outer = run_root_bare(&region);
+        let window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
+        let scope = outer
+            .brand()
+            .alloc_scope(Scope::child_recursive_group(outer, window.clone()));
+        // Mark the binder in-flight (the `pending_types` name the finalize gate reads) and install
+        // a value-side placeholder for the producer node to park on.
         let bindings: &Bindings<'_> = scope.bindings();
         let pending_guard = bindings.insert_pending_type("Node".into());
         scope
@@ -220,33 +181,80 @@ mod bare_leaf_resolution {
             TypeResolution::Park(producers) => {
                 assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
             }
-            other => panic!("expected Park mid-seal, got {:?}", outcome_tag(&other)),
+            other => panic!("expected Park mid-window, got {:?}", outcome_tag(&other)),
         }
 
-        // Seal: fill the member, drop the in-flight guard. The re-resolve now admits
-        // (the name is no longer in `pending_types`) and hands back the sealed carrier.
-        set.fill_member(
-            0,
-            NominalSchema::NewType(Box::new(KType::record(Box::new(Record::from_pairs([(
-                "x".to_string(),
-                KType::Number,
-            )]))))),
-        );
+        // Seal: fill the member, drop the in-flight guard, and bind the sealed handle where the
+        // declarator's finalize would. The re-resolve now admits.
+        let sealed = window
+            .fill_member(
+                0,
+                RelativeSchema::NewType(
+                    types.record(Record::from_pairs([("x".to_string(), KType::NUMBER)])),
+                ),
+                &types,
+            )
+            .expect("the only member's fill seals the window");
         drop(pending_guard);
+        scope
+            .register_nominal_upsert("Node".into(), sealed.members[0], BindingIndex::value(0))
+            .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(resolved) => match resolved {
-                KType::SetRef { set: s, index } => {
-                    assert_eq!(s.member(*index).name, "Node");
-                }
-                other => panic!("expected SetRef after seal, got {other:?}"),
-            },
-            other => {
-                panic!(
-                    "expected Done(SetRef) after seal, got {:?}",
-                    outcome_tag(&other)
-                )
-            }
+            TypeResolution::Done(resolved) => assert_eq!(*resolved, sealed.members[0]),
+            other => panic!(
+                "expected Done(member) after seal, got {:?}",
+                outcome_tag(&other)
+            ),
+        }
+    }
+
+    /// Shadowing: an in-flight declaration of the *same name* in an unrelated window must not
+    /// capture a sibling reference minted against this one. The gate resolves the index against
+    /// the nearest window and then requires the pending scope to carry that same window, so the
+    /// inner declaration's own window — which is a different allocation — never matches.
+    ///
+    /// This is what the pre-flip gate got from pointer-equality on the set allocation; window
+    /// identity carries exactly the same guarantee.
+    #[test]
+    fn a_same_named_declaration_in_another_window_does_not_capture() {
+        use crate::machine::core::Bindings;
+        use crate::machine::core::NodeId;
+        use crate::machine::core::Scope;
+
+        let region = run_root_storage();
+        let root = run_root_bare(&region);
+        // An outer scope with an in-flight `Node` belonging to its *own* window.
+        let other_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
+        let outer = root
+            .brand()
+            .alloc_scope(Scope::child_recursive_group(root, other_window));
+        let outer_bindings: &Bindings<'_> = outer.bindings();
+        let _outer_guard = outer_bindings.insert_pending_type("Node".into());
+        outer
+            .install_placeholder(
+                "Node".into(),
+                NodeId(11),
+                BindingIndex::value(0),
+                crate::machine::BindKind::Type,
+            )
+            .expect("placeholder install");
+
+        // The elaborating scope carries a *different* window that also announces `Node`, with no
+        // pending marker of its own.
+        let inner_window = RecursiveGroupWindow::new(vec![("Node".into(), KKind::NewType)], None);
+        let inner = outer
+            .brand()
+            .alloc_scope(Scope::child_recursive_group(outer, inner_window));
+
+        let types = TypeRegistry::new();
+        let leaf = TypeIdentifier::leaf("Node".to_string());
+        match inner.resolve_type_identifier(&leaf, None, &types) {
+            TypeResolution::Done(_) => {}
+            other => panic!(
+                "the outer same-named declaration must not capture this reference, got {:?}",
+                outcome_tag(&other),
+            ),
         }
     }
 

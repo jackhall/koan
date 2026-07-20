@@ -22,6 +22,7 @@ use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
 pub(crate) type SchemaFinalize<'a> = fn(
     &FinishCtx<'a, '_>,
     String,
+    std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
     Vec<(String, KType)>,
     BindingIndex,
 ) -> Result<StepCarried<'a>, KError>;
@@ -29,9 +30,15 @@ pub(crate) type SchemaFinalize<'a> = fn(
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`
 /// builds the carrier from the sealed pairs.
+///
+/// `window` is the declaration window the schema's co-declared references resolve against — the
+/// enclosing `RECURSIVE TYPES` block's when this declaration is one of its members, else one this
+/// declaration opens and seals itself.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'a, '_>,
     name: String,
+    window: std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
     schema_expr: crate::machine::model::KExpression<'a>,
     context: FieldListContext,
     name_kind: FieldNameKind,
@@ -44,10 +51,11 @@ pub(crate) fn nominal_schema_action<'a>(
     // can park on our producer node. The guard's Drop removes the name; the Pending path moves it
     // into the dep-finish closure.
     let pending_guard = ctx.scope.bindings().insert_pending_type(name.clone());
-    // Seed the threaded set with this binder's name so a self-recursive declaration resolves to the
-    // transient `RecursiveRef` rather than parking on its own placeholder.
+    // Seed the threaded set with this binder's name so a self-recursive declaration resolves
+    // through the window rather than parking on its own placeholder.
     let mut elaborator = Elaborator::new(ctx.scope)
         .with_threaded([name.clone()])
+        .with_window(std::rc::Rc::clone(&window))
         .with_chain(chain.clone());
     match parse_typed_field_list_via_elaborator(
         &schema_expr,
@@ -57,15 +65,20 @@ pub(crate) fn nominal_schema_action<'a>(
         None,
         ctx.types,
     ) {
-        FieldListOutcome::Done(fields) => {
-            Action::Done(finalize(&ctx.finish_ctx(), name, fields, bind_index))
-        }
+        FieldListOutcome::Done(fields) => Action::Done(finalize(
+            &ctx.finish_ctx(),
+            name,
+            window,
+            fields,
+            bind_index,
+        )),
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
         } => {
             let finish_name = name.clone();
+            let finish_window = std::rc::Rc::clone(&window);
             defer_field_list_action(
                 schema_expr,
                 park_producers,
@@ -73,11 +86,12 @@ pub(crate) fn nominal_schema_action<'a>(
                 context,
                 name_kind,
                 vec![name],
+                Some(window),
                 chain,
                 Some(pending_guard),
                 Some(error_frame),
                 Box::new(move |fctx, fields, _carriers| {
-                    finalize(fctx, finish_name, fields, bind_index)
+                    finalize(fctx, finish_name, finish_window, fields, bind_index)
                 }),
             )
         }

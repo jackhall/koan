@@ -298,8 +298,8 @@ fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
     let storage = run_root_storage();
     let a = storage.brand();
     let baseline = a.region().alloc_count();
-    let t: &KType = a.alloc_ktype(KType::Number);
-    assert!(matches!(t, KType::Number));
+    let t: &KType = a.alloc_ktype(KType::NUMBER);
+    assert!(*t == KType::NUMBER);
     assert_eq!(a.region().alloc_count(), baseline + 1);
 }
 
@@ -673,9 +673,10 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
     use crate::machine::core::kfunction::action::Action;
     use crate::machine::model::{ExpressionSignature, ReturnType, SignatureElement};
     use crate::machine::Body;
+    let types = TypeRegistry::new();
     KFunction::new(
         ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Null),
+            return_type: ReturnType::Resolved(KType::NULL),
             elements: vec![SignatureElement::Keyword("__INNER__".into())],
         },
         Body::Builtin(|ctx| {
@@ -686,6 +687,7 @@ fn no_op_closure<'x>(captured: &'x Scope<'x>) -> KFunction<'x> {
         captured,
         None,
         None,
+        &types,
     )
 }
 

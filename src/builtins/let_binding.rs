@@ -1,4 +1,5 @@
 use crate::machine::model::KKind;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
 use crate::machine::StepCarried;
@@ -30,13 +31,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let type_name: Option<String> = match arg_unresolved_type(ctx.args, "name") {
         Some(te) => Some(te.render()),
         None => match arg_type(ctx.args, "name") {
-            Some(
-                name_kt @ (KType::List { .. }
-                | KType::Dict { .. }
-                | KType::KFunction { .. }
-                | KType::SetLocal(_)
-                | KType::RecursiveRef(_)),
-            ) => {
+            Some(name_kt)
+                if matches!(
+                    ctx.types.node(*name_kt),
+                    TypeNode::List { .. }
+                        | TypeNode::Dict { .. }
+                        | TypeNode::KFunction { .. }
+                        | TypeNode::Sibling(_)
+                ) =>
+            {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
                     name_kt.render(ctx.types),
@@ -51,7 +54,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
-                Held::Type(KType::Signature { .. }) => Some("signature"),
+                Held::Type(kt) if matches!(ctx.types.node(*kt), TypeNode::Signature { .. }) => {
+                    Some("signature")
+                }
                 Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
                 Held::Object(_) => None,
             };
@@ -70,7 +75,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         (_, Some(resolved_name)) => {
             type_classified_name = true;
             match rhs {
-                Held::Type(kt) => type_for_types_map = Some(kt.clone()),
+                Held::Type(kt) => type_for_types_map = Some(*kt),
                 // The `Any` RHS slot is auto-wrapped by dispatch into a resolved carrier, so a
                 // name that reaches here unlowered names nothing.
                 Held::UnresolvedType(te) => {
@@ -212,23 +217,23 @@ pub(crate) use crate::builtins::identifier_part_binder_name as binder_name;
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let identifier_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("LET"),
-                arg("name", KType::Identifier),
+                arg("name", KType::IDENTIFIER),
                 kw("="),
-                arg("value", KType::Any),
+                arg("value", KType::ANY),
             ],
         )
     };
     let type_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("LET"),
-                arg("name", KType::OfKind(KKind::ProperType)),
+                arg("name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("value", KType::Any),
+                arg("value", KType::ANY),
             ],
         )
     };

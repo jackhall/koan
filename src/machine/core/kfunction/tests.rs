@@ -49,12 +49,12 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("OP".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
@@ -80,15 +80,15 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
                 name: "verb".into(),
-                ktype: KType::Identifier,
+                ktype: KType::IDENTIFIER,
             }),
             SignatureElement::Argument(Argument {
                 name: "args".into(),
-                ktype: KType::KExpression,
+                ktype: KType::KEXPRESSION,
             }),
         ],
     };
@@ -143,12 +143,12 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("OP".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::OfKind(KKind::ProperType),
+                ktype: KType::of_kind(KKind::ProperType),
             }),
         ],
     };
@@ -168,28 +168,29 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
 /// carrying its parameter record and return slot.
 #[test]
 fn function_value_ktype_projects_kfunction() {
-    use crate::machine::model::{ExpressionSignature, ReturnType};
+    use crate::machine::model::{ExpressionSignature, ReturnType, TypeNode, TypeRegistry};
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![
             SignatureElement::Keyword("CALL".into()),
             SignatureElement::Argument(crate::machine::model::Argument {
                 name: "x".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
-    let f = KFunction::new(sig, Body::Builtin(body_any), scope, None, None);
+    let f = KFunction::new(sig, Body::Builtin(body_any), scope, None, None, &types);
     let obj = KObject::KFunction(region.brand().alloc_function(f));
-    match obj.ktype() {
-        KType::KFunction { params, ret, .. } => {
-            assert_eq!(params.get("x"), Some(&KType::Number));
+    match types.node(obj.ktype()) {
+        TypeNode::KFunction { params, ret } => {
+            assert_eq!(params.get("x"), Some(&KType::NUMBER));
             assert_eq!(params.len(), 1);
-            assert_eq!(*ret, KType::Number);
+            assert_eq!(ret, KType::NUMBER);
         }
-        other => panic!("expected KFunction, got {other:?}"),
+        _ => panic!("expected KFunction, got {}", obj.ktype().name(&types)),
     }
 }
 
@@ -202,12 +203,12 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("OP".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
         ],
     };

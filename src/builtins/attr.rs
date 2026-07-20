@@ -16,7 +16,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module, WrappedPayload};
-use crate::machine::model::{Held, KObject, KType};
+use crate::machine::model::{Held, KObject, KType, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
@@ -88,8 +88,10 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
             .expect("a data-bound name always resolves to a delivered value carrier");
         return route(access_field(&ctx.ctx, target, &field_name, &lhs, ctx.types));
     }
-    if let Some(KType::AbstractType { name, .. }) = ctx.scope.resolve_type(&s_name) {
-        return Action::Done(Err(abstract_type_has_no_members(name)));
+    if let Some(kt) = ctx.scope.resolve_type(&s_name) {
+        if let TypeNode::AbstractType { name, .. } = ctx.types.node(*kt) {
+            return Action::Done(Err(abstract_type_has_no_members(&name)));
+        }
     }
     Action::Done(Err(KError::new(KErrorKind::UnboundName(s_name))))
 }
@@ -197,8 +199,8 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 /// Project `field` off a Type-channel lhs. A signature answers directly from its owned schema —
 /// a manifest or abstract type member first, then a declared value slot's type — with no
 /// decl-scope reverse-lookup; an abstract identity carries no receiver and errors. A module rides
-/// the value channel, so a module lhs lands in [`body_module`] instead. A `SetRef` (struct /
-/// union name) and every other type has no members and falls through to the same TypeMismatch a
+/// the value channel, so a module lhs lands in [`body_module`] instead. A nominal type handle
+/// (struct / union name) and every other type has no members and falls through to the same TypeMismatch a
 /// static struct field access produces.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
@@ -206,35 +208,35 @@ fn access_type_member<'a>(
     field: &str,
     types: &TypeRegistry,
 ) -> Result<StepCarried<'a>, KError> {
-    match kt {
+    match types.node(*kt) {
         // ATTR over a first-class signature value — answered from the owned schema. The
         // projected member is a clone out of that schema, allocated fresh into the read-site
         // scope's own region.
-        KType::Signature { content, .. } => {
-            let member = content
-                .schema
+        TypeNode::Signature { schema, .. } => {
+            let member = schema
                 .manifest_members
                 .get(field)
-                .or_else(|| content.schema.abstract_members.get(field))
-                .or_else(|| content.schema.value_slots.get(field));
+                .or_else(|| schema.abstract_members.get(field))
+                .or_else(|| schema.value_slots.get(field));
             match member {
-                Some(kt) => Ok(StepCarried::born(scope.seal_fresh_ktype(kt.clone()))),
+                Some(member) => Ok(StepCarried::born(scope.seal_fresh_ktype(*member))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
-                    content.path, field
+                    kt.name(types),
+                    field
                 )))),
             }
         }
-        KType::AbstractType { name, .. } => Err(abstract_type_has_no_members(name)),
-        other => Err(KError::new(KErrorKind::TypeMismatch {
+        TypeNode::AbstractType { name, .. } => Err(abstract_type_has_no_members(&name)),
+        _ => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "a type with members".to_string(),
-            got: other.name(types),
+            got: kt.name(types),
         })),
     }
 }
 
-/// A [`KType::AbstractType`] is an identity — a binder scope, a name, and a generativity nonce —
+/// An abstract type ([`TypeNode::AbstractType`]) is an identity — a binder scope, a name, and a generativity nonce —
 /// not a receiver. The
 /// module it names rides the value channel, and further members project off *that* value, so a
 /// member access whose lhs is a bare abstract identity has nowhere to look.
@@ -315,7 +317,7 @@ fn access_field<'a>(
         }
         // A type member is owned data: it clones out of the lhs and allocates into the read
         // site's own region, so the read carries no dependence on the lhs carrier.
-        Held::Type(kt) => Ok(step.alloc_type(kt.clone())),
+        Held::Type(kt) => Ok(step.alloc_type(*kt)),
         // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
         // never lands in one.
         Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
@@ -382,7 +384,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                         (Carried::Object(o), Carried::Type(tag)) => {
                             Carried::Object(b.alloc_object_folded(KObject::Wrapped {
                                 inner: WrappedPayload::peel(o),
-                                type_id: tag,
+                                type_id: *tag,
                             }))
                         }
                         _ => unreachable!("operand order: [value member, re-tag identity]"),
@@ -406,21 +408,21 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let identifier_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::Identifier),
-                arg("field", KType::Identifier),
+                arg("s", KType::IDENTIFIER),
+                arg("field", KType::IDENTIFIER),
             ],
         )
     };
     let module_field_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::empty_signature()),
-                arg("field", KType::Identifier),
+                arg("s", KType::EMPTY_SIGNATURE),
+                arg("field", KType::IDENTIFIER),
             ],
         )
     };
@@ -434,42 +436,42 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // `body_type_lhs`, and only a bare runtime value falls through to here.
     let newtype_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::Any),
-                arg("field", KType::Identifier),
+                arg("s", KType::ANY),
+                arg("field", KType::IDENTIFIER),
             ],
         )
     };
     let type_identifier_field_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::ProperType)),
-                arg("field", KType::Identifier),
+                arg("s", KType::of_kind(KKind::ProperType)),
+                arg("field", KType::IDENTIFIER),
             ],
         )
     };
     let type_type_field_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::OfKind(KKind::ProperType)),
-                arg("field", KType::OfKind(KKind::ProperType)),
+                arg("s", KType::of_kind(KKind::ProperType)),
+                arg("field", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
     // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
     let module_type_field_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("ATTR"),
-                arg("s", KType::empty_signature()),
-                arg("field", KType::OfKind(KKind::ProperType)),
+                arg("s", KType::EMPTY_SIGNATURE),
+                arg("field", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
@@ -675,7 +677,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG Ordered = (VAL compare :Number)");
         let kt = test_run.run_one_type(parse_one("Ordered.compare"));
-        assert_eq!(*kt, KType::Number);
+        assert_eq!(*kt, KType::NUMBER);
     }
 
     /// A missing field on the wrapped record names the carrier's nominal type in the

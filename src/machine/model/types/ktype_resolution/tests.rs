@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine::model::types::Record;
 use crate::machine::model::TypeRegistry;
 
 fn leaf(n: &str) -> TypeIdentifier {
@@ -10,7 +11,7 @@ fn from_type_expr_leaf_number() {
     let types = TypeRegistry::new();
     assert_eq!(
         KType::from_type_identifier(&leaf("Number"), &types).unwrap(),
-        KType::Number
+        KType::NUMBER
     );
 }
 
@@ -25,7 +26,7 @@ fn from_type_expr_leaf_falls_through_to_builtin() {
     let types = TypeRegistry::new();
     assert_eq!(
         KType::from_type_identifier(&leaf("Number"), &types).unwrap(),
-        KType::Number,
+        KType::NUMBER,
     );
 }
 
@@ -36,65 +37,58 @@ fn from_name_kfunction_no_longer_resolves() {
 
 #[test]
 fn from_name_list_lowers_to_list_any() {
-    assert_eq!(
-        KType::from_name("List"),
-        Some(KType::list(Box::new(KType::Any)))
-    );
+    let types = TypeRegistry::new();
+    assert_eq!(KType::from_name("List"), Some(types.list(KType::ANY)));
 }
 
 #[test]
 fn from_name_dict_lowers_to_dict_any_any() {
+    let types = TypeRegistry::new();
     assert_eq!(
         KType::from_name("Dict"),
-        Some(KType::dict(Box::new(KType::Any), Box::new(KType::Any)))
+        Some(types.dict(KType::ANY, KType::ANY))
     );
 }
 
 #[test]
 fn join_distinct_concretes_yields_any() {
     let types = TypeRegistry::new();
-    assert_eq!(KType::join(&KType::Number, &KType::Str, &types), KType::Any);
+    assert_eq!(types.join(KType::NUMBER, KType::STR), KType::ANY);
 }
 
 #[test]
 fn join_same_yields_same() {
     let types = TypeRegistry::new();
-    assert_eq!(
-        KType::join(&KType::Number, &KType::Number, &types),
-        KType::Number
-    );
+    assert_eq!(types.join(KType::NUMBER, KType::NUMBER), KType::NUMBER);
 }
 
 #[test]
 fn join_lists_recurses_on_element() {
     let types = TypeRegistry::new();
-    let a = KType::list(Box::new(KType::Number));
-    let b = KType::list(Box::new(KType::Str));
-    assert_eq!(
-        KType::join(&a, &b, &types),
-        KType::list(Box::new(KType::Any))
-    );
+    let a = types.list(KType::NUMBER);
+    let b = types.list(KType::STR);
+    assert_eq!(types.join(a, b), types.list(KType::ANY));
 }
 
 #[test]
 fn join_iter_empty_is_any() {
     let types = TypeRegistry::new();
     let v: Vec<KType> = vec![];
-    assert_eq!(KType::join_iter(v, &types), KType::Any);
+    assert_eq!(types.join_iter(v), KType::ANY);
 }
 
 #[test]
 fn join_iter_homogeneous() {
     let types = TypeRegistry::new();
-    let v = vec![KType::Number, KType::Number, KType::Number];
-    assert_eq!(KType::join_iter(v, &types), KType::Number);
+    let v = vec![KType::NUMBER, KType::NUMBER, KType::NUMBER];
+    assert_eq!(types.join_iter(v), KType::NUMBER);
 }
 
 #[test]
 fn join_iter_mixed_yields_any() {
     let types = TypeRegistry::new();
-    let v = vec![KType::Number, KType::Str, KType::Bool];
-    assert_eq!(KType::join_iter(v, &types), KType::Any);
+    let v = vec![KType::NUMBER, KType::STR, KType::BOOL];
+    assert_eq!(types.join_iter(v), KType::ANY);
 }
 
 // --- union_of ---------------------------------------------------------------------
@@ -103,15 +97,15 @@ fn join_iter_mixed_yields_any() {
 #[test]
 fn union_of_two_distinct_members() {
     let types = TypeRegistry::new();
-    let u = KType::union_of(vec![KType::Number, KType::Str], &types);
-    assert_eq!(u, KType::union_of(vec![KType::Number, KType::Str], &types));
+    let u = types.union_of(vec![KType::NUMBER, KType::STR]);
+    assert_eq!(u, types.union_of(vec![KType::NUMBER, KType::STR]));
 }
 
 /// A single member collapses to that member (AC2's `:(A | A)` is `:A`, degenerate case).
 #[test]
 fn union_of_single_member_collapses() {
     let types = TypeRegistry::new();
-    assert_eq!(KType::union_of(vec![KType::Number], &types), KType::Number);
+    assert_eq!(types.union_of(vec![KType::NUMBER]), KType::NUMBER);
 }
 
 /// Duplicate members are deduplicated; `:(Number | Number)` collapses to `:Number`.
@@ -119,8 +113,8 @@ fn union_of_single_member_collapses() {
 fn union_of_dedups_to_single() {
     let types = TypeRegistry::new();
     assert_eq!(
-        KType::union_of(vec![KType::Number, KType::Number], &types),
-        KType::Number
+        types.union_of(vec![KType::NUMBER, KType::NUMBER]),
+        KType::NUMBER
     );
 }
 
@@ -128,26 +122,26 @@ fn union_of_dedups_to_single() {
 #[test]
 fn union_of_dedups_within_set() {
     let types = TypeRegistry::new();
-    let u = KType::union_of(vec![KType::Number, KType::Str, KType::Number], &types);
-    assert_eq!(u, KType::union_of(vec![KType::Number, KType::Str], &types));
+    let u = types.union_of(vec![KType::NUMBER, KType::STR, KType::NUMBER]);
+    assert_eq!(u, types.union_of(vec![KType::NUMBER, KType::STR]));
 }
 
 /// A nested `Union` member is flattened into the outer members, then deduplicated.
 #[test]
 fn union_of_flattens_nested_union() {
     let types = TypeRegistry::new();
-    let inner = KType::union_of(vec![KType::Str, KType::Bool], &types);
-    let u = KType::union_of(vec![KType::Number, inner, KType::Bool], &types);
+    let inner = types.union_of(vec![KType::STR, KType::BOOL]);
+    let u = types.union_of(vec![KType::NUMBER, inner, KType::BOOL]);
     assert_eq!(
         u,
-        KType::union_of(vec![KType::Number, KType::Str, KType::Bool], &types)
+        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL])
     );
 }
 
-fn function(params: Vec<(&str, KType)>, ret: KType) -> KType {
-    KType::function_type(
+fn function(params: Vec<(&str, KType)>, ret: KType, types: &TypeRegistry) -> KType {
+    types.function_type(
         Record::from_pairs(params.into_iter().map(|(n, t)| (n.into(), t))),
-        Box::new(ret),
+        ret,
     )
 }
 
@@ -155,7 +149,7 @@ fn function(params: Vec<(&str, KType)>, ret: KType) -> KType {
 #[test]
 fn join_same_shape_functions_yields_shared_function() {
     let types = TypeRegistry::new();
-    let f1 = function(vec![("x", KType::Number)], KType::Bool);
-    let f2 = function(vec![("x", KType::Number)], KType::Bool);
-    assert_eq!(KType::join(&f1, &f2, &types), f1.clone());
+    let f1 = function(vec![("x", KType::NUMBER)], KType::BOOL, &types);
+    let f2 = function(vec![("x", KType::NUMBER)], KType::BOOL, &types);
+    assert_eq!(types.join(f1, f2), f1);
 }

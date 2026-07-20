@@ -1,6 +1,5 @@
 //! AST node types shared across the parse module.
 
-use crate::machine::model::types::KKind;
 use crate::machine::DeliveredCarried;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -116,6 +115,18 @@ pub enum ExpressionPart<'a> {
     },
 }
 
+/// Registry-free rendering of a spliced cell's carried value, for `Debug` and the registry-free
+/// [`ExpressionPart::summarize`]. A type name resolves through the registry, which neither signature
+/// carries, so the type channel renders its content-digest hex — the value's own identity — and an
+/// object renders its type's digest. An unlowered name is already a bare surface string.
+fn spliced_summary(carried: Carried<'_>) -> String {
+    match carried {
+        Carried::Type(kt) => format!("0x{:032x}", kt.digest().0),
+        Carried::UnresolvedType(ti) => ti.render(),
+        Carried::Object(object) => format!("0x{:032x}", object.ktype().digest().0),
+    }
+}
+
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -141,11 +152,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("QuotedExpression").field(e).finish()
             }
             ExpressionPart::Spliced { cell, .. } => {
-                write!(
-                    f,
-                    "Spliced({})",
-                    cell.open(|c| c.summarize_without_registry())
-                )
+                write!(f, "Spliced({})", cell.open(spliced_summary))
             }
         }
     }
@@ -216,7 +223,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Boolean(b) => b.to_string(),
                 KLiteral::Null => "null".to_string(),
             },
-            ExpressionPart::Spliced { cell, .. } => cell.open(|c| c.summarize_without_registry()),
+            ExpressionPart::Spliced { cell, .. } => cell.open(spliced_summary),
         }
     }
 
@@ -240,31 +247,27 @@ impl<'a> ExpressionPart<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced { cell, .. } = self {
             return match scope.adopt_sealed(cell) {
-                Carried::Type(kt) => Held::Type(kt.clone()),
+                Carried::Type(kt) => Held::Type(*kt),
                 Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),
             };
         }
-        if let (
-            ExpressionPart::Type(t),
-            KType::OfKind(KKind::ProperType) | KType::OfKind(KKind::AnyType),
-        ) = (self, slot)
-        {
+        if let (ExpressionPart::Type(t), KType::PROPER_TYPE | KType::ANY_TYPE) = (self, *slot) {
             return match KType::from_type_identifier(t, types) {
                 Ok(kt) => Held::Type(kt),
                 Err(_) => Held::UnresolvedType(t.clone()),
             };
         }
-        if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
+        if let (ExpressionPart::SigiledTypeExpr(inner), KType::SIGILED_TYPE_EXPR) = (self, *slot) {
             return Held::Object(KObject::KExpression((**inner).clone()));
         }
-        if let (ExpressionPart::RecordType(inner), KType::RecordType) = (self, slot) {
+        if let (ExpressionPart::RecordType(inner), KType::RECORD_TYPE) = (self, *slot) {
             return Held::Object(KObject::KExpression((**inner).clone()));
         }
         // A `Unary`-mode operator run reduces to `[Keyword, ListLiteral]`; a `:KExpression` slot
         // captures the list literal raw as a one-per-part `KExpression`, so the receiving builtin
         // walks the operand parts itself rather than seeing an eager-evaluated list value.
-        if let (ExpressionPart::ListLiteral(items), KType::KExpression) = (self, slot) {
+        if let (ExpressionPart::ListLiteral(items), KType::KEXPRESSION) = (self, *slot) {
             let parts = items.iter().cloned().map(Spanned::bare).collect();
             return Held::Object(KObject::KExpression(KExpression::new(parts)));
         }
@@ -723,7 +726,7 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 
 impl<'a> Parseable for KExpression<'a> {
     fn ktype(&self) -> crate::machine::model::KType {
-        crate::machine::model::KType::KExpression
+        crate::machine::model::KType::KEXPRESSION
     }
 }
 

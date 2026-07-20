@@ -154,21 +154,21 @@ pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let number_sig = |op: &str| {
         sig(
-            KType::Number,
+            KType::NUMBER,
             vec![
-                arg("left", KType::Number),
+                arg("left", KType::NUMBER),
                 kw(op),
-                arg("right", KType::Number),
+                arg("right", KType::NUMBER),
             ],
         )
     };
     let comparison_sig = |op: &str| {
         sig(
-            KType::Bool,
+            KType::BOOL,
             vec![
-                arg("left", KType::Number),
+                arg("left", KType::NUMBER),
                 kw(op),
-                arg("right", KType::Number),
+                arg("right", KType::NUMBER),
             ],
         )
     };
@@ -184,11 +184,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types);
 
     let and_sig = sig(
-        KType::Bool,
+        KType::BOOL,
         vec![
-            arg("left", KType::Bool),
+            arg("left", KType::BOOL),
             kw("AND"),
-            arg("right", KType::Bool),
+            arg("right", KType::BOOL),
         ],
     );
     crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types);

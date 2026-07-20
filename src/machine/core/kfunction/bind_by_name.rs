@@ -60,12 +60,12 @@ mod tests {
     /// `(DOUBLE x: Number)` — one keyword, one parameter.
     fn double_signature<'a>() -> ExpressionSignature<'a> {
         ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Number),
+            return_type: ReturnType::Resolved(KType::NUMBER),
             elements: vec![
                 SignatureElement::Keyword("DOUBLE".to_string()),
                 SignatureElement::Argument(Argument {
                     name: "x".to_string(),
-                    ktype: KType::Number,
+                    ktype: KType::NUMBER,
                 }),
             ],
         }

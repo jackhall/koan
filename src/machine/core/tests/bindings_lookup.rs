@@ -93,10 +93,10 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Tee".into(), KType::Number, BindingIndex::value(99));
+    scope.register_type("Tee".into(), KType::NUMBER, BindingIndex::value(99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
-        Some(NameLookup::Bound(KType::Number)),
+        Some(NameLookup::Bound(kt)) if *kt == KType::NUMBER,
     ));
 }
 
@@ -104,7 +104,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("TyLate".into(), KType::Number, BindingIndex::value(5));
+    scope.register_type("TyLate".into(), KType::NUMBER, BindingIndex::value(5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
 }
@@ -120,6 +120,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj = region
         .brand()
@@ -143,22 +144,22 @@ fn lookup_function_filters_per_overload_visibility() {
     // Two overloads sharing the same bucket key but differing on a value-side
     // argument shape so they coexist in `functions[key]`.
     let sig_num = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("BAR".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
     let sig_str = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("BAR".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Str,
+                ktype: KType::STR,
             }),
         ],
     };
@@ -170,6 +171,7 @@ fn lookup_function_filters_per_overload_visibility() {
         scope,
         None,
         None,
+        &types,
     ));
     let f_late = region.brand().alloc_function(KFunction::new(
         sig_str,
@@ -177,6 +179,7 @@ fn lookup_function_filters_per_overload_visibility() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj_early = region
         .brand()
@@ -239,6 +242,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj = region
         .brand()
@@ -269,6 +273,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj = region
         .brand()

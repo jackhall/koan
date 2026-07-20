@@ -5,6 +5,7 @@ pub(crate) mod signature;
 
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -107,7 +108,7 @@ pub fn body_value_named_return<'a>(
 
 /// Anonymous-FN body: `FN :{<record schema>} -> ReturnType = (<body>)`.
 ///
-/// The record-schema sigil `:{…}` resolves to a `KType::Record` before this
+/// The record-schema sigil `:{…}` resolves to a record-type `KType` before this
 /// fires — it is a first-class `ExpressionPart::RecordType` the dispatcher folds
 /// structurally, and the `signature` slot is typed `ProperType`, so the operand
 /// sub-dispatches to a type-side carrier and the args record hands us the
@@ -120,13 +121,15 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
     use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
-        Some(KType::Record { fields: record, .. }) => record.clone(),
-        Some(other) => {
-            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                other.name(ctx.types),
-            )))))
-        }
+        Some(kt) => match ctx.types.node(*kt) {
+            TypeNode::Record { fields } => fields,
+            _ => {
+                return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
+                    kt.name(ctx.types),
+                )))))
+            }
+        },
         None => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(
                 "anonymous FN signature slot must be a record schema `:{…}`".to_string(),
@@ -138,7 +141,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         .map(|(name, ktype)| {
             SignatureElement::Argument(Argument {
                 name: name.clone(),
-                ktype: ktype.clone(),
+                ktype: *ktype,
             })
         })
         .collect();
@@ -178,7 +181,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    // Declared return is `KType::Any`: a function's structural type only exists
+    // Declared return is `KType::ANY`: a function's structural type only exists
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
     //
@@ -202,14 +205,14 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // `:ProperType`-return keyworded overload (`-> Number` / `-> er`).
     let typeexpr_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KExpression),
+                arg("signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::ProperType)),
+                arg("return_type", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
@@ -219,49 +222,49 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // per-call instead of eager-sub-dispatching it to an unbound parameter.
     let sigil_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KExpression),
+                arg("signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::SigiledTypeExpr),
+                arg("return_type", KType::SIGILED_TYPE_EXPR),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     // Value-named return (`-> er`): a return slot names a *type*, and an Identifier names a value.
     // The overload exists only to diagnose — without it the shape falls through every FN overload
-    // and reports "no matching function", which says nothing about the actual mistake. It is the
-    // most common one post-flip: a module-valued parameter is a value token now, so the type it
-    // used to stand for is spelled `:(TYPE OF er)`.
+    // and reports "no matching function", which says nothing about the actual mistake. It is a
+    // common one: a module-valued parameter is a value token, so the type it denotes is spelled
+    // `:(TYPE OF er)`.
     let value_named_return_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::KExpression),
+                arg("signature", KType::KEXPRESSION),
                 kw("->"),
-                arg("return_type", KType::Identifier),
+                arg("return_type", KType::IDENTIFIER),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     // Anonymous overload: a `:{…}` record-schema operand is a `RecordType` part, which the two
     // `KExpression`-signature overloads above reject and only this `ProperType`-signature overload
-    // admits (it sub-dispatches to a resolved `KType::Record`). Selection is unambiguous by operand
+    // admits (it sub-dispatches to a resolved record-type `KType`). Selection is unambiguous by operand
     // part-kind, so it needs no `binder_bucket` park-guard.
     let record_sig = || {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("FN"),
-                arg("signature", KType::OfKind(KKind::ProperType)),
+                arg("signature", KType::of_kind(KKind::ProperType)),
                 kw("->"),
-                arg("return_type", KType::OfKind(KKind::ProperType)),
+                arg("return_type", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };

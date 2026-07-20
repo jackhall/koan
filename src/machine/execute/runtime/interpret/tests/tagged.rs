@@ -105,7 +105,7 @@ fn union_typed_slot_admits_any_variant() {
 }
 
 /// `:(Maybe Some)` is a first-class type value reached through its union — the `Some` variant's
-/// per-tag newtype `SetRef`, which renders by its own member name.
+/// per-tag newtype `SetMember`, which renders by its own member name.
 #[test]
 fn variant_type_value_renders_member_name() {
     let region = run_root_storage();

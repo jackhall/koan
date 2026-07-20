@@ -120,7 +120,7 @@ pub(crate) fn extract_terminal<'a>(
             ),
             // A type is owned data: it crosses into `scope`'s region by clone through the single
             // storage door, naming no reach. An unlowered type name crosses the same way.
-            Carried::Type(kt) => Carried::Type(scope.brand().alloc_ktype(kt.clone())),
+            Carried::Type(kt) => Carried::Type(scope.brand().alloc_ktype(*kt)),
             Carried::UnresolvedType(ti) => {
                 Carried::UnresolvedType(scope.brand().alloc_type_identifier(ti.clone()))
             }
@@ -377,7 +377,7 @@ pub(crate) fn delivered_with_host(value: Carried<'_>, host: Rc<FrameStorage>) ->
 #[cfg(test)]
 pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Argument(Argument {
             name: name.into(),
             ktype: kt,

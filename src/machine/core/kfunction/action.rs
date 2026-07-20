@@ -15,7 +15,7 @@ use crate::machine::model::Held;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KType, Record};
+use crate::machine::model::{KType, Record, TypeNode};
 use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
 #[cfg(test)]
@@ -104,7 +104,7 @@ pub fn require_ktype<'a>(
     types: &TypeRegistry,
 ) -> Result<KType, KError> {
     match arg_held(args, name) {
-        Some(Held::Type(kt)) => Ok(kt.clone()),
+        Some(Held::Type(kt)) => Ok(*kt),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "ProperType".to_string(),
@@ -172,30 +172,29 @@ fn bare_type_name(
     surface: &str,
     types: &TypeRegistry,
 ) -> Result<String, KError> {
-    match t {
-        KType::Number
-        | KType::Str
-        | KType::Bool
-        | KType::Null
-        | KType::Identifier
-        | KType::KExpression
-        | KType::SigiledTypeExpr
-        | KType::RecordType
-        | KType::OfKind(_)
-        | KType::Any
-        | KType::SetRef { .. }
-        | KType::Signature { .. }
-        | KType::AbstractType { .. } => Ok(t.name(types)),
-        KType::List { .. }
-        | KType::Dict { .. }
-        | KType::Record { .. }
-        | KType::KFunction { .. }
-        | KType::DeferredReturn(_)
-        | KType::SetLocal(_)
-        | KType::Union { .. }
-        | KType::RecursiveRef(_)
-        | KType::RecursiveGroup(_)
-        | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
+    match types.node(*t) {
+        TypeNode::Number
+        | TypeNode::Str
+        | TypeNode::Bool
+        | TypeNode::Null
+        | TypeNode::Identifier
+        | TypeNode::KExpression
+        | TypeNode::SigiledTypeExpr
+        | TypeNode::RecordType
+        | TypeNode::OfKind(_)
+        | TypeNode::Any
+        | TypeNode::SetMember { .. }
+        | TypeNode::Signature { .. }
+        | TypeNode::AbstractType { .. } => Ok(t.name(types)),
+        TypeNode::List { .. }
+        | TypeNode::Dict { .. }
+        | TypeNode::Record { .. }
+        | TypeNode::KFunction { .. }
+        | TypeNode::DeferredReturn(_)
+        | TypeNode::Sibling(_)
+        | TypeNode::Union { .. }
+        | TypeNode::Group { .. }
+        | TypeNode::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {name} must be a bare type name, got `{}`",
             t.render(types),
         )))),

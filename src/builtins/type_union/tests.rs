@@ -1,6 +1,6 @@
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KType;
 use crate::machine::model::ReductionMode;
+use crate::machine::model::{KType, TypeNode};
 use crate::machine::run_root_storage;
 
 /// AC7: `|` is registered as a single-member `Unary`-mode operator group, so a `|` run reduces
@@ -26,9 +26,10 @@ fn two_member_union_lowers_to_union() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":(Number | Str)"));
+    let types = test_run.types();
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::Number, KType::Str], &test_run.types),
+        types.union_of(vec![KType::NUMBER, KType::STR]),
         "two-member `|` builds the union of its members",
     );
 }
@@ -40,12 +41,10 @@ fn three_member_run_builds_flat_union() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":(Number | Str | Bool)"));
+    let types = test_run.types();
     assert_eq!(
         *result,
-        KType::union_of(
-            vec![KType::Number, KType::Str, KType::Bool],
-            &test_run.types
-        ),
+        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
 
@@ -55,7 +54,7 @@ fn duplicate_member_collapses() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":(Number | Number)"));
-    assert_eq!(*result, KType::Number);
+    assert_eq!(*result, KType::NUMBER);
 }
 
 /// Member order does not matter (AC2): `:(Number | Str)` equals `:(Str | Number)`.
@@ -63,9 +62,9 @@ fn duplicate_member_collapses() {
 fn member_order_blind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let forward = test_run.run_one_type(parse_one(":(Number | Str)"));
-    let backward = test_run.run_one_type(parse_one(":(Str | Number)"));
-    assert_eq!(*forward, *backward);
+    let forward = *test_run.run_one_type(parse_one(":(Number | Str)"));
+    let backward = *test_run.run_one_type(parse_one(":(Str | Number)"));
+    assert_eq!(forward, backward);
 }
 
 /// The explicit prefix form `:(| [Number Str Bool])` reaches the same n-ary body as the infix
@@ -75,12 +74,10 @@ fn prefix_form_builds_union() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":(| [Number Str Bool])"));
+    let types = test_run.types();
     assert_eq!(
         *result,
-        KType::union_of(
-            vec![KType::Number, KType::Str, KType::Bool],
-            &test_run.types
-        ),
+        types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
 
@@ -91,12 +88,10 @@ fn parenthesized_compound_member() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":((LIST OF Number) | Str)"));
+    let types = test_run.types();
     assert_eq!(
         *result,
-        KType::union_of(
-            vec![KType::list(Box::new(KType::Number)), KType::Str],
-            &test_run.types
-        ),
+        types.union_of(vec![types.list(KType::NUMBER), KType::STR]),
     );
 }
 
@@ -109,19 +104,20 @@ fn binary_union_with_reaching_member_correlates() {
     let mut test_run = TestRun::silent(&region);
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
     let result = test_run.run_one_type(parse_one(":(Wrapped | Number)"));
-    match result {
-        KType::Union { members, .. } => {
+    let types = test_run.types();
+    match types.node(*result) {
+        TypeNode::Union { members } => {
             assert_eq!(members.len(), 2, "expected a flat two-member union");
             assert!(
-                members.iter().any(|m| m.name(&test_run.types) == "Wrapped"),
+                members.iter().any(|m| m.name(types) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
             assert!(
-                members.contains(&KType::Number),
+                members.contains(&KType::NUMBER),
                 "the scalar member must lower to Number, got {members:?}",
             );
         }
-        other => panic!("expected a Union carrier, got {other:?}"),
+        _ => panic!("expected a Union carrier, got {result:?}"),
     }
 }
 
@@ -134,17 +130,18 @@ fn nary_union_with_reaching_member_correlates() {
     let mut test_run = TestRun::silent(&region);
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
     let result = test_run.run_one_type(parse_one(":(Wrapped | Number | Str)"));
-    match result {
-        KType::Union { members, .. } => {
+    let types = test_run.types();
+    match types.node(*result) {
+        TypeNode::Union { members } => {
             assert_eq!(members.len(), 3, "expected a flat three-member union");
             assert!(
-                members.iter().any(|m| m.name(&test_run.types) == "Wrapped"),
+                members.iter().any(|m| m.name(types) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
-            assert!(members.contains(&KType::Number), "got {members:?}");
-            assert!(members.contains(&KType::Str), "got {members:?}");
+            assert!(members.contains(&KType::NUMBER), "got {members:?}");
+            assert!(members.contains(&KType::STR), "got {members:?}");
         }
-        other => panic!("expected a Union carrier, got {other:?}"),
+        _ => panic!("expected a Union carrier, got {result:?}"),
     }
 }
 

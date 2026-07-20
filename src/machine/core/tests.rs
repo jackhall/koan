@@ -12,7 +12,7 @@ use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureEle
 
 pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     }
 }

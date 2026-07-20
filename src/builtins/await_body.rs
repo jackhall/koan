@@ -15,7 +15,7 @@ use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx}
 /// `SealBeforeFinish`: every bind into the child resolved with the awaited deps and the
 /// finish only reads it — close first, so the sealed reach rides any value that captures
 /// the scope. `LeaveOpen`: the caller's finish does not capture the scope into an escaping
-/// value (RECURSIVE TYPES: members ride the `RecursiveSet`, not the scope), so the scope
+/// value (RECURSIVE TYPES: members ride the `RecursiveGroupWindow`, not the scope), so the scope
 /// stays open.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChildScopeSeal {

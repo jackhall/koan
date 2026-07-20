@@ -72,7 +72,7 @@ pub(crate) fn extract_type_slot_raw<'a>(
     if let Some(te) = arg_unresolved_type(args, slot) {
         Ok(ReturnTypeRaw::TypeExprCarrier(te.clone()))
     } else if let Some(kt) = arg_type(args, slot) {
-        Ok(ReturnTypeRaw::Resolved(kt.clone()))
+        Ok(ReturnTypeRaw::Resolved(*kt))
     } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
         Ok(ReturnTypeRaw::ExprCarrier(e.clone()))
     } else {

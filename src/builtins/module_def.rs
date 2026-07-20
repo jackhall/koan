@@ -82,12 +82,12 @@ pub(super) fn await_module_body<'a>(
             {
                 let mut tm = module.type_members.borrow_mut();
                 for (member, kt) in child_scope.bindings().iter_types() {
-                    tm.insert(member, kt.clone());
+                    tm.insert(member, *kt);
                 }
             }
             // Seal the module's self-sig now that `type_members` reflects the body — a plain
             // module carries no SIG, so the raw derivation is the whole signature.
-            module.seal_self_sig(SigSchema::raw_self_sig(module));
+            module.seal_self_sig(SigSchema::raw_self_sig(module), fctx.types);
             // Fused MODULE-finish bind: the module's stored reach is derived off the child scope held
             // **directly** here (never by walking the built value) — the home-borrow bit included,
             // `true` because the same-region child's own region owner covers this scope's region
@@ -133,19 +133,19 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let module_sig = |name_kt: KType| {
         sig(
-            KType::empty_signature(),
+            KType::EMPTY_SIGNATURE,
             vec![
                 kw("MODULE"),
                 arg("name", name_kt),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     crate::builtins::register_builtin_full(
         scope,
         "MODULE",
-        module_sig(KType::Identifier),
+        module_sig(KType::IDENTIFIER),
         body,
         Some((
             super::identifier_part_binder_name,
@@ -157,7 +157,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     crate::builtins::register_builtin_full(
         scope,
         "MODULE",
-        module_sig(KType::OfKind(KKind::ProperType)),
+        module_sig(KType::of_kind(KKind::ProperType)),
         body_type_named,
         None,
         None,
@@ -170,6 +170,7 @@ mod tests {
     use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::model::Module;
+    use crate::machine::model::SigSchema;
     use crate::machine::{run_root_storage, FrameStorageExt};
     use crate::machine::{BindingIndex, KErrorKind};
 
@@ -281,9 +282,10 @@ mod tests {
         let listed = test_run.run_one(parse_one("[int_ord, int_ord]"));
         match listed {
             KObject::List(items, elem) => {
+                // Ruling 12: a module's self-sig renders structurally, not by the module name.
                 assert_eq!(
                     elem.name(&test_run.types),
-                    "int_ord",
+                    ":(LIST OF SIG (compare: Number))",
                     "the memoized element type is the module self-sig"
                 );
                 assert_eq!(items.len(), 2);
@@ -311,14 +313,14 @@ mod tests {
              MODULE int_ord = (LET compare = 7)",
         );
         // A parenthesized module expression evaluates to the Object-arm module value, so the list
-        // element is `Held::Object` memoized as the module's self-sig (`Signature{SelfOf}`, whose
-        // name renders as the module path).
+        // element is `Held::Object` memoized as the module's self-sig, which (ruling 12) renders
+        // structurally as `SIG (compare: Number)` rather than by the module name.
         let listed = test_run.run_one(parse_one("[(int_ord)]"));
         match listed {
             KObject::List(items, elem) => {
                 assert_eq!(
                     elem.name(&test_run.types),
-                    "int_ord",
+                    ":(LIST OF SIG (compare: Number))",
                     "element memoizes to the module self-sig"
                 );
                 assert_eq!(items.len(), 1);
@@ -427,6 +429,9 @@ mod tests {
         let module: &Module<'_> = region
             .brand()
             .alloc_module(Module::new("foo".into(), child));
+        // Every mint seals its self-sig (2d eager-seal invariant), so a manually pre-seeded
+        // module seals its (empty) interface before it is bound and its `ktype()` is read.
+        module.seal_self_sig(SigSchema::raw_self_sig(module), &test_run.types);
         scope
             .bind_module(
                 "foo".into(),

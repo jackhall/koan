@@ -45,7 +45,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    let signature = sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]);
+    let signature = sig(KType::ANY, vec![kw("EVAL"), arg("expr", KType::ANY)]);
     crate::builtins::register_builtin(scope, "EVAL", signature, body, types);
 }
 

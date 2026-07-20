@@ -87,10 +87,10 @@ fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
         ),
     };
     let tm = module.type_members.borrow();
-    match tm.get("ElemType") {
-        Some(KType::Number) => {}
+    match tm.get("ElemType").copied() {
+        Some(KType::NUMBER) => {}
         other => panic!(
-            "expected ElemType registered as KType::Number on returned module, got {:?}",
+            "expected ElemType registered as Number on returned module, got {:?}",
             other,
         ),
     }

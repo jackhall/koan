@@ -15,37 +15,35 @@
 //! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KKind, KObject, KType, TypeRegistry};
+use crate::machine::model::{KKind, KObject, KType, TypeNode, TypeRegistry};
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
-use crate::machine::{KError, KErrorKind, Scope, ScopeId};
+use crate::machine::{KError, KErrorKind, Scope};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
 fn typeexpr_from_carrier(kt: &KType, types: &TypeRegistry) -> CarrierForm {
-    match kt {
-        KType::Number
-        | KType::Str
-        | KType::Bool
-        | KType::Null
-        | KType::OfKind(KKind::AnyType)
-        | KType::OfKind(KKind::Signature)
-        | KType::Any
-        | KType::Identifier
-        | KType::KExpression
-        | KType::OfKind(KKind::ProperType) => {
-            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
-        }
-        // `:Module` lowers to the empty signature (no declaring scope); its `name()` is
-        // "Module", so it re-resolves against decl_scope through the same leaf path as the
-        // other builtin type names. A user-declared signature (a real `sig_id`) stays `Direct`:
-        // re-resolution is by name, and an aliased user SIG reached through a `LET` could miss
-        // or hit a shadow.
-        KType::Signature { content, .. } if content.sig_id == ScopeId::SENTINEL => {
-            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
-        }
-        _ => CarrierForm::Direct(kt.clone()),
+    // The builtin leaf type names re-resolve against decl_scope through the same name path so a
+    // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
+    // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
+    // interface) stays `Direct`: re-resolution is by name, and an aliased user SIG reached
+    // through a `LET` could miss or hit a shadow.
+    let is_leaf_builtin = matches!(
+        types.node(*kt),
+        TypeNode::Number
+            | TypeNode::Str
+            | TypeNode::Bool
+            | TypeNode::Null
+            | TypeNode::Any
+            | TypeNode::Identifier
+            | TypeNode::KExpression
+            | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
+    );
+    if is_leaf_builtin || *kt == KType::EMPTY_SIGNATURE {
+        CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
+    } else {
+        CarrierForm::Direct(*kt)
     }
 }
 
@@ -149,7 +147,7 @@ fn finalize_val<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
-        &declared_kt,
+        declared_kt,
         &format!("the type of SIG value slot `{name}`"),
         fctx.types,
     ) {
@@ -167,11 +165,11 @@ fn finalize_val<'a>(
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
-        KType::Any,
+        KType::ANY,
         vec![
             kw("VAL"),
-            arg("name", KType::Identifier),
-            arg("ty", KType::OfKind(KKind::ProperType)),
+            arg("name", KType::IDENTIFIER),
+            arg("ty", KType::of_kind(KKind::ProperType)),
         ],
     );
     crate::builtins::register_builtin_full(

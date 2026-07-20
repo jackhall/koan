@@ -3,6 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
+use super::recursive_group_window::RecursiveGroupWindow;
 use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -13,6 +14,7 @@ use crate::parse::parse_pair_list;
 pub use crate::parse::FieldNameKind;
 use crate::source::Spanned;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 /// The two nouns a field-list diagnostic needs. `list` names the whole schema, for errors about
 /// the list as a unit ("UNION schema: forward type reference still unresolved…"); `member` names
@@ -120,10 +122,10 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
         // Every field types a value, so each field type must be a proper type; a bare
         // constructor of kind `* -> *` standing unapplied is a kind error. Applied to each
         // elaborated field on the way out, so the four arms below share one verdict — the
-        // `KType::Any` placeholders a `Pending` walk yields are proper and pass, and the
+        // `KType::ANY` placeholders a `Pending` walk yields are proper and pass, and the
         // re-walk checks the resolved type they stand for.
         let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
-            &kt,
+            kt,
             &format!("the type of {context_member} `{name}`"),
             types,
         ) {
@@ -137,33 +139,44 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     parks.extend(producers);
                     // Placeholder, discarded under Pending; lets the walk collect every
                     // parking producer in one pass.
-                    Ok(KType::Any)
+                    Ok(KType::ANY)
                 }
                 TypeResolution::Unbound(msg) => {
                     Err(format!("{msg} in {context_list} for `{}`", name))
                 }
             },
-            // Sigils sub-Dispatch through the standalone dispatcher, which carries no SCC
-            // context, so self-references are pre-resolved to `RecursiveRef` carriers first
+            // Sigils sub-Dispatch through the standalone dispatcher, which carries no window
+            // context, so co-declared references are pre-resolved to sibling carriers first
             // (see `rewrite_threaded_self_refs`).
             ExpressionPart::SigiledTypeExpr(boxed) => {
                 // `:(Tree Leaf)` while `Tree` is the binder under seal: a sibling-variant
                 // reference. It cannot sub-dispatch (parking would deadlock on this very
-                // seal's producer), so it lowers straight to the transient `RecursiveRef`
-                // that `seal_union_refs` resolves to the member's `SetLocal`.
+                // seal's producer), so it lowers straight to the variant's relative `Sibling`
+                // handle against the ambient window.
                 if let [first, second] = boxed.parts.as_slice() {
                     if let (ExpressionPart::Type(head), ExpressionPart::Type(tag)) =
                         (&first.value, &second.value)
                     {
                         if elaborator.threaded.contains(head.as_str()) {
-                            return Ok(KType::RecursiveRef(tag.render()));
+                            let window = elaborator.window().ok_or_else(|| {
+                                format!(
+                                    "{context_list}: `{}` names a co-declared member with no \
+                                     open declaration window",
+                                    tag.render(),
+                                )
+                            })?;
+                            return Ok(window.sibling(
+                                &tag.render(),
+                                crate::machine::model::KKind::NewType,
+                                types,
+                            ));
                         }
                     }
                 }
                 match results.as_mut().and_then(|feed| feed.pop()) {
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that
                     // resolved to a value-by-expression.
-                    Some(Carried::Type(kt)) => checked(kt.clone()),
+                    Some(Carried::Type(kt)) => checked(*kt),
                     Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
                         Err(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
@@ -179,11 +192,13 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                             boxed,
                             &elaborator.threaded,
                             elaborator.scope,
+                            elaborator.window().as_ref(),
+                            types,
                         );
                         sub_dispatches.push(KExpression::new(vec![Spanned::bare(
                             ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
                         )]));
-                        Ok(KType::Any)
+                        Ok(KType::ANY)
                     }
                 }
             }
@@ -199,9 +214,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     results.as_deref_mut(),
                     types,
                 ) {
-                    FieldListOutcome::Done(pairs) => {
-                        Ok(KType::record(Box::new(Record::from_pairs(pairs))))
-                    }
+                    FieldListOutcome::Done(pairs) => Ok(types.record(Record::from_pairs(pairs))),
                     FieldListOutcome::Err(msg) => Err(msg),
                     FieldListOutcome::Pending {
                         park_producers,
@@ -209,14 +222,14 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     } => {
                         parks.extend(park_producers);
                         sub_dispatches.extend(inner_subs);
-                        Ok(KType::Any)
+                        Ok(KType::ANY)
                     }
                 }
             }
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
             ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
-                Carried::Type(kt) => checked(kt.clone()),
+                Carried::Type(kt) => checked(*kt),
                 other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
@@ -246,42 +259,49 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
 }
 
 /// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches into
-/// the standalone dispatcher, which carries no SCC threading context. Every bare
-/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Spliced` cell sealing a
-/// `RecursiveRef(name)` carrier, so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree`
-/// to `RecursiveRef` instead of parking on its own placeholder and closing a
-/// scheduler-deadlock cycle. Recurses into nested sigils and records; non-threaded names
-/// are left for the dispatcher.
+/// the standalone dispatcher, which carries no window context. Every bare `Type(name)` leaf whose
+/// `name` is in `threaded` becomes a `Spliced` cell sealing the name's relative sibling handle
+/// against `window`, so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to a `Sibling`
+/// back-edge instead of parking on its own placeholder and closing a scheduler-deadlock cycle.
+/// Recurses into nested sigils and records; non-threaded names — and, with no open window, every
+/// name — are left for the dispatcher.
 fn rewrite_threaded_self_refs<'e, 'a>(
     inner: &KExpression<'e>,
     threaded: &HashSet<String>,
     scope: &Scope<'a>,
+    window: Option<&Rc<RecursiveGroupWindow>>,
+    types: &TypeRegistry,
 ) -> KExpression<'e> {
     let parts = inner
         .parts
         .iter()
         .map(|p| {
-            let value = match &p.value {
-                ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
-                    // Minted fresh in this scope's region and spliced into a sub-dispatched
-                    // expression (it crosses into another node), so it travels as a cell: a
-                    // region-resident type carrier reaching nothing foreign. The delivery
-                    // envelope's pin is this scope's own region owner (the seal-resident veneer),
-                    // not a separate producer frame.
-                    let carrier = scope.seal_fresh_ktype(KType::RecursiveRef(t.render()));
+            let value = match (&p.value, window) {
+                (ExpressionPart::Type(t), Some(window)) if threaded.contains(t.as_str()) => {
+                    // The sibling handle is minted against the window here, where the window is in
+                    // hand — the sub-dispatch it crosses into cannot reach one. The carrier is
+                    // minted fresh in this scope's region and spliced as a cell: a region-resident
+                    // type carrier reaching nothing foreign, whose delivery envelope pins this
+                    // scope's own region owner (the seal-resident veneer) rather than a separate
+                    // producer frame.
+                    let sibling =
+                        window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
+                    let carrier = scope.seal_fresh_ktype(sibling);
                     ExpressionPart::Spliced {
                         cell: scope.seal_resident_delivered(carrier),
                     }
                 }
-                ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
-                    rewrite_threaded_self_refs(b, threaded, scope),
-                )),
+                (ExpressionPart::SigiledTypeExpr(b), _) => {
+                    ExpressionPart::SigiledTypeExpr(Box::new(rewrite_threaded_self_refs(
+                        b, threaded, scope, window, types,
+                    )))
+                }
                 // A record nested inside a sub-dispatched sigil must thread its
                 // self-references the same way.
-                ExpressionPart::RecordType(b) => ExpressionPart::RecordType(Box::new(
-                    rewrite_threaded_self_refs(b, threaded, scope),
+                (ExpressionPart::RecordType(b), _) => ExpressionPart::RecordType(Box::new(
+                    rewrite_threaded_self_refs(b, threaded, scope, window, types),
                 )),
-                other => other.clone(),
+                (other, _) => other.clone(),
             };
             Spanned {
                 value,
@@ -290,4 +310,20 @@ fn rewrite_threaded_self_refs<'e, 'a>(
         })
         .collect();
     KExpression::new(parts)
+}
+
+/// The declared names of a `<name> <slot>` pair list, without elaborating any slot — what a
+/// declarator pre-scans to announce its window's members before walking their types, so a
+/// reference to a later-declared sibling already has a stable relative index.
+pub fn pair_list_names(
+    expr: &KExpression<'_>,
+    context: &'static str,
+    name_kind: FieldNameKind,
+) -> Result<Vec<String>, String> {
+    parse_pair_list(expr, context, name_kind, |_, _| Ok(())).map(|pairs| {
+        pairs
+            .into_iter()
+            .map(|(name, ())| name)
+            .collect::<Vec<String>>()
+    })
 }

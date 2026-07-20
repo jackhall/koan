@@ -5,7 +5,6 @@
 use super::*;
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::types::KType;
 use std::ptr;
 #[test]
 fn module_child_scope_transmute_does_not_dangle() {
@@ -34,26 +33,34 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
+    let types = &test_run.types;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tm = module.type_members.borrow_mut();
         tm.insert(
             "Type".into(),
-            KType::AbstractType {
+            types.intern(TypeNode::AbstractType {
                 source: module.scope_id(),
                 name: "Type".into(),
                 param_names: Vec::new(),
                 nonce: None,
-            },
+            }),
         );
     }
-    let bound = module.type_members.borrow().get("Type").cloned();
-    assert!(matches!(
-        &bound,
-        Some(KType::AbstractType { source, name, .. })
-            if *source == scope_id && name == "Type"
-    ));
+    let handle = module
+        .type_members
+        .borrow()
+        .get("Type")
+        .copied()
+        .expect("the Type member was just inserted");
+    match types.node(handle) {
+        TypeNode::AbstractType { source, name, .. } => {
+            assert_eq!(source, scope_id);
+            assert_eq!(name.as_str(), "Type");
+        }
+        _ => panic!("expected an AbstractType member, got {handle:?}"),
+    }
 }
 
 /// `slot_type_tags` mutates after the surrounding `KObject` is alloc'd, same as
@@ -65,40 +72,49 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
+    let types = &test_run.types;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
         let mut tags = module.slot_type_tags.borrow_mut();
         tags.insert(
             "zero".into(),
-            KType::AbstractType {
+            types.intern(TypeNode::AbstractType {
                 source: module.scope_id(),
                 name: "Type".into(),
                 param_names: Vec::new(),
                 nonce: None,
-            },
+            }),
         );
     }
-    let bound = module.slot_type_tags.borrow().get("zero").cloned();
-    assert!(matches!(
-        &bound,
-        Some(KType::AbstractType { source, name, .. })
-            if *source == scope_id && name == "Type"
-    ));
+    let handle = module
+        .slot_type_tags
+        .borrow()
+        .get("zero")
+        .copied()
+        .expect("the zero tag was just inserted");
+    match types.node(handle) {
+        TypeNode::AbstractType { source, name, .. } => {
+            assert_eq!(source, scope_id);
+            assert_eq!(name.as_str(), "Type");
+        }
+        _ => panic!("expected an AbstractType tag, got {handle:?}"),
+    }
 }
 
-/// A bare `Module::new` never sealed still answers `self_sig()` — the accessor lazily derives
-/// the schema from the (here empty) body via the fallback, so direct constructions in tests
-/// need no explicit seal.
+/// A bare module's self-sig is derived from its (here empty) body by [`SigSchema::raw_self_sig`]
+/// and sealed at mint, so reading it back through the sealed cell yields an empty interface.
 #[test]
-fn bare_module_self_sig_falls_back_to_raw_derivation() {
+fn bare_module_self_sig_is_empty_after_raw_seal() {
     let region = run_root_storage();
     let test_run = TestRun::silent(&region);
     let scope = test_run.scope;
+    let types = &test_run.types;
     let module = region
         .brand()
         .alloc_module(Module::new("Bare".into(), scope));
-    let sig = module.self_sig();
+    module.seal_self_sig(SigSchema::raw_self_sig(module), types);
+    let sig = module.self_sig(types);
     assert!(sig.abstract_members.is_empty());
     assert!(sig.manifest_members.is_empty());
     assert!(sig.value_slots.is_empty());

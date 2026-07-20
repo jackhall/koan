@@ -288,8 +288,9 @@ fn sibling_variant_sigil_types_a_field() {
          PRINT tree",
     );
     assert_eq!(
-        projected, "Node(1)\n",
-        "the constructed sibling-typed value projects structurally; got {projected:?}"
+        projected, "Node(Leaf(1))\n",
+        "the constructed sibling-typed value projects structurally — a `Tagged` variant nests its
+         payload without collapsing the inner variant's tag (ruling 13); got {projected:?}"
     );
 }
 

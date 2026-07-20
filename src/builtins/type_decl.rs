@@ -5,10 +5,10 @@
 //! Two overloads share the keyword `TYPE`:
 //!
 //! - the bare form `TYPE Elt` binds a first-order abstract member as
-//!   [`KType::AbstractType`] `{ source: <decl_scope id>, name, nonce: None }` — no witness, open
+//!   [`TypeNode::AbstractType`] `{ source: <decl_scope id>, name, nonce: None }` — no witness, open
 //!   for a client to share via a `WITH` constraint;
 //! - the higher-kinded form `TYPE (Elem AS Wrap)` binds an abstract type *constructor* as an
-//!   [`KType::AbstractType`] carrying the declared parameter names, mirroring the application
+//!   [`TypeNode::AbstractType`] carrying the declared parameter names, mirroring the application
 //!   surface with the concrete arguments replaced by the parameter names. Opaque ascription
 //!   re-mints it as a fresh per-call constructor nonced on the view module's scope id.
 //!
@@ -19,6 +19,7 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::StepCarried;
@@ -63,12 +64,12 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::A
         Ok(name) => name,
         Err(e) => return Action::Done(Err(e)),
     };
-    let kt = KType::AbstractType {
+    let kt = ctx.types.intern(TypeNode::AbstractType {
         source: ctx.scope.id,
         name: name.clone(),
         param_names: Vec::new(),
         nonce: None,
-    };
+    });
     bind_abstract_member(ctx, name, kt)
 }
 
@@ -89,12 +90,12 @@ pub fn body_hk<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Act
         Ok(pair) => pair,
         Err(e) => return Action::Done(Err(e)),
     };
-    let kt = KType::AbstractType {
+    let kt = ctx.types.intern(TypeNode::AbstractType {
         source: ctx.scope.id,
         name: member_name.clone(),
         param_names,
         nonce: None,
-    };
+    });
     bind_abstract_member(ctx, member_name, kt)
 }
 
@@ -152,8 +153,8 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let bare_signature = sig(
-        KType::Any,
-        vec![kw("TYPE"), arg("name", KType::OfKind(KKind::ProperType))],
+        KType::ANY,
+        vec![kw("TYPE"), arg("name", KType::of_kind(KKind::ProperType))],
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -165,8 +166,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         types,
     );
     let hk_signature = sig(
-        KType::Any,
-        vec![kw("TYPE"), arg("decl", KType::KExpression)],
+        KType::ANY,
+        vec![kw("TYPE"), arg("decl", KType::KEXPRESSION)],
     );
     crate::builtins::register_builtin_full(
         scope,

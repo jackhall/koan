@@ -5,23 +5,22 @@
 //! Routes [`await_body_in_scope`](super::await_body::await_body_in_scope) like
 //! `module_def` / `recursive_types`: body statements dispatch against a fresh child scope
 //! on the outer scheduler, and the finish projects the populated scope into a
-//! [`SigContent`] and installs the `KType::Signature` identity into the parent scope.
+//! [`SigSchema`], interns it as a `Signature` type, and installs that handle into the parent scope.
 //! `VAL <name> :Type` declares a value slot, `TYPE <Name>` declares an abstract type
 //! member, and `LET <Name> = <Type>` declares a manifest type member. The ascription
 //! operators (`:|` / `:!`) read the stored schema at ascription time.
 
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{KKind, SigContent, SigSchema};
+use crate::machine::model::{KKind, SigSchema};
 use crate::machine::{Scope, TraceFrame};
-use std::rc::Rc;
 
 use super::{arg, kw, sig};
 
 /// The SIG body: mints the declaration scope, dispatches the SIG body block against it via
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope), and the finish projects
-/// that scope into a [`SigContent`] and installs the `KType::Signature` identity into
-/// the parent scope.
+/// that scope into a [`SigSchema`], interns it as a `Signature` type, and installs that handle
+/// into the parent scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
@@ -41,18 +40,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         body_expr,
         ChildScopeSeal::SealBeforeFinish,
         move |fctx| {
-            let schema = SigSchema::project_decl(decl_scope);
-            let content = Rc::new(SigContent::new(
-                name_for_finish.clone(),
-                decl_scope.id,
-                schema,
-            ));
-            let identity = KType::signature(content, Vec::new());
+            let schema = SigSchema::project_decl(decl_scope, fctx.types);
+            let identity = fctx.types.signature(schema, Vec::new());
             match fctx
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
             {
-                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
+                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(*kt_ref))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<signature>",
                     format!("SIG {} body", name_for_finish),
@@ -64,12 +58,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
-        KType::OfKind(KKind::Signature),
+        KType::of_kind(KKind::Signature),
         vec![
             kw("SIG"),
-            arg("name", KType::OfKind(KKind::ProperType)),
+            arg("name", KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg("body", KType::KExpression),
+            arg("body", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin_full(
@@ -100,31 +94,43 @@ mod tests {
 
     #[test]
     fn sig_binds_under_name_in_scope() {
-        use crate::machine::model::KType;
+        use crate::machine::model::TypeNode;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
         assert!(scope.bindings().data().get("Ordered").is_none());
+        let handle = scope
+            .resolve_type("Ordered")
+            .copied()
+            .expect("Ordered binds");
         assert!(matches!(
-            scope.resolve_type("Ordered"),
-            Some(KType::Signature { .. })
+            test_run.types().node(handle),
+            TypeNode::Signature { .. }
         ));
     }
 
+    /// A signature carries no declaration label (ruling 12): its name is content-derived — the
+    /// structural rendering of its members in name order, never the binder that declared it.
     #[test]
-    fn sig_path_records_name() {
-        use crate::machine::model::KType;
+    fn sig_name_renders_structurally_not_by_declaration_name() {
+        use crate::machine::model::TypeNode;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
-        let content = match scope.resolve_type("Ordered") {
-            Some(KType::Signature { content, .. }) => content,
-            _ => panic!("Ordered should be a signature"),
-        };
-        assert_eq!(content.path, "Ordered");
+        let handle = scope
+            .resolve_type("Ordered")
+            .copied()
+            .expect("Ordered binds");
+        let types = test_run.types();
+        assert!(matches!(types.node(handle), TypeNode::Signature { .. }));
+        assert_eq!(
+            handle.name(types),
+            "SIG (x: Number)",
+            "a signature names itself by its content, not its binder",
+        );
     }
 
     /// Body-statement forward-reference: a SIG body's `VAL x :SomeType` parks on an
@@ -135,18 +141,19 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
-        use crate::machine::model::KType;
-        let content = match scope.resolve_type("Foo") {
-            Some(KType::Signature { content, .. }) => content,
+        use crate::machine::model::{KType, TypeNode};
+        let handle = scope.resolve_type("Foo").copied().expect("Foo should bind");
+        let schema = match test_run.types().node(handle) {
+            TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Foo should be a signature"),
         };
-        let x = content
-            .schema
+        let x = *schema
             .value_slots
             .get("x")
             .expect("VAL slot `x` must live in the signature's stored schema");
-        assert!(
-            matches!(x, KType::Number),
+        assert_eq!(
+            x,
+            KType::NUMBER,
             "x's declared type must elaborate to Number through the alias, got {x:?}",
         );
     }
@@ -193,7 +200,7 @@ mod tests {
     /// differing binder names `Alpha`/`Beta` do not distinguish.
     #[test]
     fn identical_sigs_share_identity_differing_members_distinguish() {
-        use crate::machine::model::KType;
+        use crate::machine::model::TypeNode;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
@@ -203,11 +210,14 @@ mod tests {
              SIG Gamma = ((VAL x :Number) (VAL y :Bool))\n\
              SIG Delta = ((VAL x :Number) (VAL z :Str))",
         );
-        let alpha = scope.resolve_type("Alpha").expect("Alpha binds");
-        let beta = scope.resolve_type("Beta").expect("Beta binds");
-        let gamma = scope.resolve_type("Gamma").expect("Gamma binds");
-        let delta = scope.resolve_type("Delta").expect("Delta binds");
-        assert!(matches!(alpha, KType::Signature { .. }));
+        let alpha = scope.resolve_type("Alpha").copied().expect("Alpha binds");
+        let beta = scope.resolve_type("Beta").copied().expect("Beta binds");
+        let gamma = scope.resolve_type("Gamma").copied().expect("Gamma binds");
+        let delta = scope.resolve_type("Delta").copied().expect("Delta binds");
+        assert!(matches!(
+            test_run.types().node(alpha),
+            TypeNode::Signature { .. }
+        ));
         assert_eq!(alpha, beta, "identical schemas are one type");
         assert_ne!(alpha, gamma, "a differing member type distinguishes");
         assert_ne!(alpha, delta, "a differing member name distinguishes");
@@ -218,7 +228,7 @@ mod tests {
     /// the self-reference digests differently from the same slot spelled with a manifest type.
     #[test]
     fn sig_self_referential_slot_canonicalizes() {
-        use crate::machine::model::KType;
+        use crate::machine::model::TypeNode;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
@@ -227,12 +237,16 @@ mod tests {
              SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
              SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
         );
-        let a = scope.resolve_type("OrdA").expect("OrdA binds");
-        let b = scope.resolve_type("OrdB").expect("OrdB binds");
+        let a = scope.resolve_type("OrdA").copied().expect("OrdA binds");
+        let b = scope.resolve_type("OrdB").copied().expect("OrdB binds");
         let manifest = scope
             .resolve_type("OrdManifest")
+            .copied()
             .expect("OrdManifest binds");
-        assert!(matches!(a, KType::Signature { .. }));
+        assert!(matches!(
+            test_run.types().node(a),
+            TypeNode::Signature { .. }
+        ));
         assert_eq!(
             a, b,
             "self-reference canonicalizes; identical declarations unify"
@@ -248,24 +262,23 @@ mod tests {
     /// this guards it stays a content distinction.)
     #[test]
     fn with_pins_distinguish_signature_identity() {
-        use crate::machine::model::KType;
+        use crate::machine::model::{KType, TypeNode};
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
-        let container = match scope.resolve_type("Container") {
-            Some(KType::Signature { content, .. }) => std::rc::Rc::clone(content),
+        let types = test_run.types();
+        let handle = scope
+            .resolve_type("Container")
+            .copied()
+            .expect("Container binds");
+        let schema = match types.node(handle) {
+            TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Container should be a signature"),
         };
-        let pin_num = KType::signature(
-            std::rc::Rc::clone(&container),
-            vec![("Elem".into(), KType::Number)],
-        );
-        let pin_str = KType::signature(
-            std::rc::Rc::clone(&container),
-            vec![("Elem".into(), KType::Str)],
-        );
-        let bare = KType::signature(container, Vec::new());
+        let pin_num = types.signature(schema.clone(), vec![("Elem".into(), KType::NUMBER)]);
+        let pin_str = types.signature(schema.clone(), vec![("Elem".into(), KType::STR)]);
+        let bare = types.signature(schema, Vec::new());
         assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
         assert_ne!(pin_num, bare, "a pin refines away from the bare signature");
     }

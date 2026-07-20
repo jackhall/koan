@@ -5,7 +5,7 @@ use std::rc::{Rc, Weak};
 
 use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
-use crate::machine::model::RecursiveSet;
+use crate::machine::model::RecursiveGroupWindow;
 
 use super::arena::{FrameStorage, FrameStorageExt, KoanRegion, RegionBrand};
 use super::bindings::Bindings;
@@ -54,18 +54,19 @@ pub struct Scope<'a> {
     /// frame's storage, a same-region child inherits its parent's; empty (`Weak::new()`) for a test
     /// scope built outside any `FrameStorage`.
     region_owner: Weak<FrameStorage>,
-    /// Position-independent origin id recorded on a sealed `NominalMember` (diagnostics)
-    /// and on `KType::Signature { content, .. }` (via `content.sig_id`) so dispatch on
-    /// user-declared types compares ids rather than scope pointers.
+    /// Position-independent origin id, recorded on an `AbstractType` node's `source` so
+    /// dispatch on SIG-declared members compares ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
-    /// Set iff this is a `RECURSIVE TYPES` block's child scope: the shared [`RecursiveSet`]
-    /// whose members are co-declared and threaded together. The elaborator lowers a bare
-    /// leaf naming one of its members to a transient `RecursiveRef` back-edge, so
-    /// cross-references inside the block resolve regardless of lexical order — the block is
-    /// the one cross-order resolution that survives strict source-order type-name lookup.
-    recursive_set: Option<Rc<RecursiveSet>>,
+    /// Set iff this is a `RECURSIVE TYPES` block's child scope: the open
+    /// [`RecursiveGroupWindow`] whose members are co-declared and elaborate together. The
+    /// elaborator lowers a bare leaf naming one of its members to that member's relative sibling
+    /// back-edge, so cross-references inside the block resolve regardless of lexical order — the
+    /// block is the one cross-order resolution that survives strict source-order type-name lookup.
+    /// The window rides the scope rather than the registry because several can be open at once
+    /// under the park-capable scheduler.
+    recursive_window: Option<Rc<RecursiveGroupWindow>>,
     /// Set iff this is a `GROUP` body's child scope: the one shared [`OperatorGroup`] record its
     /// member `OP` declarations belong to, read through [`Scope::nearest_group_context`]. The record
     /// is lifetime-free (member set + mode + combiner *name*), so holding it costs the scope no
@@ -157,7 +158,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Root,
-            recursive_set: None,
+            recursive_window: None,
             group: None,
             sig_slots: None,
             closed: Cell::new(false),
@@ -230,14 +231,14 @@ impl<'a> Scope<'a> {
     /// Shared skeleton for a **same-region** child of `outer`: inherits `outer`'s region, its
     /// `region_owner`, and its `root` handle, and takes a fresh id. The five public same-region
     /// constructors below differ only in what they pass here — the binding storage, the kind stamp,
-    /// and any recursive-set membership — so the inherit-from-`outer` field set lives in one place.
+    /// and any recursive-group window — so the inherit-from-`outer` field set lives in one place.
     /// (The two cross-region constructors, [`Self::run_root`] and [`Self::child_for_frame_witnessed`], do not
     /// route this: they set `root`/`region`/`region_owner` from a fresh frame, not from `outer`.)
     fn child_inheriting(
         outer: &'a Scope<'a>,
         bindings: ScopeBindings<'a>,
         kind: ScopeKind,
-        recursive_set: Option<Rc<RecursiveSet>>,
+        recursive_window: Option<Rc<RecursiveGroupWindow>>,
     ) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -249,7 +250,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind,
-            recursive_set,
+            recursive_window,
             group: None,
             sig_slots: None,
             closed: Cell::new(false),
@@ -291,7 +292,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
-            recursive_set: None,
+            recursive_window: None,
             group: None,
             sig_slots: None,
             closed: Cell::new(false),
@@ -341,26 +342,30 @@ impl<'a> Scope<'a> {
         child
     }
 
-    /// Child scope for a `RECURSIVE TYPES` block body: carries the shared [`RecursiveSet`]
-    /// whose members are co-declared. Members dispatch against this scope, so the elaborator
-    /// threads the group (a member name lowers to `RecursiveRef`). `outer` is the lexical
-    /// parent; the sealed members are mirrored up into it at the block's dep-finish.
-    pub fn child_recursive_group(outer: &'a Scope<'a>, set: Rc<RecursiveSet>) -> Scope<'a> {
+    /// Child scope for a `RECURSIVE TYPES` block body: carries the open
+    /// [`RecursiveGroupWindow`] whose members are co-declared. Members dispatch against this
+    /// scope, so the elaborator finds the window (a member name lowers to its sibling handle).
+    /// `outer` is the lexical parent; the sealed members are mirrored up into it at the block's
+    /// dep-finish, which is also the window's seal barrier.
+    pub fn child_recursive_group(
+        outer: &'a Scope<'a>,
+        window: Rc<RecursiveGroupWindow>,
+    ) -> Scope<'a> {
         Self::child_inheriting(
             outer,
             ScopeBindings::Owned(Bindings::new()),
             ScopeKind::Anonymous,
-            Some(set),
+            Some(window),
         )
     }
 
-    /// The shared [`RecursiveSet`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
-    /// The elaborator consults this to decide whether a bare leaf is a co-declared member:
-    /// only the *nearest* group is considered, so a reference to an outer block's member
-    /// falls through to ordinary resolution (an external `SetRef`), not a back-edge into the
-    /// inner set.
-    pub fn nearest_recursive_set(&self) -> Option<Rc<RecursiveSet>> {
-        self.ancestors().find_map(|s| s.recursive_set.clone())
+    /// The open [`RecursiveGroupWindow`] of the nearest enclosing `RECURSIVE TYPES` block, if any.
+    /// The elaborator consults this to decide whether a bare leaf is a co-declared member: only
+    /// the *nearest* window is considered, so a reference to an outer block's member falls through
+    /// to ordinary resolution (that member's sealed handle), not a back-edge into the inner
+    /// window.
+    pub fn nearest_recursive_window(&self) -> Option<Rc<RecursiveGroupWindow>> {
+        self.ancestors().find_map(|s| s.recursive_window.clone())
     }
 
     /// Transparent `USING … SCOPE` child scope. `outer` is the call site (the lexical

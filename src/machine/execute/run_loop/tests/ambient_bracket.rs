@@ -14,7 +14,7 @@ use crate::machine::LexicalFrame;
 /// A trivial declared-return obligation the bracket tests deposit to stand in for the old
 /// `in_contract_chain` bool: any obligation makes `in_contract_chain()` read `true` inside the step.
 fn sample_obligation<'a>(scope: &'a crate::machine::Scope<'a>) -> ReturnObligation {
-    let ret = scope.brand().alloc_ktype(KType::Number);
+    let ret = scope.brand().alloc_ktype(KType::NUMBER);
     ReturnObligation::seal(ReturnContract::Arm {
         ret,
         kind: "return type",

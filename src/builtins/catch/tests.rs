@@ -3,7 +3,7 @@
 //! TCO position.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, TypeNode};
 use crate::machine::run_root_storage;
 
 fn run_program(source: &str) -> Vec<u8> {
@@ -81,8 +81,8 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     assert_eq!(bytes, b"done\n");
 }
 
-/// Nominal identity: a CATCH-produced `Result` and a `Result (...)`-constructed one must
-/// reference the *same* sealed `RecursiveSet` member so MATCH dispatches them identically.
+/// Nominal identity: a CATCH-produced `Result` and a `Result (...)`-constructed one must name
+/// the *same* sealed member handle so MATCH dispatches them identically.
 #[test]
 fn catch_result_shares_identity_with_constructed_result() {
     let region = run_root_storage();
@@ -90,18 +90,14 @@ fn catch_result_shares_identity_with_constructed_result() {
     let caught = test_run.run_one(parse_one("CATCH (foo)"));
     let constructed = test_run.run_one(parse_one("Result (Ok 1)"));
     match (caught, constructed) {
-        (
-            KObject::Tagged {
-                set: s1, index: i1, ..
-            },
-            KObject::Tagged {
-                set: s2, index: i2, ..
-            },
-        ) => {
-            assert_eq!(s1.member(*i1).name, "Result");
-            assert!(
-                std::rc::Rc::ptr_eq(s1, s2) && i1 == i2,
-                "CATCH and constructed Result must share the same set member",
+        (KObject::Tagged { identity: id1, .. }, KObject::Tagged { identity: id2, .. }) => {
+            match test_run.types().node(*id1) {
+                TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
+                _ => panic!("expected a SetMember identity, got {id1:?}"),
+            }
+            assert_eq!(
+                id1, id2,
+                "CATCH and constructed Result must name the same identity handle",
             );
         }
         _ => panic!("expected both to be Tagged"),

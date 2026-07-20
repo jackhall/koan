@@ -134,7 +134,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // it is read straight out of the envelope and cloned into the signature's
                         // own `Argument` — no adoption, no allocation.
                         let cloned = cell.open(|live| match live {
-                            Carried::Type(kt) => Ok(kt.clone()),
+                            Carried::Type(kt) => Ok(*kt),
                             other => Err(other.summarize(types)),
                         });
                         match cloned {

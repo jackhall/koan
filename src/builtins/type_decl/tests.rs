@@ -3,52 +3,60 @@ use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{constructor_param_names, KKind, KType, NominalSchema, RecursiveSet};
+use crate::machine::model::{
+    constructor_param_names, declarator_window, KKind, KType, RelativeSchema, TypeNode,
+};
 use crate::machine::run_root_storage;
 use crate::machine::{BindingIndex, ScopeId};
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
 /// representation at SIG finish.
-fn member_type<'a>(scope: &'a crate::machine::Scope<'a>, sig_name: &str, member: &str) -> KType {
-    let content = match scope.resolve_type(sig_name) {
-        Some(KType::Signature { content, .. }) => content,
-        other => panic!("{sig_name} must bind a Signature, got {other:?}"),
+fn member_type(
+    scope: &crate::machine::Scope<'_>,
+    types: &TypeRegistry,
+    sig_name: &str,
+    member: &str,
+) -> KType {
+    let handle = scope
+        .resolve_type(sig_name)
+        .copied()
+        .unwrap_or_else(|| panic!("{sig_name} must bind a type"));
+    let schema = match types.node(handle) {
+        TypeNode::Signature { schema, .. } => schema,
+        _ => panic!("{sig_name} must bind a Signature, got {handle:?}"),
     };
-    if let Some(kt) = content.schema.abstract_members.get(member) {
-        return kt.clone();
+    if let Some(kt) = schema.abstract_members.get(member) {
+        return *kt;
     }
-    content
-        .schema
+    schema
         .manifest_members
         .get(member)
-        .cloned()
+        .copied()
         .unwrap_or_else(|| panic!("member `{member}` must live in {sig_name}'s type table"))
 }
 
-/// `TYPE Elt` binds `AbstractType { source: <decl_scope id>, name: "Elt" }`.
+/// `TYPE Elt` binds `AbstractType { source: SENTINEL, name: "Elt" }` — a SIG-declared abstract
+/// member's binder is the canonical sentinel (ruling 12), never a per-declaration id.
 #[test]
 fn bare_type_binds_abstract_member() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Container = ((TYPE Elt))");
-    let sig_id = match scope.resolve_type("Container") {
-        Some(KType::Signature { content, .. }) => content.sig_id,
-        other => panic!("Container must bind a Signature, got {other:?}"),
-    };
-    match member_type(scope, "Container", "Elt") {
-        KType::AbstractType { source, name, .. } => {
+    match test_run
+        .types()
+        .node(member_type(scope, test_run.types(), "Container", "Elt"))
+    {
+        TypeNode::AbstractType { source, name, .. } => {
             assert_eq!(name, "Elt");
-            assert_eq!(source, sig_id);
+            assert_eq!(source, ScopeId::SENTINEL);
         }
-        other => {
-            panic!("Elt must be an abstract member sourced at the SIG decl scope, got {other:?}")
-        }
+        _ => panic!("Elt must be an abstract member sourced at the canonical binder"),
     }
 }
 
-/// `TYPE (Type AS Wrap)` binds an `AbstractType` named `Wrap`, sourced at the SIG decl scope,
+/// `TYPE (Type AS Wrap)` binds an `AbstractType` named `Wrap`, sourced at the canonical binder,
 /// carrying `param_names == ["Type"]`.
 #[test]
 fn hk_type_binds_abstract_constructor() {
@@ -56,19 +64,21 @@ fn hk_type_binds_abstract_constructor() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Monad = ((TYPE (Type AS Wrap)))");
-    let sig_id = sig_decl_scope_id(scope, "Monad");
-    match member_type(scope, "Monad", "Wrap") {
-        KType::AbstractType {
+    match test_run
+        .types()
+        .node(member_type(scope, test_run.types(), "Monad", "Wrap"))
+    {
+        TypeNode::AbstractType {
             source,
             name,
             param_names,
             ..
         } => {
             assert_eq!(name, "Wrap");
-            assert_eq!(source, sig_id);
+            assert_eq!(source, ScopeId::SENTINEL);
             assert_eq!(param_names, vec!["Type".to_string()]);
         }
-        other => panic!("Wrap must be an abstract constructor member, got {other:?}"),
+        _ => panic!("Wrap must be an abstract constructor member"),
     }
 }
 
@@ -82,11 +92,11 @@ fn abstract_member_kind_tracks_parameters() {
     test_run.run("SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
     let types = test_run.types.clone();
     assert_eq!(
-        member_type(scope, "Monad", "Wrap").kind_of(&types),
+        member_type(scope, &types, "Monad", "Wrap").kind_of(&types),
         KKind::TypeConstructor,
     );
     assert_eq!(
-        member_type(scope, "Monad", "Elt").kind_of(&types),
+        member_type(scope, &types, "Monad", "Elt").kind_of(&types),
         KKind::ProperType,
     );
 }
@@ -143,28 +153,31 @@ fn val_slot_after_type_records_abstract_member() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Container = ((TYPE Elt) (VAL item :Elt))");
-    let content = match scope.resolve_type("Container") {
-        Some(KType::Signature { content, .. }) => content,
-        other => panic!("Container must bind a Signature, got {other:?}"),
+    let handle = scope
+        .resolve_type("Container")
+        .copied()
+        .expect("Container must bind a type");
+    let item = match test_run.types().node(handle) {
+        TypeNode::Signature { schema, .. } => schema
+            .value_slots
+            .get("item")
+            .copied()
+            .expect("item must live in Container's stored schema value_slots"),
+        _ => panic!("Container must bind a Signature, got {handle:?}"),
     };
-    match content
-        .schema
-        .value_slots
-        .get("item")
-        .expect("item must live in Container's stored schema value_slots")
-    {
-        KType::AbstractType { source, name, .. } => {
+    match test_run.types().node(item) {
+        TypeNode::AbstractType { source, name, .. } => {
             assert_eq!(name, "Elt");
-            assert_eq!(*source, sig_decl_scope_id(scope, "Container"));
+            assert_eq!(source, ScopeId::SENTINEL);
         }
-        other => panic!("item's declared type must be the abstract Elt, got {other:?}"),
+        _ => panic!("item's declared type must be the abstract Elt, got {item:?}"),
     }
 }
 
 /// End-to-end: a module ascribed to a SIG with a `TYPE Elt` member mints a per-call
 /// `AbstractType` for `Elt` in its `type_members`, nonced on the view module's own `ScopeId`. The
-/// `source` binder stays the declaring SIG's — generativity rides `nonce` alone — so the mint is a
-/// distinct identity from the SIG-decl-time member it was threaded from.
+/// `source` binder stays the canonical sentinel — generativity rides `nonce` alone — so the mint is
+/// a distinct identity from the SIG-decl-time member it was threaded from.
 #[test]
 fn opaque_ascription_mints_module_abstract_for_type_member() {
     let region = run_root_storage();
@@ -176,25 +189,28 @@ fn opaque_ascription_mints_module_abstract_for_type_member() {
          LET view = (implementation :| Container)",
     );
     let view = lookup_module(scope, "view", &test_run.types);
-    let elt = view.type_members.borrow().get("Elt").cloned();
-    let declared = member_type(scope, "Container", "Elt");
+    let elt = view.type_members.borrow().get("Elt").copied();
+    let declared = member_type(scope, test_run.types(), "Container", "Elt");
     match elt {
-        Some(minted @ KType::AbstractType { .. }) => {
-            let KType::AbstractType {
-                source,
-                name,
-                nonce,
-                ..
-            } = &minted
-            else {
-                unreachable!()
-            };
-            assert_eq!(name, "Elt");
-            assert_eq!(*source, sig_decl_scope_id(scope, "Container"));
-            assert_eq!(*nonce, Some(view.scope_id()));
+        Some(minted) => {
+            match test_run.types().node(minted) {
+                TypeNode::AbstractType {
+                    source,
+                    name,
+                    nonce,
+                    ..
+                } => {
+                    assert_eq!(name, "Elt");
+                    assert_eq!(source, ScopeId::SENTINEL);
+                    assert_eq!(nonce, Some(view.scope_id()));
+                }
+                _ => panic!(
+                    "Elt must mint an abstract type keyed on the view module, got {minted:?}"
+                ),
+            }
             assert_ne!(minted, declared, "the mint is not the declaration");
         }
-        other => panic!("Elt must mint an abstract type keyed on the view module, got {other:?}"),
+        None => panic!("Elt must mint an abstract type keyed on the view module"),
     }
 }
 
@@ -216,11 +232,14 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
             .type_members
             .borrow()
             .get("Elt")
-            .cloned()
+            .copied()
             .expect("each view mints Elt")
     };
     let (one, two) = (elt("one"), elt("two"));
-    assert!(matches!(one, KType::AbstractType { .. }));
+    assert!(matches!(
+        test_run.types().node(one),
+        TypeNode::AbstractType { .. }
+    ));
     assert_ne!(
         one, two,
         "each `:|` application mints its own opaque Elt identity",
@@ -228,38 +247,34 @@ fn two_ascriptions_of_one_sig_mint_distinct_slot_types() {
     assert_ne!(one.digest(), two.digest());
 }
 
-/// The `ScopeId` a SIG's decl-time abstract members are sourced at.
-fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> ScopeId {
-    match scope.resolve_type(sig_name) {
-        Some(KType::Signature { content, .. }) => content.sig_id,
-        other => panic!("{sig_name} must bind a Signature, got {other:?}"),
-    }
-}
-
-/// Assert `kt` is a type constructor — a declared family (`SetRef`) or a SIG's abstract
+/// Assert `kt` is a type constructor — a declared family (`SetMember`) or a SIG's abstract
 /// constructor slot (`AbstractType`) — whose parameter names equal `expected`; returns its name.
-fn assert_type_constructor(kt: &KType, expected: &[&str], types: &TypeRegistry) -> String {
+fn assert_type_constructor(kt: KType, expected: &[&str], types: &TypeRegistry) -> String {
     let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
     let param_names = constructor_param_names(kt, types)
         .unwrap_or_else(|| panic!("expected a type constructor, got {kt:?}"));
     assert_eq!(param_names, want);
-    match kt {
-        KType::SetRef { set, index } => set.member(*index).name.clone(),
-        KType::AbstractType { name, .. } => name.clone(),
-        other => panic!("expected a type constructor, got {other:?}"),
+    match types.node(kt) {
+        TypeNode::SetMember { name, .. } => name,
+        TypeNode::AbstractType { name, .. } => name,
+        _ => panic!("expected a type constructor, got {kt:?}"),
     }
 }
 
-/// A root-scope-bound `Wrap` TypeConstructor `SetRef`.
-fn wrap_type_constructor() -> KType {
-    let set = RecursiveSet::singleton(
-        "Wrap".into(),
-        NominalSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
-            param_names: vec!["Type".into()],
-        },
-    );
-    KType::SetRef { set, index: 0 }
+/// A root-scope-bound `Wrap` TypeConstructor member, sealed through the real declaration window.
+fn wrap_type_constructor(scope: &crate::machine::Scope<'_>, types: &TypeRegistry) -> KType {
+    let window = declarator_window(scope, "Wrap", KKind::TypeConstructor);
+    window
+        .fill_member(
+            0,
+            RelativeSchema::TypeConstructor {
+                schema: std::collections::HashMap::new(),
+                param_names: vec!["Type".into()],
+            },
+            types,
+        )
+        .expect("a singleton window seals on its sole fill")
+        .members[0]
 }
 
 /// Pins the dispatch path for an FN return type `:(Number AS Wrap)` against a
@@ -270,11 +285,8 @@ fn fn_return_type_constructor_apply_root_scope() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
-    scope.register_builtin_type(
-        "Wrap".into(),
-        wrap_type_constructor(),
-        BindingIndex::BUILTIN,
-    );
+    let wrap = wrap_type_constructor(scope, test_run.types());
+    scope.register_builtin_type("Wrap".into(), wrap, BindingIndex::BUILTIN);
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
         parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
@@ -292,12 +304,15 @@ fn fn_return_type_constructor_apply_root_scope() {
     };
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(KType::ConstructorApply { args, .. }) => {
-            assert_eq!(
-                *args,
-                Record::from_pairs([("Type".to_string(), KType::Number)]),
-            );
-        }
+        ReturnType::Resolved(handle) => match test_run.types().node(*handle) {
+            TypeNode::ConstructorApply { arguments, .. } => {
+                assert_eq!(
+                    arguments,
+                    Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+                );
+            }
+            _ => panic!("expected Resolved(ConstructorApply), got {:?}", handle),
+        },
         other => panic!("expected Resolved(ConstructorApply), got {:?}", other),
     }
 }
@@ -314,56 +329,66 @@ fn monad_signature_smoke() {
     let src = "SIG Monad = ((TYPE (Type AS Wrap)) \
          (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
     let exprs = parse(src).expect("parse should succeed");
-    let runtime = &mut test_run.runtime;
-    let mut ids = Vec::new();
-    for expr in exprs {
-        ids.push(runtime.dispatch_in_scope(expr, scope));
-    }
-    match runtime.execute() {
-        Ok(()) => {}
-        Err(e) => panic!("scheduler errored: {}", e),
-    }
-    for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = runtime.result_error(*id) {
-            panic!("expr {} errored: {}", i, e);
+    {
+        let runtime = &mut test_run.runtime;
+        let mut ids = Vec::new();
+        for expr in exprs {
+            ids.push(runtime.dispatch_in_scope(expr, scope));
+        }
+        match runtime.execute() {
+            Ok(()) => {}
+            Err(e) => panic!("scheduler errored: {}", e),
+        }
+        for (i, id) in ids.iter().enumerate() {
+            if let Err(e) = runtime.result_error(*id) {
+                panic!("expr {} errored: {}", i, e);
+            }
         }
     }
-    let content = match scope.resolve_type("Monad") {
-        Some(KType::Signature { content, .. }) => content,
-        other => panic!("Monad must bind a Signature KType, got {:?}", other),
+    let types = test_run.types();
+    let handle = scope
+        .resolve_type("Monad")
+        .copied()
+        .expect("Monad must bind a type");
+    let schema = match types.node(handle) {
+        TypeNode::Signature { schema, .. } => schema,
+        _ => panic!("Monad must bind a Signature KType, got {:?}", handle),
     };
-    let wrap_kt = content
-        .schema
+    let wrap_kt = schema
         .abstract_members
         .get("Wrap")
+        .copied()
         .expect("Wrap must live in Monad's stored schema abstract_members");
-    assert_type_constructor(wrap_kt, &["Type"], &test_run.types);
+    assert_type_constructor(wrap_kt, &["Type"], types);
     // A SIG-body `VAL pure :T` slot lives in the signature's stored schema (`value_slots`),
     // carrying the declared type directly.
-    let kt: &KType = content
-        .schema
+    let pure = schema
         .value_slots
         .get("pure")
+        .copied()
         .expect("pure must live in Monad's stored schema value_slots");
-    match kt {
-        KType::KFunction { params, ret, .. } => {
-            assert_eq!(params.get("x"), Some(&KType::Number));
+    match types.node(pure) {
+        TypeNode::KFunction { params, ret } => {
+            assert_eq!(params.get("x").copied(), Some(KType::NUMBER));
             assert_eq!(params.len(), 1);
-            match ret.as_ref() {
-                KType::ConstructorApply { ctor, args, .. } => {
-                    assert_type_constructor(ctor.as_ref(), &["Type"], &test_run.types);
+            match types.node(ret) {
+                TypeNode::ConstructorApply {
+                    constructor,
+                    arguments,
+                } => {
+                    assert_type_constructor(constructor, &["Type"], types);
                     assert_eq!(
-                        *args,
-                        Record::from_pairs([("Type".to_string(), KType::Number)]),
+                        arguments,
+                        Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
                     );
                 }
-                other => panic!(
+                _ => panic!(
                     "pure return type must be ConstructorApply(Wrap, {{Type = Number}}), got {:?}",
-                    other,
+                    ret,
                 ),
             }
         }
-        other => panic!("pure must be a Function type, got {:?}", other),
+        _ => panic!("pure must be a Function type, got {:?}", pure),
     }
 }
 
@@ -383,10 +408,10 @@ fn module_attr_access_returns_type_constructor() {
          LET mo = (int_list :| Monad)",
     );
     let mo = lookup_module(scope, "mo", &test_run.types);
-    let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
+    let wrap_t = mo.type_members.borrow().get("Wrap").copied();
     match wrap_t {
         Some(kt) => {
-            let name = assert_type_constructor(&kt, &["Type"], &test_run.types);
+            let name = assert_type_constructor(kt, &["Type"], test_run.types());
             assert_eq!(name, "Wrap");
         }
         other => panic!(

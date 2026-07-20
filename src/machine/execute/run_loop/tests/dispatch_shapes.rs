@@ -18,7 +18,7 @@ use crate::machine::execute::dispatch::{
 use crate::machine::model::Held;
 use crate::machine::model::KExpression;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::{Carried, KObject, TypeRegistry};
+use crate::machine::model::{Carried, KObject, TypeNode, TypeRegistry};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(
@@ -73,10 +73,10 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
 /// Identifier head that resolves to a function value without going through FN/LET.
 fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Argument(Argument {
             name: "n".into(),
-            ktype: KType::Number,
+            ktype: KType::NUMBER,
         })],
     };
     let f = scope.brand().alloc_function(KFunction::new(
@@ -85,6 +85,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
         scope,
         None,
         None,
+        types,
     ));
     let obj = scope
         .brand()
@@ -115,7 +116,7 @@ fn bare_type_leaf_short_circuits() {
         "BareTypeLeaf must not enter resolve_dispatch",
     );
     assert!(
-        matches!(result, Carried::Type(KType::Number)),
+        matches!(result, Carried::Type(&KType::NUMBER)),
         "(Number) must terminate to a Number type; got {}",
         result.summarize(&test_run.types),
     );
@@ -338,18 +339,24 @@ fn fast_lane_on_tagged_union_constructs() {
          entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
-    // A user-union variant value is an ordinary `Wrapped` over the member `SetRef`.
+    // A user-union variant value is a `Tagged` — the same shape builtin `Result` produces —
+    // carrying its variant tag and the member's own `SetMember` handle as `identity`.
     match result {
-        KObject::Wrapped { inner, type_id } => {
-            assert!(matches!(inner.get(), KObject::Number(n) if *n == 42.0));
-            match type_id {
-                crate::machine::model::KType::SetRef { set, index } => {
-                    assert_eq!(set.member(*index).name, "Some");
+        KObject::Tagged {
+            tag,
+            value,
+            identity,
+        } => {
+            assert_eq!(tag, "Some");
+            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 42.0));
+            match test_run.types.node(*identity) {
+                TypeNode::SetMember { name, .. } => {
+                    assert_eq!(name, "Some");
                 }
-                other => panic!("expected a member SetRef type_id, got {other:?}"),
+                _ => panic!("expected a member SetMember identity, got {identity:?}"),
             }
         }
-        other => panic!("expected Wrapped, got {:?}", other.ktype()),
+        other => panic!("expected Tagged, got {:?}", other.ktype()),
     }
 }
 

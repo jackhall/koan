@@ -1,21 +1,23 @@
 //! `RECURSIVE TYPES <name:ProperType> = (<body>)` — co-declare a group of
-//! mutually-recursive nominal types as one [`RecursiveSet`].
+//! mutually-recursive nominal types in one [`RecursiveGroupWindow`].
 //!
 //! The block is the one cross-order type-name resolution that survives strict lexical
 //! lookup. Its body is a newline-separated sequence of ordinary `UNION` /
 //! `NEWTYPE` declarations; every member name is in scope for every body inside the block,
-//! so a cross-reference lowers to a transient `RecursiveRef` and seals to a `SetLocal`
-//! index into the shared set. See
+//! so a cross-reference lowers to that member's relative sibling handle. See
 //! [user-types.md](../../design/typing/user-types.md).
 //!
-//! Mechanism: discover the members (name + kind) from the body declarations, mint one
-//! shared `RecursiveSet` (members `pending`), and dispatch the declarations against a child
-//! scope that carries the set via
+//! Mechanism: discover the members (name + kind) from the body declarations, open one
+//! window over them, and dispatch the declarations against a child scope that carries it via
 //! [`await_body_in_scope`](super::await_body::await_body_in_scope) — so each declaration's
-//! elaborator threads the group. Each member's own finalize fills its slot in the shared set
-//! (the pre-installed `SetRef` routes it there rather than minting a singleton). The finish
-//! mirrors the sealed members into the enclosing scope and binds the group handle: exiting
-//! the block guarantees every forward reference resolved.
+//! elaborator finds the group. Each member's own finalize fills its slot; the last fill seals the
+//! window, which is where every member's identity is computed at once. The finish binds the sealed
+//! members into the enclosing scope along with the group handle: exiting the block guarantees
+//! every forward reference resolved.
+//!
+//! No member binds a name before the window seals. Identity is computed over the whole reference
+//! structure, so there is nothing to pre-install — an in-window name resolves through the window,
+//! which the elaborator consults ahead of the binding tables.
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
@@ -23,8 +25,8 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::machine::model::KType;
-use crate::machine::model::{NominalMember, RecursiveSet};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::model::RecursiveGroupWindow;
+use crate::machine::{KError, KErrorKind, Scope, TraceFrame};
 
 use crate::machine::model::{ExpressionPart, KExpression};
 
@@ -91,11 +93,11 @@ fn leading_keyword<'b>(decl: &'b KExpression<'_>) -> Option<&'b str> {
     })
 }
 
-/// The RECURSIVE TYPES body: discovers the members, mints the set + carrying child
-/// scope, pre-installs each member's `SetRef`, dispatches the body block via
+/// The RECURSIVE TYPES body: discovers the members, opens the window on a carrying child
+/// scope, dispatches the body block via
 /// [`await_body_in_scope`](super::await_body::await_body_in_scope) (which fans out per
-/// declaration), and the finish mirrors the sealed members + binds the group handle into
-/// the enclosing scope.
+/// declaration), and the finish binds the sealed members + the group handle into the enclosing
+/// scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
@@ -109,58 +111,43 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "RECURSIVE TYPES", "body"));
     let members = crate::try_action!(discover_members(&body_expr));
 
-    let set = Rc::new(RecursiveSet::new(
-        members
-            .iter()
-            .map(|(name, kind)| NominalMember::pending(name.clone(), *kind))
-            .collect(),
-    ));
+    let window = RecursiveGroupWindow::new(members.clone(), None);
     let child = ctx
         .scope
         .brand()
-        .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&set)));
-    for (index, (name, _)) in members.iter().enumerate() {
-        child.preinstall_identity(
-            name.clone(),
-            KType::SetRef {
-                set: Rc::clone(&set),
-                index,
-            },
-            BindingIndex::value(0),
-        );
-    }
+        .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&window)));
 
     let bind_index = ctx.bind_index();
     await_body_in_scope(child, body_expr, ChildScopeSeal::LeaveOpen, move |fctx| {
         let frame =
             || TraceFrame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
-        for (index, (name, _)) in members.iter().enumerate() {
-            if !set.member(index).is_filled() {
+        // Block close is the seal barrier: a window still open here holds a member whose
+        // declaration never ran, so no member of the group has an identity.
+        let sealed = match window.sealed() {
+            Some(sealed) => sealed,
+            None => {
+                let unfilled = window.unfilled_member_names().join("`, `");
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "RECURSIVE TYPES `{group_name}`: member `{name}` did not seal — a \
+                    "RECURSIVE TYPES `{group_name}`: member `{unfilled}` did not seal — a \
                          declaration referenced a name outside the group",
                 )))
                 .with_frame(frame())));
             }
-        }
-        for (index, (name, _)) in members.iter().enumerate() {
-            let member_ref = KType::SetRef {
-                set: Rc::clone(&set),
-                index,
-            };
+        };
+        for ((name, _), member) in members.iter().zip(sealed.members.iter()) {
             if let Err(e) = fctx
                 .scope
-                .register_nominal_upsert(name.clone(), member_ref, bind_index)
+                .register_nominal_upsert(name.clone(), *member, bind_index)
             {
                 return Action::Done(Err(e.with_frame(frame())));
             }
         }
-        let handle = KType::RecursiveGroup(Rc::clone(&set));
+        let handle = sealed.group;
         match fctx
             .scope
             .register_nominal_upsert(group_name.clone(), handle, bind_index)
         {
-            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(kt_ref.clone()))),
+            Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(*kt_ref))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),
         }
     })
@@ -168,13 +155,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
-        KType::OfKind(KKind::AnyType),
+        KType::of_kind(KKind::AnyType),
         vec![
             kw("RECURSIVE"),
             kw("TYPES"),
-            arg("name", KType::OfKind(KKind::ProperType)),
+            arg("name", KType::of_kind(KKind::ProperType)),
             kw("="),
-            arg("body", KType::KExpression),
+            arg("body", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin_full(

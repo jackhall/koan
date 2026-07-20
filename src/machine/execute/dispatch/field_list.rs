@@ -11,8 +11,9 @@
 //!   [`BrandCompose`] closure, which assembles one owned `KType` and allocates it into the
 //!   consumer's own region;
 //! - the UNION schema and the NEWTYPE record repr hand the pairs to a caller-supplied
-//!   [`FieldListFinalizeAction`], which seals them into a heap `RecursiveSet` and crosses the
-//!   nominal identity through [`seal_type_identity`](super::constructors::seal_type_identity).
+//!   [`FieldListFinalizeAction`], which seals them through the declaration window into interned
+//!   member handles and crosses the nominal identity through
+//!   [`seal_type_identity`](super::constructors::seal_type_identity).
 
 use std::rc::Rc;
 
@@ -38,8 +39,9 @@ use crate::machine::DeliveredCarried;
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). Runs in [`compose_field_list`], which allocates
 /// the composed value into the consumer's own region through the single type door.
-pub(crate) type BrandCompose<'step> =
-    Box<dyn FnOnce(Vec<(String, KType)>) -> Result<KType, KError> + 'step>;
+pub(crate) type BrandCompose<'step> = Box<
+    dyn for<'r> FnOnce(Vec<(String, KType)>, &'r TypeRegistry) -> Result<KType, KError> + 'step,
+>;
 
 /// `Action`-path finalize, returning a witnessed carrier — used by
 /// [`defer_field_list_action`], whose finish lifts the result straight into
@@ -84,6 +86,7 @@ struct FieldListRewalk<'step> {
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
+    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
     chain: Option<Rc<LexicalFrame>>,
     error_frame: Option<TraceFrame>,
 }
@@ -105,6 +108,9 @@ impl<'step> FieldListRewalk<'step> {
         let mut elaborator = Elaborator::new(scope)
             .with_threaded(self.threaded.iter().cloned())
             .with_chain(self.chain.clone());
+        if let Some(window) = self.window.clone() {
+            elaborator = elaborator.with_window(window);
+        }
         match parse_typed_field_list_via_elaborator(
             &self.expr,
             self.context,
@@ -145,12 +151,14 @@ fn compose_field_list<'step>(
     types: &TypeRegistry,
 ) -> Result<StepCarried<'step>, KError> {
     let fields = rewalk.run(scope, feed, types)?;
-    Ok(step_ctx.alloc_type(compose(fields)?))
+    Ok(step_ctx.alloc_type(compose(fields, types)?))
 }
 
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
 /// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
-/// `threaded` / `chain` rebuild the elaborator for the re-walk; `pending_guard` (when present)
+/// `threaded` / `window` / `chain` rebuild the elaborator for the re-walk — the window is the
+/// declaration window the first walk minted its sibling handles against, so the re-walk mints the
+/// same indices; `pending_guard` (when present)
 /// rides into the closure so its Drop fires on every finish arm; `error_frame` is attached to the
 /// user-facing `Err` arm.
 #[allow(clippy::too_many_arguments)]
@@ -161,6 +169,7 @@ pub(crate) fn defer_field_list<'step>(
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
+    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
@@ -171,6 +180,7 @@ pub(crate) fn defer_field_list<'step>(
         context,
         name_kind,
         threaded,
+        window,
         chain,
         error_frame,
     };
@@ -218,6 +228,7 @@ pub(crate) fn defer_field_list_action<'a>(
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
+    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
@@ -233,6 +244,7 @@ pub(crate) fn defer_field_list_action<'a>(
         context,
         name_kind,
         threaded,
+        window,
         chain,
         error_frame,
     };
@@ -268,6 +280,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
+    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
@@ -282,6 +295,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
         context,
         name_kind,
         threaded,
+        window,
         chain,
         error_frame,
     };
@@ -319,7 +333,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         view.types(),
     ) {
         FieldListOutcome::Done(pairs) => {
-            let kt = KType::record(Box::new(Record::from_pairs(pairs)));
+            let kt = view.types().record(Record::from_pairs(pairs));
             Outcome::Done(Ok(view.step_ctx().alloc_type(kt)))
         }
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -333,10 +347,11 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
             FieldListContext::RECORD_TYPE,
             FieldNameKind::Identifier,
             Vec::new(),
+            None,
             chain,
             None,
             None,
-            Box::new(|pairs| Ok(KType::record(Box::new(Record::from_pairs(pairs))))),
+            Box::new(|pairs, types| Ok(types.record(Record::from_pairs(pairs)))),
         ),
     }
 }

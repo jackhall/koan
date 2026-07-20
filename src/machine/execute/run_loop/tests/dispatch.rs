@@ -49,12 +49,12 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let region = run_root_storage();
     let outer = run_root_bare(&region);
     let outer_sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("MARK".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
@@ -71,12 +71,12 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
     let inner_sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("MARK".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
         ],
     };
@@ -122,14 +122,14 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     register_builtin(
         scope,
         "any_first",
-        one_slot_sig("v", KType::Any),
+        one_slot_sig("v", KType::ANY),
         body_marker_any,
         &TypeRegistry::new(),
     );
     register_builtin(
         scope,
         "ident_second",
-        one_slot_sig("v", KType::Identifier),
+        one_slot_sig("v", KType::IDENTIFIER),
         body_identifier,
         &TypeRegistry::new(),
     );
@@ -163,12 +163,12 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("foo".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };

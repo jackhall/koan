@@ -146,7 +146,7 @@ fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// run's own registry.
 fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry) {
     let signature = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: vec![SignatureElement::Keyword("PROBE".into())],
     };
     crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, types);

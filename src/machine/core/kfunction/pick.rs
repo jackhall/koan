@@ -4,7 +4,6 @@
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
-use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
@@ -52,34 +51,34 @@ impl<'a> KFunction<'a> {
             match (el, &part.value) {
                 (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
                 (SignatureElement::Keyword(_), _) => return None,
-                (SignatureElement::Argument(arg), part_value) => match (&arg.ktype, part_value) {
-                    (KType::KExpression, ExpressionPart::Expression(_)) => {
+                (SignatureElement::Argument(arg), part_value) => match (arg.ktype, part_value) {
+                    (KType::KEXPRESSION, ExpressionPart::Expression(_)) => {
                         has_lazy_slot = true;
                     }
                     // A `Unary`-mode operator run reduces to `[Keyword, ListLiteral]`; the list
                     // literal rides a `:KExpression` slot raw (`resolve_for`) so the receiving
                     // builtin owns the operand run rather than eager-evaluating it.
-                    (KType::KExpression, ExpressionPart::ListLiteral(_)) => {
+                    (KType::KEXPRESSION, ExpressionPart::ListLiteral(_)) => {
                         has_lazy_slot = true;
                     }
                     // A `#(...)` quote in a `:KExpression` slot is captured raw — the body is data,
                     // so it must never be sub-dispatched.
-                    (KType::KExpression, ExpressionPart::QuotedExpression(_)) => {
+                    (KType::KEXPRESSION, ExpressionPart::QuotedExpression(_)) => {
                         has_lazy_slot = true;
                     }
-                    (KType::KExpression, _) => return None,
+                    (KType::KEXPRESSION, _) => return None,
                     // `:SigiledTypeExpr` is the lazy sibling of `:KExpression` for a `:(...)`
                     // part — captured raw (`resolve_for`), never sub-dispatched here.
-                    (KType::SigiledTypeExpr, ExpressionPart::SigiledTypeExpr(_)) => {
+                    (KType::SIGILED_TYPE_EXPR, ExpressionPart::SigiledTypeExpr(_)) => {
                         has_lazy_slot = true;
                     }
-                    (KType::SigiledTypeExpr, _) => return None,
+                    (KType::SIGILED_TYPE_EXPR, _) => return None,
                     // `:RecordType` is the lazy sibling for a `:{…}` part — captured raw so
                     // the NEWTYPE record-repr declarator owns its field-list elaboration.
-                    (KType::RecordType, ExpressionPart::RecordType(_)) => {
+                    (KType::RECORD_TYPE, ExpressionPart::RecordType(_)) => {
                         has_lazy_slot = true;
                     }
-                    (KType::RecordType, _) => return None,
+                    (KType::RECORD_TYPE, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_))
                     | (_, ExpressionPart::RecordType(_)) => {
@@ -94,10 +93,7 @@ impl<'a> KFunction<'a> {
                         // e.g. a builtin pairing a bare-name-typed slot (`:Signature` /
                         // `Type(...)`) with a lazy `:KExpression` slot would otherwise lose it.
                         if is_bare_name(other)
-                            && !matches!(
-                                arg.ktype,
-                                KType::Identifier | KType::OfKind(KKind::ProperType)
-                            )
+                            && !matches!(arg.ktype, KType::IDENTIFIER | KType::PROPER_TYPE)
                         {
                             continue;
                         }
@@ -141,10 +137,10 @@ impl<'a> KFunction<'a> {
             if !is_bare_name(&part.value) {
                 continue;
             }
-            match &arg.ktype {
+            match arg.ktype {
                 // Binders' literal-name slots are *declarations* — the slot already owns
                 // the name and must not park on its own placeholder.
-                KType::Identifier | KType::OfKind(KKind::ProperType) => {
+                KType::IDENTIFIER | KType::PROPER_TYPE => {
                     if !picked_has_binder_name {
                         ref_name_indices.push(i);
                     }

@@ -88,7 +88,7 @@ pub(crate) fn home_return_type<'captured: 'a, 'a>(
     // Shorten the brand (covariant) before the store, so the resident reference comes back at the
     // contract lifetime rather than the captured region's own.
     let brand: RegionBrand<'a> = captured.brand();
-    brand.alloc_ktype(kt.clone())
+    brand.alloc_ktype(*kt)
 }
 
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
@@ -147,11 +147,7 @@ where
                 // value binding. The arg is already a resolved type; the door clones it into the
                 // frame region. A *module* argument is a value and takes the Object arm above.
                 Carried::Type(kt) => {
-                    child.register_type_delivered(
-                        name.clone(),
-                        kt.clone(),
-                        BindingIndex::value(0),
-                    )?;
+                    child.register_type_delivered(name.clone(), *kt, BindingIndex::value(0))?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.
@@ -213,7 +209,7 @@ where
                             // A park at this point cannot be honored — the body is about to
                             // run — so fall back to Any and let the body's own dispatch surface
                             // any real error.
-                            TypeResolution::Park(_) => Ok(home_return_type(&KType::Any, captured)),
+                            TypeResolution::Park(_) => Ok(home_return_type(&KType::ANY, captured)),
                             // A miss is a real error: the return names no type. Surfacing it
                             // here rather than widening to Any is what makes `-> some_value` (a
                             // return slot naming a value — a module included) a diagnostic

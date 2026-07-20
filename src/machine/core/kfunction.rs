@@ -6,7 +6,7 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
 
 use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
-use crate::machine::model::TypeRegistry;
+use crate::machine::model::{DeferredReturnSurface, KType, ReturnType, TypeNode, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
 
@@ -53,6 +53,10 @@ pub struct KFunction<'a> {
     /// sibling bare-arg call form like `(MAKESET int_ord)` parks on the binder slot
     /// instead of surfacing `DispatchFailed` before finalize.
     pub binder_bucket: Option<BinderBucketFn>,
+    /// The function *value*'s own type: the `(params) -> ret` handle interned once, here at
+    /// definition, from the normalized signature. `KObject::KFunction(f).ktype()` copies it, so
+    /// the value layer never rebuilds a parameter record per dispatch check (ruling 4).
+    value_ktype: KType,
 }
 
 impl<'a> KFunction<'a> {
@@ -62,15 +66,23 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         binder_name: Option<(BinderNameFn, BindKind)>,
         binder_bucket: Option<BinderBucketFn>,
+        types: &TypeRegistry,
     ) -> Self {
         signature.normalize();
+        let value_ktype = function_value_ktype(&signature, types);
         Self {
             signature,
             body,
             captured,
             binder_name,
             binder_bucket,
+            value_ktype,
         }
+    }
+
+    /// This function value's type handle — a copy of the memo [`Self::new`] interned.
+    pub fn value_ktype(&self) -> KType {
+        self.value_ktype
     }
 
     /// The captured definition scope. Bare field read — the holder was already re-anchored to `'a`
@@ -203,6 +215,33 @@ impl<'a> KFunction<'a> {
         }
         Ok(KExpression::new(parts))
     }
+}
+
+/// Intern the function type a `KFunction` value reports. The parameter record keys each
+/// `Argument` by its declared name — the names the signature already holds, never the dispatch
+/// keywords — so a function value projects the same `(name → type)` record a
+/// `:(FN (name :Type) -> _)` slot declares.
+///
+/// A `Deferred(_)` source return projects into the confined `DeferredReturn` node, holding the
+/// hashable surface shadow of the deferred form, so equality and specificity read the deferred
+/// shape directly instead of seeing it coarsened to `Any`. See
+/// [ktype/records-and-limits.md § Record fields](../../../design/typing/ktype/records-and-limits.md#record-fields-and-ktype-hashing).
+fn function_value_ktype(signature: &ExpressionSignature<'_>, types: &TypeRegistry) -> KType {
+    let params: Record<KType> = signature
+        .elements
+        .iter()
+        .filter_map(|el| match el {
+            SignatureElement::Argument(a) => Some((a.name.clone(), a.ktype)),
+            _ => None,
+        })
+        .collect();
+    let ret = match &signature.return_type {
+        ReturnType::Resolved(kt) => *kt,
+        ReturnType::Deferred(d) => types.intern(TypeNode::DeferredReturn(
+            DeferredReturnSurface::from_deferred(d),
+        )),
+    };
+    types.function_type(params, ret)
 }
 
 #[cfg(test)]

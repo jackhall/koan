@@ -44,7 +44,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 None,
             ),
             Err(e) => {
-                let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand(), fctx.types);
+                let tagged: KObject<'a> = e.to_tagged(fctx.types);
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
@@ -79,14 +79,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
-        KType::Any,
+        KType::ANY,
         vec![
             kw("TRY"),
-            arg("expr", KType::KExpression),
+            arg("expr", KType::KEXPRESSION),
             kw("->"),
-            arg("return_type", KType::OfKind(KKind::ProperType)),
+            arg("return_type", KType::of_kind(KKind::ProperType)),
             kw("WITH"),
-            arg("branches", KType::KExpression),
+            arg("branches", KType::KEXPRESSION),
         ],
     );
     crate::builtins::register_builtin(scope, "TRY", signature, body, types);

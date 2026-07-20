@@ -36,7 +36,7 @@ pub(crate) fn classify_name_lookup(
     name: &str,
 ) -> TypeResolution<KType> {
     match lookup {
-        Some(NameLookup::Bound(kt)) => TypeResolution::Done(kt.clone()),
+        Some(NameLookup::Bound(kt)) => TypeResolution::Done(*kt),
         Some(NameLookup::Parked(producer)) => TypeResolution::Park(vec![producer]),
         None => TypeResolution::Unbound(format!("unknown type name `{name}`")),
     }
@@ -45,7 +45,7 @@ pub(crate) fn classify_name_lookup(
 /// Clone the stored type out of `Scope::resolve_type_identifier`'s outcome, adapting it into
 /// the combinator currency: the combinators carry an owned `KType`, not a region borrow.
 pub(crate) fn classify_resolved_type(resolution: TypeResolution<&KType>) -> TypeResolution<KType> {
-    resolution.and_then_done(|kt| TypeResolution::Done(kt.clone()))
+    resolution.and_then_done(|kt| TypeResolution::Done(*kt))
 }
 
 /// Re-run `resolve` after the parked producers finished. `Done` yields the type; `Park` is the
@@ -103,7 +103,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 ) -> Result<KType, KError> {
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
     match terminal.value {
-        Carried::Type(kt) => Ok(kt.clone()),
+        Carried::Type(kt) => Ok(*kt),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name(types))),
         Carried::UnresolvedType(ti) => Err(non_type_result_error(slot, ti.render())),
     }

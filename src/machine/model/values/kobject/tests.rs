@@ -1,19 +1,19 @@
 use super::*;
-use crate::machine::model::types::{NominalSchema, RecursiveSet};
+use crate::machine::model::types::{RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::KKey;
 use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
-/// A singleton newtype-set `Rc` named `name` over `repr`.
-fn newtype_singleton(name: &str, repr: KType) -> std::rc::Rc<RecursiveSet> {
-    RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)))
+/// A singleton newtype member handle named `name` over `repr`.
+fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
+    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
 }
 
 #[test]
 fn ktype_of_homogeneous_number_list() {
     let types = TypeRegistry::new();
     let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
-    assert_eq!(l.ktype(), KType::list(Box::new(KType::Number)));
+    assert_eq!(l.ktype(), types.list(KType::NUMBER));
 }
 
 #[test]
@@ -23,14 +23,14 @@ fn ktype_of_mixed_list_is_list_any() {
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
     );
-    assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
+    assert_eq!(l.ktype(), types.list(KType::ANY));
 }
 
 #[test]
 fn ktype_of_empty_list_is_list_any() {
     let types = TypeRegistry::new();
     let l: KObject<'_> = KObject::list(vec![], &types);
-    assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
+    assert_eq!(l.ktype(), types.list(KType::ANY));
 }
 
 #[test]
@@ -38,10 +38,7 @@ fn ktype_of_nested_list() {
     let types = TypeRegistry::new();
     let inner: KObject<'_> = KObject::list(vec![KObject::Number(1.0)], &types);
     let outer: KObject<'_> = KObject::list(vec![inner], &types);
-    assert_eq!(
-        outer.ktype(),
-        KType::list(Box::new(KType::list(Box::new(KType::Number))))
-    );
+    assert_eq!(outer.ktype(), types.list(types.list(KType::NUMBER)));
 }
 
 #[test]
@@ -51,10 +48,7 @@ fn ktype_of_dict_string_number() {
     map.insert(KKey::String("a".into()), KObject::Number(1.0));
     map.insert(KKey::String("b".into()), KObject::Number(2.0));
     let d: KObject<'_> = KObject::dict(map, &types);
-    assert_eq!(
-        d.ktype(),
-        KType::dict(Box::new(KType::Str), Box::new(KType::Number))
-    );
+    assert_eq!(d.ktype(), types.dict(KType::STR, KType::NUMBER));
 }
 
 #[test]
@@ -62,16 +56,13 @@ fn ktype_of_empty_dict_is_dict_any_any() {
     let types = TypeRegistry::new();
     let map: HashMap<KKey, KObject<'static>> = HashMap::new();
     let d: KObject<'_> = KObject::dict(map, &types);
-    assert_eq!(
-        d.ktype(),
-        KType::dict(Box::new(KType::Any), Box::new(KType::Any))
-    );
+    assert_eq!(d.ktype(), types.dict(KType::ANY, KType::ANY));
 }
 
 #[test]
 fn matches_value_list_number_rejects_string_element() {
     let types = TypeRegistry::new();
-    let t = KType::list(Box::new(KType::Number));
+    let t = types.list(KType::NUMBER);
     let bad: KObject<'_> = KObject::list(
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
@@ -82,7 +73,7 @@ fn matches_value_list_number_rejects_string_element() {
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
     let types = TypeRegistry::new();
-    let t = KType::list(Box::new(KType::Number));
+    let t = types.list(KType::NUMBER);
     let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
     assert!(t.matches_value(&good, &types));
 }
@@ -90,7 +81,7 @@ fn matches_value_list_number_accepts_all_numbers() {
 #[test]
 fn matches_value_list_any_accepts_any_list() {
     let types = TypeRegistry::new();
-    let t = KType::list(Box::new(KType::Any));
+    let t = types.list(KType::ANY);
     let mixed: KObject<'_> = KObject::list(
         vec![KObject::Number(1.0), KObject::KString("x".into())],
         &types,
@@ -104,58 +95,59 @@ fn matches_value_list_any_accepts_any_list() {
 fn list_with_type_carrier_is_authoritative_for_ktype() {
     use crate::machine::model::values::Held;
     use std::rc::Rc;
+    let types = TypeRegistry::new();
     let items = Rc::new(vec![
         Held::Object(KObject::Number(1.0)),
         Held::Object(KObject::Number(2.0)),
     ]);
-    let stamped = KObject::list_with_type(items, KType::Any);
-    assert_eq!(stamped.ktype(), KType::list(Box::new(KType::Any)));
+    let list_any = types.list(KType::ANY);
+    let stamped = KObject::list_with_type(items, list_any);
+    assert_eq!(stamped.ktype(), list_any);
 }
 
-/// A `TypeConstructor` (`Result`) value keeps the ctor identity: erased `type_args`
-/// reports the bare `SetRef`, a populated carrier the applied `ConstructorApply`.
+/// A `TypeConstructor` (`Result`) value carries its identity handle directly: an erased carrier
+/// holds the bare member reference, a stamped carrier the applied `ConstructorApply`.
 #[test]
 fn type_constructor_ktype_erased_vs_applied() {
     use std::rc::Rc;
-    let set = RecursiveSet::singleton(
+    let types = TypeRegistry::new();
+    let ctor = RecursiveGroupWindow::seal_singleton(
         "Result".into(),
-        NominalSchema::TypeConstructor {
+        RelativeSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names: vec!["Ok".into(), "Error".into()],
         },
+        None,
+        &types,
     );
     let erased = KObject::Tagged {
         tag: "Ok".into(),
         value: Rc::new(KObject::Number(1.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity: ctor,
     };
-    match erased.ktype() {
-        KType::SetRef { set: s, index } => assert_eq!(s.member(index).name, "Result"),
-        other => panic!("expected SetRef, got {other:?}"),
+    let erased_handle = erased.ktype();
+    match types.node(erased_handle) {
+        TypeNode::SetMember { name, .. } => assert_eq!(name, "Result"),
+        _ => panic!("expected SetMember, got {erased_handle:?}"),
     }
+    let arguments = Record::from_pairs([
+        ("Ok".to_string(), KType::NUMBER),
+        ("Error".to_string(), KType::STR),
+    ]);
     let applied = KObject::Tagged {
         tag: "Ok".into(),
         value: Rc::new(KObject::Number(1.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::from_pairs([
-            ("Ok".to_string(), KType::Number),
-            ("Error".to_string(), KType::Str),
-        ])),
+        identity: types.constructor_apply(ctor, arguments.clone()),
     };
-    match applied.ktype() {
-        KType::ConstructorApply { args, .. } => {
-            assert_eq!(
-                args,
-                Record::from_pairs([
-                    ("Ok".to_string(), KType::Number),
-                    ("Error".to_string(), KType::Str),
-                ])
-            );
+    let applied_handle = applied.ktype();
+    match types.node(applied_handle) {
+        TypeNode::ConstructorApply {
+            arguments: applied_args,
+            ..
+        } => {
+            assert_eq!(applied_args, arguments);
         }
-        other => panic!("expected ConstructorApply, got {other:?}"),
+        _ => panic!("expected ConstructorApply, got {applied_handle:?}"),
     }
 }
 
@@ -163,9 +155,10 @@ fn type_constructor_ktype_erased_vs_applied() {
 fn stamp_type_coarsens_list_carrier() {
     let types = TypeRegistry::new();
     let value = KObject::list(vec![KObject::Number(1.0)], &types);
-    assert_eq!(value.ktype(), KType::list(Box::new(KType::Number)));
-    let stamped = value.stamp_type(&KType::list(Box::new(KType::Any)));
-    assert_eq!(stamped.ktype(), KType::list(Box::new(KType::Any)));
+    assert_eq!(value.ktype(), types.list(KType::NUMBER));
+    let list_any = types.list(KType::ANY);
+    let stamped = value.stamp_type(list_any, &types);
+    assert_eq!(stamped.ktype(), list_any);
 }
 
 #[test]
@@ -174,7 +167,7 @@ fn unstamped_empty_container_detection() {
     use std::rc::Rc;
     let types = TypeRegistry::new();
     assert!(KObject::list(vec![], &types).is_unstamped_empty_container());
-    let stamped = KObject::list_with_type(Rc::new(vec![]), KType::Number);
+    let stamped = KObject::list_with_type(Rc::new(vec![]), types.list(KType::NUMBER));
     assert!(!stamped.is_unstamped_empty_container());
     let hetero = KObject::list(
         vec![KObject::Number(1.0), KObject::KString("x".into())],
@@ -185,25 +178,24 @@ fn unstamped_empty_container_detection() {
     assert!(KObject::dict(map, &types).is_unstamped_empty_container());
 }
 
-/// `Wrapped.ktype()` reports a clone of the `SetRef` identity the dispatcher reads for
+/// `Wrapped.ktype()` reports a copy of the member-handle identity the dispatcher reads for
 /// per-declaration identity comparisons.
 #[test]
 fn wrapped_ktype_reports_clone_of_type_id() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
+    let types = TypeRegistry::new();
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", KType::Number);
-    let type_id: &KType = region.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
     let w = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),
         type_id,
     };
-    match w.ktype() {
-        KType::SetRef { set, index } => {
-            assert_eq!(set.member(index).name, "Distance");
-        }
-        other => panic!("expected NewType SetRef identity, got {other:?}"),
+    let handle = w.ktype();
+    match types.node(handle) {
+        TypeNode::SetMember { name, .. } => assert_eq!(name, "Distance"),
+        _ => panic!("expected NewType SetMember identity, got {handle:?}"),
     }
 }
 
@@ -214,8 +206,7 @@ fn wrapped_summarize_renders_surface_form() {
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", KType::Number);
-    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
     let w = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),
         type_id,
@@ -224,15 +215,15 @@ fn wrapped_summarize_renders_surface_form() {
 }
 
 /// `deep_clone` is shallow: it `Rc::clone`s the inner (sharing the same allocation as the
-/// source `Wrapped`, not re-deep-cloning the repr) and copies the `&'a` `type_id` slot.
+/// source `Wrapped`, not re-deep-cloning the repr) and copies the `type_id` handle.
 #[test]
 fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
+    let types = TypeRegistry::new();
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
-    let set = newtype_singleton("Distance", KType::Number);
-    let type_id = region.alloc_ktype(KType::SetRef { set, index: 0 });
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
     let original = KObject::Wrapped {
         inner: WrappedPayload::peel(inner),
         type_id,
@@ -254,7 +245,7 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
                 original_inner,
                 "deep_clone must Rc::clone the inner, sharing the source allocation",
             );
-            assert!(std::ptr::eq(ct, type_id));
+            assert_eq!(ct, type_id);
         }
         _ => panic!("expected Wrapped after deep_clone"),
     }
@@ -276,7 +267,7 @@ fn resident_in_true_for_same_region_kfunction() {
     let test_run = TestRun::silent(&storage);
     let scope = test_run.scope;
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };
     let f = storage.brand().alloc_function(KFunction::new(
@@ -285,6 +276,7 @@ fn resident_in_true_for_same_region_kfunction() {
         scope,
         None,
         None,
+        &test_run.types,
     ));
     let o = KObject::KFunction(f);
     assert!(o.resident_in(storage.region()));
@@ -307,7 +299,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     let foreign_test_run = TestRun::silent(&foreign);
     let foreign_scope = foreign_test_run.scope;
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };
     let f = foreign.brand().alloc_function(KFunction::new(
@@ -316,6 +308,7 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
         foreign_scope,
         None,
         None,
+        &foreign_test_run.types,
     ));
     let o = KObject::KFunction(f);
 

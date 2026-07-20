@@ -1,8 +1,16 @@
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KKind, NodeSchema, TypeNode};
+use crate::machine::model::{KObject, KType, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
+
+/// Assert `identity` names a `SetMember` whose name is `expected`.
+fn assert_member_named(types: &TypeRegistry, identity: KType, expected: &str) {
+    match types.node(identity) {
+        TypeNode::SetMember { name, .. } => assert_eq!(name, expected),
+        _ => panic!("expected a SetMember identity named `{expected}`, got {identity:?}"),
+    }
+}
 
 #[test]
 fn result_registers_type_constructor_with_schema() {
@@ -12,25 +20,31 @@ fn result_registers_type_constructor_with_schema() {
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
     // variant `schema`; no value-side carrier in `data`.
-    let identity = scope
+    let handle = scope
         .resolve_type("Result")
+        .copied()
         .expect("Result type registered");
-    match identity {
-        KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
-            assert_eq!(set.member(*index).name, "Result");
-            match RecursiveSet::projected_schema(set, *index, &test_run.types) {
-                ProjectedSchema::TypeConstructor {
+    match test_run.types().node(handle) {
+        TypeNode::SetMember {
+            name,
+            kind: KKind::TypeConstructor,
+            schema,
+            ..
+        } => {
+            assert_eq!(name, "Result");
+            match schema {
+                NodeSchema::TypeConstructor {
                     param_names,
                     schema,
                 } => {
                     assert_eq!(param_names.len(), 2);
-                    assert_eq!(schema.get("Ok"), Some(&KType::Any));
-                    assert_eq!(schema.get("Error"), Some(&KType::Any));
+                    assert_eq!(schema.get("Ok").copied(), Some(KType::ANY));
+                    assert_eq!(schema.get("Error").copied(), Some(KType::ANY));
                 }
                 _ => panic!("expected a TypeConstructor schema"),
             }
         }
-        other => panic!("expected arity-2 TypeConstructor SetRef, got {other:?}"),
+        _ => panic!("expected arity-2 TypeConstructor SetMember, got {handle:?}"),
     }
     assert!(
         scope.lookup("Result").is_none(),
@@ -47,12 +61,10 @@ fn result_constructs_ok_variant() {
         KObject::Tagged {
             tag,
             value,
-            set,
-            index,
-            ..
+            identity,
         } => {
             assert_eq!(tag, "Ok");
-            assert_eq!(set.member(*index).name, "Result");
+            assert_member_named(test_run.types(), *identity, "Result");
             assert!(matches!(&**value, KObject::Number(n) if *n == 1.0));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),
@@ -68,12 +80,10 @@ fn result_constructs_error_variant() {
         KObject::Tagged {
             tag,
             value,
-            set,
-            index,
-            ..
+            identity,
         } => {
             assert_eq!(tag, "Error");
-            assert_eq!(set.member(*index).name, "Result");
+            assert_member_named(test_run.types(), *identity, "Result");
             assert!(matches!(&**value, KObject::KString(s) if s == "x"));
         }
         other => panic!("expected Tagged, got {:?}", other.ktype()),

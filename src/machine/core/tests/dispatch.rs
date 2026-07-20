@@ -20,7 +20,7 @@ fn body_b<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 fn two_slot_sig<'a>(a: KType, b: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Argument(Argument {
                 name: "a".into(),
@@ -41,7 +41,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a, &types);
+    register_builtin(scope, "ONE", one_slot_sig("v", KType::ANY), body_a, &types);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
@@ -64,14 +64,14 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     register_builtin(
         scope,
         "NA",
-        two_slot_sig(KType::Number, KType::Any),
+        two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &types,
     );
     register_builtin(
         scope,
         "AN",
-        two_slot_sig(KType::Any, KType::Number),
+        two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &types,
     );
@@ -99,7 +99,7 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     register_overload_at(
         outer,
         "OUTER",
-        two_slot_sig(KType::Number, KType::Number),
+        two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         BindingIndex::value(1),
         &TypeRegistry::new(),
@@ -108,14 +108,14 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     register_builtin(
         inner,
         "NA",
-        two_slot_sig(KType::Number, KType::Any),
+        two_slot_sig(KType::NUMBER, KType::ANY),
         body_a,
         &types,
     );
     register_builtin(
         inner,
         "AN",
-        two_slot_sig(KType::Any, KType::Number),
+        two_slot_sig(KType::ANY, KType::NUMBER),
         body_b,
         &types,
     );
@@ -145,17 +145,17 @@ fn resolve_carries_placeholder_name_for_binder_function() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("LETLIKE".into()),
             SignatureElement::Argument(Argument {
                 name: "n".into(),
-                ktype: KType::Identifier,
+                ktype: KType::IDENTIFIER,
             }),
             SignatureElement::Keyword("=".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Any,
+                ktype: KType::ANY,
             }),
         ],
     };
@@ -194,7 +194,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     register_builtin(
         scope,
         "ONE_ID",
-        one_slot_sig("v", KType::Identifier),
+        one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &types,
     );
@@ -221,7 +221,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     register_builtin(
         scope,
         "PLUS",
-        two_slot_sig(KType::Number, KType::Number),
+        two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &types,
     );
@@ -297,12 +297,12 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
     let outer = run_root_bare(&region);
     // Outer finalized overload that strictly Picks `(MARK <number>)`.
     let outer_sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("MARK".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
@@ -351,7 +351,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     register_builtin(
         outer,
         "outer_plus",
-        two_slot_sig(KType::Number, KType::Number),
+        two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_a,
         &types,
     );
@@ -359,7 +359,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
     register_builtin(
         inner,
         "inner_plus",
-        two_slot_sig(KType::Number, KType::Number),
+        two_slot_sig(KType::NUMBER, KType::NUMBER),
         body_b,
         &types,
     );
@@ -394,7 +394,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     register_builtin(
         outer,
         "outer_id",
-        one_slot_sig("v", KType::Identifier),
+        one_slot_sig("v", KType::IDENTIFIER),
         body_a,
         &types,
     );
@@ -404,7 +404,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
     register_builtin(
         inner,
         "inner_num",
-        one_slot_sig("v", KType::Number),
+        one_slot_sig("v", KType::NUMBER),
         body_b,
         &types,
     );
@@ -417,7 +417,7 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         DispatchOutcome::Resolved(r) => assert!(
             matches!(
                 r.function.signature.elements.first(),
-                Some(SignatureElement::Argument(arg)) if arg.ktype == KType::Identifier
+                Some(SignatureElement::Argument(arg)) if arg.ktype == KType::IDENTIFIER
             ),
             "outer `:Identifier` overload must Pick the bare name shape-only",
         ),
@@ -444,12 +444,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // user index (not BUILTIN) so the same-bucket sibling below is a legitimate
     // user-vs-user overload — a builtin bucket admits no user siblings.
     let pick_num = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("PICK".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Number,
+                ktype: KType::NUMBER,
             }),
         ],
     };
@@ -459,6 +459,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         scope,
         None,
         None,
+        &types,
     ));
     let pick_num_obj = region
         .brand()
@@ -498,12 +499,12 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     // pending's index removes its `pending_overloads` entry (mirrors the real
     // finalize-clear path, which retains-by-`BindingIndex`).
     let pick_str = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Any),
+        return_type: ReturnType::Resolved(KType::ANY),
         elements: vec![
             SignatureElement::Keyword("PICK".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
-                ktype: KType::Str,
+                ktype: KType::STR,
             }),
         ],
     };
@@ -513,6 +514,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
         scope,
         None,
         None,
+        &types,
     ));
     let sibling_obj = region
         .brand()

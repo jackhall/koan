@@ -230,8 +230,8 @@ impl<'a> Scope<'a> {
     }
 
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
-    /// MODULE). Writes the sealed `SetRef` identity into [`Bindings::types`], overwriting
-    /// a `PartialEq`-equal `SetRef` a `RECURSIVE TYPES` block pre-installed (same set + index).
+    /// MODULE). Writes the sealed `SetMember` identity into [`Bindings::types`], overwriting
+    /// a `PartialEq`-equal `SetMember` a `RECURSIVE TYPES` block pre-installed (same set + index).
     /// Returns the region-allocated `&KType` so the caller can yield it as a
     /// `Carried::Type`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
@@ -268,7 +268,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Nominal upsert: install a nominal `SetRef` identity (STRUCT/UNION/NEWTYPE/RECURSIVE member)
+    /// Nominal upsert: install a nominal `SetMember` identity (STRUCT/UNION/NEWTYPE/RECURSIVE member)
     /// — a heap-`Rc` set index. The nominal-finalize sites' name for
     /// [`Self::register_type_upsert`].
     pub(crate) fn register_nominal_upsert(
@@ -397,40 +397,6 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
     ) {
         self.register_type(name, ktype, index);
-    }
-
-    /// Synchronous pre-install of a nominal type's identity — `name` → `ktype` (a
-    /// `KType::SetRef` into the declaring set's shared `RecursiveSet`) — into
-    /// [`Bindings::types`] *before* the declaration's schema finalizes, so the body can
-    /// reference the name (self-recursion, or sibling members in a `RECURSIVE TYPES` block).
-    /// Unlike the finalize-time upsert it panics on borrow conflict instead of deferring,
-    /// and panics on `Rebind` — the identity must not already be in `types`.
-    ///
-    /// Callers run this with no outer `bindings` borrow held; a conflict here is a
-    /// programming error. The schema is filled later, at the declaration's own finalize,
-    /// against the same shared set recovered from this `SetRef`.
-    pub fn preinstall_identity(
-        &self,
-        name: String,
-        ktype: crate::machine::model::KType,
-        index: BindingIndex,
-    ) {
-        if self.bindings.is_borrowed() {
-            self.write_target().preinstall_identity(name, ktype, index);
-            return;
-        }
-        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref, index) {
-            Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => panic!(
-                "preinstall_identity borrow conflict on `{name}` — runs with no outer \
-                 types borrow held",
-            ),
-            Err(e) => panic!(
-                "preinstall_identity Rebind for `{name}`: {e} — the identity should not \
-                 already be in bindings.types",
-            ),
-        }
     }
 
     /// Apply queued writes between dispatch nodes. Items that still hit a borrow

@@ -24,10 +24,11 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
     // into `home`'s region — where the captured scope genuinely lives — inside the open, so the re-homed
     // `&KFunction` escapes at `home`'s lifetime without a fixed-lifetime reattach. Mirrors a closure
     // capturing its defining scope in its own region.
+    let types = crate::machine::model::TypeRegistry::new();
     home.with_scope(|child| {
         let kf = KFunction::new(
             ExpressionSignature {
-                return_type: ReturnType::Resolved(KType::Null),
+                return_type: ReturnType::Resolved(KType::NULL),
                 elements: vec![SignatureElement::Keyword("__INNER__".into())],
             },
             Body::Builtin(|ctx| {
@@ -38,6 +39,7 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
             child,
             None,
             None,
+            &types,
         );
         home.brand().alloc_function(kf)
     })
@@ -92,7 +94,7 @@ fn list_relocation_shares_inner_rc() {
     let list: &KObject = source
         .brand()
         .alloc_object_checked(
-            KObject::list_with_type(Rc::clone(&items), KType::Any),
+            KObject::list_with_type(Rc::clone(&items), KType::LIST_OF_ANY),
             &types,
         )
         .expect("a fresh owned List is always resident-in-self");
@@ -141,7 +143,7 @@ fn dict_relocation_shares_inner_rc() {
     let dict: &KObject = source
         .brand()
         .alloc_object_checked(
-            KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any),
+            KObject::dict_with_type(Rc::clone(&entries), KType::DICT_ANY_ANY),
             &types,
         )
         .expect("a fresh owned Dict is always resident-in-self");
@@ -151,7 +153,7 @@ fn dict_relocation_shares_inner_rc() {
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
-        Carried::Object(r @ KObject::Dict(out, _, _)) => {
+        Carried::Object(r @ KObject::Dict(out, _)) => {
             assert!(
                 dest.region().owns_object(r),
                 "relocated dict node lives in dest"
@@ -166,11 +168,12 @@ fn dict_relocation_shares_inner_rc() {
     }
 }
 
-/// A `Tagged` shares both its `value` and its `RecursiveSet` `Rc` through relocation, and the tag
-/// rides along unchanged.
+/// A `Tagged` shares its `value` `Rc` through relocation, and its tag and interned `identity` type
+/// handle ride along unchanged.
 #[test]
-fn tagged_relocation_shares_value_and_set_rc() {
-    use crate::machine::model::{NominalSchema, RecursiveSet};
+fn tagged_relocation_shares_value_and_identity() {
+    use crate::machine::core::ScopeId;
+    use crate::machine::model::TypeNode;
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
@@ -179,22 +182,23 @@ fn tagged_relocation_shares_value_and_set_rc() {
     let types = test_run.types.clone();
 
     let inner = Rc::new(KObject::Number(42.0));
-    let set = RecursiveSet::singleton(
-        "Maybe".into(),
-        NominalSchema::TypeConstructor {
-            schema: std::collections::HashMap::new(),
-            param_names: Vec::new(),
-        },
-    );
+    // The value's own type handle: a `Maybe` constructor applied to `Number` — the shape a tagged
+    // union member's `identity` interns to.
+    let ctor = types.intern(TypeNode::AbstractType {
+        source: ScopeId::from_raw(0, 0x11),
+        name: "Maybe".into(),
+        param_names: vec!["T".into()],
+        nonce: None,
+    });
+    let identity =
+        types.constructor_apply(ctor, Record::from_pairs([("T".to_string(), KType::NUMBER)]));
     let tagged: &KObject = source
         .brand()
         .alloc_object_checked(
             KObject::Tagged {
                 tag: "Just".into(),
                 value: Rc::clone(&inner),
-                set: Rc::clone(&set),
-                index: 0,
-                type_args: Rc::new(Record::new()),
+                identity,
             },
             &types,
         )
@@ -209,8 +213,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
             r @ KObject::Tagged {
                 tag,
                 value,
-                set: out_set,
-                ..
+                identity: out_identity,
             },
         ) => {
             assert!(
@@ -219,7 +222,10 @@ fn tagged_relocation_shares_value_and_set_rc() {
             );
             assert_eq!(tag, "Just");
             assert!(Rc::ptr_eq(value, &inner), "the wrapped value is shared");
-            assert!(Rc::ptr_eq(out_set, &set), "the RecursiveSet is shared");
+            assert_eq!(
+                *out_identity, identity,
+                "the identity handle rides along unchanged"
+            );
         }
         Carried::Object(other) => panic!("expected a Tagged, got {:?}", other.ktype()),
         Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
@@ -264,68 +270,63 @@ fn kfunction_borrow_preserved_verbatim() {
     }
 }
 
-/// A recursive `SetRef` *type* value (a self-recursive newtype) relocates by sharing the whole
-/// `RecursiveSet` `Rc` — no copy — and stays navigable afterward: the member's self-edge
-/// `SetLocal(0)` still resolves back through the relocated set. Guards against a type value
-/// escaping the region that built it with a dangling self-reference (cf. `recursive_tagged_match`).
+/// A recursive newtype's sealed member *type* handle relocates by copying its digest, and stays
+/// navigable afterward: reading the relocated handle back through the registry still finds the
+/// member's `children` field self-referencing the sealed `Tree` member. Guards against a relocated
+/// type value losing its recursive self-edge.
 #[test]
-fn type_recursive_setref_relocates_and_navigates() {
-    use crate::machine::model::{NominalSchema, Record, RecursiveSet};
+fn type_recursive_member_relocates_and_navigates() {
+    use crate::machine::model::{NodeSchema, RecursiveGroupWindow, RelativeSchema, TypeNode};
     let root = run_root_storage();
     let test_run = TestRun::silent(&root);
     let scope = test_run.scope;
     let dest = CallFrame::new(scope);
+    let types = crate::machine::model::TypeRegistry::new();
 
-    // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a
-    // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into.
-    let set = RecursiveSet::singleton(
+    // A self-recursive `Tree` whose `children` field is `List(Tree)` — the shape a
+    // `NEWTYPE Tree = :{children :(LIST OF Tree)}` seals into. The self-edge starts as `Sibling(0)`
+    // and seals to the member's own absolute handle.
+    let tree = RecursiveGroupWindow::seal_singleton(
         "Tree".into(),
-        NominalSchema::NewType(Box::new(KType::record(Box::new(Record::from_pairs(vec![
-            ("children".into(), KType::list(Box::new(KType::SetLocal(0)))),
-        ]))))),
+        RelativeSchema::NewType(types.record(Record::from_pairs([(
+            "children".to_string(),
+            types.list(types.intern(TypeNode::Sibling(0))),
+        )]))),
+        None,
+        &types,
     );
-    let type_value = KType::SetRef {
-        set: Rc::clone(&set),
-        index: 0,
-    };
-    let before = Rc::strong_count(&set);
+    let type_value = tree;
 
     let relocated = copy_carried(
         Carried::Type(&type_value),
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
-    assert_eq!(
-        Rc::strong_count(&set),
-        before + 1,
-        "the set travels by Rc::clone"
-    );
     match relocated {
-        Carried::Type(KType::SetRef {
-            set: out_set,
-            index,
-        }) => {
-            assert!(
-                Rc::ptr_eq(out_set, &set),
-                "lift shares the same RecursiveSet allocation"
+        Carried::Type(out) => {
+            assert_eq!(
+                *out, tree,
+                "relocation copies the member's digest handle unchanged"
             );
-            // Navigable: the member's self-edge `SetLocal(0)` survives the relocation.
-            let borrow = out_set.member(*index).schema();
-            match borrow.as_ref() {
-                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                    KType::Record { fields, .. } => assert_eq!(
+            // Navigable: reading the relocated handle back finds the member's `children` field
+            // self-referencing the sealed `Tree` member.
+            match types.node(*out) {
+                TypeNode::SetMember {
+                    schema: NodeSchema::NewType(repr),
+                    ..
+                } => match types.node(repr) {
+                    TypeNode::Record { fields } => assert_eq!(
                         fields.get("children"),
-                        Some(&KType::list(Box::new(KType::SetLocal(0)))),
-                        "the relocated Tree's self-reference is still SetLocal(0)",
+                        Some(&types.list(tree)),
+                        "the relocated Tree's children field self-references the sealed Tree member",
                     ),
-                    other => panic!("expected a record repr, got {other:?}"),
+                    _ => panic!("expected a record repr, got {}", repr.name(&types)),
                 },
-                other => panic!("expected a navigable NewType schema, got {other:?}"),
+                _ => panic!("expected a navigable NewType member, got {}", out.name(&types)),
             }
         }
-        Carried::Type(other) => panic!("expected a SetRef type, got {other:?}"),
         Carried::UnresolvedType(ti) => {
             panic!(
-                "expected a SetRef type, got the unlowered name {}",
+                "expected a member type, got the unlowered name {}",
                 ti.render()
             )
         }

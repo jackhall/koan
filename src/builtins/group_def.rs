@@ -184,29 +184,29 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // a value).
     let fold = |name_kt: KType, direction: &str| {
         sig(
-            KType::empty_signature(),
+            KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
                 arg("name", name_kt),
                 kw("FOLD"),
                 kw(direction),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     let pairwise = |name_kt: KType, direction: &str| {
         sig(
-            KType::empty_signature(),
+            KType::EMPTY_SIGNATURE,
             vec![
                 kw("GROUP"),
                 arg("name", name_kt),
                 kw("PAIRWISE"),
                 kw("FOLD"),
-                arg("combiner", KType::KExpression),
+                arg("combiner", KType::KEXPRESSION),
                 kw(direction),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
@@ -231,7 +231,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "GROUP",
-            fold(KType::Identifier, direction),
+            fold(KType::IDENTIFIER, direction),
             fold_body,
             value_binder(),
             None,
@@ -240,7 +240,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "GROUP",
-            pairwise(KType::Identifier, direction),
+            pairwise(KType::IDENTIFIER, direction),
             pairwise_body,
             value_binder(),
             None,
@@ -249,7 +249,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "GROUP",
-            fold(KType::OfKind(KKind::ProperType), direction),
+            fold(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
             None,
             None,
@@ -258,7 +258,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "GROUP",
-            pairwise(KType::OfKind(KKind::ProperType), direction),
+            pairwise(KType::of_kind(KKind::ProperType), direction),
             super::module_def::body_type_named,
             None,
             None,

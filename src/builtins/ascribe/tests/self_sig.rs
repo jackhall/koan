@@ -7,6 +7,7 @@ use crate::builtins::test_support::{binds_module, lookup_module, parse_one, Test
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
@@ -22,14 +23,14 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Tag = Number) (LET compare = 5))");
     let m = module_named(scope, "int_ord", &test_run.types);
-    let sig = m.self_sig();
+    let sig = m.self_sig(&test_run.types);
     assert!(
         sig.abstract_members.is_empty(),
         "a plain module has no abstract members"
     );
-    assert_eq!(sig.manifest_members.get("Tag"), Some(&KType::Number));
+    assert_eq!(sig.manifest_members.get("Tag"), Some(&KType::NUMBER));
     // `compare = 5` reads its raw value type — a plain module records no declared type.
-    assert_eq!(sig.value_slots.get("compare"), Some(&KType::Number));
+    assert_eq!(sig.value_slots.get("compare"), Some(&KType::NUMBER));
 }
 
 #[test]
@@ -45,7 +46,7 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
          LET view = (int_ord :| Ordered)",
     );
     let view = module_named(scope, "view", &test_run.types);
-    let sig = view.self_sig();
+    let sig = view.self_sig(&test_run.types);
 
     // The view's manifest `Elem` is the per-call abstract identity it minted.
     let elem_abstract = view
@@ -54,7 +55,10 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
         .get("Elem")
         .cloned()
         .expect("opaque view mints an abstract `Elem`");
-    assert!(matches!(elem_abstract, KType::AbstractType { .. }));
+    assert!(matches!(
+        test_run.types.node(elem_abstract),
+        TypeNode::AbstractType { .. }
+    ));
     assert_eq!(sig.manifest_members.get("Elem"), Some(&elem_abstract));
 
     // The `zero` slot, declared `:Elem`, reads that same abstract identity (not `Number`).
@@ -62,12 +66,13 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
 
     // The `compare` slot's `x` param reads the abstract identity — the substitution reaches
     // inside the function type, the case a raw value read would get wrong.
-    match sig.value_slots.get("compare") {
-        Some(KType::KFunction { params, ret, .. }) => {
+    let compare = sig.value_slots.get("compare").copied();
+    match compare.map(|h| test_run.types.node(h)) {
+        Some(TypeNode::KFunction { params, ret }) => {
             assert_eq!(params.get("x"), Some(&elem_abstract));
-            assert_eq!(**ret, KType::Number);
+            assert_eq!(ret, KType::NUMBER);
         }
-        other => panic!("compare slot should be a function type, got {other:?}"),
+        _ => panic!("compare slot should be a function type, got {compare:?}"),
     }
 }
 
@@ -84,18 +89,19 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
          LET view = (int_ord :! Ordered)",
     );
     let view = module_named(scope, "view", &test_run.types);
-    let sig = view.self_sig();
+    let sig = view.self_sig(&test_run.types);
 
     // A transparent view reads the source's concrete `Elem = Number`.
-    assert_eq!(sig.manifest_members.get("Elem"), Some(&KType::Number));
+    assert_eq!(sig.manifest_members.get("Elem"), Some(&KType::NUMBER));
     // Declared slots substitute to the concrete source type.
-    assert_eq!(sig.value_slots.get("zero"), Some(&KType::Number));
-    match sig.value_slots.get("compare") {
-        Some(KType::KFunction { params, ret, .. }) => {
-            assert_eq!(params.get("x"), Some(&KType::Number));
-            assert_eq!(**ret, KType::Number);
+    assert_eq!(sig.value_slots.get("zero"), Some(&KType::NUMBER));
+    let compare = sig.value_slots.get("compare").copied();
+    match compare.map(|h| test_run.types.node(h)) {
+        Some(TypeNode::KFunction { params, ret }) => {
+            assert_eq!(params.get("x"), Some(&KType::NUMBER));
+            assert_eq!(ret, KType::NUMBER);
         }
-        other => panic!("compare slot should be a function type, got {other:?}"),
+        _ => panic!("compare slot should be a function type, got {compare:?}"),
     }
 }
 
@@ -114,8 +120,11 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
     let second = module_named(scope, "second", &test_run.types);
     // Generativity: each ascription mints its own abstract `Elem`, so the self-sigs differ.
     assert_ne!(
-        first.self_sig().manifest_members.get("Elem"),
-        second.self_sig().manifest_members.get("Elem"),
+        first.self_sig(&test_run.types).manifest_members.get("Elem"),
+        second
+            .self_sig(&test_run.types)
+            .manifest_members
+            .get("Elem"),
     );
 }
 
@@ -130,9 +139,10 @@ fn value_slot_type_mismatch_is_rejected() {
          MODULE str_mod = ((LET v = (\"hi\")))",
     );
     let err = test_run.run_one_err(parse_one("str_mod :| Numeric"));
+    // Ruling 12: the signature renders structurally (`SIG (v: Number)`), not as "Numeric".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("Numeric") && msg.contains("`v`") && msg.contains("has type")),
+            if msg.contains("does not satisfy signature") && msg.contains("`v`") && msg.contains("has type")),
         "expected a value-slot type error naming `v`, got {err}",
     );
 }

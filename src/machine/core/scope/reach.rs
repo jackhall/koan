@@ -171,7 +171,7 @@ impl<'a> Scope<'a> {
         }
 
         let cloned_type = cell.open(|live| match live {
-            Carried::Type(kt) => Some(AdoptedType::Lowered(kt.clone())),
+            Carried::Type(kt) => Some(AdoptedType::Lowered(*kt)),
             Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(ti.clone())),
             Carried::Object(_) => None,
         });

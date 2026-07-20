@@ -22,11 +22,11 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // fields read directly — see [`with::body`].
     let with_sig = || {
         sig(
-            KType::OfKind(KKind::ProperType),
+            KType::of_kind(KKind::ProperType),
             vec![
-                arg("sig", KType::OfKind(KKind::Signature)),
+                arg("sig", KType::of_kind(KKind::Signature)),
                 kw("WITH"),
-                arg("bindings", KType::record(Box::new(Record::new()))),
+                arg("bindings", types.record(Record::new())),
             ],
         )
     };
@@ -39,8 +39,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         scope,
         "TYPE",
         sig(
-            KType::OfKind(KKind::AnyType),
-            vec![kw("TYPE"), kw("OF"), arg("value", KType::Any)],
+            KType::of_kind(KKind::AnyType),
+            vec![kw("TYPE"), kw("OF"), arg("value", KType::ANY)],
         ),
         type_of::body,
         types,

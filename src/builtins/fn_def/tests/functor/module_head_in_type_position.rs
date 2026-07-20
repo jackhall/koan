@@ -95,8 +95,10 @@ fn deferred_type_of_param_return_contract_is_the_self_sig() {
     match &error.kind {
         KErrorKind::TypeMismatch { arg, expected, .. } => {
             assert_eq!(arg, "<return>");
+            // Ruling 12: the self-sig renders structurally (`SIG (compare: Number)`), not "int_ord".
             assert!(
-                expected.contains("int_ord") && expected.contains("per-call return type"),
+                expected.contains("SIG (compare: Number)")
+                    && expected.contains("per-call return type"),
                 "the contract is int_ord's self-sig, got `{expected}`",
             );
         }

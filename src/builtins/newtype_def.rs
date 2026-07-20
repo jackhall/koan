@@ -10,21 +10,21 @@
 //! sub-dispatched to a resolved `KType` by the shared [`body`]. A record repr (`= :{…}`) is
 //! captured *raw* through its own `:RecordType` slot and routed to [`body_record_repr`], so
 //! the declarator owns its field-list elaboration and threads the binder name
-//! ([`Elaborator::with_threaded`]): a self-reference (`:{next :Node}`) lowers to a
-//! `RecursiveRef` and seals to a `SetLocal` back-edge — the same shared seal path
-//! ([`finalize_nominal_member`], [`seal_recursive_refs`]) `UNION` uses, and the path a
+//! ([`Elaborator::with_threaded`]): a self-reference (`:{next :Node}`) lowers to a relative
+//! `Sibling` handle against the declaration window and seals to an absolute member handle — the
+//! same shared seal path ([`finalize_nominal_member`]) `UNION` uses, and the path a
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
 use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::{
-    finalize_nominal_member, seal_recursive_refs, FieldListContext, FieldNameKind, NominalSchema,
-    Record, RecursiveSet, SchemaSealResult, SealOutcome,
+    declarator_window, finalize_nominal_member, FieldListContext, FieldNameKind, Record,
+    RecursiveGroupWindow, RelativeSchema, SealOutcome,
 };
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::FinishCtx;
@@ -34,13 +34,13 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
-/// Seal a resolved `repr` into the NEWTYPE's identity and register it. A NEWTYPE is
-/// non-recursive (its `repr` is already resolved), so it seals into a singleton set of one
-/// member whose `kind` (`NewType`) is what `kind_of` reports for the sealed `SetRef`;
-/// identity never descends `repr`.
-///
-/// The identity is owned data allocated into this scope's own region, so it seals as a resident
-/// type carrier regardless of where `repr` was resolved from.
+/// Seal a resolved `repr` into the NEWTYPE's identity and register it. Fills the declaration
+/// window's member with `RelativeSchema::NewType(repr)`; the window is a fresh singleton for a
+/// standalone declaration, or the enclosing `RECURSIVE TYPES` block's window when this NEWTYPE is
+/// one of its members. A standalone declaration's window seals immediately, so identity is the
+/// sealed member handle whose `kind` (`NewType`) is what `kind_of` reports; identity never
+/// descends `repr`. The identity is owned data allocated into this scope's own region, so it
+/// seals as a resident type carrier regardless of where `repr` was resolved from.
 fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
@@ -50,29 +50,35 @@ fn finalize_newtype<'a>(
     // The repr types the values the NEWTYPE wraps, so it must be a proper type; a bare
     // constructor of kind `* -> *` standing unapplied is a kind error.
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
-        &repr,
+        repr,
         &format!("the representation type of NEWTYPE `{name}`"),
         fctx.types,
     ) {
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
     let scope = fctx.scope;
-    let set = RecursiveSet::singleton(name.clone(), NominalSchema::NewType(Box::new(repr)));
-    let identity = KType::SetRef { set, index: 0 };
-    // Fused alloc + register: the identity is allocated into this scope's own region through the
-    // single storage door and registered — one call returns the resident `&KType`.
-    let kt_ref = scope.register_type_delivered(name, identity, bind_index)?;
-    Ok(seal_type_identity(fctx.scope, kt_ref))
+    let window = declarator_window(scope, &name, KKind::NewType);
+    let outcome = finalize_nominal_member(
+        scope,
+        &window,
+        &name,
+        |_window| RelativeSchema::NewType(repr),
+        bind_index,
+        fctx.types,
+    );
+    seal_outcome_into_carrier(fctx, &name, outcome)
 }
 
-/// Seal the elaborated record fields into the NEWTYPE's [`RecursiveSet`] member as
-/// `NominalSchema::NewType(KType::record(sealed))`. Transient `RecursiveRef(name)` field leaves
-/// seal to `SetLocal(index)` against the member's set — the block's shared set when present (a
-/// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
-/// synchronous and dep-finish paths.
+/// Seal the elaborated record fields into the NEWTYPE's declaration-window member as
+/// `RelativeSchema::NewType` of the interned record type. A self-reference field already carries a
+/// relative `Sibling` handle (the field-list elaboration threads the binder name against the
+/// window), so the window's seal rewrites it to the member's own absolute handle. The window is
+/// the enclosing `RECURSIVE TYPES` block's when this NEWTYPE is one of its members, else a fresh
+/// singleton for standalone self-recursion. Shared by the synchronous and dep-finish paths.
 fn finalize_record_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
+    window: Rc<RecursiveGroupWindow>,
     fields: Vec<(String, KType)>,
     bind_index: BindingIndex,
 ) -> Result<StepCarried<'a>, KError> {
@@ -84,28 +90,35 @@ fn finalize_record_newtype<'a>(
     let scope = fctx.scope;
     let outcome = finalize_nominal_member(
         scope,
+        &window,
         &name,
-        KKind::NewType,
-        |set| {
-            let missing = RefCell::new(Vec::new());
-            let sealed_pairs: Vec<(String, KType)> = fields
-                .into_iter()
-                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing, fctx.types)))
-                .collect();
-            let sealed = Record::from_pairs(sealed_pairs);
-            match missing.into_inner().into_iter().next() {
-                Some(m) => SchemaSealResult::Dangling(m),
-                None => SchemaSealResult::Ok(NominalSchema::NewType(Box::new(KType::record(
-                    Box::new(sealed),
-                )))),
-            }
+        |_window| {
+            let record = fctx.types.record(Record::from_pairs(fields));
+            RelativeSchema::NewType(record)
         },
         bind_index,
+        fctx.types,
     );
+    seal_outcome_into_carrier(fctx, &name, outcome)
+}
+
+/// Map a [`SealOutcome`] into the declarator's per-statement result. A sealed member crosses as a
+/// resident type carrier. A member whose window has not sealed — only a `RECURSIVE TYPES` block
+/// member reaches this — has no identity yet; the block's own finish binds every member, so this
+/// per-statement result is discarded, and a benign `Null` stands in without fabricating a handle.
+fn seal_outcome_into_carrier<'a>(
+    fctx: &FinishCtx<'a, '_>,
+    name: &str,
+    outcome: SealOutcome<'a>,
+) -> Result<StepCarried<'a>, KError> {
     match outcome {
-        SealOutcome::Sealed(kt_ref) => Ok(seal_type_identity(scope, kt_ref)),
+        SealOutcome::Sealed(kt_ref) => Ok(seal_type_identity(fctx.scope, kt_ref)),
+        SealOutcome::Deferred => Ok(fctx
+            .ctx
+            .alloc_object_scalar(&KObject::Null)
+            .expect("Null is a shallow scalar carrier")),
         SealOutcome::DanglingRef(missing) => Err(KError::new(KErrorKind::ShapeError(format!(
-            "NEWTYPE `{name}` record repr references unsealed type `{missing}`",
+            "NEWTYPE `{name}` references unsealed type `{missing}`",
         )))),
         SealOutcome::Rebind(e) => Err(e),
     }
@@ -142,7 +155,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Action::Done(finalize_newtype(
             &ctx.finish_ctx(),
             name,
-            repr_kt.clone(),
+            *repr_kt,
             bind_index,
         ))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
@@ -190,9 +203,13 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         }
     };
     let error_frame = TraceFrame::bare("<newtype>", format!("NEWTYPE {name}"));
+    // The window a self-reference resolves against: the enclosing `RECURSIVE TYPES` block's when
+    // this NEWTYPE is one of its members, else a fresh one-member window this declaration seals.
+    let window = declarator_window(ctx.scope, &name, KKind::NewType);
     nominal_schema_action(
         ctx,
         name,
+        window,
         fields,
         FieldListContext::NEWTYPE_RECORD_REPR,
         FieldNameKind::Identifier,
@@ -201,23 +218,28 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     )
 }
 
-/// Mint a type-constructor family: a singleton [`RecursiveSet`] of one
+/// Mint a type-constructor family: a one-member window sealed in miniature over one
 /// [`KKind::TypeConstructor`] member, filled with an empty variant schema (identity ignores it)
-/// and the declared `param_names`.
-pub(crate) fn mint_type_constructor(member_name: String, param_names: Vec<String>) -> KType {
-    let set = RecursiveSet::singleton(
+/// and the declared `param_names`. The member's singleton component is its interned identity.
+pub(crate) fn mint_type_constructor(
+    member_name: String,
+    param_names: Vec<String>,
+    types: &TypeRegistry,
+) -> KType {
+    RecursiveGroupWindow::seal_singleton(
         member_name,
-        NominalSchema::TypeConstructor {
+        RelativeSchema::TypeConstructor {
             schema: HashMap::new(),
             param_names,
         },
-    );
-    KType::SetRef { set, index: 0 }
+        None,
+        types,
+    )
 }
 
 /// `NEWTYPE (<Param>… AS <Name>)` — declare a type-constructor family (declaration-by-example),
 /// mirroring the application surface with the concrete arguments replaced by the parameter names.
-/// Mints a [`KKind::TypeConstructor`] `SetRef` under `Name` in the declaring scope, so it
+/// Mints a [`KKind::TypeConstructor`] member handle under `Name` in the declaring scope, so it
 /// satisfies a higher-kinded slot declared over the same parameter names and applies through
 /// `AS`. Reuses the shared `TYPE` declaration parser. Valid in any scope (top level, MODULE body)
 /// — no SIG-body gate.
@@ -234,7 +256,7 @@ pub fn body_constructor_family<'a>(
         Ok(pair) => pair,
         Err(e) => return Action::Done(Err(e)),
     };
-    let kt = mint_type_constructor(member_name.clone(), param_names);
+    let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types);
     // Bind through the fused alloc + register path, mirroring `type_decl::bind_abstract_member`.
     let bind_index = ctx.bind_index();
     let kt_ref = match ctx
@@ -253,34 +275,34 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
         sig(
-            KType::OfKind(KKind::AnyType),
+            KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::ProperType)),
+                arg("name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::OfKind(KKind::ProperType)),
+                arg("repr", KType::of_kind(KKind::ProperType)),
             ],
         )
     };
     let sigil_sig = || {
         sig(
-            KType::OfKind(KKind::AnyType),
+            KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::ProperType)),
+                arg("name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::SigiledTypeExpr),
+                arg("repr", KType::SIGILED_TYPE_EXPR),
             ],
         )
     };
     let record_sig = || {
         sig(
-            KType::OfKind(KKind::AnyType),
+            KType::of_kind(KKind::AnyType),
             vec![
                 kw("NEWTYPE"),
-                arg("name", KType::OfKind(KKind::ProperType)),
+                arg("name", KType::of_kind(KKind::ProperType)),
                 kw("="),
-                arg("repr", KType::RecordType),
+                arg("repr", KType::RECORD_TYPE),
             ],
         )
     };
@@ -321,8 +343,8 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // overloads above. The `KExpression` slot captures `(Type AS Wrapper)` raw — the inner `AS`
     // is not sub-dispatched (same as TYPE's higher-kinded overload).
     let constructor_family_sig = sig(
-        KType::OfKind(KKind::AnyType),
-        vec![kw("NEWTYPE"), arg("decl", KType::KExpression)],
+        KType::of_kind(KKind::AnyType),
+        vec![kw("NEWTYPE"), arg("decl", KType::KEXPRESSION)],
     );
     register_builtin_full(
         scope,
@@ -342,39 +364,49 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 mod tests {
 
     use crate::builtins::test_support::{binds_module, parse_one, TestRun};
-    use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::{KKind, NodeSchema, TypeNode, TypeRegistry};
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::run_root_storage;
     use crate::machine::{KErrorKind, Scope};
-    use std::rc::Rc;
 
-    /// `(set, record-fields)` of a sealed record-repr newtype, read raw off its `SetRef`
-    /// identity so assertions see `SetLocal` / `List(SetLocal)` back-edges before projection.
-    fn record_fields<'a>(
-        scope: &'a Scope<'a>,
+    /// `(scc-size, member-handle, record-fields)` of a sealed record-repr newtype, read off its
+    /// `SetMember` identity so assertions see the absolute member handles the sealed schema's
+    /// self-references seal to (a recursive field carries the member's own handle, or `List` of it).
+    fn record_fields(
+        scope: &Scope<'_>,
+        types: &TypeRegistry,
         name: &str,
-    ) -> (Rc<RecursiveSet>, Vec<(String, KType)>) {
-        match scope.resolve_type(name) {
-            Some(KType::SetRef { set, index }) => {
-                let member = set.member(*index);
-                let borrow = member.schema();
-                match borrow.as_ref() {
-                    Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                        KType::Record { fields: record, .. } => {
-                            let fields =
-                                record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            (Rc::clone(set), fields)
-                        }
-                        other => panic!("expected {name} to carry a record repr, got {other:?}"),
-                    },
-                    other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
-                }
-            }
-            other => panic!("expected {name} to be a SetRef identity, got {other:?}"),
+    ) -> (usize, KType, Vec<(String, KType)>) {
+        let handle = scope
+            .resolve_type(name)
+            .copied()
+            .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
+        match types.node(handle) {
+            TypeNode::SetMember {
+                scc_size, schema, ..
+            } => match schema {
+                NodeSchema::NewType(repr) => match types.node(repr) {
+                    TypeNode::Record { fields } => {
+                        let fields = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                        (scc_size, handle, fields)
+                    }
+                    _ => panic!("expected {name} to carry a record repr, got {repr:?}"),
+                },
+                _ => panic!("expected {name} to carry a NewType schema for {handle:?}"),
+            },
+            _ => panic!("expected {name} to be a SetMember identity, got {handle:?}"),
         }
     }
 
-    /// NEWTYPE writes the `SetRef` identity into `bindings.types` and nothing into
+    /// `(name, kind)` of the `SetMember` `handle` names. Panics if `handle` is any other node.
+    fn member_of(types: &TypeRegistry, handle: KType) -> (String, KKind) {
+        match types.node(handle) {
+            TypeNode::SetMember { name, kind, .. } => (name, kind),
+            _ => panic!("expected a SetMember identity, got {handle:?}"),
+        }
+    }
+
+    /// NEWTYPE writes the `SetMember` identity into `bindings.types` and nothing into
     /// `bindings.data` — the declaration has no payload value to bind.
     #[test]
     fn declare_mints_newtype_identity() {
@@ -382,22 +414,26 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Distance = Number");
-        let types = scope.bindings().types();
-        let (kt, _) = types
-            .get("Distance")
-            .expect("Distance should be in bindings.types");
-        match **kt {
-            KType::SetRef { ref set, index } => {
-                assert_eq!(set.member(index).name, "Distance");
-                assert_eq!(set.member(index).kind, KKind::NewType);
-                match RecursiveSet::projected_schema(set, index, &test_run.types) {
-                    ProjectedSchema::NewType(repr) => assert_eq!(repr, KType::Number),
+        let handle = {
+            let bindings = scope.bindings().types();
+            let (kt, _) = bindings
+                .get("Distance")
+                .expect("Distance should be in bindings.types");
+            **kt
+        };
+        match test_run.types().node(handle) {
+            TypeNode::SetMember {
+                name, kind, schema, ..
+            } => {
+                assert_eq!(name, "Distance");
+                assert_eq!(kind, KKind::NewType);
+                match schema {
+                    NodeSchema::NewType(repr) => assert_eq!(repr, KType::NUMBER),
                     _ => panic!("expected a NewType schema"),
                 }
             }
-            ref other => panic!("expected NewType SetRef identity, got {other:?}"),
+            _ => panic!("expected NewType SetMember identity, got {handle:?}"),
         }
-        drop(types);
         let data = scope.bindings().data();
         assert!(
             data.get("Distance").is_none(),
@@ -415,13 +451,9 @@ mod tests {
         let result = test_run.run_one(parse_one("Distance (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::SetRef { ref set, index } => {
-                        assert_eq!(set.member(index).name, "Distance");
-                        assert_eq!(set.member(index).kind, KKind::NewType);
-                    }
-                    ref other => panic!("expected NewType SetRef type_id, got {other:?}"),
-                }
+                let (name, kind) = member_of(test_run.types(), *type_id);
+                assert_eq!(name, "Distance");
+                assert_eq!(kind, KKind::NewType);
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -445,8 +477,8 @@ mod tests {
     /// A record-repr NEWTYPE and a NEWTYPE depending on it, declared in the *same*
     /// scheduler, then constructed. The dependency's `:{…}` defers its finalize behind a
     /// sub-dispatch, so the dependent's body would run first; it must park on the
-    /// dependency's producer rather than error on an unresolved repr (which previously
-    /// leaked a stale value-side placeholder that panicked the next construction).
+    /// dependency's producer rather than error on an unresolved repr (which would leak a
+    /// stale value-side placeholder and panic the next construction).
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
         let region = run_root_storage();
@@ -520,81 +552,88 @@ mod tests {
         );
     }
 
-    /// A self-recursive record repr seals its self-reference to a `SetLocal` back-edge into the
-    /// declaring member's singleton set — the binder name is threaded through the field-list
-    /// elaboration. (`next :Node` has no base case, so the type is uninhabited by a finite value;
-    /// this pins the seal shape, not construction.)
+    /// A self-recursive record repr seals its self-reference to the declaring member's own
+    /// absolute handle — the singleton component's sole member — with the binder name threaded
+    /// through the field-list elaboration. (`next :Node` has no base case, so the type is
+    /// uninhabited by a finite value; this pins the seal shape, not construction.)
     #[test]
-    fn record_repr_self_recursion_seals_set_local() {
+    fn record_repr_self_recursion_seals_self_handle() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Node = :{value :Number, next :Node}");
-        let (set, fields) = record_fields(scope, "Node");
-        let node_idx = set.index_of("Node").expect("Node is its own set member");
+        let types = test_run.types();
+        let (size, node_handle, fields) = record_fields(scope, types, "Node");
         assert_eq!(
-            fields.iter().find(|(f, _)| f == "value").map(|(_, t)| t),
-            Some(&KType::Number),
+            size, 1,
+            "a self-recursive type seals into a singleton component"
+        );
+        assert_eq!(
+            fields.iter().find(|(f, _)| f == "value").map(|(_, t)| *t),
+            Some(KType::NUMBER),
             "value stays a builtin leaf",
         );
         assert_eq!(
-            fields.iter().find(|(f, _)| f == "next").map(|(_, t)| t),
-            Some(&KType::SetLocal(node_idx)),
-            "next seals to a SetLocal self-reference",
+            fields.iter().find(|(f, _)| f == "next").map(|(_, t)| *t),
+            Some(node_handle),
+            "next seals to the member's own handle (a self-reference)",
         );
         assert!(scope.bindings().pending_types().is_empty());
     }
 
     /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
-    /// `children` seals to `List(SetLocal(Tree))`. (Construction is the same seal-shape concern the
-    /// retired struct path pinned — a bare recursive record has no nullable base, and an empty list
-    /// literal types as `List(Str)`, both orthogonal to the recursion threading proven here.)
+    /// `children` seals to `List` of the declaring member's own handle. (Construction is the same
+    /// seal-shape concern the retired struct path pinned — a bare recursive record has no nullable
+    /// base, and an empty list literal types as `List(Str)`, both orthogonal to the recursion
+    /// threading proven here.)
     #[test]
-    fn record_repr_list_of_self_field_seals_set_local() {
+    fn record_repr_list_of_self_field_seals_self_handle() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Tree = :{children :(LIST OF Tree)}");
-        let (set, fields) = record_fields(scope, "Tree");
-        let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
+        let types = test_run.types();
+        let (size, tree_handle, fields) = record_fields(scope, types, "Tree");
         assert_eq!(
-            set.len(),
-            1,
-            "a self-recursive type seals into a singleton set"
+            size, 1,
+            "a self-recursive type seals into a singleton component"
         );
         assert_eq!(
-            fields.iter().find(|(f, _)| f == "children").map(|(_, t)| t),
-            Some(&KType::list(Box::new(KType::SetLocal(tree_idx)))),
-            "children seals its self-reference to List(SetLocal(Tree))",
+            fields
+                .iter()
+                .find(|(f, _)| f == "children")
+                .map(|(_, t)| *t),
+            Some(types.list(tree_handle)),
+            "children seals its self-reference to List of the member's own handle",
         );
         assert!(scope.bindings().pending_types().is_empty());
     }
 
     /// A record type nested as a field type elaborates *inline* through the shared field
     /// walker (no whole-`:{…}` sub-Dispatch), so the outer binder name threads into the
-    /// inner record: `owner :Outer` seals to a `SetLocal` back-edge. The retired
+    /// inner record: `owner :Outer` seals to the outer member's own handle. The retired
     /// sub-Dispatch path could not thread here — it handed the record a fresh elaborator
-    /// with an empty threaded set.
+    /// with an empty threaded window.
     #[test]
     fn nested_record_field_threads_self_reference() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE Outer = :{inner :{owner :Outer}}");
-        let (set, fields) = record_fields(scope, "Outer");
-        let outer_idx = set.index_of("Outer").expect("Outer is its own set member");
+        let types = test_run.types();
+        let (_, outer_handle, fields) = record_fields(scope, types, "Outer");
         let inner_ty = fields
             .iter()
             .find(|(f, _)| f == "inner")
-            .map(|(_, t)| t)
+            .map(|(_, t)| *t)
             .expect("inner field present");
-        match inner_ty {
-            KType::Record { fields: rec, .. } => assert_eq!(
-                rec.get("owner"),
-                Some(&KType::SetLocal(outer_idx)),
-                "the nested record's `owner` threads to a SetLocal back-edge into Outer",
+        match types.node(inner_ty) {
+            TypeNode::Record { fields: rec } => assert_eq!(
+                rec.get("owner").copied(),
+                Some(outer_handle),
+                "the nested record's `owner` threads to the outer member's own handle",
             ),
-            other => panic!("expected `inner` to be a record type, got {other:?}"),
+            _ => panic!("expected `inner` to be a record type, got {inner_ty:?}"),
         }
         assert!(scope.bindings().pending_types().is_empty());
     }
@@ -602,7 +641,8 @@ mod tests {
     /// A non-record sigil repr (`= :(LIST OF Number)`) routes through the same
     /// `:SigiledTypeExpr` overload but has no self-reference to thread: it sub-dispatches the
     /// sigil to a resolved `KType` and seals a plain NewType over it. Regression guard for the
-    /// overload split — this used to ride the `:ProperType` overload's speculative sub-dispatch.
+    /// overload split: a non-record sigil repr seals through the `:SigiledTypeExpr` overload, not
+    /// the `:ProperType` overload's speculative sub-dispatch.
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
         let region = run_root_storage();
@@ -611,12 +651,7 @@ mod tests {
         let result = test_run.run_one(parse_one("(Nums [1.0, 2.0])"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::SetRef { ref set, index } => {
-                        assert_eq!(set.member(index).name, "Nums")
-                    }
-                    ref other => panic!("expected Nums identity, got {other:?}"),
-                }
+                assert_eq!(member_of(test_run.types(), *type_id).0, "Nums");
                 assert!(
                     matches!(inner.get(), KObject::List(..)),
                     "inner is the bare list, got {:?}",
@@ -637,10 +672,7 @@ mod tests {
         let result = test_run.run_one(parse_one("Bar (Foo (3.0))"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::SetRef { ref set, index } => assert_eq!(set.member(index).name, "Bar"),
-                    ref other => panic!("expected Bar identity, got {other:?}"),
-                }
+                assert_eq!(member_of(test_run.types(), *type_id).0, "Bar");
                 // Critical: `inner` must be the bare Number, NOT another Wrapped.
                 assert!(
                     matches!(inner.get(), KObject::Number(n) if *n == 3.0),
@@ -720,12 +752,7 @@ mod tests {
         let result = test_run.run_one(parse_one("Distance (x)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::SetRef { ref set, index } => {
-                        assert_eq!(set.member(index).name, "Distance")
-                    }
-                    ref other => panic!("expected Distance identity, got {other:?}"),
-                }
+                assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -765,19 +792,14 @@ mod tests {
         let result = test_run.run_one(parse_one("Distance (MAKE_NUM 3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::SetRef { ref set, index } => {
-                        assert_eq!(set.member(index).name, "Distance")
-                    }
-                    ref other => panic!("expected Distance identity, got {other:?}"),
-                }
+                assert_eq!(member_of(test_run.types(), *type_id).0, "Distance");
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
     }
 
-    /// `NEWTYPE (Type AS Wrapper)` mints a `TypeConstructor` `SetRef` in the declaring scope's
+    /// `NEWTYPE (Type AS Wrapper)` mints a `TypeConstructor` `SetMember` in the declaring scope's
     /// type table: kind `TypeConstructor`, `param_names == ["Type"]`, empty schema, and no
     /// value-side entry.
     #[test]
@@ -786,33 +808,35 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("NEWTYPE (Type AS Wrapper)");
-        let types = scope.bindings().types();
-        let (kt, _) = types
-            .get("Wrapper")
-            .expect("Wrapper should be in bindings.types");
-        match **kt {
-            KType::SetRef { ref set, index } => {
-                let member = set.member(index);
-                assert_eq!(member.name, "Wrapper");
-                assert_eq!(member.kind, KKind::TypeConstructor);
-                let borrow = member.schema();
-                match borrow.as_ref() {
-                    Some(NominalSchema::TypeConstructor {
+        let handle = {
+            let bindings = scope.bindings().types();
+            let (kt, _) = bindings
+                .get("Wrapper")
+                .expect("Wrapper should be in bindings.types");
+            **kt
+        };
+        match test_run.types().node(handle) {
+            TypeNode::SetMember {
+                name, kind, schema, ..
+            } => {
+                assert_eq!(name, "Wrapper");
+                assert_eq!(kind, KKind::TypeConstructor);
+                match schema {
+                    NodeSchema::TypeConstructor {
                         schema,
                         param_names,
-                    }) => {
+                    } => {
                         assert!(
                             schema.is_empty(),
                             "a constructor family has an empty schema"
                         );
-                        assert_eq!(*param_names, vec!["Type".to_string()]);
+                        assert_eq!(param_names, vec!["Type".to_string()]);
                     }
-                    other => panic!("expected a TypeConstructor schema, got {other:?}"),
+                    _ => panic!("expected a TypeConstructor schema for {handle:?}"),
                 }
             }
-            ref other => panic!("expected a TypeConstructor SetRef identity, got {other:?}"),
+            _ => panic!("expected a TypeConstructor SetMember identity, got {handle:?}"),
         }
-        drop(types);
         assert!(
             scope.bindings().data().get("Wrapper").is_none(),
             "a constructor-family declaration writes no value-side carrier",
@@ -820,28 +844,27 @@ mod tests {
     }
 
     /// After `NEWTYPE (Type AS Wrapper)`, applying it with `:(Number AS Wrapper)` lowers to a
-    /// `ConstructorApply { ctor: <Wrapper SetRef>, args: {Type = Number} }` — `AS` fills the
-    /// constructor's sole parameter by name.
+    /// `ConstructorApply { constructor: <Wrapper SetMember>, arguments: {Type = Number} }` — `AS`
+    /// fills the constructor's sole parameter by name.
     #[test]
     fn constructor_family_applies_with_as() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         test_run.run("NEWTYPE (Type AS Wrapper)");
         let result = test_run.run_one_type(parse_one(":(Number AS Wrapper)"));
-        match result {
-            KType::ConstructorApply { ctor, args, .. } => {
-                match ctor.as_ref() {
-                    KType::SetRef { set, index } => {
-                        assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
-                    }
-                    other => panic!("expected a SetRef ctor, got {other:?}"),
-                }
+        let types = test_run.types();
+        match types.node(*result) {
+            TypeNode::ConstructorApply {
+                constructor,
+                arguments,
+            } => {
+                assert_eq!(member_of(types, constructor).1, KKind::TypeConstructor);
                 assert_eq!(
-                    *args,
-                    Record::from_pairs([("Type".to_string(), KType::Number)]),
+                    arguments,
+                    Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
                 );
             }
-            other => panic!("expected ConstructorApply, got {other:?}"),
+            _ => panic!("expected ConstructorApply, got {result:?}"),
         }
     }
 
@@ -885,6 +908,7 @@ mod tests {
         test_run.run("NEWTYPE (One Two AS Wrapper)");
         let kt = scope
             .resolve_type("Wrapper")
+            .copied()
             .expect("Wrapper must bind a type");
         assert_eq!(
             crate::machine::model::constructor_param_names(kt, &test_run.types),
@@ -915,23 +939,21 @@ mod tests {
         let result = test_run.run_one(parse_one("Wrapper (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
-                match **type_id {
-                    KType::ConstructorApply {
-                        ref ctor, ref args, ..
+                let types = test_run.types();
+                match types.node(*type_id) {
+                    TypeNode::ConstructorApply {
+                        constructor,
+                        arguments,
                     } => {
-                        match ctor.as_ref() {
-                            KType::SetRef { set, index } => {
-                                assert_eq!(set.member(*index).name, "Wrapper");
-                                assert_eq!(set.member(*index).kind, KKind::TypeConstructor);
-                            }
-                            other => panic!("expected a SetRef ctor, got {other:?}"),
-                        }
+                        let (name, kind) = member_of(types, constructor);
+                        assert_eq!(name, "Wrapper");
+                        assert_eq!(kind, KKind::TypeConstructor);
                         assert_eq!(
-                            *args,
-                            Record::from_pairs([("Type".to_string(), KType::Number)]),
+                            arguments,
+                            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
                         );
                     }
-                    ref other => panic!("expected a ConstructorApply type_id, got {other:?}"),
+                    _ => panic!("expected a ConstructorApply type_id, got {type_id:?}"),
                 }
                 assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
@@ -941,7 +963,7 @@ mod tests {
 
     /// `Wrapper (Distance (3.0))` collapses the inner `Wrapped` payload — the stored `inner`
     /// is the bare `Number`, never a nested `Wrapped` (the single-layer invariant) — while the
-    /// stamped arg keeps the full `Distance` nominal identity: args are `[Distance's SetRef]`.
+    /// stamped arg keeps the full `Distance` nominal identity: args are `[Distance's SetMember]`.
     #[test]
     fn apply_construct_collapses_wrapped_payload() {
         let region = run_root_storage();
@@ -956,19 +978,20 @@ mod tests {
                     "inner must be the bare Number, got {:?}",
                     inner.get().ktype(),
                 );
-                match **type_id {
-                    KType::ConstructorApply { ref args, .. } => {
-                        assert_eq!(args.len(), 1);
-                        // The stamped arg keeps the Distance identity (a NewType SetRef).
-                        match args.get("Type") {
-                            Some(KType::SetRef { set, index }) => {
-                                assert_eq!(set.member(*index).name, "Distance");
-                                assert_eq!(set.member(*index).kind, KKind::NewType);
+                match test_run.types().node(*type_id) {
+                    TypeNode::ConstructorApply { arguments, .. } => {
+                        assert_eq!(arguments.len(), 1);
+                        // The stamped arg keeps the Distance identity (a NewType SetMember).
+                        match arguments.get("Type").copied() {
+                            Some(arg) => {
+                                let (name, kind) = member_of(test_run.types(), arg);
+                                assert_eq!(name, "Distance");
+                                assert_eq!(kind, KKind::NewType);
                             }
-                            other => panic!("expected the Distance SetRef arg, got {other:?}"),
+                            None => panic!("expected the Distance arg"),
                         }
                     }
-                    ref other => panic!("expected a ConstructorApply type_id, got {other:?}"),
+                    _ => panic!("expected a ConstructorApply type_id, got {type_id:?}"),
                 }
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -1095,12 +1118,12 @@ mod tests {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
-        let kt = KType::AbstractType {
+        let kt = test_run.types().intern(TypeNode::AbstractType {
             source: scope.id,
             name: "Abstract".into(),
             param_names: vec!["Type".into()],
             nonce: None,
-        };
+        });
         scope.register_builtin_type("Abstract".into(), kt, BindingIndex::BUILTIN);
         let err = test_run.run_one_err(parse_one("Abstract (3.0)"));
         assert!(

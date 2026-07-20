@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::{
-    KKind, KType, NominalMember, NominalSchema, Record, RecursiveSet,
-};
+use crate::machine::model::types::{KKind, KType, Record, RecursiveGroupWindow, RelativeSchema};
 use crate::machine::model::values::{Held, KKey, KObject, ValueEqualityError};
 use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
@@ -17,8 +15,8 @@ fn part(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
     Spanned::bare(p)
 }
 
-fn newtype_singleton(name: &str, repr: KType) -> Rc<RecursiveSet> {
-    RecursiveSet::singleton(name.into(), NominalSchema::NewType(Box::new(repr)))
+fn newtype_singleton(name: &str, repr: KType, types: &TypeRegistry) -> KType {
+    RecursiveGroupWindow::seal_singleton(name.into(), RelativeSchema::NewType(repr), None, types)
 }
 
 // --- scalars ----------------------------------------------------------------------
@@ -97,9 +95,9 @@ fn list_nan_self_compare_is_false() {
 fn list_comparability_gate_is_intransitive() {
     let types = TypeRegistry::new();
     // `[]:Number` == `[]:Any` == `[]:Str`, but the outer two are unrelated → unequal.
-    let empty_number = KObject::list_with_type(Rc::new(vec![]), KType::Number);
-    let empty_any = KObject::list_with_type(Rc::new(vec![]), KType::Any);
-    let empty_str = KObject::list_with_type(Rc::new(vec![]), KType::Str);
+    let empty_number = KObject::list_with_type(Rc::new(vec![]), types.list(KType::NUMBER));
+    let empty_any = KObject::list_with_type(Rc::new(vec![]), types.list(KType::ANY));
+    let empty_str = KObject::list_with_type(Rc::new(vec![]), types.list(KType::STR));
     assert_eq!(empty_number.value_equal(&empty_any, &types), Ok(true));
     assert_eq!(empty_any.value_equal(&empty_str, &types), Ok(true));
     // Number and Str are unrelated → gate closes, no descent.
@@ -109,9 +107,9 @@ fn list_comparability_gate_is_intransitive() {
 #[test]
 fn list_of_types_compares_by_digest() {
     let types = TypeRegistry::new();
-    let a = KObject::list_of_held(vec![Held::Type(KType::Number)], &types);
-    let b = KObject::list_of_held(vec![Held::Type(KType::Number)], &types);
-    let c = KObject::list_of_held(vec![Held::Type(KType::Str)], &types);
+    let a = KObject::list_of_held(vec![Held::Type(KType::NUMBER)], &types);
+    let b = KObject::list_of_held(vec![Held::Type(KType::NUMBER)], &types);
+    let c = KObject::list_of_held(vec![Held::Type(KType::STR)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     // Different element type parameters (a `Type OF Number` vs `Type OF Str` list) close the gate.
     assert_eq!(a.value_equal(&c, &types), Ok(false));
@@ -216,86 +214,90 @@ fn record_field_value_differs() {
 
 // --- tagged -----------------------------------------------------------------------
 
-fn two_member_set() -> Rc<RecursiveSet> {
-    // A two-member set so distinct indices exist for the `same_nominal` identity check.
-    let members = vec![
-        NominalMember::pending("None".into(), KKind::NewType),
-        NominalMember::pending("Some".into(), KKind::NewType),
-    ];
-    let set = RecursiveSet::new(members);
-    set.fill_member(0, NominalSchema::NewType(Box::new(KType::Null)));
-    set.fill_member(1, NominalSchema::NewType(Box::new(KType::Number)));
-    Rc::new(set)
+/// Two singleton newtype members declared together, so distinct handles exist for the
+/// identity check. Returns the `None`-over-`Null` and `Some`-over-`Number` member handles.
+fn two_member(types: &TypeRegistry) -> Vec<KType> {
+    let window = RecursiveGroupWindow::new(
+        vec![
+            ("None".into(), KKind::NewType),
+            ("Some".into(), KKind::NewType),
+        ],
+        None,
+    );
+    window.fill_member(0, RelativeSchema::NewType(KType::NULL), types);
+    window
+        .fill_member(1, RelativeSchema::NewType(KType::NUMBER), types)
+        .expect("the last fill seals a fully declared window")
+        .members
 }
 
 #[test]
 fn tagged_same_nominal_compares_payload() {
     let types = TypeRegistry::new();
-    let set = newtype_singleton("Distance", KType::Number);
+    let identity = newtype_singleton("Distance", KType::NUMBER, &types);
     let a = KObject::Tagged {
         tag: "Distance".into(),
         value: Rc::new(num(3.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity,
     };
     let b = KObject::Tagged {
         tag: "Distance".into(),
         value: Rc::new(num(3.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity,
     };
     let c = KObject::Tagged {
         tag: "Distance".into(),
         value: Rc::new(num(4.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity,
     };
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
 }
 
+/// Identity-based equality reads an erased carrier (the bare member handle) and a stamped one
+/// (a `ConstructorApply` over that member) as distinct types, so they compare unequal even with
+/// equal payloads — the erased-vs-stamped distinction lives in the one identity handle.
 #[test]
-fn tagged_erased_vs_stamped_is_comparable() {
+fn tagged_erased_and_stamped_are_distinct_identities() {
     let types = TypeRegistry::new();
-    // Empty type_args on one side = erased = comparable; the payloads decide.
-    let set = newtype_singleton("Box", KType::Number);
+    let ctor = RecursiveGroupWindow::seal_singleton(
+        "Box".into(),
+        RelativeSchema::TypeConstructor {
+            schema: HashMap::new(),
+            param_names: vec!["Type".into()],
+        },
+        None,
+        &types,
+    );
     let erased = KObject::Tagged {
         tag: "Box".into(),
         value: Rc::new(num(1.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity: ctor,
     };
     let stamped = KObject::Tagged {
         tag: "Box".into(),
         value: Rc::new(num(1.0)),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::from_pairs([("Type".to_string(), KType::Number)])),
+        identity: types.constructor_apply(
+            ctor,
+            Record::from_pairs([("Type".to_string(), KType::NUMBER)]),
+        ),
     };
-    assert_eq!(erased.value_equal(&stamped, &types), Ok(true));
+    assert_eq!(erased.value_equal(&stamped, &types), Ok(false));
 }
 
 #[test]
 fn tagged_distinct_index_is_unequal() {
     let types = TypeRegistry::new();
-    let set = two_member_set();
+    let members = two_member(&types);
     let none = KObject::Tagged {
         tag: "None".into(),
         value: Rc::new(KObject::Null),
-        set: Rc::clone(&set),
-        index: 0,
-        type_args: Rc::new(Record::new()),
+        identity: members[0],
     };
     let some = KObject::Tagged {
         tag: "Some".into(),
         value: Rc::new(num(1.0)),
-        set: Rc::clone(&set),
-        index: 1,
-        type_args: Rc::new(Record::new()),
+        identity: members[1],
     };
     assert_eq!(none.value_equal(&some, &types), Ok(false));
 }
@@ -305,30 +307,19 @@ fn tagged_distinct_index_is_unequal() {
 #[test]
 fn wrapped_identity_and_payload() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::WrappedPayload;
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let set = newtype_singleton("Distance", KType::Number);
-    let type_id_a = region.alloc_ktype(KType::SetRef {
-        set: Rc::clone(&set),
-        index: 0,
-    });
-    let type_id_b = region.alloc_ktype(KType::SetRef {
-        set: Rc::clone(&set),
-        index: 0,
-    });
+    let type_id = newtype_singleton("Distance", KType::NUMBER, &types);
     let a = KObject::Wrapped {
         inner: WrappedPayload::hold(&num(3.0)),
-        type_id: type_id_a,
+        type_id,
     };
     let b = KObject::Wrapped {
         inner: WrappedPayload::hold(&num(3.0)),
-        type_id: type_id_b,
+        type_id,
     };
     let diff_payload = KObject::Wrapped {
         inner: WrappedPayload::hold(&num(4.0)),
-        type_id: type_id_a,
+        type_id,
     };
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&diff_payload, &types), Ok(false));
@@ -339,25 +330,16 @@ fn wrapped_identity_and_payload() {
 #[test]
 fn wrapped_distinct_nominal_is_unequal() {
     let types = TypeRegistry::new();
-    use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::WrappedPayload;
-    let storage = run_root_storage();
-    let region = storage.brand();
-    let distance = newtype_singleton("Distance", KType::Number);
-    let weight = newtype_singleton("Weight", KType::Number);
+    let distance = newtype_singleton("Distance", KType::NUMBER, &types);
+    let weight = newtype_singleton("Weight", KType::NUMBER, &types);
     let a = KObject::Wrapped {
         inner: WrappedPayload::hold(&num(3.0)),
-        type_id: region.alloc_ktype(KType::SetRef {
-            set: distance,
-            index: 0,
-        }),
+        type_id: distance,
     };
     let b = KObject::Wrapped {
         inner: WrappedPayload::hold(&num(3.0)),
-        type_id: region.alloc_ktype(KType::SetRef {
-            set: weight,
-            index: 0,
-        }),
+        type_id: weight,
     };
     assert_eq!(a.value_equal(&b, &types), Ok(false));
 }
@@ -424,12 +406,13 @@ fn kexpression_length_and_variant_mismatch() {
 fn a_function<'a>(
     storage: &'a Rc<crate::machine::core::FrameStorage>,
     scope: &'a crate::machine::Scope<'a>,
+    types: &TypeRegistry,
 ) -> KObject<'a> {
     use crate::machine::core::{Body, FrameStorageExt};
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
     let sig = ExpressionSignature {
-        return_type: ReturnType::Resolved(KType::Number),
+        return_type: ReturnType::Resolved(KType::NUMBER),
         elements: Vec::new(),
     };
     let f = storage.brand().alloc_function(KFunction::new(
@@ -438,6 +421,7 @@ fn a_function<'a>(
         scope,
         None,
         None,
+        types,
     ));
     KObject::KFunction(f)
 }
@@ -449,7 +433,7 @@ fn function_operand_is_error_at_any_position() {
     let storage = run_root_storage();
     let test_run = TestRun::silent(&storage);
     let types = test_run.types.clone();
-    let f = a_function(&storage, test_run.scope);
+    let f = a_function(&storage, test_run.scope, &types);
     assert_eq!(
         f.value_equal(&num(1.0), &types),
         Err(ValueEqualityError::Function)
@@ -463,13 +447,13 @@ fn function_operand_is_error_at_any_position() {
     let second_run = TestRun::silent(&storage2);
     let list_f = KObject::list_of_held(
         vec![Held::Object(
-            a_function(&storage2, second_run.scope).deep_clone(),
+            a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
         &types,
     );
     let list_g = KObject::list_of_held(
         vec![Held::Object(
-            a_function(&storage2, second_run.scope).deep_clone(),
+            a_function(&storage2, second_run.scope, &second_run.types).deep_clone(),
         )],
         &types,
     );
@@ -490,7 +474,7 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     let types = test_run.types.clone();
     let list_f = KObject::list_of_held(
         vec![Held::Object(
-            a_function(&storage, test_run.scope).deep_clone(),
+            a_function(&storage, test_run.scope, &types).deep_clone(),
         )],
         &types,
     );

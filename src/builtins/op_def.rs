@@ -197,11 +197,8 @@ fn capture_type_slot<'a>(
 /// The kind diagnostic reads `label` as the subject of "must be a proper type", so the bare slot
 /// noun takes its definite article here.
 fn checked_value_type(kt: KType, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
-    match crate::machine::model::unsaturated_constructor_message(
-        &kt,
-        &format!("the {label}"),
-        types,
-    ) {
+    match crate::machine::model::unsaturated_constructor_message(kt, &format!("the {label}"), types)
+    {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
         None => Ok(kt),
     }
@@ -400,11 +397,7 @@ impl<'a> OpPlan<'a> {
         } = self;
         let (obj, stored) = match kind {
             OpKind::Binary => {
-                let elements = vec![
-                    arg(LEFT, operand.clone()),
-                    kw(&sym),
-                    arg(RIGHT, operand.clone()),
-                ];
+                let elements = vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)];
                 let result_type = result.unwrap_or(operand);
                 let registered = register_body(
                     scope,
@@ -430,11 +423,8 @@ impl<'a> OpPlan<'a> {
                     ))
                 })?;
                 let list_signature = sig(
-                    result_type.clone(),
-                    vec![
-                        kw(&sym),
-                        arg(OPERANDS, KType::list(Box::new(operand.clone()))),
-                    ],
+                    result_type,
+                    vec![kw(&sym), arg(OPERANDS, types.list(operand))],
                 );
                 // The binary bridge: `a ~ b` names one keyword, so it dispatches as a plain
                 // keyworded call, not an operator chain — without a two-operand body it would
@@ -442,7 +432,7 @@ impl<'a> OpPlan<'a> {
                 // takes, so both surfaces land on the one list body the user wrote.
                 let bridge_signature = sig(
                     result_type,
-                    vec![arg(LEFT, operand.clone()), kw(&sym), arg(RIGHT, operand)],
+                    vec![arg(LEFT, operand), kw(&sym), arg(RIGHT, operand)],
                 );
                 // `check_group_context` rejects `UNARY OP` inside a `GROUP` before the plan is
                 // built, so `in_group` cannot hold here; the door asserts that rather than take
@@ -552,7 +542,7 @@ fn register_body<'a>(
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
     let f: &'a KFunction<'a> = scope
         .brand()
-        .alloc_function(KFunction::new(signature, body, scope, None, None));
+        .alloc_function(KFunction::new(signature, body, scope, None, None, types));
     let (obj, stored) = scope
         .alloc_object_checked_stored(KObject::KFunction(f), types)
         .expect("f was just allocated into scope's own region");
@@ -615,69 +605,69 @@ fn body_unary_missing_result<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// operand × result combination of the two is registered, mirroring how `fn_def` splits its return
 /// slot.
 fn type_carriers() -> [KType; 2] {
-    [KType::OfKind(KKind::ProperType), KType::SigiledTypeExpr]
+    [KType::of_kind(KKind::ProperType), KType::SIGILED_TYPE_EXPR]
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     use crate::builtins::register_builtin_full;
 
-    // Declared return is `KType::Any`: an operator declaration evaluates to the function it
+    // Declared return is `KType::ANY`: an operator declaration evaluates to the function it
     // synthesizes, whose structural type only exists once its signature is known.
     let binary = |operand: KType| {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("OP"),
-                arg("symbol", KType::KExpression),
+                arg("symbol", KType::KEXPRESSION),
                 kw("OVER"),
                 arg("operand", operand),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     let binary_with_result = |operand: KType, result: KType| {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("OP"),
-                arg("symbol", KType::KExpression),
+                arg("symbol", KType::KEXPRESSION),
                 kw("OVER"),
                 arg("operand", operand),
                 kw("->"),
                 arg("return_type", result),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     let unary = |operand: KType, result: KType| {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("UNARY"),
                 kw("OP"),
-                arg("symbol", KType::KExpression),
+                arg("symbol", KType::KEXPRESSION),
                 kw("OVER"),
                 arg("operand", operand),
                 kw("->"),
                 arg("return_type", result),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
     let unary_missing_result = |operand: KType| {
         sig(
-            KType::Any,
+            KType::ANY,
             vec![
                 kw("UNARY"),
                 kw("OP"),
-                arg("symbol", KType::KExpression),
+                arg("symbol", KType::KEXPRESSION),
                 kw("OVER"),
                 arg("operand", operand),
                 kw("="),
-                arg("body", KType::KExpression),
+                arg("body", KType::KEXPRESSION),
             ],
         )
     };
@@ -686,7 +676,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "OP",
-            binary(operand.clone()),
+            binary(operand),
             body_binary,
             None,
             Some(binder_bucket),
@@ -695,7 +685,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         register_builtin_full(
             scope,
             "OP",
-            unary_missing_result(operand.clone()),
+            unary_missing_result(operand),
             body_unary_missing_result,
             None,
             None,
@@ -705,7 +695,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             register_builtin_full(
                 scope,
                 "OP",
-                binary_with_result(operand.clone(), result.clone()),
+                binary_with_result(operand, result),
                 body_binary,
                 None,
                 Some(binder_bucket),
@@ -714,7 +704,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
             register_builtin_full(
                 scope,
                 "OP",
-                unary(operand.clone(), result),
+                unary(operand, result),
                 body_unary,
                 None,
                 Some(binder_bucket),

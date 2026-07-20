@@ -15,7 +15,6 @@
 use crate::machine::core::{BindKind, FunctionLookup, KError, LexicalFrame, Scope};
 use crate::machine::core::{ClassifiedSlots, KFunction};
 use crate::machine::model::Carried;
-use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
@@ -411,7 +410,7 @@ fn has_lazy_kexpr_slot(sig: &ExpressionSignature<'_>, expr: &KExpression<'_>) ->
         .zip(&expr.parts)
         .any(|(el, part)| match (el, &part.value) {
             (SignatureElement::Argument(arg), ExpressionPart::Expression(_)) => {
-                matches!(arg.ktype, KType::KExpression)
+                matches!(arg.ktype, KType::KEXPRESSION)
             }
             _ => false,
         })
@@ -437,7 +436,7 @@ fn slot_admits_strict<'e>(
             // sub-dispatch to a type-side carrier — the FN record-schema overload's `ProperType`
             // signature slot taking a `:{…}`). An `Identifier` slot does not: it is part-kind-exact,
             // so a `:{…}` return type is not mistaken for a value-named one.
-            if matches!(arg.ktype, KType::OfKind(KKind::ProperType)) {
+            if matches!(arg.ktype, KType::PROPER_TYPE) {
                 if matches!(
                     part_value,
                     ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)
@@ -446,7 +445,7 @@ fn slot_admits_strict<'e>(
                 }
                 return arg.matches(part_value, types);
             }
-            if matches!(arg.ktype, KType::Identifier) {
+            if matches!(arg.ktype, KType::IDENTIFIER) {
                 return arg.matches(part_value, types);
             }
             // A sigil / record-type part in a slot that is neither `:KExpression` nor the
@@ -457,12 +456,12 @@ fn slot_admits_strict<'e>(
             // incomparably and the eager fallback wins (dropping the lazy raw capture).
             match part_value {
                 ExpressionPart::SigiledTypeExpr(_)
-                    if !matches!(arg.ktype, KType::KExpression | KType::RecordType) =>
+                    if !matches!(arg.ktype, KType::KEXPRESSION | KType::RECORD_TYPE) =>
                 {
                     return true;
                 }
                 ExpressionPart::RecordType(_)
-                    if !matches!(arg.ktype, KType::KExpression | KType::SigiledTypeExpr) =>
+                    if !matches!(arg.ktype, KType::KEXPRESSION | KType::SIGILED_TYPE_EXPR) =>
                 {
                     return true;
                 }
@@ -475,7 +474,7 @@ fn slot_admits_strict<'e>(
                 && matches!(part_value, ExpressionPart::Expression(_))
                 && !matches!(
                     arg.ktype,
-                    KType::KExpression | KType::SigiledTypeExpr | KType::RecordType
+                    KType::KEXPRESSION | KType::SIGILED_TYPE_EXPR | KType::RECORD_TYPE
                 )
             {
                 return true;

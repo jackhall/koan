@@ -2,17 +2,16 @@
 //! value channel (scalar, container, module, view), and the door a module takes to type position.
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use std::rc::Rc;
 
 #[test]
 fn type_of_number_literal_is_number() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one("TYPE OF 5"));
-    assert_eq!(*result, KType::Number);
+    assert_eq!(*result, KType::NUMBER);
 }
 
 /// A bound container reports its memoized carried element type, not a walk of its contents.
@@ -22,7 +21,8 @@ fn type_of_bound_list_is_list_of_element_type() {
     let mut test_run = TestRun::silent(&region);
     test_run.run("LET xs = [1, 2, 3]");
     let result = test_run.run_one_type(parse_one("TYPE OF xs"));
-    assert_eq!(*result, KType::list(Box::new(KType::Number)));
+    let types = test_run.types();
+    assert_eq!(*result, types.list(KType::NUMBER));
 }
 
 /// A module's reported type is its principal signature, sourced from the module itself — the
@@ -34,13 +34,16 @@ fn type_of_module_is_its_self_sig() {
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
     let module = lookup_module(scope, "int_ord", &test_run.types);
-    match test_run.run_one_type(parse_one("TYPE OF int_ord")) {
-        KType::Signature { content, .. } => assert!(
-            Rc::ptr_eq(content, module.self_sig_content()),
-            "the self-sig must source the module itself",
-        ),
-        other => panic!("expected a module's self-sig, got {other:?}"),
-    }
+    let result = *test_run.run_one_type(parse_one("TYPE OF int_ord"));
+    assert!(
+        matches!(test_run.types().node(result), TypeNode::Signature { .. }),
+        "TYPE OF a module is a signature",
+    );
+    assert_eq!(
+        result,
+        module.ktype(),
+        "the self-sig must source the module itself",
+    );
 }
 
 /// An opaque view is its own module with its own sealed self-sig, so `TYPE OF` reports the
@@ -57,26 +60,28 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     );
     let view = lookup_module(scope, "view", &test_run.types);
     let source = lookup_module(scope, "int_ord", &test_run.types);
-    match test_run.run_one_type(parse_one("TYPE OF view")) {
-        KType::Signature { content, .. } => {
-            assert!(
-                Rc::ptr_eq(content, view.self_sig_content()),
-                "TYPE OF must report the view itself"
-            );
-            assert!(
-                !Rc::ptr_eq(content, source.self_sig_content()),
+    let result = *test_run.run_one_type(parse_one("TYPE OF view"));
+    let types = test_run.types();
+    match types.node(result) {
+        TypeNode::Signature { schema, .. } => {
+            assert_eq!(result, view.ktype(), "TYPE OF must report the view itself");
+            assert_ne!(
+                result,
+                source.ktype(),
                 "the opaque view's sealed self-sig is not the source module's",
             );
+            let elt = schema
+                .manifest_members
+                .get("Elt")
+                .copied()
+                .expect("the view's self-sig has an `Elt` manifest member");
             assert!(
-                matches!(
-                    content.schema.manifest_members.get("Elt"),
-                    Some(KType::AbstractType { .. })
-                ),
+                matches!(types.node(elt), TypeNode::AbstractType { .. }),
                 "the opaque view's self-sig holds `Elt` as its per-call abstract identity, \
                  not the source's `Number`",
             );
         }
-        other => panic!("expected a Signature type, got {other:?}"),
+        _ => panic!("expected a Signature type, got {result:?}"),
     }
 }
 
@@ -91,15 +96,17 @@ fn type_of_transparent_view_reports_concrete_slots() {
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :! Ordered)",
     );
-    match test_run.run_one_type(parse_one("TYPE OF view")) {
-        KType::Signature { content, .. } => {
+    let result = *test_run.run_one_type(parse_one("TYPE OF view"));
+    let types = test_run.types();
+    match types.node(result) {
+        TypeNode::Signature { schema, .. } => {
             assert_eq!(
-                content.schema.manifest_members.get("Elt"),
-                Some(&KType::Number),
+                schema.manifest_members.get("Elt").copied(),
+                Some(KType::NUMBER),
                 "a transparent view records the source's concrete `Elt`",
             );
         }
-        other => panic!("expected a Signature type, got {other:?}"),
+        _ => panic!("expected a Signature type, got {result:?}"),
     }
 }
 

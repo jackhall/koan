@@ -11,7 +11,8 @@
 use super::{arg, sig};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral, TypeIdentifier};
-use crate::machine::model::{ExpressionSignature, RecursiveSet, TypeResolution};
+use crate::machine::model::{ExpressionSignature, TypeResolution};
+
 use crate::machine::model::{KObject, KType};
 use crate::machine::LexicalFrame;
 use crate::machine::ReturnContract;
@@ -31,7 +32,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             .scope
             .resolve_type_identifier(te, ctx.chain.clone(), ctx.types)
         {
-            TypeResolution::Done(kt) => kt.clone(),
+            TypeResolution::Done(kt) => *kt,
             // The builtin fallback is already tried inside `resolve_type_identifier`; a
             // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
             _ => {
@@ -43,7 +44,7 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     } else {
         match arg_type(ctx.args, "return_type") {
-            Some(other) => other.clone(),
+            Some(other) => *other,
             None => {
                 return Err(KError::new(KErrorKind::MissingArg(
                     "return_type".to_string(),
@@ -223,14 +224,10 @@ pub(crate) struct SelectedArm<'a> {
 
 /// How a `MATCH` scrutinee resolves its type-name arm heads.
 enum HeadMode {
-    /// A union-variant value (`KObject::Wrapped` over a member `SetRef`): a head naming one of
-    /// the scrutinee's own set members resolves to that member `SetRef`, which admits only a
-    /// `Wrapped` of that exact identity — the value is a specific variant, so only its own member
-    /// name matches — and `it` binds the wrapped payload (`inner`, F3). A head that is not a member
-    /// name falls back to scope resolution.
-    WrappedMember { set: Rc<RecursiveSet> },
-    /// A `TypeConstructor` value (`Result`): a head admits by tag-name equality against the
-    /// value's own tag, and `it` binds the wrapped payload (F3).
+    /// A tagged value (a user-`UNION` variant or a builtin `Result`, both `KObject::Tagged`): a
+    /// head admits by tag-name equality against the value's own tag, and `it` binds the wrapped
+    /// payload (F3). A union's sibling variants need no resolution — the value carries its own tag,
+    /// so a non-matching head is a silent non-match, and the arm slate settles exhaustiveness.
     TaggedByTag { value_tag: String },
     /// Any other value: a head resolves through the scope and admits via
     /// [`KType::matches_value`]; `it` binds the scrutinee unchanged (F3).
@@ -247,7 +244,7 @@ fn resolve_head_type<'a>(
     types: &TypeRegistry,
 ) -> Result<KType, String> {
     match scope.resolve_type_identifier(token, chain, types) {
-        TypeResolution::Done(kt) => Ok(kt.clone()),
+        TypeResolution::Done(kt) => Ok(*kt),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
             token.render()
@@ -260,8 +257,8 @@ fn resolve_head_type<'a>(
 ///
 /// Head classification depends on the scrutinee ([`HeadMode`]):
 /// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
-/// - `Type(token)` heads over a union-variant value (`KObject::Wrapped` over a member `SetRef`)
-///   naming one of the scrutinee's own set members admit by member `SetRef` identity (only the
+/// - `Type(token)` heads over a union-variant value (`KObject::Wrapped` over a member handle)
+///   naming one of the scrutinee's own set members admit by member identity (only the
 ///   value's own variant matches) and bind the payload; a non-member head resolves through `scope`.
 /// - `Type(token)` heads over a `TypeConstructor` value (`Result`) admit by tag-name equality.
 /// - `Type(token)` heads over any other value resolve through `scope` and admit via
@@ -284,16 +281,10 @@ pub(crate) fn find_branch_body_by_type<'a>(
             parts.len()
         ));
     }
-    // A union-variant value (`Wrapped` over a member `SetRef`) resolves member-name heads against
-    // its own set; a `TypeConstructor` value (`Result`) resolves them by tag string; any other
-    // value resolves heads against the scope.
+    // A tagged value (a user-`UNION` variant or a builtin `Result`, both `Tagged`) resolves
+    // member-name heads by its own tag string; any other value — including a `NEWTYPE (T AS W)`
+    // identity wrapper or a standalone newtype — resolves heads against the scope.
     let mode = match scrutinee {
-        KObject::Wrapped {
-            type_id: KType::SetRef { set, .. },
-            ..
-        } => HeadMode::WrappedMember {
-            set: Rc::clone(set),
-        },
         KObject::Tagged { tag, .. } => HeadMode::TaggedByTag {
             value_tag: tag.clone(),
         },
@@ -361,49 +352,6 @@ pub(crate) fn find_branch_body_by_type<'a>(
             ExpressionPart::Type(token) => {
                 let label = token.render();
                 match &mode {
-                    // A head naming one of the scrutinee's own set members resolves to that
-                    // member `SetRef` and enters the tournament; the member `SetRef` admits only a
-                    // `Wrapped` of that exact identity, so only the value's own variant matches
-                    // (`matches_value`), and `it` binds the payload. A non-member head resolves
-                    // through the scope like any type arm; failing that, the error names the
-                    // scrutinee's variants.
-                    HeadMode::WrappedMember { set } => match set.index_of(&label) {
-                        Some(member_index) => {
-                            typed_arms.push(TypedArm {
-                                head_label: label,
-                                ktype: KType::SetRef {
-                                    set: Rc::clone(set),
-                                    index: member_index,
-                                },
-                                body: body_expr,
-                                binds_payload: true,
-                            });
-                        }
-                        None => {
-                            let kt = match resolve_head_type(scope, token, chain.clone(), types) {
-                                Ok(kt) => kt,
-                                Err(_) => {
-                                    let variants: Vec<String> = set
-                                        .members()
-                                        .iter()
-                                        .map(|m| format!("`{}`", m.name))
-                                        .collect();
-                                    return Err(format!(
-                                        "match arm type `{}` is not a known type; the scrutinee's \
-                                         union variants are {}",
-                                        token.render(),
-                                        variants.join(", ")
-                                    ));
-                                }
-                            };
-                            typed_arms.push(TypedArm {
-                                head_label: label,
-                                ktype: kt,
-                                body: body_expr,
-                                binds_payload: false,
-                            });
-                        }
-                    },
                     // A tag head equal to the scrutinee's own tag is an exact arm binding the
                     // payload; a non-tag head is a silent non-match (no scope resolution for a
                     // `Tagged` scrutinee).
@@ -471,7 +419,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
     }
     let sigs: Vec<ExpressionSignature<'a>> = admitted
         .iter()
-        .map(|arm| sig(KType::Any, vec![arg("it", arm.ktype.clone())]))
+        .map(|arm| sig(KType::ANY, vec![arg("it", arm.ktype)]))
         .collect();
     let refs: Vec<&ExpressionSignature<'a>> = sigs.iter().collect();
     match ExpressionSignature::most_specific(&refs, types) {

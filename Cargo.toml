@@ -23,6 +23,10 @@ mimalloc = { version = "0.1", default-features = false }
 stable_deref_trait = "1.2.1"
 workgraph = { path = "workgraph" }
 blake3 = "1.8.5"
+# Persistent HAMT for the type registry's node table. No features: the optional `triomphe`
+# feature swaps the default shared pointer to an atomic one, and the registry is single-threaded
+# per run frame, so it instantiates the map over `archery::RcK` instead.
+imbl = "7"
 
 [dev-dependencies]
 workgraph = { path = "workgraph", features = ["test-hooks"] }

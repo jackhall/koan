@@ -65,6 +65,7 @@ fn drain_debug_asserts_on_invariant_violation() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj1 = region
         .brand()
@@ -76,6 +77,7 @@ fn drain_debug_asserts_on_invariant_violation() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj2 = region
         .brand()
@@ -112,6 +114,7 @@ fn register_function_defers_and_drains_through_function_arm() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj = region
         .brand()
@@ -171,6 +174,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj = region
         .brand()
@@ -198,7 +202,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
     let scope = run_root_bare(&region);
 
     let snapshot = scope.bindings().types();
-    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type("Foo".to_string(), KType::NUMBER, BindingIndex::BUILTIN);
     scope.drain_pending();
     assert!(!snapshot.contains_key("Foo"));
     drop(snapshot);
@@ -222,6 +226,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj1 = region
         .brand()
@@ -233,6 +238,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
         scope,
         None,
         None,
+        &types,
     ));
     let obj2 = region
         .brand()
@@ -260,8 +266,8 @@ fn drain_debug_asserts_on_type_arm_invariant_violation() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let snapshot = scope.bindings().types();
-    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type("Foo".to_string(), KType::NUMBER, BindingIndex::BUILTIN);
     drop(snapshot);
-    scope.register_type("Foo".to_string(), KType::Str, BindingIndex::BUILTIN);
+    scope.register_type("Foo".to_string(), KType::STR, BindingIndex::BUILTIN);
     scope.drain_pending();
 }

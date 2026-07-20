@@ -4,7 +4,7 @@
 //! [`operator_chain::reduce_unary`](crate::machine::execute::dispatch::operator_chain)), while a
 //! two-member run `A | B` stays a plain keyworded `[A, |, B]` (an operator chain needs at least
 //! two operators). Two overloads cover both shapes; each folds its resolved members through
-//! [`KType::union_of`], so `:(A | A)` collapses to `:A` and member order never matters.
+//! [`TypeRegistry::union_of`], so `:(A | A)` collapses to `:A` and member order never matters.
 //!
 //! Untagged union *instances* need no construction: a `Number` **is** a valid `:(Number | Str)`
 //! value with no wrapper. This builtin only constructs the union *type* as a first-class type
@@ -33,7 +33,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
     Action::Done(Ok(ctx
         .ctx
-        .alloc_type(KType::union_of(vec![left, right], ctx.types))))
+        .alloc_type(ctx.types.union_of(vec![left, right]))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
@@ -41,7 +41,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
 /// member part is sub-dispatched on its own — a bare type leaf resolves against scope and parks on
 /// a forward reference, a `:(...)` member sub-dispatches to its `KType` — so every member-part kind
 /// rides the ordinary type-resolution machinery. `expect_type_terminal` clones each resolved member
-/// out of its terminal as owned data, and the composite union builds through [`KType::union_of`].
+/// out of its terminal as owned data, and the composite union builds through [`TypeRegistry::union_of`].
 fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let members = match arg_object(ctx.args, "members") {
         Some(KObject::KExpression(e)) => e.clone(),
@@ -76,9 +76,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
             ));
             members.push(kt);
         }
-        Action::Done(Ok(fctx
-            .ctx
-            .alloc_type(KType::union_of(members, fctx.types))))
+        Action::Done(Ok(fctx.ctx.alloc_type(fctx.types.union_of(members))))
     });
     Action::AwaitDeps { deps, finish }
 }
@@ -93,18 +91,18 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
         "|",
         OperatorForm {
             signature: sig(
-                KType::OfKind(KKind::AnyType),
-                vec![kw("|"), arg("members", KType::KExpression)],
+                KType::of_kind(KKind::AnyType),
+                vec![kw("|"), arg("members", KType::KEXPRESSION)],
             ),
             body: Body::Builtin(body_nary),
         },
         OperatorForm {
             signature: sig(
-                KType::OfKind(KKind::AnyType),
+                KType::of_kind(KKind::AnyType),
                 vec![
-                    arg("left", KType::OfKind(KKind::AnyType)),
+                    arg("left", KType::of_kind(KKind::AnyType)),
                     kw("|"),
-                    arg("right", KType::OfKind(KKind::AnyType)),
+                    arg("right", KType::of_kind(KKind::AnyType)),
                 ],
             ),
             body: Body::Builtin(body_binary),

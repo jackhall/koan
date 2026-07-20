@@ -1,97 +1,110 @@
-//! `RECURSIVE TYPES` block sealing: co-declared members seal into one shared
-//! `RecursiveSet`, cross-references seal to `SetLocal` indices into that set, and the group
-//! name binds the set handle. Exiting the block guarantees every forward reference resolved.
+//! `RECURSIVE TYPES` block sealing: co-declared members that reference each other seal into one
+//! strongly-connected component, each cross-reference sealing to the referent's absolute member
+//! handle, and the group name binding a `Group` handle over the declared members. Exiting the
+//! block guarantees every forward reference resolved.
 
 use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
-use crate::machine::model::{NominalSchema, RecursiveSet};
+use crate::machine::model::{NodeSchema, TypeDigest, TypeNode, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
-/// `(set, field-types)` of a sealed record-repr newtype member, read off its `SetRef` identity. Field
-/// types carry raw `SetLocal` / `SetRef` leaves so assertions inspect the seal shape.
-fn struct_set_and_fields<'a>(
-    scope: &'a Scope<'a>,
+/// `(scc-digest, scc-size, field-types)` of a sealed record-repr newtype member, read off its
+/// `SetMember` identity. The member's SCC digest and component size witness which members seal
+/// together; the field types carry the absolute member handles the sealed schema references, so
+/// assertions inspect the seal shape.
+fn member_scc_and_fields(
+    scope: &Scope<'_>,
+    types: &TypeRegistry,
     name: &str,
-) -> (std::rc::Rc<RecursiveSet>, Vec<(String, KType)>) {
-    match scope.resolve_type(name) {
-        Some(KType::SetRef { set, index }) => {
-            let member = set.member(*index);
-            let borrow = member.schema();
-            match borrow.as_ref() {
-                Some(NominalSchema::NewType(repr)) => match repr.as_ref() {
-                    KType::Record { fields: record, .. } => {
-                        let fields = record.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                        (std::rc::Rc::clone(set), fields)
-                    }
-                    other => panic!("expected {name} to carry a record repr, got {other:?}"),
-                },
-                other => panic!("expected {name} to carry a NewType schema, got {other:?}"),
-            }
-        }
-        other => panic!("expected {name} to be a SetRef identity in types, got {other:?}"),
+) -> (TypeDigest, usize, Vec<(String, KType)>) {
+    let handle = scope
+        .resolve_type(name)
+        .copied()
+        .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
+    match types.node(handle) {
+        TypeNode::SetMember {
+            scc_digest,
+            scc_size,
+            schema,
+            ..
+        } => match schema {
+            NodeSchema::NewType(repr) => match types.node(repr) {
+                TypeNode::Record { fields } => {
+                    let fields = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                    (scc_digest, scc_size, fields)
+                }
+                _ => panic!("expected {name} to carry a record repr, got {repr:?}"),
+            },
+            _ => panic!("expected {name} to carry a NewType schema for {handle:?}"),
+        },
+        _ => panic!("expected {name} to be a SetMember identity in types, got {handle:?}"),
     }
 }
 
-/// A mutually-recursive pair co-declared in a block seals into one shared set; each
-/// cross-reference is a `SetLocal` into that set, and the members bind in the enclosing
-/// scope.
+/// A mutually-recursive pair co-declared in a block seals into one shared component of two; each
+/// cross-reference seals to the referent member's absolute handle, and the members bind in the
+/// enclosing scope.
 #[test]
-fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
+fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
-    let (a_set, a_fields) = struct_set_and_fields(scope, "Aa");
-    let (b_set, b_fields) = struct_set_and_fields(scope, "Bb");
-    assert!(
-        std::rc::Rc::ptr_eq(&a_set, &b_set),
-        "Aa and Bb share one RecursiveSet",
-    );
-    assert_eq!(a_set.len(), 2, "the block seals into a set of 2 members");
-    let a_idx = a_set.index_of("Aa").unwrap();
-    let b_idx = a_set.index_of("Bb").unwrap();
-    assert_eq!(a_fields[0], ("b".to_string(), KType::SetLocal(b_idx)));
-    assert_eq!(b_fields[0], ("a".to_string(), KType::SetLocal(a_idx)));
+    let types = test_run.types();
+    let (a_scc, a_size, a_fields) = member_scc_and_fields(scope, types, "Aa");
+    let (b_scc, b_size, b_fields) = member_scc_and_fields(scope, types, "Bb");
+    assert_eq!(a_scc, b_scc, "Aa and Bb seal into one component");
+    assert_eq!(a_size, 2, "the block seals into a component of 2 members");
+    assert_eq!(b_size, 2);
+    let aa_handle = scope.resolve_type("Aa").copied().unwrap();
+    let bb_handle = scope.resolve_type("Bb").copied().unwrap();
+    assert_eq!(a_fields[0], ("b".to_string(), bb_handle));
+    assert_eq!(b_fields[0], ("a".to_string(), aa_handle));
     assert!(scope.bindings().pending_types().is_empty());
 }
 
-/// The group name binds a `RecursiveGroup` handle over the members' shared set.
+/// The group name binds a `Group` handle over the block's declared members.
 #[test]
-fn block_group_name_binds_the_set_handle() {
+fn block_group_name_binds_the_group_handle() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
-    let (a_set, _) = struct_set_and_fields(scope, "Aa");
-    match scope.resolve_type("Pair") {
-        Some(KType::RecursiveGroup(set)) => assert!(
-            std::rc::Rc::ptr_eq(set, &a_set),
-            "Pair must handle the members' shared set",
-        ),
-        other => panic!("expected Pair to bind a RecursiveGroup handle, got {other:?}"),
+    let types = test_run.types();
+    let aa = scope.resolve_type("Aa").copied().unwrap();
+    let bb = scope.resolve_type("Bb").copied().unwrap();
+    match scope.resolve_type("Pair").copied() {
+        Some(handle) => match types.node(handle) {
+            TypeNode::Group { members } => assert_eq!(
+                members,
+                vec![aa, bb],
+                "Pair's Group spans its declared members in order",
+            ),
+            _ => panic!("expected Pair to bind a Group handle, got {handle:?}"),
+        },
+        None => panic!("expected Pair to bind a Group handle"),
     }
 }
 
-/// Three-way mutual recursion: one shared set of 3; each field is a `SetLocal` to the next.
+/// Three-way mutual recursion: one shared component of 3; each field references the next member's
+/// absolute handle.
 #[test]
-fn block_three_way_seals_one_set() {
+fn block_three_way_seals_one_component() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run(
         "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
     );
-    let (set, _) = struct_set_and_fields(scope, "Aa");
-    assert_eq!(set.len(), 3);
+    let types = test_run.types();
+    let (scc, size, _) = member_scc_and_fields(scope, types, "Aa");
+    assert_eq!(size, 3);
     for (from, field, target) in [("Aa", "b", "Bb"), ("Bb", "c", "Cc"), ("Cc", "a", "Aa")] {
-        let (from_set, fields) = struct_set_and_fields(scope, from);
-        assert!(
-            std::rc::Rc::ptr_eq(&from_set, &set),
-            "{from} shares the set"
-        );
-        let target_idx = set.index_of(target).unwrap();
-        assert_eq!(fields[0], (field.to_string(), KType::SetLocal(target_idx)));
+        let (from_scc, _, fields) = member_scc_and_fields(scope, types, from);
+        assert_eq!(from_scc, scc, "{from} shares the component");
+        let target_handle = scope.resolve_type(target).copied().unwrap();
+        assert_eq!(fields[0], (field.to_string(), target_handle));
     }
 }
 

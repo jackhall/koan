@@ -117,7 +117,7 @@ fn let_type_class_with_type_value_still_binds() {
     let kt = scope
         .resolve_type("Foo")
         .expect("expected type binding 'Foo' in bindings.types");
-    assert_eq!(*kt, KType::Number, "expected Number, got {:?}", kt);
+    assert_eq!(*kt, KType::NUMBER, "expected Number, got {:?}", kt);
 }
 
 /// `LET foo = 1` (lowercase, Identifier overload) doesn't go through the
@@ -274,16 +274,21 @@ fn let_type_class_in_sig_body_binds_manifest() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG WithTag = ((LET Tag = Number) (VAL zero :Number))");
-    let content = match scope.resolve_type("WithTag") {
-        Some(KType::Signature { content, .. }) => content,
-        other => panic!("WithTag should be a Signature KType, got {:?}", other),
+    use crate::machine::model::TypeNode;
+    let handle = scope
+        .resolve_type("WithTag")
+        .copied()
+        .expect("WithTag should bind a type");
+    let schema = match test_run.types().node(handle) {
+        TypeNode::Signature { schema, .. } => schema,
+        _ => panic!("WithTag should be a Signature KType, got {:?}", handle),
     };
-    let bound = content.schema.manifest_members.get("Tag").expect(
+    let bound = schema.manifest_members.get("Tag").copied().expect(
         "Tag binding should survive in the SIG schema's manifest members after manifest LET",
     );
     assert_eq!(
-        *bound,
-        KType::Number,
+        bound,
+        KType::NUMBER,
         "SIG-local `LET Tag = Number` binds the concrete `Number`, not an AbstractType, got {:?}",
         bound,
     );
@@ -302,10 +307,11 @@ fn let_type_class_signature_alias_preserves_identity() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("SIG Ordered = (VAL compare :Number)\nLET Po = Ordered");
+    use crate::machine::model::TypeNode;
     let original = scope.resolve_type("Ordered").expect("Ordered type binding");
     let aliased = scope.resolve_type("Po").expect("Po type binding");
     assert!(
-        matches!(aliased, KType::Signature { .. }),
+        matches!(test_run.types().node(*aliased), TypeNode::Signature { .. }),
         "Po must alias to a Signature KType, got {:?}",
         aliased,
     );

@@ -192,7 +192,7 @@ mod tests {
         let region = storage.brand();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
-        let kt = region.alloc_ktype(KType::Number);
+        let kt = region.alloc_ktype(KType::NUMBER);
         queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);

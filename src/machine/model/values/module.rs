@@ -3,12 +3,11 @@
 //!
 //! **Terminology — "module-signature" vs "expression-signature".** A module-signature is the
 //! interface a module can be ascribed to via `:|` / `:!` — a `SIG`-declared interface or a
-//! module's own self-sig, both carried as an owned
-//! [`SigContent`](crate::machine::model::types::SigContent) wrapping a
-//! [`SigSchema`](crate::machine::model::types::SigSchema) (see [`Module::self_sig_content`]). The
-//! **expression-signature** machinery (`ExpressionSignature`, `Argument`, `SignatureElement`)
-//! lives in [`crate::machine::model::types::signature`]. The two are distinct concepts; do not
-//! conflate.
+//! module's own self-sig, both interned as a `Signature` node over a
+//! [`SigSchema`](crate::machine::model::types::SigSchema) and named by one
+//! [`KType`] handle (see [`Module::ktype`]). The **expression-signature** machinery
+//! (`ExpressionSignature`, `Argument`, `SignatureElement`) lives in
+//! [`crate::machine::model::types::signature`]. The two are distinct concepts; do not conflate.
 //!
 //! The captured scope is held as a plain `&'a Scope<'a>` and re-anchored to `'a` together with the
 //! rest of the value when the holder is read out of its region (the substrate retype in
@@ -19,18 +18,18 @@
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::{Scope, ScopeId};
 
 use super::super::types::{
-    sig_subtype, KType, Relation, SigContent, SigSchema, TypeDigest, TypeRegistry,
+    empty_schema_digest, sig_subtype, KType, Relation, SigSchema, TypeDigest, TypeNode,
+    TypeRegistry,
 };
 
 /// First-class module value. `path` is the lexical-source label (`"int_ord"`,
 /// `"outer.inner"`). The module value rides the value channel as `KObject::Module(self)` and is
-/// typed by its principal signature (`KType::Signature { content: self.self_sig_content(), .. }`);
-/// opaque-ascription members mint `KType::AbstractType { name, nonce: Some(self.scope_id()), .. }`.
+/// typed by its principal signature — the interned `Signature` handle [`Module::ktype`] returns;
+/// opaque-ascription members mint `AbstractType { name, nonce: Some(self.scope_id()), .. }`.
 pub struct Module<'a> {
     pub path: String,
     child_scope_ref: &'a Scope<'a>,
@@ -44,14 +43,15 @@ pub struct Module<'a> {
     /// Empty for unascribed and transparently-ascribed (`:!`) modules. `RefCell` for the same
     /// reason as `type_members`.
     pub slot_type_tags: RefCell<HashMap<String, KType>>,
-    /// The module's principal signature (self-sig), owned and wrapped in an `Rc` — the same
-    /// bundle a `KType::Signature { content, .. }` over this module shares by `Rc::clone`.
-    /// Sealed exactly once at the end of construction ([`Module::seal_self_sig`]) and immutable
-    /// thereafter; a bare [`Module::new`] with no seal derives it lazily on first read
-    /// ([`SigSchema::raw_self_sig`]). The signature-subtyping relation reads it to answer "does
-    /// this module satisfy signature `S`". `OnceCell` because — like the maps above — it is
-    /// installed after the surrounding value is alloc'd.
-    self_sig: OnceCell<Rc<SigContent>>,
+    /// The module's principal signature (self-sig): the handle naming the interned `Signature`
+    /// node this module is typed by. Sealed exactly once at the end of construction
+    /// ([`Module::seal_self_sig`]) and immutable thereafter. `OnceCell` because — like the maps
+    /// above — it is installed after the surrounding value is alloc'd, and because the derivation
+    /// reads `type_members` / `slot_type_tags`, which construction writes first.
+    ///
+    /// Every mint seals: an unfilled cell is a construction bug, not a state, so the reads below
+    /// panic rather than deriving anything late.
+    self_sig: OnceCell<KType>,
 }
 
 impl<'a> Module<'a> {
@@ -67,41 +67,49 @@ impl<'a> Module<'a> {
 
     /// Install the module's self-sig. Runs exactly once, at the end of construction (after the
     /// `type_members` / `slot_type_tags` writes that feed the derivation) — a double-seal is a
-    /// construction bug. Wraps `schema` into an `Rc<SigContent>`, computing its digest.
-    pub fn seal_self_sig(&self, schema: SigSchema) {
-        let content = Rc::new(SigContent::new(self.path.clone(), self.scope_id(), schema));
-        if self.self_sig.set(content).is_err() {
+    /// construction bug. Interns `schema` as an unpinned `Signature` node and stores its handle.
+    pub fn seal_self_sig(&self, schema: SigSchema, types: &TypeRegistry) {
+        let handle = types.signature(schema, Vec::new());
+        if self.self_sig.set(handle).is_err() {
             panic!("self-sig sealed twice on module `{}`", self.path);
         }
     }
 
-    /// The module's self-sig content — the identity a `Signature { content: self.self_sig_content(),
-    /// .. }` carries. Returns the sealed content, or lazily derives + wraps it from the body for a
-    /// bare [`Module::new`] that was never sealed (e.g. a direct construction in a test).
-    pub fn self_sig_content(&self) -> &Rc<SigContent> {
-        self.self_sig.get_or_init(|| {
-            let schema = SigSchema::raw_self_sig(self);
-            Rc::new(SigContent::new(self.path.clone(), self.scope_id(), schema))
+    /// The module's type: the handle naming its principal signature, copied out of the sealed
+    /// cell. This is what `KObject::Module(self).ktype()` reports, which is why it takes no
+    /// registry — every mint seals, so the handle is already interned.
+    pub fn ktype(&self) -> KType {
+        *self.self_sig.get().unwrap_or_else(|| {
+            panic!(
+                "module `{}` was surfaced before its self-sig was sealed",
+                self.path
+            )
         })
     }
 
-    /// The module's self-sig schema (see [`Self::self_sig_content`]).
-    pub fn self_sig(&self) -> &SigSchema {
-        &self.self_sig_content().schema
+    /// The module's self-sig schema, cloned out of its signature node.
+    pub fn self_sig(&self, types: &TypeRegistry) -> SigSchema {
+        match types.node(self.ktype()) {
+            TypeNode::Signature { schema, .. } => schema,
+            _ => panic!("module `{}`'s self-sig is not a signature node", self.path),
+        }
     }
 
     /// The module's self-sig content digest — the `SigSatisfies` verdict subject key
-    /// (`registry.rs`). Reads the cached digest on [`Self::self_sig_content`].
-    pub fn self_sig_digest(&self) -> TypeDigest {
-        self.self_sig_content().schema_digest
+    /// (`registry.rs`). Reads the digest the signature node computed once at intern time.
+    pub fn self_sig_digest(&self, types: &TypeRegistry) -> TypeDigest {
+        match types.node(self.ktype()) {
+            TypeNode::Signature { schema_digest, .. } => schema_digest,
+            _ => panic!("module `{}`'s self-sig is not a signature node", self.path),
+        }
     }
 
     /// Pin agreement for a `WITH`-specialized signature slot: every pinned slot names a type
     /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
     /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
     /// applies to a pinned schema's residue.
-    pub fn satisfies_pins(&self, pins: &[(String, KType)]) -> bool {
-        let sig = self.self_sig();
+    pub fn satisfies_pins(&self, pins: &[(String, KType)], types: &TypeRegistry) -> bool {
+        let sig = self.self_sig(types);
         pins.iter().all(|(name, expected)| {
             sig.manifest_members
                 .get(name)
@@ -109,27 +117,32 @@ impl<'a> Module<'a> {
         })
     }
 
-    /// Whether this module satisfies the signature content `c` — the admission rule a
-    /// `KType::Signature` slot applies to a module value (pins are checked separately by the
-    /// caller, as they live on `KType::Signature`, not here; see [`Self::satisfies_pins`]). The
-    /// single entry point for module satisfaction: `c.is_empty_interface()` admits every module
-    /// (the lattice top); a digest-equal `c` short-circuits (sound by reflexivity of
-    /// `sig_subtype`, and broader than a same-module check — any content-equal pair matches, not
-    /// just the same module); otherwise consults the run's type registry under `SigSatisfies`,
-    /// keyed by this module's and `c`'s raw schema digests, both outcomes recorded.
-    pub fn satisfies_sig_content(&self, c: &SigContent, types: &TypeRegistry) -> bool {
-        if c.is_empty_interface() {
+    /// Whether this module satisfies the interface `schema` — the admission rule a signature
+    /// slot applies to a module value (pins are checked separately by the caller, as they live on
+    /// the signature node, not here; see [`Self::satisfies_pins`]). The single entry point for
+    /// module satisfaction: the empty interface admits every module (the lattice top); a
+    /// digest-equal schema short-circuits (sound by reflexivity of `sig_subtype`, and broader
+    /// than a same-module check — any content-equal pair matches, not just the same module);
+    /// otherwise consults the run's type registry under `SigSatisfies`, keyed by this module's
+    /// and `schema`'s digests, both outcomes recorded.
+    pub fn satisfies_sig_schema(
+        &self,
+        schema: &SigSchema,
+        schema_digest: TypeDigest,
+        types: &TypeRegistry,
+    ) -> bool {
+        if schema_digest == empty_schema_digest() {
             return true;
         }
-        let subject = self.self_sig_digest();
-        if subject == c.schema_digest {
+        let subject = self.self_sig_digest(types);
+        if subject == schema_digest {
             return true;
         }
-        if let Some(hit) = types.verdict(subject, c.schema_digest, Relation::SigSatisfies) {
+        if let Some(hit) = types.verdict(subject, schema_digest, Relation::SigSatisfies) {
             return hit;
         }
-        let ok = sig_subtype(self.self_sig(), &c.schema, types).is_ok();
-        types.record_verdict(subject, c.schema_digest, Relation::SigSatisfies, ok);
+        let ok = sig_subtype(&self.self_sig(types), schema, types).is_ok();
+        types.record_verdict(subject, schema_digest, Relation::SigSatisfies, ok);
         ok
     }
 

@@ -146,7 +146,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
         scope,
         "DEFERTEST",
         ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Str),
+            return_type: ReturnType::Resolved(KType::STR),
             elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
         },
         body,

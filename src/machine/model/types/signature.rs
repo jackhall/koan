@@ -3,7 +3,7 @@
 //! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
 //! Not to be confused with the **module-signature** content (`SIG`-declared) at
-//! [`crate::machine::model::types::sig_schema::SigContent`].
+//! [`crate::machine::model::types::sig_schema::SigSchema`].
 //!
 //! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so return types that
 //! reference a per-call parameter (`-> er`, `-> er.Carrier`) survive FN-definition without
@@ -114,7 +114,7 @@ impl DeferredReturnSurface {
 impl<'a> Clone for ReturnType<'a> {
     fn clone(&self) -> Self {
         match self {
-            ReturnType::Resolved(kt) => ReturnType::Resolved(kt.clone()),
+            ReturnType::Resolved(kt) => ReturnType::Resolved(*kt),
             ReturnType::Deferred(d) => ReturnType::Deferred(d.clone()),
         }
     }
@@ -230,9 +230,9 @@ impl<'a> ExpressionSignature<'a> {
         let mut any_less = false;
         for (a, b) in self.elements.iter().zip(other.elements.iter()) {
             if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
-                if aa.ktype.is_more_specific_than(&bb.ktype, types) {
+                if aa.ktype.is_more_specific_than(bb.ktype, types) {
                     any_more = true;
-                } else if bb.ktype.is_more_specific_than(&aa.ktype, types) {
+                } else if bb.ktype.is_more_specific_than(aa.ktype, types) {
                     any_less = true;
                 }
             }

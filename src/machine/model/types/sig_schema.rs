@@ -8,8 +8,8 @@
 //! equal, each abstract member present at the right kind and over the same parameter names, and
 //! each value slot covariantly compatible after abstract-member substitution.
 //!
-//! [`SigContent`] is the owned bundle a `KType::Signature` carries: a schema plus the
-//! diagnostic path and same-declaration `sig_id` a `KType::Signature` needs alongside it.
+//! A `SigSchema` is what the `Signature` [`TypeNode`] owns; the node computes and stores the
+//! schema's content digest once at intern time, so the schema itself carries no digest field.
 //!
 //! See [design/typing/modules.md](../../../../design/typing/modules.md).
 
@@ -19,22 +19,27 @@ use crate::machine::core::{Scope, ScopeId};
 
 use super::kkind::KKind;
 use super::ktype::KType;
-use super::recursive_set::{ProjectedSchema, RecursiveSet};
+use super::node::{NodeSchema, TypeNode};
 use super::registry::TypeRegistry;
-use super::type_digest::{empty_schema_digest, schema_content_digest, TypeDigest};
 use crate::machine::model::values::Module;
 
 /// Normalized signature schema — the carrier the subtyping relation is defined over.
 ///
 /// Members are split by *representation*, not by surface syntax: an abstract member carries no
-/// concrete witness (a [`KType::AbstractType`], of either order), a manifest member fixes a
+/// concrete witness (an `AbstractType` node, of either order), a manifest member fixes a
 /// concrete type. A module self-sig never has abstract members — `TYPE` is a SIG-body-only
 /// construct.
 #[derive(Clone)]
 pub struct SigSchema {
-    /// `Some(sig_id)` when derived from a SIG declaration — `Sig`-sourced abstract refs in
-    /// value-slot types substitute against this id. `None` for a module self-sig (whose slot
-    /// types name no SIG-decl-sourced refs).
+    /// The binder this schema's own abstract members are sourced at: `Some(ScopeId::SENTINEL)`
+    /// for a SIG declaration, `None` for a module self-sig (whose slot types name no
+    /// SIG-declared refs).
+    ///
+    /// The binder is *canonical*, not the declaring scope's id: [`Self::project_decl`] rewrites
+    /// every SIG-own member's `source` to [`ScopeId::SENTINEL`] as it projects, so two textually
+    /// identical `SIG` declarations project to one schema and intern to one type. `SENTINEL` is
+    /// never a minted scope id, so a canonical binder cannot alias a real one, and the
+    /// substitution and comparison walks below keep testing `source == sig_id` unchanged.
     pub sig_id: Option<ScopeId>,
     /// Abstract type members: name → the bound `AbstractType` as found in the decl scope. Its
     /// `param_names` carry the member's order (empty = first-order, non-empty = a constructor
@@ -47,27 +52,41 @@ pub struct SigSchema {
 }
 
 impl SigSchema {
+    /// The member-free schema — the module-lattice top the `:Module` name lowers to, and the
+    /// content any zero-member `SIG E = ()` declaration projects to. `sig_id` is `None`: an empty
+    /// interface names no abstract member for a slot type to substitute against.
+    pub fn empty() -> SigSchema {
+        SigSchema {
+            sig_id: None,
+            abstract_members: HashMap::new(),
+            manifest_members: HashMap::new(),
+            value_slots: HashMap::new(),
+        }
+    }
+
     /// Project a SIG decl scope into its schema, at SIG finish. Every type-table entry is a
     /// genuine type member (the token-class partition holds — value slots live in the scope's
     /// slot collector, not in `types`), classified abstract/manifest by representation; the
     /// value slots come from the scope's own slot collector. The only place this
     /// classification runs — once per SIG.
-    pub(crate) fn project_decl(decl_scope: &Scope<'_>) -> SigSchema {
+    pub(crate) fn project_decl(decl_scope: &Scope<'_>, types: &TypeRegistry) -> SigSchema {
+        let declared = decl_scope.id;
         let mut abstract_members = HashMap::new();
         let mut manifest_members = HashMap::new();
         for (name, kt) in decl_scope.bindings().iter_types() {
-            if is_abstract_sig_member(kt) {
-                abstract_members.insert(name, kt.clone());
+            let canonical = canonicalize_binder(*kt, declared, types);
+            if is_abstract_sig_member(canonical, types) {
+                abstract_members.insert(name, canonical);
             } else {
-                manifest_members.insert(name, kt.clone());
+                manifest_members.insert(name, canonical);
             }
         }
         let mut value_slots = HashMap::new();
         for (name, kt) in decl_scope.sig_value_slots() {
-            value_slots.insert(name, kt.clone());
+            value_slots.insert(name, canonicalize_binder(*kt, declared, types));
         }
         SigSchema {
-            sig_id: Some(decl_scope.id),
+            sig_id: Some(ScopeId::SENTINEL),
             abstract_members,
             manifest_members,
             value_slots,
@@ -83,7 +102,7 @@ impl SigSchema {
         let mut schema = self.clone();
         for (name, kt) in pins {
             schema.abstract_members.remove(name);
-            schema.manifest_members.insert(name.clone(), kt.clone());
+            schema.manifest_members.insert(name.clone(), *kt);
         }
         schema
     }
@@ -103,17 +122,17 @@ impl SigSchema {
         let child = module.child_scope();
         let mut manifest_members: HashMap<String, KType> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
-            manifest_members.insert(name, kt.clone());
+            manifest_members.insert(name, *kt);
         }
         for (name, kt) in module.type_members.borrow().iter() {
-            manifest_members.insert(name.clone(), kt.clone());
+            manifest_members.insert(name.clone(), *kt);
         }
         let mut value_slots: HashMap<String, KType> = HashMap::new();
         for (name, obj) in child.bindings().iter_data() {
             value_slots.insert(name, obj.ktype());
         }
         for (name, tag) in module.slot_type_tags.borrow().iter() {
-            value_slots.insert(name.clone(), tag.clone());
+            value_slots.insert(name.clone(), *tag);
         }
         SigSchema {
             sig_id: None,
@@ -124,69 +143,18 @@ impl SigSchema {
     }
 }
 
-/// Owned content of a `KType::Signature` — everything the type carries about the interface it
-/// names. Shared by `Rc` until interning replaces the transport.
-pub struct SigContent {
-    /// Diagnostic-only path label ("Ordered", "int_ord", "Module").
-    pub path: String,
-    /// Same-declaration key for WITH-pin specificity refinement; [`ScopeId::SENTINEL`] for the
-    /// scopeless `:Module` mint. Never part of identity.
-    pub sig_id: ScopeId,
-    pub schema: SigSchema,
-    /// [`schema_content_digest`] of `schema`, computed once at construction.
-    pub schema_digest: TypeDigest,
-}
-
-impl SigContent {
-    pub fn new(path: String, sig_id: ScopeId, schema: SigSchema) -> Self {
-        let schema_digest = schema_content_digest(&schema);
-        SigContent {
-            path,
-            sig_id,
-            schema,
-            schema_digest,
-        }
-    }
-
-    /// The `:Module` mint — empty schema, `SENTINEL` id, path `"Module"`, digest ==
-    /// [`empty_schema_digest`] (the schema's own `sig_id` is `None`, matching a self-sig).
-    pub fn empty() -> Self {
-        SigContent::new(
-            "Module".to_string(),
-            ScopeId::SENTINEL,
-            SigSchema {
-                sig_id: None,
-                abstract_members: HashMap::new(),
-                manifest_members: HashMap::new(),
-                value_slots: HashMap::new(),
-            },
-        )
-    }
-
-    /// Content-keyed lattice-top test — true for [`Self::empty`] and, by content, for any other
-    /// signature whose schema has no members: an empty interface is an empty interface
-    /// regardless of how it was minted. Keyed off the schema digest so it tracks the identity
-    /// relation, letting the specificity walk place the top by content, not by mint.
-    pub fn is_empty_interface(&self) -> bool {
-        self.schema_digest == empty_schema_digest()
-    }
-}
-
 /// `Some(parameter names)` iff `kt` is a type constructor — a declared family (a
-/// `TypeConstructor`-kind `SetRef`, whose names come off the projected schema) or a SIG's abstract
-/// higher-kinded member (an [`KType::AbstractType`] carrying them directly). `None` for a
+/// `TypeConstructor`-kind member, whose names ride its sealed schema) or a SIG's abstract
+/// higher-kinded member (an `AbstractType` node carrying them directly). `None` for a
 /// first-order type. Arity is the returned list's length.
-pub fn constructor_param_names(kt: &KType, types: &TypeRegistry) -> Option<Vec<String>> {
-    match kt {
-        KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
-            Some(param_names.clone())
-        }
-        KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
-            match RecursiveSet::projected_schema(set, *index, types) {
-                ProjectedSchema::TypeConstructor { param_names, .. } => Some(param_names),
-                ProjectedSchema::NewType(_) => None,
-            }
-        }
+pub fn constructor_param_names(kt: KType, types: &TypeRegistry) -> Option<Vec<String>> {
+    match types.node(kt) {
+        TypeNode::AbstractType { param_names, .. } if !param_names.is_empty() => Some(param_names),
+        TypeNode::SetMember {
+            kind: KKind::TypeConstructor,
+            schema: NodeSchema::TypeConstructor { param_names, .. },
+            ..
+        } => Some(param_names),
         _ => None,
     }
 }
@@ -195,7 +163,7 @@ pub fn constructor_param_names(kt: &KType, types: &TypeRegistry) -> Option<Vec<S
 /// `kt` is well-kinded there.
 ///
 /// A value's type must be a proper type — kind `*`. The ill-kinded shapes are exactly the two
-/// [`constructor_param_names`] names: a declared family (`SetRef` at `TypeConstructor` kind) and
+/// [`constructor_param_names`] names: a declared family at `TypeConstructor` kind and
 /// a SIG's higher-kinded abstract member, each of kind `* -> *` and standing with none of its
 /// parameters supplied. A saturated application (`ConstructorApply`), a first-order abstract
 /// member, and every ground type are proper, so they yield `None`. A *type* position — the head
@@ -208,7 +176,7 @@ pub fn constructor_param_names(kt: &KType, types: &TypeRegistry) -> Option<Vec<S
 /// is: "the type of SIG value slot `boxed`", not "SIG value slot `boxed`", since a slot is not
 /// itself a type. The constructor's parameter names follow, since supplying them is the fix.
 pub fn unsaturated_constructor_message(
-    kt: &KType,
+    kt: KType,
     position: &str,
     types: &TypeRegistry,
 ) -> Option<String> {
@@ -246,51 +214,114 @@ pub(super) fn name_sets_equal(left: &[String], right: &[String]) -> bool {
 }
 
 /// Rewrite `kt`, replacing references to `sig_id`'s abstract members with the caller's bindings
-/// for them. Returns a plain value used only for comparison — never region-allocated.
+/// for them. Returns an interned handle used only for comparison.
 ///
 /// One reference shape substitutes: a nonce-free `AbstractType { source: sig_id, name }` of either
-/// order — a first-order slot type, or a higher-kinded member in the ctor position of a
-/// `ConstructorApply`. Compound types recurse; every other variant is a clone. A nonced
+/// order — a first-order slot type, or a higher-kinded member in the constructor position of a
+/// `ConstructorApply`. Compound types recurse; every other shape is returned unchanged. A nonced
 /// `AbstractType` is an opaque ascription's generative mint, not a reference to a declaration, so
 /// it never substitutes even when it shares its binder's `source` and name.
 pub fn substitute_sig_members(
-    kt: &KType,
+    kt: KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
     types: &TypeRegistry,
 ) -> KType {
-    match kt {
-        KType::AbstractType {
+    match types.node(kt) {
+        TypeNode::AbstractType {
             source,
-            name,
+            ref name,
             nonce: None,
             ..
-        } if *source == sig_id => members.get(name).cloned().unwrap_or_else(|| kt.clone()),
-        KType::List { element, .. } => KType::list(Box::new(substitute_sig_members(
-            element, sig_id, members, types,
-        ))),
-        KType::Dict { key, value, .. } => KType::dict(
-            Box::new(substitute_sig_members(key, sig_id, members, types)),
-            Box::new(substitute_sig_members(value, sig_id, members, types)),
-        ),
-        KType::Record { fields, .. } => KType::record(Box::new(
-            fields.map(|v| substitute_sig_members(v, sig_id, members, types)),
-        )),
-        KType::KFunction { params, ret, .. } => KType::function_type(
-            params.map(|v| substitute_sig_members(v, sig_id, members, types)),
-            Box::new(substitute_sig_members(ret, sig_id, members, types)),
-        ),
-        KType::Union { members: us, .. } => KType::union_of(
-            us.iter()
+        } if source == sig_id => members.get(name).copied().unwrap_or(kt),
+        TypeNode::List { element } => {
+            let element = substitute_sig_members(element, sig_id, members, types);
+            types.list(element)
+        }
+        TypeNode::Dict { key, value } => {
+            let key = substitute_sig_members(key, sig_id, members, types);
+            let value = substitute_sig_members(value, sig_id, members, types);
+            types.dict(key, value)
+        }
+        TypeNode::Record { fields } => {
+            let fields = fields.map(|v| substitute_sig_members(*v, sig_id, members, types));
+            types.record(fields)
+        }
+        TypeNode::KFunction { params, ret } => {
+            let params = params.map(|v| substitute_sig_members(*v, sig_id, members, types));
+            let ret = substitute_sig_members(ret, sig_id, members, types);
+            types.function_type(params, ret)
+        }
+        TypeNode::Union { members: us } => types.union_of(
+            us.into_iter()
                 .map(|m| substitute_sig_members(m, sig_id, members, types))
                 .collect(),
-            types,
         ),
-        KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
-            Box::new(substitute_sig_members(ctor, sig_id, members, types)),
-            args.map(|a| substitute_sig_members(a, sig_id, members, types)),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            let constructor = substitute_sig_members(constructor, sig_id, members, types);
+            let arguments = arguments.map(|a| substitute_sig_members(*a, sig_id, members, types));
+            types.constructor_apply(constructor, arguments)
+        }
+        _ => kt,
+    }
+}
+
+/// Rewrite every reference to `declared`'s own abstract members so it is sourced at
+/// [`ScopeId::SENTINEL`] instead — the canonical binder every projected SIG schema shares.
+///
+/// Structurally this is [`substitute_sig_members`] with the substitution being a re-source rather
+/// than a lookup: the same shapes recurse, and only a nonce-free `AbstractType` at `declared`
+/// changes. Running it at projection is what makes two textually identical declarations one
+/// interned type, since after it nothing in the schema records which scope declared it.
+fn canonicalize_binder(kt: KType, declared: ScopeId, types: &TypeRegistry) -> KType {
+    match types.node(kt) {
+        TypeNode::AbstractType {
+            source,
+            name,
+            param_names,
+            nonce: None,
+        } if source == declared => types.intern(TypeNode::AbstractType {
+            source: ScopeId::SENTINEL,
+            name,
+            param_names,
+            nonce: None,
+        }),
+        TypeNode::List { element } => {
+            let element = canonicalize_binder(element, declared, types);
+            types.list(element)
+        }
+        TypeNode::Dict { key, value } => {
+            let key = canonicalize_binder(key, declared, types);
+            let value = canonicalize_binder(value, declared, types);
+            types.dict(key, value)
+        }
+        TypeNode::Record { fields } => {
+            let fields = fields.map(|v| canonicalize_binder(*v, declared, types));
+            types.record(fields)
+        }
+        TypeNode::KFunction { params, ret } => {
+            let params = params.map(|v| canonicalize_binder(*v, declared, types));
+            let ret = canonicalize_binder(ret, declared, types);
+            types.function_type(params, ret)
+        }
+        TypeNode::Union { members } => types.union_of(
+            members
+                .into_iter()
+                .map(|m| canonicalize_binder(m, declared, types))
+                .collect(),
         ),
-        _ => kt.clone(),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            let constructor = canonicalize_binder(constructor, declared, types);
+            let arguments = arguments.map(|a| canonicalize_binder(*a, declared, types));
+            types.constructor_apply(constructor, arguments)
+        }
+        _ => kt,
     }
 }
 
@@ -376,8 +407,8 @@ impl SigSubtypeFailure {
 /// equal, each abstract member present at the matching kind and parameter names, and each value slot
 /// covariantly compatible after substituting `sup`'s abstract members with `sub`'s bindings.
 ///
-/// The failure is boxed: `SigSubtypeFailure` carries `KType`s and is large relative to the
-/// common `Ok` path.
+/// The failure is boxed: `SigSubtypeFailure` carries rendered member names and types, and is
+/// large relative to the common `Ok` path.
 pub fn sig_subtype(
     sub: &SigSchema,
     sup: &SigSchema,
@@ -396,8 +427,8 @@ pub fn sig_subtype(
                 name: name.clone(),
             }));
         };
-        let sup_params = constructor_param_names(sup_repr, types);
-        let sub_params = constructor_param_names(sub_binding, types);
+        let sup_params = constructor_param_names(*sup_repr, types);
+        let sub_params = constructor_param_names(*sub_binding, types);
         let agrees = match (&sup_params, &sub_params) {
             (None, None) => true,
             (Some(expected), Some(got)) => name_sets_equal(expected, got),
@@ -448,10 +479,10 @@ pub fn sig_subtype(
     // substituted type is ever built.
     let mut sub_member_map: HashMap<String, KType> = HashMap::new();
     for (name, kt) in &sub.manifest_members {
-        sub_member_map.insert(name.clone(), kt.clone());
+        sub_member_map.insert(name.clone(), *kt);
     }
     for (name, repr) in &sub.abstract_members {
-        sub_member_map.insert(name.clone(), repr.clone());
+        sub_member_map.insert(name.clone(), *repr);
     }
     for (name, declared) in &sup.value_slots {
         let Some(sub_type) = sub.value_slots.get(name) else {
@@ -460,9 +491,9 @@ pub fn sig_subtype(
             }));
         };
         let ok = match sup.sig_id {
-            Some(id) => slot_satisfied_by(declared, sub_type, &sub_member_map, id, types),
+            Some(id) => slot_satisfied_by(*declared, *sub_type, &sub_member_map, id, types),
             // No `sig_id`: nothing to substitute, so the heterogeneous `satisfied_by` is exact.
-            None => declared.satisfied_by(sub_type, types),
+            None => declared.satisfied_by(*sub_type, types),
         };
         if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
@@ -480,39 +511,43 @@ pub fn sig_subtype(
 /// `members` binds). When false, substitution is the identity and a plain compare on `declared`
 /// is exact.
 fn references_sig_member(
-    declared: &KType,
+    declared: KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
+    types: &TypeRegistry,
 ) -> bool {
-    match declared {
-        KType::AbstractType {
+    match types.node(declared) {
+        TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } => *source == sig_id && members.contains_key(name),
-        KType::List { element, .. } => references_sig_member(element, sig_id, members),
-        KType::Dict { key, value, .. } => {
-            references_sig_member(key, sig_id, members)
-                || references_sig_member(value, sig_id, members)
+        } => source == sig_id && members.contains_key(&name),
+        TypeNode::List { element } => references_sig_member(element, sig_id, members, types),
+        TypeNode::Dict { key, value } => {
+            references_sig_member(key, sig_id, members, types)
+                || references_sig_member(value, sig_id, members, types)
         }
-        KType::Record { fields, .. } => fields
+        TypeNode::Record { fields } => fields
             .values()
-            .any(|v| references_sig_member(v, sig_id, members)),
-        KType::KFunction { params, ret, .. } => {
+            .any(|v| references_sig_member(*v, sig_id, members, types)),
+        TypeNode::KFunction { params, ret } => {
             params
                 .values()
-                .any(|v| references_sig_member(v, sig_id, members))
-                || references_sig_member(ret, sig_id, members)
+                .any(|v| references_sig_member(*v, sig_id, members, types))
+                || references_sig_member(ret, sig_id, members, types)
         }
-        KType::Union { members: us, .. } => {
-            us.iter().any(|m| references_sig_member(m, sig_id, members))
-        }
-        KType::ConstructorApply { ctor, args, .. } => {
-            references_sig_member(ctor, sig_id, members)
-                || args
+        TypeNode::Union { members: us } => us
+            .iter()
+            .any(|m| references_sig_member(*m, sig_id, members, types)),
+        TypeNode::ConstructorApply {
+            constructor,
+            arguments,
+        } => {
+            references_sig_member(constructor, sig_id, members, types)
+                || arguments
                     .values()
-                    .any(|a| references_sig_member(a, sig_id, members))
+                    .any(|a| references_sig_member(*a, sig_id, members, types))
         }
         _ => false,
     }
@@ -520,18 +555,19 @@ fn references_sig_member(
 
 /// The `sub`-side binding a substitution point in `declared` resolves to, if any — the type
 /// `substitute_sig_members` would splice in for this node.
-fn substitution_binding<'m>(
-    declared: &KType,
+fn substitution_binding(
+    declared: KType,
     sig_id: ScopeId,
-    members: &'m HashMap<String, KType>,
-) -> Option<&'m KType> {
-    match declared {
-        KType::AbstractType {
+    members: &HashMap<String, KType>,
+    types: &TypeRegistry,
+) -> Option<KType> {
+    match types.node(declared) {
+        TypeNode::AbstractType {
             source,
             name,
             nonce: None,
             ..
-        } if *source == sig_id => members.get(name),
+        } if source == sig_id => members.get(&name).copied(),
         _ => None,
     }
 }
@@ -543,67 +579,58 @@ fn substitution_binding<'m>(
 /// `satisfied_by`; otherwise it descends the shared container structure with the same covariance
 /// [`KType::satisfied_by`] applies (`Dict`/`Record`/`KFunction` component rules included).
 fn slot_satisfied_by(
-    declared: &KType,
-    sub_type: &KType,
+    declared: KType,
+    sub_type: KType,
     members: &HashMap<String, KType>,
     sig_id: ScopeId,
     types: &TypeRegistry,
 ) -> bool {
-    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+    if let Some(binding) = substitution_binding(declared, sig_id, members, types) {
         return binding.satisfied_by(sub_type, types);
     }
-    if !references_sig_member(declared, sig_id, members) {
+    if !references_sig_member(declared, sig_id, members, types) {
         return declared.satisfied_by(sub_type, types);
     }
-    match (declared, sub_type) {
-        (KType::List { element: ed, .. }, KType::List { element: es, .. }) => {
+    match (types.node(declared), types.node(sub_type)) {
+        (TypeNode::List { element: ed }, TypeNode::List { element: es }) => {
             slot_satisfied_by(ed, es, members, sig_id, types)
         }
-        (
-            KType::Dict {
-                key: kd, value: vd, ..
-            },
-            KType::Dict {
-                key: ks, value: vs, ..
-            },
-        ) => {
+        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ks, value: vs }) => {
             slot_satisfied_by(kd, ks, members, sig_id, types)
                 && slot_satisfied_by(vd, vs, members, sig_id, types)
         }
-        (KType::Record { fields: fd, .. }, KType::Record { fields: fs, .. }) => {
+        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fs }) => {
             // Record-value covariance: every slot field present in the value, covariantly.
             fd.iter().all(|(name, dt)| {
                 fs.get(name)
-                    .is_some_and(|st| slot_satisfied_by(dt, st, members, sig_id, types))
+                    .is_some_and(|st| slot_satisfied_by(*dt, *st, members, sig_id, types))
             })
         }
         (
-            KType::ConstructorApply {
-                ctor: cd, args: ad, ..
+            TypeNode::ConstructorApply {
+                constructor: cd,
+                arguments: ad,
             },
-            KType::ConstructorApply {
-                ctor: cs,
-                args: as_,
-                ..
+            TypeNode::ConstructorApply {
+                constructor: cs,
+                arguments: as_,
             },
         ) => {
             ad.len() == as_.len()
-                && slot_types_equal(cd, cs, members, sig_id)
+                && slot_types_equal(cd, cs, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
                     as_.get(name)
-                        .is_some_and(|s| slot_satisfied_by(d, s, members, sig_id, types))
+                        .is_some_and(|s| slot_satisfied_by(*d, *s, members, sig_id, types))
                 })
         }
         (
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: pd,
                 ret: rd,
-                ..
             },
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: ps,
                 ret: rs,
-                ..
             },
         ) => {
             // Contravariant params (width-drop): every value param names a slot param the
@@ -611,21 +638,22 @@ fn slot_satisfied_by(
             ps.keys().all(|k| pd.get(k).is_some())
                 && ps.iter().all(|(name, sp)| {
                     pd.get(name).is_some_and(|dp| {
-                        slot_more_specific_or_equal(dp, sp, members, sig_id, types)
+                        slot_more_specific_or_equal(*dp, *sp, members, sig_id, types)
                     })
                 })
                 && slot_satisfied_by(rd, rs, members, sig_id, types)
         }
-        (KType::Union { members: ud, .. }, _) => {
+        (TypeNode::Union { members: ud }, sub_node) => {
             // A value satisfies a substituted union slot iff it (each of its members, if it is
-            // itself a union) refines some slot member — the union-membership rule of `satisfied_by`.
-            let ys: Vec<&KType> = match sub_type {
-                KType::Union { members: us, .. } => us.iter().collect(),
-                other => vec![other],
+            // itself a union) refines some slot member — the union-membership rule of
+            // `satisfied_by`.
+            let ys: Vec<KType> = match sub_node {
+                TypeNode::Union { members: us } => us,
+                _ => vec![sub_type],
             };
             ys.iter().all(|y| {
                 ud.iter()
-                    .any(|md| slot_satisfied_by(md, y, members, sig_id, types))
+                    .any(|md| slot_satisfied_by(*md, *y, members, sig_id, types))
             })
         }
         _ => false,
@@ -637,87 +665,83 @@ fn slot_satisfied_by(
 /// direction [`slot_satisfied_by`] needs for a function parameter, computed without building the
 /// substituted type.
 fn slot_more_specific_or_equal(
-    declared: &KType,
-    target: &KType,
+    declared: KType,
+    target: KType,
     members: &HashMap<String, KType>,
     sig_id: ScopeId,
     types: &TypeRegistry,
 ) -> bool {
-    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+    if let Some(binding) = substitution_binding(declared, sig_id, members, types) {
         return binding == target || binding.is_more_specific_than(target, types);
     }
-    if !references_sig_member(declared, sig_id, members) {
+    if !references_sig_member(declared, sig_id, members, types) {
         return declared == target || declared.is_more_specific_than(target, types);
     }
     // The substituted slot outranks `Any` / an unconstrained name, and refines a union it has a
     // member in — the top guards of `more_specific_walk`, mirrored here.
-    match target {
-        KType::Any => return true,
-        KType::Identifier | KType::OfKind(KKind::ProperType) => return true,
-        KType::Union { members: ts, .. } => {
-            return ts
-                .iter()
-                .any(|t| slot_more_specific_or_equal(declared, t, members, sig_id, types))
-        }
-        _ => {}
+    if target == KType::ANY
+        || target == KType::IDENTIFIER
+        || target == KType::of_kind(KKind::ProperType)
+    {
+        return true;
     }
-    match (declared, target) {
-        (KType::List { element: ed, .. }, KType::List { element: et, .. }) => {
+    let target_node = types.node(target);
+    if let TypeNode::Union { members: ts } = &target_node {
+        return ts
+            .iter()
+            .any(|t| slot_more_specific_or_equal(declared, *t, members, sig_id, types));
+    }
+    match (types.node(declared), target_node) {
+        (TypeNode::List { element: ed }, TypeNode::List { element: et }) => {
             slot_more_specific_or_equal(ed, et, members, sig_id, types)
         }
-        (
-            KType::Dict {
-                key: kd, value: vd, ..
-            },
-            KType::Dict {
-                key: kt, value: vt, ..
-            },
-        ) => {
+        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: kt, value: vt }) => {
             slot_more_specific_or_equal(kd, kt, members, sig_id, types)
                 && slot_more_specific_or_equal(vd, vt, members, sig_id, types)
         }
-        (KType::Record { fields: fd, .. }, KType::Record { fields: ft, .. }) => {
+        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: ft }) => {
             // Record-value covariance with width-superset: the more-specific record has every
             // field of `target`, each covariantly refined.
             ft.keys().all(|k| fd.get(k).is_some())
                 && ft.iter().all(|(name, tt)| {
                     fd.get(name).is_some_and(|dt| {
-                        slot_more_specific_or_equal(dt, tt, members, sig_id, types)
+                        slot_more_specific_or_equal(*dt, *tt, members, sig_id, types)
                     })
                 })
         }
         (
-            KType::ConstructorApply {
-                ctor: cd, args: ad, ..
+            TypeNode::ConstructorApply {
+                constructor: cd,
+                arguments: ad,
             },
-            KType::ConstructorApply {
-                ctor: ct, args: at, ..
+            TypeNode::ConstructorApply {
+                constructor: ct,
+                arguments: at,
             },
         ) => {
             ad.len() == at.len()
-                && slot_types_equal(cd, ct, members, sig_id)
+                && slot_types_equal(cd, ct, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
-                    at.get(name)
-                        .is_some_and(|t| slot_more_specific_or_equal(d, t, members, sig_id, types))
+                    at.get(name).is_some_and(|t| {
+                        slot_more_specific_or_equal(*d, *t, members, sig_id, types)
+                    })
                 })
         }
         (
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: pd,
                 ret: rd,
-                ..
             },
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: pt,
                 ret: rt,
-                ..
             },
         ) => {
             // Contravariant params, covariant return — the dual of the `slot_satisfied_by` case.
             pd.keys().all(|k| pt.get(k).is_some())
                 && pd.iter().all(|(name, dp)| {
                     pt.get(name)
-                        .is_some_and(|tp| slot_satisfied_by(dp, tp, members, sig_id, types))
+                        .is_some_and(|tp| slot_satisfied_by(*dp, *tp, members, sig_id, types))
                 })
                 && slot_more_specific_or_equal(rd, rt, members, sig_id, types)
         }
@@ -727,77 +751,74 @@ fn slot_more_specific_or_equal(
 
 /// Verdict of `substitute_sig_members(declared, ...) == other` — structural equality with `sub`'s
 /// bindings spliced in. Only the constructor identity of a `ConstructorApply` needs this (a
-/// constructor is a leaf `SetRef`, so the recursion bottoms out immediately in practice).
+/// constructor is a leaf member reference, so the recursion bottoms out immediately in practice).
 fn slot_types_equal(
-    declared: &KType,
-    other: &KType,
+    declared: KType,
+    other: KType,
     members: &HashMap<String, KType>,
     sig_id: ScopeId,
+    types: &TypeRegistry,
 ) -> bool {
-    if let Some(binding) = substitution_binding(declared, sig_id, members) {
+    if let Some(binding) = substitution_binding(declared, sig_id, members, types) {
         return binding == other;
     }
-    if !references_sig_member(declared, sig_id, members) {
+    if !references_sig_member(declared, sig_id, members, types) {
         return declared == other;
     }
-    match (declared, other) {
-        (KType::List { element: ed, .. }, KType::List { element: eo, .. }) => {
-            slot_types_equal(ed, eo, members, sig_id)
+    match (types.node(declared), types.node(other)) {
+        (TypeNode::List { element: ed }, TypeNode::List { element: eo }) => {
+            slot_types_equal(ed, eo, members, sig_id, types)
         }
-        (
-            KType::Dict {
-                key: kd, value: vd, ..
-            },
-            KType::Dict {
-                key: ko, value: vo, ..
-            },
-        ) => slot_types_equal(kd, ko, members, sig_id) && slot_types_equal(vd, vo, members, sig_id),
-        (KType::Record { fields: fd, .. }, KType::Record { fields: fo, .. }) => {
+        (TypeNode::Dict { key: kd, value: vd }, TypeNode::Dict { key: ko, value: vo }) => {
+            slot_types_equal(kd, ko, members, sig_id, types)
+                && slot_types_equal(vd, vo, members, sig_id, types)
+        }
+        (TypeNode::Record { fields: fd }, TypeNode::Record { fields: fo }) => {
             fd.len() == fo.len()
                 && fd.iter().all(|(name, dt)| {
                     fo.get(name)
-                        .is_some_and(|ot| slot_types_equal(dt, ot, members, sig_id))
+                        .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
                 })
         }
         (
-            KType::ConstructorApply {
-                ctor: cd, args: ad, ..
+            TypeNode::ConstructorApply {
+                constructor: cd,
+                arguments: ad,
             },
-            KType::ConstructorApply {
-                ctor: co, args: ao, ..
+            TypeNode::ConstructorApply {
+                constructor: co,
+                arguments: ao,
             },
         ) => {
             ad.len() == ao.len()
-                && slot_types_equal(cd, co, members, sig_id)
+                && slot_types_equal(cd, co, members, sig_id, types)
                 && ad.iter().all(|(name, d)| {
                     ao.get(name)
-                        .is_some_and(|o| slot_types_equal(d, o, members, sig_id))
+                        .is_some_and(|o| slot_types_equal(*d, *o, members, sig_id, types))
                 })
         }
         (
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: pd,
                 ret: rd,
-                ..
             },
-            KType::KFunction {
+            TypeNode::KFunction {
                 params: po,
                 ret: ro,
-                ..
             },
         ) => {
             pd.len() == po.len()
                 && pd.iter().all(|(name, dt)| {
                     po.get(name)
-                        .is_some_and(|ot| slot_types_equal(dt, ot, members, sig_id))
+                        .is_some_and(|ot| slot_types_equal(*dt, *ot, members, sig_id, types))
                 })
-                && slot_types_equal(rd, ro, members, sig_id)
+                && slot_types_equal(rd, ro, members, sig_id, types)
         }
-        (KType::Union { members: ud, .. }, KType::Union { members: uo, .. }) => {
+        (TypeNode::Union { members: ud }, TypeNode::Union { members: uo }) => {
             ud.len() == uo.len()
                 && ud.iter().all(|dm| {
                     uo.iter()
-                        .any(|om| slot_types_equal(dm, om, members, sig_id))
+                        .any(|om| slot_types_equal(*dm, *om, members, sig_id, types))
                 })
         }
         _ => false,
@@ -805,12 +826,12 @@ fn slot_types_equal(
 }
 
 /// Classify a SIG type-table entry by its *representation*: an abstract member carries no
-/// concrete witness, which is exactly a [`KType::AbstractType`] — the first-order `TYPE Elt` slot
+/// concrete witness, which is exactly an `AbstractType` node — the first-order `TYPE Elt` slot
 /// and the higher-kinded `TYPE (Elem AS Wrap)` slot alike, both sourced at the SIG decl scope.
 /// Everything else — a manifest `LET Tag = Number` binding a concrete type, a minted constructor
 /// family — is manifest.
-pub(crate) fn is_abstract_sig_member(kt: &KType) -> bool {
-    matches!(kt, KType::AbstractType { .. })
+pub(crate) fn is_abstract_sig_member(kt: KType, types: &TypeRegistry) -> bool {
+    matches!(types.node(kt), TypeNode::AbstractType { .. })
 }
 
 #[cfg(test)]

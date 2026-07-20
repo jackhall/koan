@@ -341,7 +341,7 @@ reattachable! {
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
-/// type-channel identity (a `SetRef` / declared type) that must cross the build brand. A
+/// type-channel identity (a `SetMember` / declared type) that must cross the build brand. A
 /// value-embedding construction `transfer_into`/`merge`s its object carrier with this operand so the
 /// wrapped value lands — allocated through the handle — tagged by the identity, both re-anchored to
 /// the build brand under the same witness; the dest frame's `outer` chain pins the identity's

@@ -73,7 +73,7 @@ fn extract_binder_install<'ast, 'step>(
             .elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Argument(arg) => arg.ktype != KType::KExpression,
+                SignatureElement::Argument(arg) => arg.ktype != KType::KEXPRESSION,
                 SignatureElement::Keyword(_) => false,
             })
             .collect();
@@ -86,7 +86,7 @@ fn extract_binder_install<'ast, 'step>(
                     break;
                 }
                 if let SignatureElement::Argument(arg) = el {
-                    if arg.ktype == KType::KExpression {
+                    if arg.ktype == KType::KEXPRESSION {
                         mask[i] = false;
                     }
                 }

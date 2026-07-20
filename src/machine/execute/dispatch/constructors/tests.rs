@@ -34,23 +34,29 @@ fn ctor_fast_lane_propagates_tag_validation_error() {
 }
 
 /// Value-cell sub-expression `(x)` rides the `BareIdentifier` fast lane to resolve
-/// `x` before the newtype construction sees the value bind. A user-union variant value is an
-/// ordinary `KObject::Wrapped` over the member `SetRef`, not a `KObject::Tagged`.
+/// `x` before the variant construction sees the value bind. A user-union variant value is a
+/// `KObject::Tagged` — the same shape builtin `Result` produces — carrying its variant tag and,
+/// as `identity`, the member's own sealed `SetMember` handle.
 #[test]
 fn ctor_fast_lane_with_sub_expression_value() {
-    use crate::machine::model::KType;
+    use crate::machine::model::TypeNode;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     test_run.run("UNION Maybe = (Some :Number None :Null)\nLET x = 7");
     let result = test_run.run_one(parse_one("Maybe (Some (x))"));
     match result {
-        KObject::Wrapped { inner, type_id } => {
-            assert!(matches!(inner.get(), KObject::Number(n) if *n == 7.0));
-            match type_id {
-                KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Some"),
-                other => panic!("expected a member SetRef type_id, got {other:?}"),
+        KObject::Tagged {
+            tag,
+            value,
+            identity,
+        } => {
+            assert_eq!(tag, "Some");
+            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 7.0));
+            match test_run.types.node(*identity) {
+                TypeNode::SetMember { name, .. } => assert_eq!(name, "Some"),
+                _ => panic!("expected a member SetMember identity, got {identity:?}"),
             }
         }
-        other => panic!("expected Wrapped, got {:?}", other.ktype()),
+        other => panic!("expected Tagged, got {:?}", other.ktype()),
     }
 }

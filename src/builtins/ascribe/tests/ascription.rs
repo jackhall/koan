@@ -1,7 +1,7 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
 use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 use crate::parse::parse;
@@ -29,10 +29,12 @@ fn ascription_missing_member_errors() {
          SIG Ordered = (VAL compare :Number)",
     );
     let err = test_run.run_one_err(parse_one("empty :| Ordered"));
+    // Ruling 12: a signature renders structurally, not by declared name — the diagnostic names
+    // the interface `SIG (compare: Number)` and the missing member, not "Ordered".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("Ordered") && msg.contains("`compare`")),
-        "expected ShapeError naming Ordered and the missing member, got {err}",
+            if msg.contains("does not satisfy signature") && msg.contains("`compare`")),
+        "expected ShapeError naming the missing member `compare`, got {err}",
     );
 }
 
@@ -66,12 +68,12 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     // An opaque-ascription abstract-type member mints as
     // `KType::AbstractType { name, nonce: Some(<view module's scope id>), .. }`.
     assert!(matches!(
-        &a_t,
-        Some(KType::AbstractType { name, .. }) if name == "Carrier"
+        a_t.map(|h| test_run.types.node(h)),
+        Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert!(matches!(
-        &b_t,
-        Some(KType::AbstractType { name, .. }) if name == "Carrier"
+        b_t.map(|h| test_run.types.node(h)),
+        Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"
     ));
     assert_ne!(
         a_t, b_t,
@@ -112,13 +114,16 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         .get("Carrier")
         .cloned()
         .expect("opaque ascription should mint a Carrier member");
-    match &minted {
-        KType::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
-        other => panic!("minted abstract type must be AbstractType, got {:?}", other),
+    match test_run.types.node(minted) {
+        TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
+        _ => panic!(
+            "minted abstract type must be AbstractType, got {:?}",
+            minted
+        ),
     }
     assert_ne!(
         minted,
-        KType::Number,
+        KType::NUMBER,
         "opaque int_ord_abstract.Carrier must not equal Number"
     );
     let compare = abstract_mod
@@ -148,7 +153,7 @@ fn opaque_view_reads_manifest_type_member_concretely() {
     let tag = view.type_members.borrow().get("Tag").cloned();
     assert_eq!(
         tag,
-        Some(KType::Number),
+        Some(KType::NUMBER),
         "manifest `LET Tag = Number` must mirror concretely into the opaque view, got {tag:?}",
     );
 }
@@ -191,9 +196,10 @@ fn opaque_missing_abstract_member_rejected() {
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
     let err = test_run.run_one_err(parse_one("implementation :| Container"));
+    // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("Container") && msg.contains("missing type member `Elt`")),
+            if msg.contains("does not satisfy signature") && msg.contains("missing type member `Elt`")),
         "expected the missing-type-member error, got {err}",
     );
 }
@@ -208,9 +214,10 @@ fn transparent_missing_abstract_member_rejected() {
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
     let err = test_run.run_one_err(parse_one("implementation :! Container"));
+    // Ruling 12: the signature is named structurally, not "Container".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("Container") && msg.contains("missing type member `Elt`")),
+            if msg.contains("does not satisfy signature") && msg.contains("missing type member `Elt`")),
         "expected the missing-type-member error, got {err}",
     );
 }
@@ -226,9 +233,10 @@ fn manifest_type_member_mismatch_rejected() {
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))",
     );
     let err = test_run.run_one_err(parse_one("implementation :| Tagged"));
+    // Ruling 12: the signature is named structurally, not "Tagged".
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
-            if msg.contains("Tagged")
+            if msg.contains("does not satisfy signature")
                 && msg.contains("type member `Tag`")
                 && msg.contains("fixes it to")),
         "expected the manifest fixes-it-to error, got {err}",

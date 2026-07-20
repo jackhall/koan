@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, KObject, KType, RecursiveSet};
+use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
@@ -28,9 +28,8 @@ use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Residence;
 
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
-/// slot is resolved. `(set, index)` is the sealed-member identity stamped onto the produced
-/// `KObject`; `schema` is the projected (sibling-`SetLocal`-resolved) schema used for
-/// per-value type-checking.
+/// slot is resolved. `identity` / `constructor` is the sealed member's handle, stamped onto the
+/// produced `KObject`; `schema` is the member's variant schema, used for per-value type-checking.
 pub(in crate::machine::execute) enum CtorKind<'step> {
     /// NewType construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
@@ -46,8 +45,9 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     },
     Tagged {
         schema: Rc<HashMap<String, KType>>,
-        set: Rc<RecursiveSet>,
-        index: usize,
+        /// The sealed union member's own handle — what the built `Tagged` carries as its
+        /// `identity`, and what its `ktype()` reports.
+        member: KType,
         tag: String,
     },
     /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
@@ -56,7 +56,7 @@ pub(in crate::machine::execute) enum CtorKind<'step> {
     /// `Wrapped` layer, and wraps the payload with a fresh
     /// `ConstructorApply(Wrapper, {<param> = <arg>})`
     /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
-    ApplyConstructor { set: Rc<RecursiveSet>, index: usize },
+    ApplyConstructor { constructor: KType },
 }
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -236,7 +236,7 @@ fn park_on_literal<'step>(dep: DepRequest<'step>) -> Outcome<'step> {
 
 /// Bare-`Type`-head call. A single `resolve_type_with_chain` (a `types[name]` read)
 /// classifies the identity, which routes through the shared apply-a-callable tail's
-/// `Constructor` arm — a constructible `SetRef` identity (a sealed nominal type) is the
+/// `Constructor` arm — a constructible `SetMember` identity (a sealed nominal type) is the
 /// invocable case.
 ///
 /// A `Parked` head (a still-finalizing `LET <Type-class> = …` binding, including a

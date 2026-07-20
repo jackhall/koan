@@ -304,5 +304,5 @@ fn let_type_to_value_name_rejected() {
         test_run.runtime.dispatch_in_scope(e, scope);
     }
     test_run.runtime.execute().unwrap();
-    assert_eq!(scope.resolve_type("Ty"), Some(&KType::Number));
+    assert_eq!(scope.resolve_type("Ty"), Some(&KType::NUMBER));
 }

@@ -3,7 +3,7 @@
 //!
 //! - `core` — `Scope`, `KoanRegion`, `KError`, scheduler glue, and the
 //!   `kfunction` submodule (`KFunction`, `Body`).
-//! - `model` — `KType`, `KObject`, `Module`, `SigContent`, signature traits.
+//! - `model` — `KType`, `KObject`, `Module`, `SigSchema`, signature traits.
 //! - `execute` — top-level interpret loop and scheduler driver.
 
 pub(crate) mod core;
@@ -27,7 +27,7 @@ pub use core::{
 };
 pub(crate) use core::{
     BindKind, BindingIndex, CallFrame, CarrierWitness, FrameSet, FunctionLookup, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, RegionBrand, RegionTypeFamily, TraceFrame,
+    LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, TraceFrame,
 };
 pub(crate) use execute::{
     build_type_operand, defer_field_list_action, defer_field_list_action_composed,

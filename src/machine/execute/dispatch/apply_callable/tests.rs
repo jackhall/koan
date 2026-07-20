@@ -2,23 +2,23 @@
 //!
 //! A record-literal body on a type-constructor head — a `NEWTYPE`-declared family, the builtin
 //! `Result`, or a SIG's abstract constructor slot — binds the family's declared parameters by
-//! name and yields a `KType::ConstructorApply`. `AS` is its arity-1 sugar. These run the real
+//! name and yields a `TypeNode::ConstructorApply`. `AS` is its arity-1 sugar. These run the real
 //! dispatcher, so they cover the sub-dispatch parking path and the key-check diagnostics.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::{KType, Record, TypeRegistry};
+use crate::machine::model::{KType, Record, TypeNode, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// The `(name, arg)` pairs of a `ConstructorApply`, in the order the args record carries them —
 /// the constructor's declared parameter order.
 fn applied_args(kt: &KType, types: &TypeRegistry) -> Vec<(String, KType)> {
-    match kt {
-        KType::ConstructorApply { args, .. } => args
+    match types.node(*kt) {
+        TypeNode::ConstructorApply { arguments, .. } => arguments
             .iter()
-            .map(|(name, arg)| (name.clone(), arg.clone()))
+            .map(|(name, arg)| (name.clone(), *arg))
             .collect(),
-        other => panic!("expected a ConstructorApply, got {}", other.name(types)),
+        _ => panic!("expected a ConstructorApply, got {}", kt.name(types)),
     }
 }
 
@@ -32,8 +32,8 @@ fn result_applies_named_type_arguments() {
     assert_eq!(
         applied_args(applied, &test_run.types),
         vec![
-            ("Ok".to_string(), KType::Number),
-            ("Error".to_string(), KType::Str),
+            ("Ok".to_string(), KType::NUMBER),
+            ("Error".to_string(), KType::STR),
         ],
     );
 }
@@ -47,7 +47,7 @@ fn user_family_applies_named_type_argument() {
     let applied = test_run.run_one_type(parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(
         applied_args(applied, &test_run.types),
-        vec![("Elem".to_string(), KType::Number)],
+        vec![("Elem".to_string(), KType::NUMBER)],
     );
 }
 
@@ -61,7 +61,7 @@ fn compound_type_argument_sub_dispatches() {
     let applied = test_run.run_one_type(parse_one(":(Wrap {Elem = (LIST OF Number)})"));
     assert_eq!(
         applied_args(applied, &test_run.types),
-        vec![("Elem".to_string(), KType::list(Box::new(KType::Number)),)],
+        vec![("Elem".to_string(), test_run.types.list(KType::NUMBER))],
     );
 }
 
@@ -72,9 +72,7 @@ fn as_sugar_equals_named_application() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let sugared = test_run
-        .run_one_type(parse_one(":(Number AS Wrap)"))
-        .clone();
+    let sugared = *test_run.run_one_type(parse_one(":(Number AS Wrap)"));
     let named = test_run.run_one_type(parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(sugared.digest(), named.digest());
     assert_eq!(&sugared, named);
@@ -86,9 +84,7 @@ fn as_sugar_equals_named_application() {
 fn named_application_is_order_blind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let declared = test_run
-        .run_one_type(parse_one(":(Result {Ok = Number, Error = Str})"))
-        .clone();
+    let declared = *test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Str})"));
     let reversed = test_run.run_one_type(parse_one(":(Result {Error = Str, Ok = Number})"));
     assert_eq!(declared.digest(), reversed.digest());
     assert_eq!(&declared, reversed);
@@ -109,7 +105,7 @@ fn constructor_apply_name_round_trips() {
         ":(Wrap {Elem = :(LIST OF Number)})",
         ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
-        let applied = test_run.run_one_type(parse_one(source)).clone();
+        let applied = *test_run.run_one_type(parse_one(source));
         let rendered = applied.name(&test_run.types);
         let reparsed = test_run.run_one_type(parse_one(&rendered));
         assert_eq!(
@@ -222,8 +218,8 @@ fn multi_parameter_family_rejects_value_construction() {
     assert_eq!(
         applied_args(applied, &test_run.types),
         vec![
-            ("One".to_string(), KType::Number),
-            ("Two".to_string(), KType::Str),
+            ("One".to_string(), KType::NUMBER),
+            ("Two".to_string(), KType::STR),
         ],
     );
 }
@@ -236,9 +232,7 @@ fn erased_result_carrier_admits_named_application() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("LET wrapped = (Result (Ok 3.0))");
-    let admitting = test_run
-        .run_one_type(parse_one(":(Result {Ok = Number, Error = Any})"))
-        .clone();
+    let admitting = *test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Any})"));
     let refusing = test_run.run_one_type(parse_one(":(Result {Ok = Str, Error = Any})"));
     let value = scope.bindings().expect_value("wrapped");
     let types = test_run.types.clone();
@@ -276,18 +270,16 @@ fn value_type_argument_is_refused() {
 fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
     use crate::machine::core::ScopeId;
     use crate::machine::model::KKind;
-    let ctor = KType::AbstractType {
+    let types = TypeRegistry::new();
+    let ctor = types.intern(TypeNode::AbstractType {
         source: ScopeId::from_raw(0, 0xB0B),
         name: "Wrap".into(),
         param_names: vec!["Elem".into()],
         nonce: None,
-    };
-    let applied = KType::constructor_apply(
-        Box::new(ctor),
-        Record::from_pairs([("Elem".to_string(), KType::Number)]),
+    });
+    let applied = types.constructor_apply(
+        ctor,
+        Record::from_pairs([("Elem".to_string(), KType::NUMBER)]),
     );
-    assert_eq!(
-        applied.kind_of(&TypeRegistry::new()),
-        KKind::TypeConstructor
-    );
+    assert_eq!(applied.kind_of(&types), KKind::TypeConstructor);
 }

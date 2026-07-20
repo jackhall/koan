@@ -78,7 +78,7 @@ fn try_register_type_inserts_into_types_map() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::NUMBER);
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
@@ -97,8 +97,8 @@ fn try_register_type_rejects_collision_with_rebind() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt1: &KType = region.alloc_ktype(KType::Number);
-    let kt2: &KType = region.alloc_ktype(KType::Str);
+    let kt1: &KType = region.alloc_ktype(KType::NUMBER);
+    let kt2: &KType = region.alloc_ktype(KType::STR);
     bindings
         .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
         .expect("first register should succeed");
@@ -120,7 +120,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::NUMBER);
     let _r = bindings.types();
     let outcome = bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
@@ -134,7 +134,7 @@ fn try_register_type_clears_matching_placeholder() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::NUMBER);
     bindings
         .try_install_placeholder(
             "Bar".to_string(),
@@ -155,7 +155,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::NUMBER);
     bindings
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("register should succeed");
@@ -215,7 +215,7 @@ fn value_token_may_not_bind_type_side() {
     let storage = run_root_storage();
     let region = storage.brand();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = region.alloc_ktype(KType::Number);
+    let kt: &KType = region.alloc_ktype(KType::NUMBER);
     let error = match bindings.try_register_type("int_ord", kt, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),

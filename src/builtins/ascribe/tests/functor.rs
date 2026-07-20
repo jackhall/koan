@@ -2,7 +2,7 @@
 //! per-call generativity.
 
 use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeNode};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 use crate::parse::parse;
@@ -115,11 +115,11 @@ fn functor_application_mints_distinct_abstract_types() {
     let one_carrier = one.type_members.borrow().get("Carrier").cloned();
     let two_carrier = two.type_members.borrow().get("Carrier").cloned();
     assert!(
-        matches!(&one_carrier, Some(KType::AbstractType { name, .. }) if name == "Carrier"),
+        matches!(one_carrier.map(|h| test_run.types.node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
         "the first application must mint an abstract Carrier, got {one_carrier:?}",
     );
     assert!(
-        matches!(&two_carrier, Some(KType::AbstractType { name, .. }) if name == "Carrier"),
+        matches!(two_carrier.map(|h| test_run.types.node(h)), Some(TypeNode::AbstractType { name, .. }) if name == "Carrier"),
         "the second application must mint an abstract Carrier, got {two_carrier:?}",
     );
     assert_ne!(
@@ -311,7 +311,10 @@ fn pure_call_passes_return_check() {
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
-                matches!(**type_id, KType::ConstructorApply { .. }),
+                matches!(
+                    test_run.types.node(*type_id),
+                    TypeNode::ConstructorApply { .. }
+                ),
                 "pure must return an identity-wrapper value, got {:?}",
                 type_id,
             );
@@ -381,23 +384,32 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     let b = lookup_module(scope, "second", &test_run.types);
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
-    let is_type_constructor = |kt: &Option<KType>| {
+    let is_type_constructor = |kt: Option<KType>| {
         matches!(
-            kt,
-            Some(KType::SetRef { set, index }) if set.member(*index).kind == KKind::TypeConstructor
+            kt.map(|h| test_run.types.node(h)),
+            Some(TypeNode::SetMember { kind, .. }) if kind == KKind::TypeConstructor
         )
     };
-    assert!(is_type_constructor(&a_wrap));
-    assert!(is_type_constructor(&b_wrap));
-    // Identity is the content digest, but an opaque-ascription set is *generative*: each
-    // application folds its per-call nonce (the view module's `scope_id`) into the set digest,
-    // so the two sets digest apart even though their member content is identical.
-    match (&a_wrap, &b_wrap) {
-        (Some(KType::SetRef { set: aset, .. }), Some(KType::SetRef { set: bset, .. })) => {
+    assert!(is_type_constructor(a_wrap));
+    assert!(is_type_constructor(b_wrap));
+    // Identity is the content digest, but an opaque-ascription mint is *generative*: each
+    // application folds its per-call nonce (the view module's `scope_id`) into the component
+    // digest, so the two members digest apart even though their member content is identical.
+    match (
+        a_wrap.map(|h| test_run.types.node(h)),
+        b_wrap.map(|h| test_run.types.node(h)),
+    ) {
+        (
+            Some(TypeNode::SetMember {
+                scc_digest: a_scc, ..
+            }),
+            Some(TypeNode::SetMember {
+                scc_digest: b_scc, ..
+            }),
+        ) => {
             assert_ne!(
-                aset.generative_nonce(),
-                bset.generative_nonce(),
-                "two opaque ascriptions must mint TypeConstructor sets with distinct nonces",
+                a_scc, b_scc,
+                "two opaque ascriptions must mint TypeConstructor members with distinct component digests",
             );
         }
         _ => unreachable!("matched above"),

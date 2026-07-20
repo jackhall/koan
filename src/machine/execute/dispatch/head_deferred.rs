@@ -5,17 +5,17 @@
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
 //!
-//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or a `SetRef`
+//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or a `SetMember`
 //!   constructor.
 //! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only a
-//!   constructible type — a `SetRef` constructor. A function value or any other type
+//!   constructible type — a `SetMember` constructor. A function value or any other type
 //!   surfaces a type-shaped `TypeMismatch`.
 //!
 //! The park/resume pair mirrors `park_on_literal` + the `type_call`
 //! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::DepPlacement;
-use crate::machine::model::KType;
+use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -103,17 +103,17 @@ fn classify_head<'step>(
         },
         // A head is resolved before it is classified, so an unlowered name names no callable.
         Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
-        // A `SetRef` is a constructor — the only invocable type identity. Every other type is
-        // type-shaped but not invocable.
-        Carried::Type(kt) => match kt {
-            KType::SetRef { .. } => Ok(ResolvedCallable::Constructor { identity: kt }),
-            other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
+        // A sealed nominal member is a constructor — the only invocable type identity. Every other
+        // type is type-shaped but not invocable.
+        Carried::Type(kt) => match types.node(*kt) {
+            TypeNode::SetMember { .. } => Ok(ResolvedCallable::Constructor { identity: kt }),
+            _ if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),
-                got: other.name(types),
+                got: kt.name(types),
             })),
-            other => Err(KError::new(KErrorKind::DispatchFailed {
-                expr: other.name(types),
+            _ => Err(KError::new(KErrorKind::DispatchFailed {
+                expr: kt.name(types),
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },

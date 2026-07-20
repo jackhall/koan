@@ -3,7 +3,7 @@
 //! its `ktype()` is `KType::KFunction`. `bindings.types` holds no callable value.
 
 use crate::builtins::test_support::{parse_one, TestRun};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, TypeNode};
 use crate::machine::run_root_storage;
 
 const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
@@ -46,8 +46,8 @@ fn module_returning_fn_ktype_is_kfunction() {
         .expect("make_set must bind value-side");
     let ktype = bound.ktype();
     assert!(
-        matches!(ktype, KType::KFunction { .. }),
-        "a module-returning FN's ktype() must be KType::KFunction, got {:?}",
+        matches!(test_run.types.node(ktype), TypeNode::KFunction { .. }),
+        "a module-returning FN's ktype() must be a function type, got {:?}",
         ktype,
     );
 }
