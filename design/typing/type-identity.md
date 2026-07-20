@@ -23,6 +23,13 @@ shared interner, no global table, and no reconciliation step. This is what
 keeps identity local — a future parallel runtime mints digests thread-locally
 and joins registries without a lock.
 
+Every type handle therefore denotes a type. A bare type name the synchronous
+bind seam cannot lower to a concrete type is not one: it rides the value channel
+as its own unlowered-name carrier — a dedicated `Held`/`Carried` arm holding the
+surface `TypeIdentifier` — until the park-capable resolver consumes it. It never
+enters the type layer, so it never digests, never reaches the dispatch
+predicates, and no handle can denote an unresolved name.
+
 The digest *is* the truth: equality is an unconditional digest compare, hashing
 keys on the digest, and no repair path exists. The width is chosen so that an
 accidental collision is less likely than a hardware fault — the same footing on
@@ -42,15 +49,26 @@ Dispatch, matching, and memo caches all inherit this unification.
 
 ## Opaque ascription is the generative exception
 
-`:|` exists to hide representation, and hiding rides distinctness: each
-application mints a fresh identity nonce and folds it into the digested
-content, so two applications of the same signature member over the same
-representation are distinct types. Generativity survives exactly where
-abstraction demands it and nowhere else.
+`:|` exists to hide representation, and hiding rides distinctness. Generativity
+is one explicit mechanism — a minted `ScopeId` *nonce*, folded into digested
+content ahead of everything else — and it appears in exactly two carriers: a
+recursive set's nonce and an abstract type's. Each `:|` application mints a
+fresh one, so two applications of the same signature member over the same
+representation are distinct types; a `SIG`-body abstract declaration carries no
+nonce and is content-keyed against its binder. Generativity survives exactly
+where abstraction demands it and nowhere else.
 
-The sole remaining id-keyed leaf is `AbstractType`: its digest folds the
-minting scope id, is stable within a run, and the order-independence property
-above is scoped to types without such a leaf. A `Signature` is *not* id-keyed —
+The sole remaining id-keyed leaf is `AbstractType`. Its digest folds all four
+of its fields — the nonce, the binder scope the member is named against, its
+name, and its parameter names, the last fed as a *set* (sorted, so declaration
+order is presentation, matching the schema encoding below). It is stable within
+a run, and the order-independence property above is scoped to types without
+such a leaf. Because generativity rides the nonce rather than the binder scope,
+an opaque mint shares its declaration's binder and name; the matchers that read
+an `AbstractType` as a *reference* to a signature member — substitution, the
+reference test, and the schema self-reference canonicalization — therefore
+require a nonce-free one, so a mint never reads as a reference to the
+declaration it was threaded from. A `Signature` is *not* id-keyed —
 it digests by its source's schema content (member names, each abstract member's
 parameter names — sorted, so declaration order is presentation — and
 manifest-member / value-slot type digests), with references to the

@@ -180,11 +180,6 @@ impl<'a> Held<'a> {
         self.render_summary(Some(types))
     }
 
-    /// The registry-free twin of [`Self::summarize`] — see [`Carried::summarize_without_registry`].
-    pub fn summarize_without_registry(&self) -> String {
-        self.render_summary(None)
-    }
-
     pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
             Held::Object(o) => o.render_summary(types),

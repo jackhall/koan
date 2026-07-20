@@ -160,6 +160,22 @@ garbage collection, no refcounting, and no growth that outlives the run. Dedup k
 the node population at the number of *distinct* types the run builds, which is what
 bounds the growth.
 
+## How the registry reaches its readers
+
+Ownership is one thing, reach is another: every consumer that dereferences a
+handle takes `&TypeRegistry` as a parameter, and none reaches for ambient static
+state. The run frame's registry is threaded to three kinds of reader. A step
+body reads it off the scheduler view it already holds. The type-system surface
+itself — rendering, kind classification, schema projection, the subtype and
+signature predicates, and the builtin seeding that constructs the run's first
+types — takes it as an explicit operand, so a type layer function is a pure
+function of its arguments. A wake-time finisher reads it off its finish context,
+which carries a *borrow* independent of the step brand: a continuation is
+invoked immediately at a site holding the scheduler view, so the registry need
+only outlive the finish call, and continuations are higher-ranked over that
+lifetime. Nothing stores the reference beyond the call that received it, which
+is what keeps ownership sitting on the run frame alone.
+
 ## Concurrency
 
 Koan has no concurrency primitives yet; the registry is designed so that adding them
@@ -182,11 +198,14 @@ The registry home and its verdict edges are shipped
 lifetime parameter — every variant owns its content, so a type crosses a region
 boundary by clone through the single storage door
 ([`RegionBrand::alloc_ktype`](../../src/machine/core/arena.rs)) with no residence
-audit to run. The storage model — everything this doc says about nodes, handles, and
-composition edges — lands through one further roadmap item. Until it ships, type
-content is owned by each `KType` value (`Box`/`Vec` children, `Rc<RecursiveSet>`
-transport, `Rc<SigContent>` for a signature's schema), and `KType` is `Clone` not
-`Copy`.
+audit to run. The access model above is shipped: the registry is threaded to every
+type-layer reader as an explicit parameter, and reachable at wake time as a borrow
+on the finish context. The storage model — everything this doc says about nodes,
+handles, and composition edges — lands through one further roadmap item. Until it
+ships, type content is owned by each `KType` value (`Box`/`Vec` children,
+`Rc<RecursiveSet>` transport, `Rc<SigContent>` for a signature's schema), `KType` is
+`Clone` not `Copy`, and the threaded registry is inert on the reader side — no
+consumer dereferences a handle through it yet.
 
 - [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
   — content nodes, the `Copy` digest handle, and the recursive-set builder. The

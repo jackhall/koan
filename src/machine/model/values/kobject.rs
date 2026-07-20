@@ -452,12 +452,6 @@ impl<'a> KObject<'a> {
         self.render_summary(Some(types))
     }
 
-    /// The registry-free twin of [`Self::summarize`], for the `Formatter`-only renderers that
-    /// have no registry to hand.
-    pub fn summarize_without_registry(&self) -> String {
-        self.render_summary(None)
-    }
-
     pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
             KObject::Number(n) => n.to_string(),
