@@ -37,16 +37,36 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
     ));
 }
 
+/// A bare user type name has no builtin lowering, so the bind seam hands it on as the
+/// `UnresolvedType` carrier: the surface `TypeIdentifier` survives verbatim and no type handle
+/// is ever minted for an unresolved name.
 #[test]
-fn resolve_for_defers_user_bound_leaf_to_unresolved() {
+fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::ProperType);
-    assert!(matches!(
-        part.resolve_for(&slot, scope),
-        Held::Type(KType::Unresolved(_))
-    ));
+    match part.resolve_for(&slot, scope) {
+        Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
+        other => panic!(
+            "expected the unlowered-name carrier, got {}",
+            other.summarize()
+        ),
+    }
+}
+
+/// The unlowered carrier still classifies as a proper type for slot matching, so an unresolved
+/// name keeps riding the type channel exactly where the lowered arm did.
+#[test]
+fn unresolved_carrier_classifies_as_a_proper_type() {
+    let storage = crate::machine::core::run_root_storage();
+    let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
+    let slot = KType::OfKind(KKind::ProperType);
+    let held = part.resolve_for(&slot, scope);
+    assert!(matches!(held.ktype(), KType::OfKind(KKind::ProperType)));
+    assert!(held.as_type().is_none(), "it carries no type handle");
+    assert!(held.as_object().is_none(), "and it is not a value");
 }
 
 #[test]

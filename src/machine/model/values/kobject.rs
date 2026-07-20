@@ -401,7 +401,7 @@ impl<'a> KObject<'a> {
 fn held_resident_in(h: &Held<'_>, residence: &Residence<'_>) -> bool {
     match h {
         Held::Object(o) => o.resident_in_visiting(residence),
-        Held::Type(_) => true,
+        Held::Type(_) | Held::UnresolvedType(_) => true,
     }
 }
 

@@ -220,6 +220,9 @@ fn apply_named_type_args<'step>(
                     expected: "Type".to_string(),
                     got: object.ktype().name(),
                 })),
+                Carried::UnresolvedType(ti) => {
+                    Err(KError::new(KErrorKind::UnboundName(ti.render())))
+                }
             })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {

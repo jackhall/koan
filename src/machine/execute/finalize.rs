@@ -226,11 +226,14 @@ fn match_declared_return<'c>(
             let matched = match value {
                 Carried::Object(object) => declared_type.matches_value(object, types),
                 Carried::Type(t) => declared_type.matches_type(t),
+                // Every delivered result is resolved; an unlowered name satisfies no contract.
+                Carried::UnresolvedType(_) => false,
             };
             if !matched {
                 let got = match value {
                     Carried::Object(object) => object.ktype().name(),
                     Carried::Type(t) => t.name(),
+                    Carried::UnresolvedType(ti) => ti.render(),
                 };
                 mismatch = Some(return_type_mismatch(declared_type, per_call, label, got));
             }

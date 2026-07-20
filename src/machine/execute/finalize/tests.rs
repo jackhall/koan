@@ -311,5 +311,8 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
             );
         }
         Carried::Type(other) => panic!("expected the passed-through Number, got {}", other.name()),
+        Carried::UnresolvedType(ti) => {
+            panic!("expected the passed-through Number, got {}", ti.render())
+        }
     });
 }

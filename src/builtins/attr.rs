@@ -47,11 +47,11 @@ fn read_field_name<'a>(args: &KObject<'a>) -> Result<String, KError> {
             })),
         };
     }
+    if let Some(te) = crate::machine::arg_unresolved_type(args, "field") {
+        return Ok(te.render());
+    }
     if let Some(kt) = arg_type(args, "field") {
-        return Ok(match kt {
-            KType::Unresolved(te) => te.render(),
-            other => other.name(),
-        });
+        return Ok(kt.name());
     }
     Err(KError::new(KErrorKind::MissingArg("field".to_string())))
 }
@@ -97,10 +97,28 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
 /// value (see [token classes](../../design/typing/tokens.md) for why such an lhs token is
 /// Type-classed). The Type-Type overload shares this body so a chained access whose field is itself
 /// a Type token reaches the same projection. Projects a member off the Type-classed `s`, resolving
-/// an `Unresolved` leaf through the memoized bridge first. A module lhs rides the value channel and
-/// picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
+/// an unlowered name carrier through the memoized bridge first. A module lhs rides the value channel
+/// and picks [`body_module`] instead, so `Foo.Carrier` projects off the module value.
 pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
-    use crate::machine::{arg_object, arg_type, Action};
+    use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
+    if let Some(te) = arg_unresolved_type(ctx.args, "s") {
+        let field_name = crate::try_action!(read_field_name(ctx.args));
+        return match ctx.scope.resolve_type_identifier(te, None) {
+            TypeResolution::Done(kt) => route(access_type_member(ctx.scope, kt, &field_name)),
+            TypeResolution::Unbound(name) => {
+                Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
+            }
+            TypeResolution::Park(producers) => {
+                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                    "ATTR lhs type `{}` resolved to a still-finalizing type \
+                     (parked on {} producer(s)); the type argument should already be sealed \
+                     at body entry",
+                    te.render(),
+                    producers.len(),
+                )))))
+            }
+        };
+    }
     let s_kt = match arg_type(ctx.args, "s") {
         Some(kt) => kt,
         None => {
@@ -115,24 +133,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
         }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args));
-    match s_kt {
-        KType::Unresolved(te) => match ctx.scope.resolve_type_identifier(te, None) {
-            TypeResolution::Done(kt) => route(access_type_member(ctx.scope, kt, &field_name)),
-            TypeResolution::Unbound(name) => {
-                Action::Done(Err(KError::new(KErrorKind::UnboundName(name))))
-            }
-            TypeResolution::Park(producers) => {
-                Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
-                    "ATTR lhs type `{}` resolved to a still-finalizing type \
-                     (parked on {} producer(s)); the type argument should already be sealed \
-                     at body entry",
-                    te.render(),
-                    producers.len(),
-                )))))
-            }
-        },
-        kt => route(access_type_member(ctx.scope, kt, &field_name)),
-    }
+    route(access_type_member(ctx.scope, s_kt, &field_name))
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
@@ -283,19 +284,26 @@ fn access_field<'a>(
             Ok(step.alloc_carried_with(&[lhs], |b, views| {
                 let target = match views[0] {
                     Carried::Object(o) => o,
-                    Carried::Type(_) => unreachable!("probed ambient: lhs is a value"),
+                    Carried::Type(_) | Carried::UnresolvedType(_) => {
+                        unreachable!("probed ambient: lhs is a value")
+                    }
                 };
                 match wrapped_field(target, field)
                     .expect("probed ambient: field exists on this value")
                 {
                     Held::Object(v) => Carried::Object(b.alloc_object_folded(v.deep_clone())),
-                    Held::Type(_) => unreachable!("probed ambient: member is an object"),
+                    Held::Type(_) | Held::UnresolvedType(_) => {
+                        unreachable!("probed ambient: member is an object")
+                    }
                 }
             }))
         }
         // A type member is owned data: it clones out of the lhs and allocates into the read
         // site's own region, so the read carries no dependence on the lhs carrier.
         Held::Type(kt) => Ok(step.alloc_type(kt.clone())),
+        // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
+        // never lands in one.
+        Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
     }
 }
 

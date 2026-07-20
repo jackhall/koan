@@ -20,6 +20,12 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
                 t.name(),
             )))))
         }
+        Some(Held::UnresolvedType(ti)) => {
+            return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
+                "`TYPE OF` takes a value; `{}` is already a type",
+                ti.render(),
+            )))))
+        }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("value".into())))),
     };
     if value.is_unstamped_empty_container() {

@@ -6,7 +6,6 @@ use super::ktype::KType;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
-use crate::machine::model::Parseable;
 use crate::machine::model::Record;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
@@ -162,11 +161,13 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that
                     // resolved to a value-by-expression.
                     Some(Carried::Type(kt)) => checked(kt.clone()),
-                    Some(Carried::Object(other)) => Err(format!(
-                        "{context_list} type for `{}` resolved to non-type value `{}`",
-                        name,
-                        other.summarize(),
-                    )),
+                    Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
+                        Err(format!(
+                            "{context_list} type for `{}` resolved to non-type value `{}`",
+                            name,
+                            other.summarize(),
+                        ))
+                    }
                     None if results.is_some() => Err(format!(
                         "{context_list}: dep-finish re-walk found fewer resolved sub-dispatches than slots",
                     )),
@@ -212,7 +213,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             // then routed through type/non-type handling.
             ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
                 Carried::Type(kt) => checked(kt.clone()),
-                Carried::Object(other) => Err(format!(
+                other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
                     other.summarize(),

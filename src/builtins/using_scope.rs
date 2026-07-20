@@ -44,6 +44,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 got: other.name(),
             })))
         }
+        Some(Held::UnresolvedType(ti)) => {
+            return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "m".to_string(),
+                expected: "Module".to_string(),
+                got: ti.render(),
+            })))
+        }
         Some(Held::Object(other)) => {
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),

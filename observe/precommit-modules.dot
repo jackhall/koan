@@ -729,7 +729,6 @@ digraph {
     "koan::machine::model::types::ktype" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::model::types::ktype" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
@@ -811,6 +810,7 @@ digraph {
     "koan::machine::model::types::typed_field_list" -> "koan::parse" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::model::values::carried" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::values::carried" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::values::kkey" -> "koan::machine::model::types" [label="uses", style="dashed"];

@@ -119,30 +119,27 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
     let chain = ctx.chain.clone();
     let bind_index = ctx.bind_index();
-    if let Some(repr_kt) = arg_type(ctx.args, "repr") {
-        match repr_kt {
-            KType::Unresolved(te) => {
-                let te = te.clone();
-                resolve_or_await(
-                    ctx.scope,
-                    "NEWTYPE repr slot",
-                    move |scope| {
-                        classify_name_lookup(
-                            scope.resolve_type_with_chain(te.as_str(), chain.as_deref()),
-                            te.as_str(),
-                        )
-                    },
-                    // A bare-leaf name resolved against scope bindings, not a dep terminal.
-                    move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
+    if let Some(te) = crate::machine::arg_unresolved_type(ctx.args, "repr") {
+        let te = te.clone();
+        resolve_or_await(
+            ctx.scope,
+            "NEWTYPE repr slot",
+            move |scope| {
+                classify_name_lookup(
+                    scope.resolve_type_with_chain(te.as_str(), chain.as_deref()),
+                    te.as_str(),
                 )
-            }
-            other => Action::Done(finalize_newtype(
-                &ctx.finish_ctx(),
-                name,
-                other.clone(),
-                bind_index,
-            )),
-        }
+            },
+            // A bare-leaf name resolved against scope bindings, not a dep terminal.
+            move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
+        )
+    } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
+        Action::Done(finalize_newtype(
+            &ctx.finish_ctx(),
+            name,
+            repr_kt.clone(),
+            bind_index,
+        ))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
         defer_resolved_sigil(name, inner.clone(), bind_index)
     } else {

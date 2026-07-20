@@ -102,6 +102,7 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
     match terminal.value {
         Carried::Type(kt) => Ok(kt.clone()),
         Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
+        Carried::UnresolvedType(ti) => Err(non_type_result_error(slot, ti.render())),
     }
 }
 

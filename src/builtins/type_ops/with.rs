@@ -80,6 +80,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     other.ktype().name(),
                 ))));
             }
+            Held::UnresolvedType(ti) => {
+                return done_err(KError::new(KErrorKind::UnboundName(ti.render())));
+            }
         };
         if let Some(fixed) = manifest {
             if pin_type == fixed {
@@ -103,7 +106,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .filter(|(name, _)| !dropped.contains(name.as_str()))
         .map(|(name, value)| match value {
             Held::Type(kt) => (name.clone(), kt.clone()),
-            Held::Object(_) => unreachable!("validated above: every pin value is a type"),
+            Held::Object(_) | Held::UnresolvedType(_) => {
+                unreachable!("validated above: every pin value is a type")
+            }
         })
         .collect();
     Action::Done(Ok(ctx

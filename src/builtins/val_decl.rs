@@ -8,9 +8,11 @@
 //! manifest members live in. VAL never binds a value: the slot is a specification (name →
 //! declared type) the module supplies a value for.
 //!
-//! Type resolution dispatches on the `ty` carrier shape: a [`KType::Unresolved`] leaf or a
-//! builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
+//! Type resolution dispatches on the `ty` carrier shape: a [`Held::UnresolvedType`] name carrier
+//! or a builtin leaf re-dispatch against decl_scope so a SIG-local type member shadow wins over the
 //! builtin table; structural carriers (`KFunction`, `List`, ...) are taken directly.
+//!
+//! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KKind, KObject, KType};
@@ -23,7 +25,6 @@ use super::{arg, kw, sig};
 
 fn typeexpr_from_carrier(kt: &KType) -> CarrierForm {
     match kt {
-        KType::Unresolved(te) => CarrierForm::Raw(te.clone()),
         KType::Number
         | KType::Str
         | KType::Bool
@@ -61,7 +62,7 @@ enum CarrierForm {
 /// sub-dispatch) for a leaf that re-resolves against decl_scope.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
-    use crate::machine::{arg_object, arg_type, Action};
+    use crate::machine::{arg_object, arg_type, arg_unresolved_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
 
@@ -94,25 +95,28 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ))));
     }
 
-    let carrier = match arg_type(ctx.args, "ty") {
-        Some(kt) => typeexpr_from_carrier(kt),
-        None => {
-            return done_err(match arg_object(ctx.args, "ty") {
-                Some(other) => KError::new(KErrorKind::TypeMismatch {
-                    arg: "ty".to_string(),
-                    expected: "ProperType".to_string(),
-                    got: other.ktype().name(),
-                }),
-                None => KError::new(KErrorKind::MissingArg("ty".to_string())),
-            });
-        }
+    let carrier = match arg_unresolved_type(ctx.args, "ty") {
+        Some(te) => CarrierForm::Raw(te.clone()),
+        None => match arg_type(ctx.args, "ty") {
+            Some(kt) => typeexpr_from_carrier(kt),
+            None => {
+                return done_err(match arg_object(ctx.args, "ty") {
+                    Some(other) => KError::new(KErrorKind::TypeMismatch {
+                        arg: "ty".to_string(),
+                        expected: "ProperType".to_string(),
+                        got: other.ktype().name(),
+                    }),
+                    None => KError::new(KErrorKind::MissingArg("ty".to_string())),
+                });
+            }
+        },
     };
 
     let te = match carrier {
         CarrierForm::Direct(kt) => return finalize_val(&ctx.finish_ctx(), name, kt),
         // Both leaf and raw carriers re-dispatch the leaf against decl_scope so a SIG-local
-        // `LET <name> = ...` shadow wins over the builtin table. A `KType::Unresolved` carrier always
-        // holds a bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
+        // `LET <name> = ...` shadow wins over the builtin table. A `Raw` carrier always holds a
+        // bare-leaf `TypeIdentifier` (parameterized surface forms sub-Dispatch earlier).
         CarrierForm::Leaf(te) => te,
         CarrierForm::Raw(te) => te,
     };

@@ -69,7 +69,7 @@ fn object_top_node_relocates_into_dest() {
                 "value preserved"
             );
         }
-        Carried::Type(_) => panic!("expected an Object carrier"),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
 }
 
@@ -108,7 +108,7 @@ fn list_relocation_shares_inner_rc() {
             );
         }
         Carried::Object(other) => panic!("expected a List, got {:?}", other.ktype()),
-        Carried::Type(_) => panic!("expected an Object carrier"),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
     assert_eq!(
         Rc::strong_count(&items),
@@ -155,7 +155,7 @@ fn dict_relocation_shares_inner_rc() {
             );
         }
         Carried::Object(other) => panic!("expected a Dict, got {:?}", other.ktype()),
-        Carried::Type(_) => panic!("expected an Object carrier"),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
 }
 
@@ -210,7 +210,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
             assert!(Rc::ptr_eq(out_set, &set), "the RecursiveSet is shared");
         }
         Carried::Object(other) => panic!("expected a Tagged, got {:?}", other.ktype()),
-        Carried::Type(_) => panic!("expected an Object carrier"),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
 }
 
@@ -246,7 +246,7 @@ fn kfunction_borrow_preserved_verbatim() {
             );
         }
         Carried::Object(other) => panic!("expected a KFunction, got {:?}", other.ktype()),
-        Carried::Type(_) => panic!("expected an Object carrier"),
+        Carried::Type(_) | Carried::UnresolvedType(_) => panic!("expected an Object carrier"),
     }
 }
 
@@ -308,6 +308,12 @@ fn type_recursive_setref_relocates_and_navigates() {
             }
         }
         Carried::Type(other) => panic!("expected a SetRef type, got {other:?}"),
+        Carried::UnresolvedType(ti) => {
+            panic!(
+                "expected a SetRef type, got the unlowered name {}",
+                ti.render()
+            )
+        }
         Carried::Object(_) => panic!("expected a Type carrier"),
     }
 }

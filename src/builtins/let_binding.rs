@@ -12,7 +12,7 @@ use super::{arg, kw, sig};
 /// returns the bound carrier as `Action::Done`.
 pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::model::Held;
-    use crate::machine::{arg_held, arg_object, arg_type, Action};
+    use crate::machine::{arg_held, arg_object, arg_type, arg_unresolved_type, Action};
 
     let done_err = |e: KError| Action::Done(Err(e));
     let bind_index = ctx.bind_index();
@@ -24,13 +24,34 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // Whether the binder name is Type-classified (`LET <Name> = …`) — the SIG-body VAL guard below
     // keys on it, independent of which map the RHS lands in.
     let mut type_classified_name = false;
-    let name = match (arg_object(ctx.args, "name"), arg_type(ctx.args, "name")) {
+    // The Type-classified `name` slot arrives either lowered (a builtin leaf name) or as the
+    // unlowered surface name the bind seam leaves for the binder to own; both denote the binder.
+    let type_name: Option<String> = match arg_unresolved_type(ctx.args, "name") {
+        Some(te) => Some(te.render()),
+        None => match arg_type(ctx.args, "name") {
+            Some(
+                name_kt @ (KType::List { .. }
+                | KType::Dict { .. }
+                | KType::KFunction { .. }
+                | KType::SetLocal(_)
+                | KType::RecursiveRef(_)),
+            ) => {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "LET name must be a bare type name, got `{}`",
+                    name_kt.render(),
+                ))));
+            }
+            Some(name_kt) => Some(name_kt.name()),
+            None => None,
+        },
+    };
+    let name = match (arg_object(ctx.args, "name"), type_name) {
         (Some(KObject::KString(s)), _) => {
             // A type-language carrier under a value-classified name is a cross-kind error. A module
             // is *not* one: it is a value, and a value-classified name is exactly where it belongs.
             let type_kind = match rhs {
                 Held::Type(KType::Signature { .. }) => Some("signature"),
-                Held::Type(_) => Some("type"),
+                Held::Type(_) | Held::UnresolvedType(_) => Some("type"),
                 Held::Object(_) => None,
             };
             if let Some(kind) = type_kind {
@@ -45,24 +66,15 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
             s.clone()
         }
-        (_, Some(name_kt)) => {
-            let resolved_name = match name_kt {
-                KType::Unresolved(te) => te.render(),
-                KType::List { .. }
-                | KType::Dict { .. }
-                | KType::KFunction { .. }
-                | KType::SetLocal(_)
-                | KType::RecursiveRef(_) => {
-                    return done_err(KError::new(KErrorKind::ShapeError(format!(
-                        "LET name must be a bare type name, got `{}`",
-                        name_kt.render(),
-                    ))));
-                }
-                other => other.name(),
-            };
+        (_, Some(resolved_name)) => {
             type_classified_name = true;
             match rhs {
                 Held::Type(kt) => type_for_types_map = Some(kt.clone()),
+                // The `Any` RHS slot is auto-wrapped by dispatch into a resolved carrier, so a
+                // name that reaches here unlowered names nothing.
+                Held::UnresolvedType(te) => {
+                    return done_err(KError::new(KErrorKind::UnboundName(te.render())));
+                }
                 // A module is a value, and the Type-token namespace names things that type a field.
                 // `LET view = (m :| S)` is the wrong spelling for a module binding, whatever the RHS
                 // produced it (an ascription view, a functor call) — respell it snake_case.

@@ -98,8 +98,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{
-        parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
+        parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
     };
+    use crate::machine::model::KObject;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
@@ -341,6 +342,38 @@ mod tests {
                 if msg == "match arm type `Bogus` is not a known type; the scrutinee's union variants are `Some`, `None`"),
             "expected the variants-hint message, got {err}",
         );
+    }
+
+    /// The `-> :T` slot is a `ProperType` slot on a non-binder overload, so a bare user name
+    /// reaches the body as the bind seam's unlowered-name carrier and `resolve_arm_contract`
+    /// resolves it by scope walk. An unbound one keeps the not-a-known-type diagnostic.
+    #[test]
+    fn match_unresolved_return_type_name_reports_not_a_known_type() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        let err = run_one_err(
+            scope,
+            parse_one("MATCH (42) -> :Bogus WITH (Number -> (PRINT \"x\"))"),
+        );
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg == "MATCH return type `Bogus` is not a known type"),
+            "expected the unresolved return-type message, got {err}",
+        );
+    }
+
+    /// The same slot with a *bound* user type name resolves through the carrier and runs, so the
+    /// carrier is a real resolution path, not just an error channel.
+    #[test]
+    fn match_return_type_resolves_a_user_bound_name_through_the_carrier() {
+        let region = run_root_storage();
+        let scope = run_root_silent(&region);
+        run(scope, "NEWTYPE Tag = Number");
+        let result = run_one(
+            scope,
+            parse_one("MATCH (42) -> :Tag WITH (Number -> (Tag (7)))"),
+        );
+        assert!(matches!(result, KObject::Wrapped { .. }));
     }
 
     #[test]

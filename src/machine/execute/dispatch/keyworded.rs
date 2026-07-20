@@ -439,6 +439,9 @@ fn part_walk<'step>(
                                 "a type resolved from a non-type part".into(),
                             )))
                         }
+                        (Carried::UnresolvedType(ti), _) => {
+                            return Err(KError::new(KErrorKind::UnboundName(ti.render())))
+                        }
                     };
                     new_parts.push(Spanned {
                         // A resident read: the value lives in this scope's region, so the delivery

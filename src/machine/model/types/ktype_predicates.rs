@@ -283,6 +283,9 @@ impl KType {
                 KType::OfKind(k) => k.admits(t.kind_of()),
                 _ => self == t,
             },
+            // An aggregate cell holds a value or a resolved type; the bind seam's unlowered
+            // name carrier never becomes one, so no slot classifies it.
+            Held::UnresolvedType(_) => false,
         }
     }
 
@@ -512,7 +515,7 @@ impl KType {
             },
             // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef` is sealed
             // away before dispatch, and `SetLocal` only appears inside a member's schema.
-            KType::RecursiveRef(_) | KType::Unresolved(_) => true,
+            KType::RecursiveRef(_) => true,
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no argument.
             KType::RecursiveGroup(_) => false,
@@ -527,6 +530,7 @@ impl KType {
                 args: slot_args,
                 ..
             } => match c {
+                Carried::UnresolvedType(_) => false,
                 Carried::Type(kt) => kt == self,
                 Carried::Object(obj) => match obj.ktype() {
                     KType::ConstructorApply {
@@ -607,7 +611,7 @@ impl KType {
             // Transient / intra-set leaves never reach a real argument slot: `RecursiveRef` is
             // sealed away before dispatch (consumed by `Scope::resolve_type_identifier`), and
             // `SetLocal` only appears inside a member's schema.
-            KType::RecursiveRef(_) | KType::Unresolved(_) => true,
+            KType::RecursiveRef(_) => true,
             KType::SetLocal(_) => false,
             // A whole-set handle names a group of types, not a value type — it admits no argument;
             // the `RECURSIVE TYPES` group name is a reserved value-language seam.

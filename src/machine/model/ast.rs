@@ -221,9 +221,10 @@ impl<'a> ExpressionPart<'a> {
     /// adopted into `scope` (reach folded, value re-anchored at the scope brand) so a cloned type
     /// that still borrows the producer region stays pinned before it is owned-ified; every other arm
     /// owns its value outright. A `Type`-name token in a proper-type slot lowers via
-    /// [`KType::from_type_identifier`], falling back to the [`KType::Unresolved`] transient for a bare
-    /// user name (scope-aware elaboration defers to
-    /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier)).
+    /// [`KType::from_type_identifier`], falling back to the [`Held::UnresolvedType`] carrier for a
+    /// bare user name — no type handle ever denotes an unresolved name, so the surface
+    /// [`TypeIdentifier`] rides through verbatim and scope-aware elaboration defers to
+    /// [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
     ///
     /// [`KFunction::bind_args`]: crate::machine::KFunction::bind_args
     pub fn resolve_for(
@@ -235,6 +236,7 @@ impl<'a> ExpressionPart<'a> {
         if let ExpressionPart::Spliced { cell, .. } = self {
             return match scope.adopt_sealed(cell) {
                 Carried::Type(kt) => Held::Type(kt.clone()),
+                Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),
             };
         }
@@ -243,9 +245,10 @@ impl<'a> ExpressionPart<'a> {
             KType::OfKind(KKind::ProperType) | KType::OfKind(KKind::AnyType),
         ) = (self, slot)
         {
-            let kt =
-                KType::from_type_identifier(t).unwrap_or_else(|_| KType::Unresolved(t.clone()));
-            return Held::Type(kt);
+            return match KType::from_type_identifier(t) {
+                Ok(kt) => Held::Type(kt),
+                Err(_) => Held::UnresolvedType(t.clone()),
+            };
         }
         if let (ExpressionPart::SigiledTypeExpr(inner), KType::SigiledTypeExpr) = (self, slot) {
             return Held::Object(KObject::KExpression((**inner).clone()));

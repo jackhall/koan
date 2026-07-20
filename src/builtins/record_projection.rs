@@ -106,7 +106,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     Action::Done(Ok(ctx.ctx.alloc_carried_with(&[lhs], move |b, views| {
         let record = match views[0] {
             Carried::Object(o) => o,
-            Carried::Type(_) => unreachable!("the `record` slot shape-gates to records"),
+            Carried::Type(_) | Carried::UnresolvedType(_) => {
+                unreachable!("the `record` slot shape-gates to records")
+            }
         };
         let (fields, types) = match record {
             KObject::Record(fields, types) => (fields, types),

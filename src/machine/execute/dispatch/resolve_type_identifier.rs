@@ -221,7 +221,6 @@ impl<'b> Iterator for KTypeUserRefs<'b> {
                 | KType::DeferredReturn(_)
                 | KType::SetLocal(_)
                 | KType::RecursiveRef(_)
-                | KType::Unresolved(_)
                 | KType::RecursiveGroup(_) => {}
             }
         }

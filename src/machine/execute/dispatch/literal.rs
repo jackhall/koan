@@ -101,7 +101,9 @@ fn scalar_key(slot: &Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> Resul
 fn key_from_carried(c: Carried<'_>) -> Result<KKey, String> {
     match c {
         Carried::Object(o) => KKey::try_from_kobject(o),
-        Carried::Type(_) => Err("dict key must be a value, not a type".to_string()),
+        Carried::Type(_) | Carried::UnresolvedType(_) => {
+            Err("dict key must be a value, not a type".to_string())
+        }
     }
 }
 
@@ -329,7 +331,7 @@ impl<'step> KoanRuntime<'step> {
                 // (`resolve_value_carrier`). A bare `Carried::Object` reaching here carries no reach to
                 // build a correct carrier from, so it falls through to the sub-dispatch fallback rather
                 // than wrapping a reachless value.
-                NameOutcome::Resolved(Carried::Object(_)) => None,
+                NameOutcome::Resolved(Carried::Object(_) | Carried::UnresolvedType(_)) => None,
                 NameOutcome::Parked(producer) => Some(Slot::Park(deps.park_on(producer))),
                 NameOutcome::Unbound(_)
                 | NameOutcome::ProducerErrored(_)

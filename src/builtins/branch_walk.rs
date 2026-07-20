@@ -25,26 +25,27 @@ pub(crate) fn resolve_arm_contract<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     kind: &'static str,
 ) -> Result<ReturnContract<'a>, KError> {
-    use crate::machine::arg_type;
-    let ret_kt = match arg_type(ctx.args, "return_type") {
-        Some(KType::Unresolved(te)) => {
-            match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
-                TypeResolution::Done(kt) => kt.clone(),
-                // The builtin fallback is already tried inside `resolve_type_identifier`; a
-                // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
-                _ => {
-                    return Err(KError::new(KErrorKind::ShapeError(format!(
-                        "{kind} return type `{}` is not a known type",
-                        te.render()
-                    ))))
-                }
+    use crate::machine::{arg_type, arg_unresolved_type};
+    let ret_kt = if let Some(te) = arg_unresolved_type(ctx.args, "return_type") {
+        match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
+            TypeResolution::Done(kt) => kt.clone(),
+            // The builtin fallback is already tried inside `resolve_type_identifier`; a
+            // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
+            _ => {
+                return Err(KError::new(KErrorKind::ShapeError(format!(
+                    "{kind} return type `{}` is not a known type",
+                    te.render()
+                ))))
             }
         }
-        Some(other) => other.clone(),
-        None => {
-            return Err(KError::new(KErrorKind::MissingArg(
-                "return_type".to_string(),
-            )))
+    } else {
+        match arg_type(ctx.args, "return_type") {
+            Some(other) => other.clone(),
+            None => {
+                return Err(KError::new(KErrorKind::MissingArg(
+                    "return_type".to_string(),
+                )))
+            }
         }
     };
     Ok(ReturnContract::Arm {

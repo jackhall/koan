@@ -58,7 +58,7 @@ pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTy
 }
 
 /// Read any type-denoting slot from a `BodyCtx::args` record into a [`ReturnTypeRaw`]. The two
-/// carriers a type slot arrives on: a `ProperType` cell (`Number`, or an `Unresolved` name a
+/// carriers a type slot arrives on: a `ProperType` cell (`Number`, or an unlowered name a
 /// scope walk still has to resolve) and a raw `:(…)` sigil expression that sub-dispatches to its
 /// type. `slot` names the args field; `label` names the surface in the shape error. Shared by
 /// `FN`'s return slot and `OP`'s operand / return slots.
@@ -67,12 +67,11 @@ pub(crate) fn extract_type_slot_raw<'a>(
     slot: &str,
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
-    use crate::machine::{arg_object, arg_type};
-    if let Some(kt) = arg_type(args, slot) {
-        match kt {
-            KType::Unresolved(te) => Ok(ReturnTypeRaw::TypeExprCarrier(te.clone())),
-            t => Ok(ReturnTypeRaw::Resolved(t.clone())),
-        }
+    use crate::machine::{arg_object, arg_type, arg_unresolved_type};
+    if let Some(te) = arg_unresolved_type(args, slot) {
+        Ok(ReturnTypeRaw::TypeExprCarrier(te.clone()))
+    } else if let Some(kt) = arg_type(args, slot) {
+        Ok(ReturnTypeRaw::Resolved(kt.clone()))
     } else if let Some(KObject::KExpression(e)) = arg_object(args, slot) {
         Ok(ReturnTypeRaw::ExprCarrier(e.clone()))
     } else {

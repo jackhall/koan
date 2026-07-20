@@ -52,8 +52,11 @@ pub(crate) fn extract_terminal<'a>(
                     .expect("terminal object must be covered by its own stored reach"),
             ),
             // A type is owned data: it crosses into `scope`'s region by clone through the single
-            // storage door, naming no reach.
+            // storage door, naming no reach. An unlowered type name crosses the same way.
             Carried::Type(kt) => Carried::Type(scope.brand().alloc_ktype(kt.clone())),
+            Carried::UnresolvedType(ti) => {
+                Carried::UnresolvedType(scope.brand().alloc_type_identifier(ti.clone()))
+            }
         })
         .expect("terminal should be a value, not an error")
 }
@@ -121,6 +124,12 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
     match extract_terminal(&runtime, scope, id) {
         Carried::Type(kt) => kt,
         Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
+        Carried::UnresolvedType(ti) => {
+            panic!(
+                "expected a resolved type result, got the unlowered name {}",
+                ti.render()
+            )
+        }
     }
 }
 

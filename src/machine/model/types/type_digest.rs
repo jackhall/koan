@@ -61,7 +61,7 @@ const TAG_KFUNCTION: u8 = 0x0E;
 const TAG_DEFERRED_RETURN: u8 = 0x10;
 const TAG_SET_LOCAL: u8 = 0x11;
 const TAG_RECURSIVE_REF: u8 = 0x12;
-const TAG_UNRESOLVED: u8 = 0x13;
+// 0x13 (TAG_UNRESOLVED) is retired — never reuse it.
 const TAG_SET_REF: u8 = 0x14;
 const TAG_RECURSIVE_GROUP: u8 = 0x15;
 const TAG_UNION: u8 = 0x16;
@@ -171,9 +171,6 @@ pub fn digest_of(kt: &KType) -> TypeDigest {
         }
         KType::SetLocal(index) => DigestHasher::new(TAG_SET_LOCAL).count(*index).finish(),
         KType::RecursiveRef(name) => DigestHasher::new(TAG_RECURSIVE_REF).string(name).finish(),
-        KType::Unresolved(ti) => DigestHasher::new(TAG_UNRESOLVED)
-            .string(&ti.render())
-            .finish(),
         KType::SetRef { set, index } => set_ref_digest(set, *index),
         KType::RecursiveGroup(set) => {
             let mut h = DigestHasher::new(TAG_RECURSIVE_GROUP);

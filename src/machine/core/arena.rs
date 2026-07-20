@@ -20,9 +20,9 @@ use crate::machine::execute::StepCarried;
 
 use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::KType;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{Carried, CarriedFamily, KObject, Module};
+use crate::machine::model::{KType, TypeIdentifier};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, RegionSet, StorageOf,
@@ -42,7 +42,8 @@ pub use step_allocator::StepAllocator;
 /// The Koan workload: the family set whose library-derived bundle a [`Region`] owns — one library
 /// [`FamilyArena`] cell per family. The `KType` cell backs per-type identity binding storage
 /// (`Bindings::types`); the `OperatorGroup` cell backs the per-scope operator registry
-/// (`Bindings::operators`).
+/// (`Bindings::operators`); the `TypeIdentifier` cell backs the type channel's unlowered-name
+/// carrier ([`Carried::UnresolvedType`]).
 pub struct KoanStorageProfile;
 
 impl StorageProfile for KoanStorageProfile {
@@ -52,7 +53,10 @@ impl StorageProfile for KoanStorageProfile {
             KFunction<'static>,
             (
                 Scope<'static>,
-                (Module<'static>, (KType, (OperatorGroup, (FrameSet, ())))),
+                (
+                    Module<'static>,
+                    (KType, (OperatorGroup, (FrameSet, (TypeIdentifier, ())))),
+                ),
             ),
         ),
     );
@@ -113,6 +117,12 @@ impl<'a> RegionBrand<'a> {
     /// ([`Scope::adopt_sealed`](super::scope::Scope::adopt_sealed)'s type channel).
     pub fn alloc_ktype(self, t: KType) -> &'a KType {
         self.0.alloc_resident::<KType>(t)
+    }
+
+    /// The storage door for a [`TypeIdentifier`] the bind seam left unlowered. Owned surface data
+    /// like a `KType` — no variant borrows region content — so the store is safe and unchecked.
+    pub fn alloc_type_identifier(self, ti: TypeIdentifier) -> &'a TypeIdentifier {
+        self.0.alloc_resident::<TypeIdentifier>(ti)
     }
 
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
@@ -309,7 +319,8 @@ impl<'a> FoldingBrand<'a> {
 // The lifetime family of each stored type, keyed on its `'static` form — the GAT the
 // `Region` engine erases to `'static` for storage and re-anchors to the caller's `'a` on read.
 // Each family is one type generic only in a single lifetime, so its layout is identical for every
-// choice of that lifetime; `KType` and `OperatorGroup` are lifetime-free, trivially invariant. The shared
+// choice of that lifetime; `KType`, `OperatorGroup` and `TypeIdentifier` are lifetime-free,
+// trivially invariant. The shared
 // `reattachable!` macro discharges the layout-invariance `unsafe` obligation once (see its docs).
 reattachable! {
     KObject<'static> => KObject<'r>,
@@ -318,6 +329,7 @@ reattachable! {
     Scope<'static> => Scope<'r>,
     Module<'static> => Module<'r>,
     OperatorGroup => OperatorGroup,
+    TypeIdentifier => TypeIdentifier,
 }
 
 /// A witnessed-construction operand bundling a destination region's [`RegionHandle`] with a
@@ -384,6 +396,12 @@ impl Stored<KoanStorageProfile> for OperatorGroup {
 impl Stored<KoanStorageProfile> for FrameSet {
     fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
         &s.1 .1 .1 .1 .1 .1 .0
+    }
+}
+
+impl Stored<KoanStorageProfile> for TypeIdentifier {
+    fn cell(s: &StorageOf<KoanStorageProfile>) -> &FamilyArena<Self> {
+        &s.1 .1 .1 .1 .1 .1 .1 .0
     }
 }
 

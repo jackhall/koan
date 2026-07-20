@@ -149,7 +149,6 @@ pub(crate) fn digest_is_content(kt: &KType) -> bool {
         | KType::DeferredReturn(_)
         | KType::SetLocal(_)
         | KType::RecursiveRef(_)
-        | KType::Unresolved(_)
         | KType::AbstractType { .. } => true,
     }
 }

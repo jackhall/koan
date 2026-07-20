@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::{FrameSet, FrameStorage, KoanRegion, StoredReach};
-use crate::machine::model::{Carried, CarriedFamily, KObject};
+use crate::machine::model::{Carried, CarriedFamily, KObject, KType, TypeIdentifier};
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
 
@@ -155,20 +155,31 @@ impl<'a> Scope<'a> {
     ///   its producer's region and the mint is what pins that region, so the dep survives past its
     ///   resolving step as its carrier rather than as a relocated copy (the head-deferred callable, a
     ///   spliced argument).
-    /// - **Type**: clone at the door. A `KType` is fully owned data, so the envelope is opened, the
-    ///   type cloned out, and the clone allocated into this scope's own region through the single
-    ///   storage door. The result borrows only this region, so no reach is minted and the producer's
-    ///   region is not pinned.
+    /// - **Type / unlowered type name**: clone at the door. A `KType` and a `TypeIdentifier` are
+    ///   both fully owned data, so the envelope is opened, the content cloned out, and the clone
+    ///   allocated into this scope's own region through its storage door. The result borrows only
+    ///   this region, so no reach is minted and the producer's region is not pinned.
     ///
     /// Where [`resident_value_carrier`](Self::resident_value_carrier) seals a value already living
     /// **in** this region, adoption is the consumption verb for a carrier produced **elsewhere**.
     pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
+        /// The owned content cloned out of a type-channel envelope, before it is re-allocated
+        /// into this scope's region.
+        enum AdoptedType {
+            Lowered(KType),
+            Unlowered(TypeIdentifier),
+        }
+
         let cloned_type = cell.open(|live| match live {
-            Carried::Type(kt) => Some(kt.clone()),
+            Carried::Type(kt) => Some(AdoptedType::Lowered(kt.clone())),
+            Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(ti.clone())),
             Carried::Object(_) => None,
         });
         match cloned_type {
-            Some(owned) => Carried::Type(self.brand().alloc_ktype(owned)),
+            Some(AdoptedType::Lowered(owned)) => Carried::Type(self.brand().alloc_ktype(owned)),
+            Some(AdoptedType::Unlowered(ti)) => {
+                Carried::UnresolvedType(self.brand().alloc_type_identifier(ti))
+            }
             None => cell.adopt_into(self.brand().handle(), |region| {
                 self.covers_region_ambiently(region)
             }),

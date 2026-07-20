@@ -159,7 +159,9 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
                 depth += 1;
                 current = match &items[0] {
                     Held::Object(obj) => obj,
-                    Held::Type(_) => panic!("expected an object element, got a type"),
+                    Held::Type(_) | Held::UnresolvedType(_) => {
+                        panic!("expected an object element, got a type")
+                    }
                 };
             }
             KObject::Number(n) => {

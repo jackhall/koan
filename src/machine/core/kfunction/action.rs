@@ -14,7 +14,7 @@ use crate::machine::execute::StepCarried;
 use crate::machine::model::Held;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
-use crate::machine::model::{ExpressionPart, KExpression};
+use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record};
 use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
@@ -69,7 +69,25 @@ pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType> 
     }
 }
 
-/// Read a builtin argument's raw cell ([`Held::Object`] / [`Held::Type`]) from `BodyCtx::args` by
+/// Read a builtin argument's unlowered type name (a [`Held::UnresolvedType`] cell) from
+/// `BodyCtx::args` by name. The bind seam parks a bare user type name here rather than lowering
+/// it to a type handle, so a type-slot consumer probes this before [`arg_type`] and resolves the
+/// name against its own scope chain.
+pub fn arg_unresolved_type<'a, 'c>(
+    args: &'c KObject<'a>,
+    name: &str,
+) -> Option<&'c TypeIdentifier> {
+    match args {
+        KObject::Record(fields, _) => match fields.get(name) {
+            Some(Held::UnresolvedType(ti)) => Some(ti),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Read a builtin argument's raw cell ([`Held::Object`] / [`Held::Type`] /
+/// [`Held::UnresolvedType`]) from `BodyCtx::args` by
 /// name — for builtins that branch on the value vs type channel (e.g. LET's name/value slots).
 pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a>> {
     match args {
@@ -87,6 +105,13 @@ pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType, KError
             arg: name.to_string(),
             expected: "ProperType".to_string(),
             got: o.ktype().name(),
+        })),
+        // Every slot reaching here is `OfKind(AnyType)`, which dispatch auto-wraps into a
+        // resolved type carrier, so an unlowered name is not a shape this door serves.
+        Some(Held::UnresolvedType(ti)) => Err(KError::new(KErrorKind::TypeMismatch {
+            arg: name.to_string(),
+            expected: "ProperType".to_string(),
+            got: ti.render(),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
     }
@@ -122,9 +147,12 @@ pub fn require_bare_type_name<'a>(
     slot: &str,
     surface: &str,
 ) -> Result<String, KError> {
-    match arg_type(args, slot) {
-        Some(t) => bare_type_name(t, slot, surface),
-        None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
+    match arg_held(args, slot) {
+        // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
+        // name with nothing bound to it yet.
+        Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
+        Some(Held::Type(t)) => bare_type_name(t, slot, surface),
+        Some(Held::Object(_)) | None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
 }
 
@@ -143,7 +171,6 @@ fn bare_type_name(t: &KType, name: &str, surface: &str) -> Result<String, KError
         | KType::SigiledTypeExpr
         | KType::RecordType
         | KType::OfKind(_)
-        | KType::Unresolved(_)
         | KType::Any
         | KType::SetRef { .. }
         | KType::Signature { .. }

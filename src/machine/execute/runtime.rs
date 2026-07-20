@@ -306,6 +306,11 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                     ),
                                 ))))
                             }
+                            Carried::UnresolvedType(ti) => {
+                                return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
+                                    ti.render(),
+                                ))))
+                            }
                         };
                         // The resolved type is owned data: it clones into the captured scope's own
                         // region at the contract lifetime, so the contract outlives the

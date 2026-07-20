@@ -99,6 +99,8 @@ fn classify_head<'step>(
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },
+        // A head is resolved before it is classified, so an unlowered name names no callable.
+        Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
         // A `SetRef` is a constructor — the only invocable type identity. Every other type is
         // type-shaped but not invocable.
         Carried::Type(kt) => match kt {

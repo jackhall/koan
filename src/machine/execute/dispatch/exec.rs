@@ -248,7 +248,8 @@ fn run_action_builtin<'step>(
             crate::machine::model::Held::Object(_) => {
                 Some(scope.adopted_reach_of(arg_carriers.get(name)?))
             }
-            crate::machine::model::Held::Type(_) => None,
+            crate::machine::model::Held::Type(_)
+            | crate::machine::model::Held::UnresolvedType(_) => None,
         })
         .collect();
     let args_obj: &'step KObject<'step> =

@@ -145,6 +145,11 @@ where
                         BindingIndex::value(0),
                     )?;
                 }
+                // Dispatch resolves every type-denoting argument before the call, so a name that
+                // is still unlowered here names nothing bindable.
+                Carried::UnresolvedType(ti) => {
+                    return Err(KError::new(KErrorKind::UnboundName(ti.render())));
+                }
             }
         }
         Ok(())

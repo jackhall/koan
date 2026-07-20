@@ -18,7 +18,6 @@ use super::sig_schema::{name_sets_equal, SigContent};
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, TypeDigest};
 use crate::machine::core::ScopeId;
-use crate::machine::model::ast::TypeIdentifier;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -177,13 +176,6 @@ pub enum KType {
     /// reaches the predicates. Equality is by name only.
     RecursiveRef(String),
     /// Bind-time transient for a bare-leaf type name that couldn't be lowered to a concrete
-    /// `KType` at the synchronous [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
-    /// seam — a name not in [`KType::from_name`]'s builtin table (`Point`, `Wrapped`, `MyList`).
-    /// Sibling to [`RecursiveRef`](KType::RecursiveRef): it rides the value channel's `Type`
-    /// arm, never reaches the dispatch predicates, and is consumed + replaced by the
-    /// park-capable [`Scope::resolve_type_identifier`](crate::machine::core::Scope::resolve_type_identifier).
-    /// Carries the structured `TypeIdentifier` so the surface form survives the bind.
-    Unresolved(TypeIdentifier),
     Any,
 }
 
@@ -313,7 +305,6 @@ impl KType {
             }
             KType::AbstractType { name, .. } => name.clone(),
             KType::RecursiveRef(name) => name.clone(),
-            KType::Unresolved(t) => t.render(),
             KType::ConstructorApply { ctor, args, .. } => {
                 let bindings: Vec<String> = args
                     .iter()
@@ -430,7 +421,6 @@ impl PartialEq for KType {
                 g1 == g2 && s1 == s2 && n1 == n2 && name_sets_equal(p1, p2)
             }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
-            (Unresolved(a), Unresolved(b)) => a == b,
             (DeferredReturn(a), DeferredReturn(b)) => a == b,
             _ => false,
         }
@@ -482,7 +472,6 @@ impl std::hash::Hash for KType {
                 sorted.hash(state);
             }
             RecursiveRef(n) => n.hash(state),
-            Unresolved(t) => t.hash(state),
             DeferredReturn(s) => s.hash(state),
         }
     }
