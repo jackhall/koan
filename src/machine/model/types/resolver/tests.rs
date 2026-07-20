@@ -4,7 +4,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::Record;
-use crate::machine::BindingIndex;
+use crate::machine::{BindingIndex, ScopeId};
 
 fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())

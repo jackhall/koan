@@ -85,11 +85,9 @@ fn finalize_record_newtype<'a>(
         )));
     }
     let scope = fctx.scope;
-    let scope_id = scope.id;
     let outcome = finalize_nominal_member(
         scope,
         &name,
-        scope_id,
         KKind::NewType,
         |set| {
             let missing = RefCell::new(Vec::new());

@@ -72,16 +72,32 @@ fn struct_setref(name: &str, scope_id: ScopeId) -> KType {
 /// Pins recursion shape against a regression that skips nested structurals.
 #[test]
 fn ktype_user_refs_yields_nested_structural_refs_in_order() {
-    let a_id = ScopeId::next();
-    let b_id = ScopeId::next();
-    let user_a = struct_setref("A", a_id);
-    let user_b = struct_setref("B", b_id);
+    let user_a = struct_setref("A", ScopeId::next());
+    let user_b = struct_setref("B", ScopeId::next());
+    let (set_a, set_b) = match (&user_a, &user_b) {
+        (KType::SetRef { set: a, .. }, KType::SetRef { set: b, .. }) => {
+            (std::rc::Rc::clone(a), std::rc::Rc::clone(b))
+        }
+        _ => panic!("expected SetRefs"),
+    };
     // Dict<A, List<B>>
     let kt = KType::dict(Box::new(user_a), Box::new(KType::list(Box::new(user_b))));
-    let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&kt)
-        .map(|(id, n)| (id, n.to_string()))
-        .collect();
-    assert_eq!(refs, vec![(a_id, "A".into()), (b_id, "B".into())]);
+    let refs: Vec<_> = KTypeUserRefs::of(&kt).collect();
+    match refs.as_slice() {
+        [UserTypeRef::Member {
+            set: first,
+            name: first_name,
+        }, UserTypeRef::Member {
+            set: second,
+            name: second_name,
+        }] => {
+            assert!(std::rc::Rc::ptr_eq(first, &set_a), "first ref is A's set");
+            assert_eq!(*first_name, "A");
+            assert!(std::rc::Rc::ptr_eq(second, &set_b), "second ref is B's set");
+            assert_eq!(*second_name, "B");
+        }
+        _ => panic!("expected two Member refs in order"),
+    }
 }
 
 /// SCC discipline: the iterator must not descend into a `SetRef` member's schema —
@@ -89,21 +105,24 @@ fn ktype_user_refs_yields_nested_structural_refs_in_order() {
 #[test]
 fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
     use crate::machine::model::{NominalSchema, RecursiveSet};
-    let outer_id = ScopeId::next();
-    let inner_id = ScopeId::next();
-    let inner = struct_setref("Inner", inner_id);
-    let outer = {
-        let set = RecursiveSet::singleton(
-            "Outer".into(),
-            outer_id,
-            NominalSchema::NewType(Box::new(inner)),
-        );
-        KType::SetRef { set, index: 0 }
+    let inner = struct_setref("Inner", ScopeId::next());
+    let outer_set = RecursiveSet::singleton(
+        "Outer".into(),
+        ScopeId::next(),
+        NominalSchema::NewType(Box::new(inner)),
+    );
+    let outer = KType::SetRef {
+        set: std::rc::Rc::clone(&outer_set),
+        index: 0,
     };
-    let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&outer)
-        .map(|(id, n)| (id, n.to_string()))
-        .collect();
-    assert_eq!(refs, vec![(outer_id, "Outer".into())]);
+    let refs: Vec<_> = KTypeUserRefs::of(&outer).collect();
+    match refs.as_slice() {
+        [UserTypeRef::Member { set, name }] => {
+            assert!(std::rc::Rc::ptr_eq(set, &outer_set), "yields the outer set");
+            assert_eq!(*name, "Outer");
+        }
+        _ => panic!("expected exactly the outer Member ref"),
+    }
 }
 
 /// Pin against a regression that would push a spurious leaf onto the stack.

@@ -339,6 +339,14 @@ impl<'a> Bindings<'a> {
             .map(NameLookup::Parked)
     }
 
+    /// The committed `types[name]` entry with the [`BindingIndex`] its installing statement
+    /// wrote — the pair the nominal-finalize same-declaration checks and the finalize gate's
+    /// identity probe read. Types-map only (no placeholder arm), visibility-unfiltered: this
+    /// is declaration-identity tracking, not consumer-visibility enforcement.
+    pub fn committed_type_binding(&self, name: &str) -> Option<(&'a KType, BindingIndex)> {
+        self.types.borrow().get(name).copied()
+    }
+
     /// The type-side placeholder producer for `name`, or `None` — the placeholder arm
     /// [`Self::lookup_type`] falls through to.
     fn type_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {

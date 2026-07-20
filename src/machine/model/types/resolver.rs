@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::machine::core::{LexicalFrame, NameLookup, Scope, ScopeId};
+use crate::machine::core::{LexicalFrame, NameLookup, Scope};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::NodeId;
 
@@ -151,8 +151,8 @@ pub enum SealOutcome<'a> {
 /// 2. **Non-recursive / self-recursive type** — no pre-install; mint a *singleton* set of
 ///    one `pending` member at index 0 (a self-recursive type's own name is in the
 ///    singleton's `index_of`, so its self-reference seals to `SetLocal(0)`).
-/// 3. **Already sealed** — the member's schema is filled (a parallel finalize ran first);
-///    short-circuit and return the existing identity.
+/// 3. **Already sealed** — this same declaration's `SetRef` is already installed (a parallel
+///    finalize ran first); short-circuit and return the existing identity.
 ///
 /// In every case the schema's transient `RecursiveRef(name)` leaves are sealed to
 /// `SetLocal(index)` against the (singleton or shared) set before the member is filled.
@@ -160,32 +160,26 @@ pub enum SealOutcome<'a> {
 pub fn finalize_nominal_member<'a>(
     scope: &Scope<'a>,
     name: &str,
-    scope_id: ScopeId,
     kind: KKind,
     build_schema: impl FnOnce(&Rc<RecursiveSet>) -> SchemaSealResult,
     bind_index: crate::machine::core::BindingIndex,
 ) -> SealOutcome<'a> {
-    // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type:
-    // - `SetRef` with a pending (unfilled) member: the seal's contribution for this
-    //   declaration — reuse its set + index.
-    // - `SetRef` with a filled member and matching `(scope_id, kind)`: a parallel finalize of
+    // Recover the seal's pre-install (if any), distinguishing it from a genuine prior type by
+    // declaration identity — the stored `BindingIndex`:
+    // - `SetRef` with a pending (unfilled) member: the seal's contribution for this declaration
+    //   (pre-installed at index 0, below any statement's own index) — reuse its set + index. This
+    //   arm stays first: for a block member the stored index is the pre-install's, not this
+    //   declaration's.
+    // - `SetRef` installed by this same statement (equal `BindingIndex`): a parallel finalize of
     //   this declaration — short-circuit (idempotent).
-    // - any other `SetRef`: a genuine prior type of this name; mint a fresh singleton so the
+    // - anything else: a genuine prior binding of this name; mint a fresh singleton so the
     //   install path below raises the `Rebind` a redeclaration deserves.
-    let pre_installed = match scope
-        .bindings()
-        .lookup_type(name, None)
-        .and_then(NameLookup::bound)
-    {
-        Some(KType::SetRef { set, index }) if !set.member(*index).is_filled() => {
+    let pre_installed = match scope.bindings().committed_type_binding(name) {
+        Some((KType::SetRef { set, index }, _)) if !set.member(*index).is_filled() => {
             Some((Rc::clone(set), *index))
         }
-        Some(kt @ KType::SetRef { set, index }) => {
-            let member = set.member(*index);
-            if member.scope_id == scope_id && member.kind == kind {
-                return SealOutcome::Sealed(kt);
-            }
-            None
+        Some((kt @ KType::SetRef { .. }, installed_at)) if installed_at == bind_index => {
+            return SealOutcome::Sealed(kt);
         }
         _ => None,
     };
@@ -195,7 +189,7 @@ pub fn finalize_nominal_member<'a>(
             // Non-recursive (or a redeclaration): a singleton over this one member.
             let set = Rc::new(RecursiveSet::new(vec![NominalMember::pending(
                 name.to_string(),
-                scope_id,
+                scope.id,
                 kind,
             )]));
             (set, 0)

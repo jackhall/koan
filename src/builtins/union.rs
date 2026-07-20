@@ -9,7 +9,6 @@ use crate::machine::model::{
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
 use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
-use crate::machine::{NameLookup, ScopeId};
 
 use super::{arg, kw, sig};
 
@@ -23,27 +22,36 @@ enum UnionRecovery {
 }
 
 /// Recover a sealed union identity for `name`, distinguishing an idempotent re-finalize (a bound
-/// `KType::Union` whose members are all filled) from a fresh declaration. A pre-seal placeholder
-/// is never reused in place: under content-addressed identity its transient digest no longer
-/// stands in for the sealed result, so a partially-filled match re-mints Fresh rather than
-/// upserting the placeholder.
-fn recover_union(scope: &Scope<'_>, name: &str, scope_id: ScopeId, n: usize) -> UnionRecovery {
-    let bound = scope
-        .bindings()
-        .lookup_type(name, None)
-        .and_then(NameLookup::bound);
+/// `KType::Union` whose members are all filled) from a fresh declaration. Declaration identity is
+/// the stored [`BindingIndex`]: a binding installed by this same statement is this declaration's
+/// own seal, anything else is a genuine prior binding of the name. A pre-seal placeholder is never
+/// reused in place: under content-addressed identity its transient digest no longer stands in for
+/// the sealed result, so a partially-filled match re-mints Fresh rather than upserting the
+/// placeholder.
+fn recover_union(
+    scope: &Scope<'_>,
+    name: &str,
+    bind_index: BindingIndex,
+    n: usize,
+) -> UnionRecovery {
+    let (bound, installed_at) = match scope.bindings().committed_type_binding(name) {
+        Some(entry) => entry,
+        None => return UnionRecovery::Fresh,
+    };
     let members = match bound {
-        Some(KType::Union { members, .. }) => members,
+        KType::Union { members, .. } => members,
         _ => return UnionRecovery::Fresh,
     };
     let set = match members.first() {
         Some(KType::SetRef { set, .. }) => set,
         _ => return UnionRecovery::Fresh,
     };
-    let member0 = set.member(0);
-    if set.len() == n
-        && member0.scope_id == scope_id
-        && member0.kind == KKind::NewType
+    // The two structural checks stand alongside the identity check: `all filled` is the
+    // pre-seal-window guard (a partially-filled prior binding re-mints Fresh), and `len == n`
+    // routes a persistent-scope re-run whose source changed arity at the same statement position
+    // onto the Fresh → `Rebind` path.
+    if installed_at == bind_index
+        && set.len() == n
         && set.members().iter().all(NominalMember::is_filled)
     {
         return UnionRecovery::Sealed(KType::union_of(members.clone()));
@@ -72,7 +80,7 @@ fn finalize_union<'a>(
     let scope_id = scope.id;
     let n = fields.len();
 
-    let set = match recover_union(scope, &name, scope_id, n) {
+    let set = match recover_union(scope, &name, bind_index, n) {
         // Idempotent re-finalize: the union is already bound. Allocate the recovered union into this
         // scope's own region and cross it as a declared operand, folding the carriers' reach onto the
         // placement — the same coverage the register-success path produces.
