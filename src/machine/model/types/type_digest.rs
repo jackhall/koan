@@ -449,10 +449,10 @@ fn feed_record(h: &mut DigestHasher, record: &Record<KType>) {
 
 /// A recursive set's digest, computed at seal (every member filled). Generative sets (opaque
 /// ascription) fold their per-application nonce first, so two applications never unify; every
-/// other set is content-only. Members are digested in declaration order; a member's identity
-/// is `(name, kind, schema)` — `scope_id` is excluded so the same declaration elaborated
-/// twice unifies. Intra-set sibling references are `SetLocal` (a bare index, tag-only), so
-/// computing a set's digest never recurses into the set itself.
+/// other set is content-only. Members are digested in declaration order; a member's identity is
+/// exactly `(name, kind, schema)`, and nothing outside that content distinguishes members, so the
+/// same declaration elaborated twice unifies. Intra-set sibling references are `SetLocal` (a bare
+/// index, tag-only), so computing a set's digest never recurses into the set itself.
 pub fn set_digest(set: &RecursiveSet) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_RECURSIVE_SET);
     match set.generative_nonce() {

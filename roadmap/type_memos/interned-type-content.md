@@ -118,12 +118,10 @@ several surfaces:
 The value-side counterpart is
 [Region-store record values](../refactor/region-store-records.md), which homes a
 record's field substrate in the region; this item owns every type-side clone.
+Interning may collapse digest-equal sets freely: no control flow rests on a
+member's digest-excluded origin, since `NominalMember` no longer records one.
 
-**Requires:**
-
-- [Retire functional `NominalMember.scope_id` reads](member-scope-id-functional-reads.md)
-  — interning collapses digest-equal sets to one node, so a member's digest-excluded
-  `scope_id` becomes first-interner-wins and cannot carry a decision.
+**Requires:** none — the premise is in place.
 
 **Unblocks:**
 

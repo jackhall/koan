@@ -143,9 +143,9 @@ carrier. Type-position application binds both parameters by name —
 The arity-1 `AS` form does not apply to `Result`; it errors directing to the
 record form.
 
-The identity's `(name, scope_id)` fields use the root scope's `ScopeId` — the
-scope that owns the registration — so every `Result`
-value shares one nominal identity and MATCHes uniformly. Because the name is
+The identity is minted once at prelude registration and bound in the root
+scope's `types`, so every `Result` value shares one nominal identity and
+MATCHes uniformly. Because the name is
 registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
 the binder-placeholder install refuses a name already bound to a non-function
 value.
@@ -260,10 +260,10 @@ the caller binds with `LET`, passes as an argument, or returns:
 The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
 mechanism as `TRY-WITH` (`Action::Catch` / `CatchFinish`): it schedules `<expr>` as a
 catching sub-dispatch and registers a finish closure that wraps the outcome in
-a `Result` value. The prelude `Result` identity's `scope_id` is read from
-`bindings.types` (via `scope.resolve_type("Result")`) at body time, not from the
-call-site scope, so a `CATCH`-produced `Result` and a `Result (...)`-constructed
-one share nominal identity regardless of where the `CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
+a `Result` value. The prelude `Result` identity is read from `bindings.types`
+(via `scope.resolve_type("Result")`) at body time, so a `CATCH`-produced
+`Result` and a `Result (...)`-constructed one share nominal identity regardless
+of where the `CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
 lift stays opt-in.
 
 ## Open work

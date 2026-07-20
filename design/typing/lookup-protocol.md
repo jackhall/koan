@@ -117,7 +117,17 @@ clears an in-flight type producer's placeholder (nor the reverse).
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` reads the placeholder directly through
   [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
-  bypassing the `types`-first preference.
+  bypassing the `types`-first preference. It pairs that with
+  [`Bindings::committed_type_binding`](../../src/machine/core/bindings.rs) — the
+  raw, visibility-unfiltered `types[name]` entry plus its `BindingIndex` — which
+  is the declaration-identity read, not a consumer lookup: a nominal member is
+  in flight iff some scope on the chain holds the name in `pending_types` *and*
+  its committed identity is a `SetRef` into the same set allocation the
+  reference resolved through
+  ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
+  The set-allocation match is what stops a same-named in-flight declaration of a
+  different type from capturing the reference; a SIG-declared or abstract slot,
+  whose `KType` records its declaring scope id, is matched by that id instead.
 - [`Bindings::lookup_member`](../../src/machine/core/bindings.rs) is the ATTR
   module/signature read: one classified pass over the scope's *own* `data` then
   `types`, returning a `MemberResolution::Value(&KObject)` or

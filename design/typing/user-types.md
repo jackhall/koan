@@ -53,15 +53,18 @@ has no KType variant: it is a value, typed by its principal signature
 (`Signature { sig: SelfOf(m), .. }`) — see [modules.md](modules.md) for the carrier
 model.
 
-## Identity is the set pointer plus index
+## Identity is the set digest plus index
 
-A member's identity is `(Rc::as_ptr(set), index)` — never its schema, which may
-be cyclic. `SetRef` equality and hashing key on the pointer and index only
-([ktype.rs](../../src/machine/model/types/ktype.rs)); the member's `name` and
-`scope_id` are diagnostics, never identity. Two distinct nominals sit in distinct
-sets (or distinct indices within one set), so they carry distinct identities —
-the per-declaration-distinctness dispatch keys on. Because the identity is a
-pointer, identity comparison never descends the (possibly cyclic) schema.
+A member's identity is `(set digest, index)` — the set's content digest, sealed
+when its last member fills
+([recursive_set.rs](../../src/machine/model/types/recursive_set.rs)) — never a
+live walk of the schema, which may be cyclic. The member's `name` and `kind`
+join the digested content and nothing outside that content distinguishes
+members, so two structurally different nominals carry different digests (the
+per-declaration-distinctness dispatch keys on) while the same declaration
+elaborated twice unifies. The `Rc` is content transport only: `same_nominal`
+keeps a pointer fast path for a shared allocation and for the pre-seal window
+before a digest exists.
 
 ## Lift travels the set as one unit
 
@@ -194,7 +197,22 @@ its identity (a `KType::SetRef` into its sealed set) and installs it through
 absent and overwrites a `PartialEq`-equal entry, surfacing `Rebind` on a genuine
 non-equal collision. The schema rides inside the set member, so construction reads
 fields / variant types straight off the projected member; there is no
-second-namespace write to keep in sync. The single-home invariant —
+second-namespace write to keep in sync.
+
+**A declaration is identified by its stored `BindingIndex`.** Before installing,
+[`finalize_nominal_member`](../../src/machine/model/types/resolver.rs) (and
+`recover_union` for the union path) reads the committed `types[name]` entry
+*with* the [`BindingIndex`](../../src/machine/core/bindings.rs) its installing
+statement wrote, and decides three ways: an entry whose member is still unfilled
+is this declaration's own seal pre-install, so the schema fills that set; an
+entry installed at *this* statement's index is a parallel finalize of this same
+declaration, short-circuited idempotently; anything else is a genuine prior
+binding of the name, so the seal mints a fresh singleton and the install raises
+`Rebind`. The index is the whole identity signal — a statement's lexical
+position is unique within its scope, and the pre-install sits at index 0 below
+every statement's own index, so the unfilled-member arm is what lets a
+`RECURSIVE TYPES` block member (minted in the enclosing scope, sealed in the
+child) reach its shared set. The single-home invariant —
 Type-classed name lookups go through `Scope::resolve_type` only — holds because
 the identity *is* the only entry.
 
@@ -397,7 +415,6 @@ declare the constructor member a higher-kinded signature slot demands.
 declaration mints one `KKind::TypeConstructor` member —
 [`mint_type_constructor`](../../src/builtins/newtype_def.rs), an empty variant schema plus
 the declared `param_names` — and writes it to `bindings.types` only, no value-side carrier.
-The `scope_id` on the member is the declaring scope's own id, carried for diagnostics.
 What separates a NEWTYPE-declared family from the `TYPE` declarator's abstract constructor
 slot is the *variant*: the slot is a [`KType::AbstractType`](../../src/machine/model/types/ktype.rs)
 with non-empty `param_names`, which names a kind and constructs nothing, while a family is

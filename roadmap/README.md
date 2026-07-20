@@ -53,6 +53,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Carving the workcell crate](scheduler_library/workcell-extraction.md)
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
+- [Declaration identity is the installing node](simplify_dispatch/declaration-identity-installing-node.md)
 - [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
@@ -60,5 +61,5 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
 - [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Retire functional `NominalMember.scope_id` reads](type_memos/member-scope-id-functional-reads.md)
+- [Interned type content behind Copy handles](type_memos/interned-type-content.md)
 
