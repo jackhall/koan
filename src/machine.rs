@@ -19,8 +19,8 @@ pub(crate) use core::{
     require_identifier_name, require_kexpression, require_ktype, split_body_statements, Action,
     ActionFn, AwaitContinue, BinderBucketFn, BinderNameFn, BlockEntry, BodyCtx, CatchContinue,
     DepPlacement, DepRequest, DepTerminal, FinishCtx, FoldingBrand, FramePlacement,
-    FrameStorageExt, KoanRegionExt, KoanStorageProfile, PendingTypeEntry, ReturnContract,
-    StepAllocator, StoredReach, TailContract,
+    FrameStorageExt, KoanRegionExt, KoanStorageProfile, ReturnContract, StepAllocator, StoredReach,
+    TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,

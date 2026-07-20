@@ -4,9 +4,8 @@
 
 use super::*;
 use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
-use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::KObject;
-use crate::machine::model::{KKind, KType};
+use crate::machine::model::KType;
 
 /// A value binding round-trips the home-omitted foreign reach it was bound with: a carrier-oriented
 /// read hands back exactly the `FrameSet` stored at bind time, so the read wrapper can name the
@@ -186,20 +185,14 @@ fn new_bindings_has_empty_pending_types() {
 /// for a `pending_types` entry outside `#[cfg(test)]`.
 #[test]
 fn pending_binder_guard_drop_removes_entry() {
-    use crate::machine::model::KExpression;
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
-    let entry = PendingTypeEntry {
-        kind: KKind::NewType,
-        scope_id: ScopeId::from_raw(0, 0xBEEF),
-        schema_expr: KExpression::new(Vec::new()),
-    };
     {
-        let _guard = bindings.insert_pending_type("Foo".into(), entry);
-        assert!(bindings.pending_types().contains_key("Foo"));
+        let _guard = bindings.insert_pending_type("Foo".into());
+        assert!(bindings.pending_types().contains("Foo"));
     }
     assert!(
-        !bindings.pending_types().contains_key("Foo"),
+        !bindings.pending_types().contains("Foo"),
         "guard Drop should have removed the pending_types entry",
     );
 }
@@ -207,18 +200,12 @@ fn pending_binder_guard_drop_removes_entry() {
 /// Guard Drop must tolerate an already-removed entry without panicking.
 #[test]
 fn pending_binder_guard_drop_tolerates_absent_entry() {
-    use crate::machine::model::KExpression;
     let bindings: Box<Bindings<'static>> = Box::default();
     let bindings: &'static Bindings<'static> = Box::leak(bindings);
-    let entry = PendingTypeEntry {
-        kind: KKind::NewType,
-        scope_id: ScopeId::from_raw(0, 0xBEEF),
-        schema_expr: KExpression::new(Vec::new()),
-    };
-    let guard = bindings.insert_pending_type("Foo".into(), entry);
+    let guard = bindings.insert_pending_type("Foo".into());
     bindings.pending_remove("Foo");
     drop(guard);
-    assert!(!bindings.pending_types().contains_key("Foo"));
+    assert!(!bindings.pending_types().contains("Foo"));
 }
 
 /// The token-class partition: `types` and `data` are different universes, and a name's token class

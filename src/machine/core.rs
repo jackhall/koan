@@ -25,7 +25,7 @@ pub use arena::{
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
     BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
-    PendingBinderGuard, PendingTypeEntry, StoredReach,
+    PendingBinderGuard, StoredReach,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;

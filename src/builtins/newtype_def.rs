@@ -190,7 +190,6 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
         ctx,
         name,
         fields,
-        KKind::NewType,
         FieldListContext::NEWTYPE_RECORD_REPR,
         FieldNameKind::Identifier,
         error_frame,

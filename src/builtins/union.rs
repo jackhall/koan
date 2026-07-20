@@ -157,7 +157,6 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ctx,
         name,
         schema_expr,
-        KKind::NewType,
         FieldListContext::UNION_SCHEMA,
         FieldNameKind::Type,
         error_frame,

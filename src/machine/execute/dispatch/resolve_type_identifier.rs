@@ -100,7 +100,7 @@ impl<'view, 'step> FinalizeGate<'view, 'step> {
     /// of a *different* type (shadowing) from capturing this reference.
     fn member_producer(&self, set: &Rc<RecursiveSet>, name: &str) -> Option<NodeId> {
         self.scope.ancestors().find_map(|s| {
-            if !s.bindings().pending_types().contains_key(name) {
+            if !s.bindings().pending_types().contains(name) {
                 return None;
             }
             match s.bindings().committed_type_binding(name) {
@@ -116,7 +116,7 @@ impl<'view, 'step> FinalizeGate<'view, 'step> {
     /// that scope by id, park iff it holds `name` in `pending_types`.
     fn declared_producer(&self, scope_id: ScopeId, name: &str) -> Option<NodeId> {
         let owner = self.scope.ancestors().find(|s| s.id == scope_id)?;
-        if !owner.bindings().pending_types().contains_key(name) {
+        if !owner.bindings().pending_types().contains(name) {
             return None;
         }
         owner.bindings().type_placeholder_producer(name)

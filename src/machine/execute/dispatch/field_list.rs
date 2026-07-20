@@ -159,7 +159,7 @@ pub(crate) fn defer_field_list<'step>(
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard<'step>>,
+    pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
     compose: BrandCompose<'step>,
 ) -> Outcome<'step> {
@@ -215,7 +215,7 @@ pub(crate) fn defer_field_list_action<'a>(
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard<'a>>,
+    pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
     finalize: FieldListFinalizeAction<'a>,
 ) -> crate::machine::core::Action<'a> {
@@ -265,7 +265,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     name_kind: FieldNameKind,
     threaded: Vec<String>,
     chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard<'a>>,
+    pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
     compose: BrandCompose<'a>,
 ) -> crate::machine::core::Action<'a> {

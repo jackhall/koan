@@ -173,9 +173,8 @@ mod bare_leaf_resolution {
     #[test]
     fn mid_seal_member_parks_then_resolves() {
         use crate::machine::core::BindingIndex;
+        use crate::machine::core::Bindings;
         use crate::machine::core::NodeId;
-        use crate::machine::core::{Bindings, PendingTypeEntry};
-        use crate::machine::model::KExpression;
         use crate::machine::model::Record;
         use crate::machine::model::{KKind, NominalMember, NominalSchema, RecursiveSet};
 
@@ -194,17 +193,10 @@ mod bare_leaf_resolution {
             },
             BindingIndex::value(0),
         );
-        // Mark the binder in-flight (the `pending_types` entry the finalize gate reads)
+        // Mark the binder in-flight (the `pending_types` name the finalize gate reads)
         // and install a value-side placeholder for the producer node to park on.
         let bindings: &Bindings<'_> = scope.bindings();
-        let pending_guard = bindings.insert_pending_type(
-            "Node".into(),
-            PendingTypeEntry {
-                kind: KKind::NewType,
-                scope_id: scope.id,
-                schema_expr: KExpression::new(Vec::new()),
-            },
-        );
+        let pending_guard = bindings.insert_pending_type("Node".into());
         scope
             .install_placeholder(
                 "Node".into(),

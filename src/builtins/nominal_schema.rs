@@ -3,16 +3,15 @@
 //! `(tag/field :Type, …)` list threading the binder name, then either fold the sealed pairs into
 //! the carrier synchronously or defer one dep-finish over the parked producers + sigil sub-Dispatches.
 //!
-//! The two callers differ only in the parameters threaded through here (kind, diagnostic context,
+//! The two callers differ only in the parameters threaded through here (diagnostic context,
 //! field-name policy, error frame) and the `finalize` that folds the sealed `(name, KType)` pairs
 //! into the right carrier (`finalize_union` / `finalize_record_newtype`).
 
 use crate::machine::model::KType;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
-    FieldNameKind, KKind,
+    FieldNameKind,
 };
-use crate::machine::PendingTypeEntry;
 use crate::machine::{defer_field_list_action, StepCarried};
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
@@ -27,15 +26,13 @@ pub(crate) type SchemaFinalize<'a> = fn(
     BindingIndex,
 ) -> Result<StepCarried<'a>, KError>;
 
-/// Elaborate `schema_expr` as the named declarator's field list and fold or defer it. `kind` /
+/// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
 /// `context` / `name_kind` / `error_frame` parameterize the diagnostic and seal shape; `finalize`
 /// builds the carrier from the sealed pairs.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn nominal_schema_action<'a>(
     ctx: &BodyCtx<'a, '_>,
     name: String,
     schema_expr: crate::machine::model::KExpression<'a>,
-    kind: KKind,
     context: FieldListContext,
     name_kind: FieldNameKind,
     error_frame: TraceFrame,
@@ -44,16 +41,9 @@ pub(crate) fn nominal_schema_action<'a>(
     let bind_index = ctx.bind_index();
     let chain = ctx.chain.clone();
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still finalizing)
-    // can park on our producer node. The guard's Drop removes the entry; the Pending path moves it
+    // can park on our producer node. The guard's Drop removes the name; the Pending path moves it
     // into the dep-finish closure.
-    let pending_guard = ctx.scope.bindings().insert_pending_type(
-        name.clone(),
-        PendingTypeEntry {
-            kind,
-            scope_id: ctx.scope.id,
-            schema_expr: schema_expr.clone(),
-        },
-    );
+    let pending_guard = ctx.scope.bindings().insert_pending_type(name.clone());
     // Seed the threaded set with this binder's name so a self-recursive declaration resolves to the
     // transient `RecursiveRef` rather than parking on its own placeholder.
     let mut elaborator = Elaborator::new(ctx.scope)
