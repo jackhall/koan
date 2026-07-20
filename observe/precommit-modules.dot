@@ -794,6 +794,7 @@ digraph {
     "koan::machine::model::types::signature" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::model::types::type_digest" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::type_digest" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];

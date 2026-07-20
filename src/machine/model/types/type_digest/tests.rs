@@ -2,6 +2,8 @@
 //! equal regardless of allocation and field/member order, distinct content digests apart, nonced
 //! content stays distinct, and a set seals its digest on the last member fill.
 
+mod golden;
+
 use super::*;
 use crate::machine::core::ScopeId;
 use crate::machine::model::types::{
