@@ -323,21 +323,31 @@ fn record_trailing_comma_allowed() {
     assert_eq!(tree("{x = 1,}").unwrap(), "[R{x = n(1)}]");
 }
 
-/// A record frame reads every later `:` as a type-sigil opener, so a dict-style entry
-/// after a field is diagnosed as a malformed sigil rather than as mixed delimiters.
-/// The dict-then-record direction (below) still reports the mix.
+/// A record frame reads a later `:` as a type-sigil opener, but one that opens no sigil
+/// was meant to pair, so the diagnostic names the mix in both directions.
 #[test]
 fn mixed_record_then_dict_delimiters_errors() {
     let err = tree("{x = 1, y: 2}").unwrap_err();
     assert!(
-        err.contains("must be followed by a type name") || err.contains("must be glued"),
-        "expected a type-sigil error, got: {err}"
+        err.contains("mixed `:` and `="),
+        "expected the mixed-delimiter error, got: {err}"
     );
 }
 
 #[test]
 fn mixed_dict_then_record_delimiters_errors() {
     assert!(tree("{x: 1, y = 2}").is_err());
+}
+
+/// A dict frame mid-value has spent its pairing `:`, so a second one likewise falls
+/// through to sigil parsing and reports the pairing rule when no sigil follows.
+#[test]
+fn second_colon_inside_dict_value_errors() {
+    let err = tree("{a: 1 : 2}").unwrap_err();
+    assert!(
+        err.contains("inside dict value"),
+        "expected the dict-value error, got: {err}"
+    );
 }
 
 #[test]

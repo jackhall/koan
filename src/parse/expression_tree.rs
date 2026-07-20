@@ -372,7 +372,9 @@ pub fn build_tree<'a>(
             // that can still take a separator, so a type sigil reaches the arms below
             // even inside a brace literal (`{x = :Number}`, `{a: :Number}`). A nested
             // paren or sigil frame shadows the brace anyway — `top_dict_mut` answers
-            // for the topmost frame only.
+            // for the topmost frame only. When the sigil then fails to parse, the
+            // failure sites ask the brace why it declined the `:`, so mixing pairing
+            // styles reports the pairing rule rather than a type-position complaint.
             ':' => {
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let colon_cursor = reader.cursor;
@@ -429,6 +431,11 @@ pub fn build_tree<'a>(
                             // following uppercase-leading token into a Type.
                         }
                         Some(_) => {
+                            if let Some(reason) =
+                                stack.top_dict_mut().and_then(|d| d.declined_colon_reason())
+                            {
+                                return Err(KError::parse(reason, None));
+                            }
                             let next_char = reader.peek_char().unwrap_or('?');
                             if next_char.is_whitespace() {
                                 return Err(KError::parse(
@@ -447,6 +454,11 @@ pub fn build_tree<'a>(
                             ));
                         }
                         None => {
+                            if let Some(reason) =
+                                stack.top_dict_mut().and_then(|d| d.declined_colon_reason())
+                            {
+                                return Err(KError::parse(reason, None));
+                            }
                             return Err(KError::parse(
                                 "trailing ':' at end of input; expected a type name or `(`",
                                 None,

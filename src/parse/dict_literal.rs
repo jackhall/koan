@@ -140,6 +140,20 @@ impl<'a> DictFrame<'a> {
         self.mode != BraceMode::Record && !matches!(self.state, DictPairState::Value { .. })
     }
 
+    /// Why a diverted `:` could not have paired here, for a sigil that then fails to
+    /// parse. A `:` this frame declined is a type sigil, and the sigil arms diagnose it
+    /// as one; when it turns out not to be a sigil either, the writer meant a pair, so
+    /// the failure reports the pairing rule that declined it rather than a type-position
+    /// complaint. Only the error path consults this — the accepting path stays a single
+    /// [`colon_is_separator`](Self::colon_is_separator) test.
+    pub(super) fn declined_colon_reason(&self) -> Option<&'static str> {
+        match (self.mode, &self.state) {
+            (BraceMode::Record, _) => Some(MIXED_DELIMITERS),
+            (_, DictPairState::Value { .. }) => Some("unexpected ':' inside dict value"),
+            _ => None,
+        }
+    }
+
     /// Errors if no key was buffered or if a `:` arrives while a value is already
     /// being built — one `:` per pair. Selects (or confirms) dict mode.
     pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
