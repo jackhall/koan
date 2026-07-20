@@ -91,7 +91,8 @@ fn named_application_is_order_blind() {
 }
 
 /// `KType::name()` renders the application in the constructor's declared order, and that
-/// rendering re-parses to the same type.
+/// rendering re-parses to the same type. A composite argument renders as a `:(…)` sigil in
+/// the record's value position, which the brace-literal parser reads back as a type.
 #[test]
 fn constructor_apply_name_round_trips() {
     let region = run_root_storage();
@@ -100,6 +101,9 @@ fn constructor_apply_name_round_trips() {
     for source in [
         ":(Wrap {Elem = Number})",
         ":(Result {Ok = Number, Error = Str})",
+        ":(Wrap {Elem = (LIST OF Number)})",
+        ":(Wrap {Elem = :(LIST OF Number)})",
+        ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
         let applied = run_one_type(scope, parse_one(source)).clone();
         let rendered = applied.name();

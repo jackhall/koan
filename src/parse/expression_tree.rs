@@ -367,12 +367,23 @@ pub fn build_tree<'a>(
             // classification); then glued-right type sigils `:(` / `:T`. A lone
             // `:` outside a dict is a parse error — annotation must glue to its
             // operand.
+            //
+            // `colon_is_separator` scopes the pairing reading to the brace positions
+            // that can still take a separator, so a type sigil reaches the arms below
+            // even inside a brace literal (`{x = :Number}`, `{a: :Number}`). A nested
+            // paren or sigil frame shadows the brace anyway — `top_dict_mut` answers
+            // for the topmost frame only.
             ':' => {
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let colon_cursor = reader.cursor;
                 reader.advance_byte();
-                if let Some(d) = stack.top_dict_mut() {
-                    d.accept_colon()?;
+                let pairs_brace_entry =
+                    stack.top_dict_mut().is_some_and(|d| d.colon_is_separator());
+                if pairs_brace_entry {
+                    stack
+                        .top_dict_mut()
+                        .expect("top frame checked as a dict above")
+                        .accept_colon()?;
                 } else {
                     match reader.peek_byte() {
                         Some(b'|') => {

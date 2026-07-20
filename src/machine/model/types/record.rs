@@ -13,9 +13,10 @@
 //!   `mix(hash(name), hash(value))`. The `mix` binds name to value before the fold,
 //!   so `{x: Number}` and `{y: Number}` hash apart.
 //!
-//! Names are unique within a record — an `IndexMap` key invariant. The `STRUCT` / `SIG`
-//! parser rejects duplicate fields upstream; if one ever reached [`from_pairs`], the
-//! last-wins insert still leaves keys unique, so `Hash`/`Eq` stay well-defined.
+//! Names are unique within a record — an `IndexMap` key invariant. The parser rejects
+//! duplicate fields upstream, in `STRUCT` / `SIG` declarations and in record literals
+//! alike; if one ever reached [`from_pairs`], the last-wins insert still leaves keys
+//! unique, so `Hash`/`Eq` stay well-defined.
 
 use indexmap::IndexMap;
 use std::hash::{Hash, Hasher};

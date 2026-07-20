@@ -323,12 +323,15 @@ fn record_trailing_comma_allowed() {
     assert_eq!(tree("{x = 1,}").unwrap(), "[R{x = n(1)}]");
 }
 
+/// A record frame reads every later `:` as a type-sigil opener, so a dict-style entry
+/// after a field is diagnosed as a malformed sigil rather than as mixed delimiters.
+/// The dict-then-record direction (below) still reports the mix.
 #[test]
 fn mixed_record_then_dict_delimiters_errors() {
     let err = tree("{x = 1, y: 2}").unwrap_err();
     assert!(
-        err.contains("mixed"),
-        "expected mixed-delimiter error, got: {err}"
+        err.contains("must be followed by a type name") || err.contains("must be glued"),
+        "expected a type-sigil error, got: {err}"
     );
 }
 
@@ -346,4 +349,79 @@ fn record_field_without_value_errors() {
 fn non_identifier_record_field_errors() {
     let err = tree("{1 = 2}").unwrap_err();
     assert!(err.contains("bare identifier"), "got: {err}");
+}
+
+// A `:` inside a brace literal separates a dict pair only where the frame can still take
+// one. A record frame, and a dict frame already building a value, both read it as a type
+// sigil — so a type reaches the value position of either container.
+
+#[test]
+fn record_value_is_a_glued_type_sigil() {
+    assert_eq!(tree("{x = :Number}").unwrap(), "[R{x = T(Number)}]");
+}
+
+#[test]
+fn record_value_is_a_parenthesized_type_sigil() {
+    assert_eq!(
+        tree("{x = :(LIST OF Number)}").unwrap(),
+        "[R{x = :(t(LIST) t(OF) T(Number))}]",
+    );
+}
+
+#[test]
+fn type_named_record_field_takes_a_type_sigil_value() {
+    assert_eq!(
+        tree("{Elem = :(LIST OF Number)}").unwrap(),
+        "[R{Elem = :(t(LIST) t(OF) T(Number))}]",
+    );
+}
+
+#[test]
+fn dict_value_is_a_glued_type_sigil() {
+    assert_eq!(tree("{a: :Number}").unwrap(), "[D{t(a): T(Number)}]");
+}
+
+#[test]
+fn dict_value_is_a_parenthesized_type_sigil() {
+    assert_eq!(
+        tree("{a: :(LIST OF Number)}").unwrap(),
+        "[D{t(a): :(t(LIST) t(OF) T(Number))}]",
+    );
+}
+
+/// The sigil frame opened inside a brace shadows it, so the comma and `=` inside the
+/// nested group stay ordinary tokens rather than brace-frame separators.
+#[test]
+fn nested_sigil_frame_shadows_the_brace_frame() {
+    assert_eq!(
+        tree("{x = :(Wrap {Elem = Number}), y = 1}").unwrap(),
+        "[R{x = :(T(Wrap) R{Elem = T(Number)}), y = n(1)}]",
+    );
+}
+
+/// An `Empty`-state colon keeps its missing-key diagnostic rather than falling through to
+/// the sigil arms.
+#[test]
+fn empty_brace_colon_reports_a_missing_key() {
+    let error = tree("{: 1}").unwrap_err();
+    assert!(error.contains("missing key before ':'"), "got: {error}");
+}
+
+#[test]
+fn duplicate_record_field_errors() {
+    let error = tree("{x = 1.0, x = 2.0}").unwrap_err();
+    assert!(
+        error.contains("duplicate field `x`"),
+        "the error must name the repeated field, got: {error}",
+    );
+}
+
+/// Dict keys are value expressions keyed at runtime, not a static shape, so a repeated key
+/// stays legal and last-wins.
+#[test]
+fn duplicate_dict_key_is_allowed() {
+    assert_eq!(
+        tree("{'a': 1, 'a': 2}").unwrap(),
+        "[D{s(a): n(1), s(a): n(2)}]",
+    );
 }

@@ -129,6 +129,17 @@ impl<'a> DictFrame<'a> {
         }
     }
 
+    /// Whether a `:` arriving at this frame pairs a key with its value. A record frame
+    /// has committed to `=` pairing, and a dict frame mid-value has already spent the one
+    /// `:` its pair gets — in both positions a `:` can only open a type sigil, so the
+    /// character handler falls through to sigil parsing. A legitimate separator always
+    /// arrives in `Key` state (or `Empty`, which keeps the "missing key" diagnostic),
+    /// because [`push`](Self::push)'s auto-commit returns the frame to `Key` before the
+    /// next key's `:`.
+    pub(super) fn colon_is_separator(&self) -> bool {
+        self.mode != BraceMode::Record && !matches!(self.state, DictPairState::Value { .. })
+    }
+
     /// Errors if no key was buffered or if a `:` arrives while a value is already
     /// being built — one `:` per pair. Selects (or confirms) dict mode.
     pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
@@ -224,6 +235,15 @@ impl<'a> DictFrame<'a> {
                         ));
                     }
                 };
+                // A record's field list is a static shape, so a repeated name is a
+                // mistake rather than an override. Dict keys stay unchecked: they are
+                // arbitrary value expressions keyed at runtime, not a shape.
+                if fields.iter().any(|(seen, _)| *seen == name) {
+                    return Err(KError::parse(
+                        format!("duplicate field `{name}` in record literal"),
+                        None,
+                    ));
+                }
                 fields.push((name, value));
             }
             Ok(BraceContents::Record(fields))

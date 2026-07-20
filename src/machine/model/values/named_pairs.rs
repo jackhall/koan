@@ -17,8 +17,9 @@ pub struct NamedPairs<'a> {
 
 impl<'a> NamedPairs<'a> {
     /// Wrap a record literal's fields for consume-by-name access. Errors on a duplicate
-    /// field name: a record *value* last-wins on duplicates, but a named-argument list
-    /// must reject them so a doubly-supplied argument fails loudly rather than silently.
+    /// field name. A parsed record literal is already duplicate-free — the brace-literal
+    /// parser rejects a repeated field — so this guards the fields a caller assembles
+    /// directly, keeping a doubly-supplied argument loud rather than silent.
     pub fn from_fields(fields: Vec<(String, ExpressionPart<'a>)>) -> Result<Self, String> {
         let mut map = HashMap::with_capacity(fields.len());
         for (name, value) in fields {

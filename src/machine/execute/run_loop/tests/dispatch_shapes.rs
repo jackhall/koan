@@ -301,20 +301,15 @@ fn fast_lane_legacy_paren_args_rejected() {
     );
 }
 
-/// Duplicate named-arg is caught by `NamedPairs::from_fields` at construction time.
+/// A duplicate named arg never reaches dispatch: the record literal carrying it fails to
+/// parse. `NamedPairs::from_fields` keeps its own guard for caller-assembled fields, unit-
+/// tested alongside it.
 #[test]
 fn fast_lane_duplicate_named_arg() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
-    use crate::machine::KErrorKind;
-    let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
-    reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("f {x = 1, x = 2}"));
-    assert_eq!(resolve_dispatch_entry_count(), 0);
+    let error = crate::parse::parse("f {x = 1, x = 2}").unwrap_err();
     assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
-        "expected ShapeError on duplicate name, got {err}",
+        error.to_string().contains("duplicate field `x`"),
+        "expected a duplicate-field parse error, got {error}",
     );
 }
 
