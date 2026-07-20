@@ -8,6 +8,7 @@ use crate::builtins::test_support::{delivered_with_host, run_root_bare};
 use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, CarriedFamily, Held, KObject};
 use crate::machine::BindingIndex;
 use crate::machine::CarrierWitness;
@@ -135,12 +136,13 @@ fn with_scope_relocates_seed_value_into_brand() {
     let region = run_root_storage();
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
     frame.with_scope(|child| {
         // `alloc_object_checked` erases the caller-`'a` input and re-homes it at the frame region,
         // so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
         let it_obj = child
             .brand()
-            .alloc_object_checked(it_value)
+            .alloc_object_checked(it_value, &types)
             .expect("a deep-cloned Number is always resident-in-self");
         child
             .bind_value(
@@ -477,6 +479,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     );
     // The consumer's own frame: the region the finished list node lands in.
     let dest_frame = run_root_storage();
+    let types = TypeRegistry::new();
     // `yoke` the empty accumulator (the dest region + no cells yet) into the dest frame's region.
     let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
         KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&dest_frame), |region| {
@@ -507,7 +510,7 @@ fn alloc_witnessed_fold_builds_a_list_over_independent_foreign_deps() {
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_frame, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
+            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells, &types)))
         });
     // Drop the producer handles: the dest arena's minted set solely owns both foreign regions; the
     // dest region itself rides the held `dest_frame` (the retention stand-in), which the read names.
@@ -647,10 +650,11 @@ fn alloc_home_closure<'run>(home: &'run Rc<CallFrame>) -> &'run KObject<'run> {
     // Capture `home`'s child scope (read at the brand), alloc the closure into `home`'s own region —
     // where that scope lives — and wrap it as a `KObject::KFunction` in the same region, so the escaping
     // `&KObject` reaches exactly that region.
+    let types = TypeRegistry::new();
     home.with_scope(|child| {
         let kf_ref = home.brand().alloc_function(no_op_closure(child));
         home.brand()
-            .alloc_object_checked(KObject::KFunction(kf_ref))
+            .alloc_object_checked(KObject::KFunction(kf_ref), &types)
             .expect("f was just allocated into region\'s own region")
     })
 }
@@ -705,11 +709,12 @@ fn delivered_reread_closure<'run>(
     reader: &'run Rc<FrameStorage>,
     reader_scope: &'run Scope<'run>,
 ) -> DeliveredCarried {
+    let types = TypeRegistry::new();
     let home_scope = run_root_bare(home);
     let kf_ref = home.brand().alloc_function(no_op_closure(home_scope));
     let obj = home
         .brand()
-        .alloc_object_checked(KObject::KFunction(kf_ref))
+        .alloc_object_checked(KObject::KFunction(kf_ref), &types)
         .expect("closure co-located with its captured scope");
     // The bind-time mint: `home` materializes into the reader's arena as the entry's stored reach.
     let bind_cell = delivered_with_host(Carried::Object(obj), Rc::clone(home));
@@ -749,6 +754,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let reader_b = run_root_storage();
     let reader_b_scope = run_root_bare(&reader_b);
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope); // the list node lands here.
+    let types = TypeRegistry::new();
 
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
         (region.handle(), Vec::new())
@@ -780,7 +786,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let list: Witnessed<CarriedFamily, CarrierWitness> =
         acc2.map_pinned(&dest_storage, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
-            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells)))
+            Carried::Object(region.alloc_object_folded(KObject::list_of_held(cells, &types)))
         });
 
     // Free every home and reader shell: the dest arena's minted set (the unioned closure homes plus
@@ -799,10 +805,13 @@ fn multi_region_list_of_closures_survives_frame_free() {
             .iter()
             .map(|h| match h.object() {
                 KObject::KFunction(f) => f.captured_scope().id,
-                other => panic!("expected a KFunction cell, got {}", other.ktype().name()),
+                other => panic!(
+                    "expected a KFunction cell, got {}",
+                    other.ktype().name(&types)
+                ),
             })
             .collect(),
-        other => panic!("expected a List, got {}", other.ktype().name()),
+        other => panic!("expected a List, got {}", other.ktype().name(&types)),
     });
     assert_eq!(
         ids.len(),
@@ -824,6 +833,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
     let frame_outer: Rc<CallFrame> = CallFrame::new(scope);
     let frame_1: Rc<CallFrame> = CallFrame::new(scope);
     let frame_2: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
     // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
@@ -860,7 +870,7 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
         |outer_v, (_region, cells), placement| {
             let region = FoldingBrand::in_fold_closure(placement);
             if let KObject::KFunction(kf) = outer_v.object() {
-                let list_obj = region.alloc_object_folded(KObject::list_of_held(cells));
+                let list_obj = region.alloc_object_folded(KObject::list_of_held(cells, &types));
                 kf.captured_scope()
                     .bind_value(
                         "inners".to_string(),
@@ -887,12 +897,15 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
                 .iter()
                 .map(|h| match h.object() {
                     KObject::KFunction(f) => f.captured_scope().id,
-                    other => panic!("expected a KFunction cell, got {}", other.ktype().name()),
+                    other => panic!(
+                        "expected a KFunction cell, got {}",
+                        other.ktype().name(&types)
+                    ),
                 })
                 .collect(),
             _ => panic!("`inners` must be bound to a list of closures"),
         },
-        other => panic!("expected a KFunction, got {}", other.ktype().name()),
+        other => panic!("expected a KFunction, got {}", other.ktype().name(&types)),
     });
     assert_eq!(
         ids.len(),
@@ -913,6 +926,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
     let frame_a: Rc<CallFrame> = CallFrame::new(scope);
     let frame_b: Rc<CallFrame> = CallFrame::new(scope);
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
     // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
@@ -940,7 +954,10 @@ fn multi_region_record_of_closures_survives_frame_free() {
         acc2.map_pinned(&dest_storage, |(region, cells), _token| {
             let region = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
             Carried::Object(
-                region.alloc_object_folded(KObject::record_of_held(Record::from_pairs(cells))),
+                region.alloc_object_folded(KObject::record_of_held(
+                    Record::from_pairs(cells),
+                    &types,
+                )),
             )
         });
 
@@ -955,10 +972,13 @@ fn multi_region_record_of_closures_survives_frame_free() {
             .values()
             .map(|h| match h.object() {
                 KObject::KFunction(f) => f.captured_scope().id,
-                other => panic!("expected a KFunction field, got {}", other.ktype().name()),
+                other => panic!(
+                    "expected a KFunction field, got {}",
+                    other.ktype().name(&types)
+                ),
             })
             .collect(),
-        other => panic!("expected a Record, got {}", other.ktype().name()),
+        other => panic!("expected a Record, got {}", other.ktype().name(&types)),
     });
     assert_eq!(
         ids.len(),
@@ -978,6 +998,7 @@ fn multi_region_record_of_closures_survives_frame_free() {
 fn object_field_reach_fold_survives_producer_frame_free() {
     let root = run_root_storage();
     let scope = default_scope(&root, Box::new(std::io::sink()));
+    let types = TypeRegistry::new();
 
     // Producer: a closure resident in its own frame's region. A `KFunction` borrows its captured
     // scope, so the pointee is a genuine region borrow — the dangle the fold has to prevent.
@@ -985,7 +1006,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     let obj: &KObject<'_> = alloc_home_closure(&producer_frame);
     let expected_id = match obj {
         KObject::KFunction(f) => f.captured_scope().id,
-        other => panic!("expected a KFunction, got {}", other.ktype().name()),
+        other => panic!("expected a KFunction, got {}", other.ktype().name(&types)),
     };
     let dep: DeliveredCarried = Delivered::seal(
         Witnessed::from_erased(
@@ -1004,7 +1025,7 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     // region, which is exactly what the fold has to keep alive.
     let sealed: StepCarried = ctx.alloc_carried_with(&[&dep], |b, views| {
         let cells = vec![Held::from_carried(views[0])];
-        Carried::Object(b.alloc_object_folded(KObject::list_of_held(cells)))
+        Carried::Object(b.alloc_object_folded(KObject::list_of_held(cells, &types)))
     });
 
     // Drop the dep envelope and every frame shell: only the fold (if it happened) keeps the
@@ -1020,9 +1041,12 @@ fn object_field_reach_fold_survives_producer_frame_free() {
     let read = sealed.inspect_pinned(&consumer_storage, |c| match c.object() {
         KObject::List(items, _) => match items[0].object() {
             KObject::KFunction(f) => f.captured_scope().id,
-            other => panic!("expected a KFunction element, got {}", other.ktype().name()),
+            other => panic!(
+                "expected a KFunction element, got {}",
+                other.ktype().name(&types)
+            ),
         },
-        other => panic!("expected a List, got {}", other.ktype().name()),
+        other => panic!("expected a List, got {}", other.ktype().name(&types)),
     });
     assert_eq!(
         read, expected_id,
@@ -1198,9 +1222,10 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
 
     let storage = run_root_storage();
     let scope = run_root_bare(&storage);
+    let types = TypeRegistry::new();
 
     let witnessed = scope
-        .seal_fresh_object(KObject::Number(7.0))
+        .seal_fresh_object(KObject::Number(7.0), &types)
         .expect("a bare Number borrows no region, so its checked seal cannot fail");
     let spliced = ExpressionPart::Spliced {
         cell: Delivered::hosted(Sealed::seal(witnessed), Rc::clone(&storage)),
@@ -1213,7 +1238,7 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
 
     let result = scope
         .brand()
-        .alloc_object_witnessed_checked(KObject::KExpression(expression));
+        .alloc_object_witnessed_checked(KObject::KExpression(expression), &types);
     assert!(
         result.is_err(),
         "a spliced quoted expression must be rejected, not silently stored"

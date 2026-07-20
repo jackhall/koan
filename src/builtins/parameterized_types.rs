@@ -10,6 +10,7 @@
 //! like `OF` don't pay a bucket-walk cost on every dispatched parameterized type.
 
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
     FieldNameKind,
@@ -37,8 +38,12 @@ fn finalize_carrier(fields: Vec<(String, KType)>, ret: KType) -> KType {
 /// a list's element, a dict's key and value, a function type's return. Each names the type of a
 /// value, so each must be a proper type. The parameter list of an `:(FN …)` is checked inside the
 /// shared field-list walker instead, alongside every other record-shaped schema.
-fn require_proper_type(kt: &KType, position: &str) -> Result<(), KError> {
-    match crate::machine::model::unsaturated_constructor_message(kt, position) {
+fn require_proper_type(
+    kt: &KType,
+    position: &str,
+    types: &crate::machine::model::TypeRegistry,
+) -> Result<(), KError> {
+    match crate::machine::model::unsaturated_constructor_message(kt, position, types) {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
         None => Ok(()),
     }
@@ -59,36 +64,44 @@ mod action_bodies {
     /// owned `KType` and assemble the composite from those values, then allocate it into the
     /// step's own region through the single type door.
     pub(super) fn body_list_of<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let elem = crate::try_action!(require_ktype(ctx.args, "elem"));
-        crate::try_action!(require_proper_type(&elem, "the element type of `LIST OF`"));
+        let elem = crate::try_action!(require_ktype(ctx.args, "elem", ctx.types));
+        crate::try_action!(require_proper_type(
+            &elem,
+            "the element type of `LIST OF`",
+            ctx.types
+        ));
         Action::Done(Ok(ctx.ctx.alloc_type(KType::list(Box::new(elem)))))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let k = crate::try_action!(require_ktype(ctx.args, "k"));
-        let v = crate::try_action!(require_ktype(ctx.args, "v"));
-        crate::try_action!(require_proper_type(&k, "the key type of `MAP`"));
-        crate::try_action!(require_proper_type(&v, "the value type of `MAP`"));
+        let k = crate::try_action!(require_ktype(ctx.args, "k", ctx.types));
+        let v = crate::try_action!(require_ktype(ctx.args, "v", ctx.types));
+        crate::try_action!(require_proper_type(&k, "the key type of `MAP`", ctx.types));
+        crate::try_action!(require_proper_type(
+            &v,
+            "the value type of `MAP`",
+            ctx.types
+        ));
         Action::Done(Ok(ctx
             .ctx
             .alloc_type(KType::dict(Box::new(k), Box::new(v)))))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-        let applied = crate::try_action!(require_ktype(ctx.args, "applied"));
-        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor"));
+        let applied = crate::try_action!(require_ktype(ctx.args, "applied", ctx.types));
+        let ctor = crate::try_action!(require_ktype(ctx.args, "ctor", ctx.types));
         // A declared family and a SIG's abstract constructor slot both name their parameters.
-        let Some(param_names) = constructor_param_names(&ctor) else {
+        let Some(param_names) = constructor_param_names(&ctor, ctx.types) else {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "right-hand side of `AS` must be a type constructor, got `{}`",
-                ctor.name(),
+                ctor.name(ctx.types),
             )))));
         };
         let [param_name] = &param_names[..] else {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`{}` takes {} type arguments; the `AS` form supplies one, so \
                  multi-parameter application is not yet supported",
-                ctor.name(),
+                ctor.name(ctx.types),
                 param_names.len(),
             )))));
         };
@@ -123,10 +136,11 @@ fn build_carrier<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::{require_kexpression, require_ktype, Action};
     let sig_expr = crate::try_action!(require_kexpression(ctx.args, "FN", sig_slot));
-    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot));
+    let ret = crate::try_action!(require_ktype(ctx.args, ret_slot, ctx.types));
     crate::try_action!(require_proper_type(
         &ret,
-        "the return type of an `:(FN …)` type"
+        "the return type of an `:(FN …)` type",
+        ctx.types
     ));
     let mut elaborator = Elaborator::new(ctx.scope);
     match parse_typed_field_list_via_elaborator(
@@ -135,6 +149,7 @@ fn build_carrier<'a>(
         FN_PARAM_NAME_KIND,
         &mut elaborator,
         None,
+        ctx.types,
     ) {
         FieldListOutcome::Done(fields) => {
             Action::Done(Ok(ctx.ctx.alloc_type(finalize_carrier(fields, ret))))
@@ -158,7 +173,7 @@ fn build_carrier<'a>(
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     use crate::builtins::register_builtin;
     register_builtin(
         scope,
@@ -172,6 +187,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         action_bodies::body_list_of,
+        types,
     );
     register_builtin(
         scope,
@@ -186,6 +202,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         action_bodies::body_map,
+        types,
     );
     register_builtin(
         scope,
@@ -199,6 +216,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         action_bodies::body_apply_as,
+        types,
     );
     register_builtin(
         scope,
@@ -215,6 +233,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         action_bodies::body_fn,
+        types,
     );
 }
 
@@ -223,7 +242,7 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one_err, run_one_type, run_root_silent,
     };
-    use crate::machine::model::{KKind, KType, Record};
+    use crate::machine::model::{KKind, KType, Record, TypeRegistry};
     use crate::machine::run_root_storage;
     use crate::machine::{KErrorKind, Scope};
 
@@ -390,7 +409,7 @@ mod tests {
                     "the sigil param must lower to LIST OF Number",
                 );
                 assert_eq!(
-                    ret.name(),
+                    ret.name(&TypeRegistry::new()),
                     "Wrapped",
                     "the reaching return type must survive the carrier-view crossing",
                 );
@@ -417,7 +436,7 @@ mod tests {
     /// a type carrier equal to `expected`. The expected value is built at each call site so
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
     fn assert_round_trips<'a>(scope: &'a Scope<'a>, expected: KType) {
-        let rendered = expected.name();
+        let rendered = expected.name(&TypeRegistry::new());
         let result = run_one_type(scope, parse_one(&rendered));
         assert_eq!(
             *result, expected,
@@ -489,7 +508,7 @@ mod tests {
             } => {
                 assert_eq!(**k, KType::Str, "scalar key must lower to Str");
                 assert_eq!(
-                    v.name(),
+                    v.name(&TypeRegistry::new()),
                     "Wrapped",
                     "reaching value type must survive the carrier-view crossing",
                 );
@@ -511,7 +530,7 @@ mod tests {
                 key: k, value: v, ..
             } => {
                 assert_eq!(
-                    k.name(),
+                    k.name(&TypeRegistry::new()),
                     "Wrapped",
                     "reaching key type must survive the carrier-view crossing",
                 );
@@ -534,7 +553,7 @@ mod tests {
             KType::Record { fields: record, .. } => {
                 let field = record.get("x").expect("record must have field x");
                 assert_eq!(
-                    field.name(),
+                    field.name(&TypeRegistry::new()),
                     "Wrapped",
                     "the reaching field must survive the sync brand re-fold",
                 );
@@ -555,7 +574,7 @@ mod tests {
         match result {
             KType::KFunction { params, ret, .. } => {
                 assert_eq!(
-                    params.get("x").map(|kt| kt.name()),
+                    params.get("x").map(|kt| kt.name(&TypeRegistry::new())),
                     Some("Wrapped".to_string()),
                     "the SetRef param must survive the sync compose",
                 );
@@ -586,7 +605,7 @@ mod tests {
                     "the region-free param must be Number",
                 );
                 assert_eq!(
-                    ret.name(),
+                    ret.name(&TypeRegistry::new()),
                     "Wrapped",
                     "the SetRef return type must survive the carrier-view crossing",
                 );
@@ -606,7 +625,7 @@ mod tests {
         match result {
             KType::List { element: elem, .. } => {
                 assert_eq!(
-                    elem.name(),
+                    elem.name(&TypeRegistry::new()),
                     "Wrapped",
                     "reaching elem type must survive the carrier-view crossing",
                 );

@@ -6,6 +6,7 @@ use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -128,6 +129,7 @@ fn close_is_per_scope_open_child_still_binds() {
 
 #[test]
 fn register_function_dedupes_exact_signature() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f1 = region.brand().alloc_function(KFunction::new(
@@ -139,7 +141,7 @@ fn register_function_dedupes_exact_signature() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f1))
+        .alloc_object_checked(KObject::KFunction(f1), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
@@ -153,7 +155,7 @@ fn register_function_dedupes_exact_signature() {
     ));
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f2))
+        .alloc_object_checked(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region\'s own region");
     let err = scope
         .register_function("FOO".to_string(), f2, obj2, BindingIndex::BUILTIN)
@@ -169,6 +171,7 @@ fn register_function_dedupes_exact_signature() {
 /// the unified `try_apply` shares the FN dedupe rule.
 #[test]
 fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f1 = region.brand().alloc_function(KFunction::new(
@@ -180,7 +183,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f1))
+        .alloc_object_checked(KObject::KFunction(f1), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f1, obj1, BindingIndex::BUILTIN)
@@ -194,7 +197,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
     ));
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f2))
+        .alloc_object_checked(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region\'s own region");
     let err = scope
         .bind_value(
@@ -215,6 +218,7 @@ fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
 /// structural-rejection only on pointer-distinct ones.
 #[test]
 fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
@@ -226,11 +230,11 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .bind_value(
@@ -252,6 +256,7 @@ fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
 
 #[test]
 fn register_function_allows_overload_with_different_arg_types() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let sig_num = ExpressionSignature {
@@ -290,11 +295,11 @@ fn register_function_allows_overload_with_different_arg_types() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f1))
+        .alloc_object_checked(KObject::KFunction(f1), &types)
         .expect("f was just allocated into region\'s own region");
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f2))
+        .alloc_object_checked(KObject::KFunction(f2), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("BAR".to_string(), f1, obj1, BindingIndex::BUILTIN)
@@ -308,6 +313,7 @@ fn register_function_allows_overload_with_different_arg_types() {
 /// coexist with a same-name value binding. The two namespaces stay independent.
 #[test]
 fn register_function_coexists_with_same_name_value() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let v = region.brand().alloc_object(KObject::Number(1.0));
@@ -328,7 +334,7 @@ fn register_function_coexists_with_same_name_value() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::BUILTIN)
@@ -350,6 +356,7 @@ fn register_function_coexists_with_same_name_value() {
 /// so it is exempt: a same-name type and a bare FN coexist.
 #[test]
 fn register_function_coexists_with_same_name_type() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
@@ -362,7 +369,7 @@ fn register_function_coexists_with_same_name_type() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("Foo".to_string(), f, obj, BindingIndex::BUILTIN)

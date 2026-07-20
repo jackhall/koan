@@ -1,4 +1,5 @@
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope};
@@ -38,10 +39,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             ) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
-                    name_kt.render(),
+                    name_kt.render(ctx.types),
                 ))));
             }
-            Some(name_kt) => Some(name_kt.name()),
+            Some(name_kt) => Some(name_kt.name(ctx.types)),
             None => None,
         },
     };
@@ -89,7 +90,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 Held::Object(o) => {
                     return done_err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: o.ktype().name(),
+                        got: o.ktype().name(ctx.types),
                     }));
                 }
             }
@@ -99,7 +100,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier or ProperType".to_string(),
-                got: other.ktype().name(),
+                got: other.ktype().name(ctx.types),
             }));
         }
         (None, None) => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -143,10 +144,16 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // returns the resident reference plus the same token, from which the terminal witnesses the
         // bound value in place — the same reach-aware wrapper a later read uses.
         let bound = match ctx.arg_carrier("value") {
-            Some(carrier) => ctx
+            Some(carrier) => ctx.scope.bind_delivered(
+                name,
+                carrier,
+                bind_index,
+                |carried| Ok(carried.object()),
+                ctx.types,
+            ),
+            None => ctx
                 .scope
-                .bind_delivered(name, carrier, bind_index, |carried| Ok(carried.object())),
-            None => ctx.scope.bind_checked(name, value.deep_clone(), bind_index),
+                .bind_checked(name, value.deep_clone(), bind_index, ctx.types),
         };
         let (allocated, stored) = match bound {
             Ok(pair) => pair,
@@ -202,7 +209,7 @@ fn capitalize_identifier(name: &str) -> String {
 /// tagged `Value` xor `Type` to match where the bind lands.
 pub(crate) use crate::builtins::identifier_part_binder_name as binder_name;
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let identifier_sig = || {
         sig(
             KType::Any,
@@ -232,6 +239,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder_name, crate::machine::BindKind::Value)),
         None,
+        types,
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -240,6 +248,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
 }
 

@@ -11,7 +11,7 @@
 
 use crate::machine::model::Carried;
 use crate::machine::model::CarriedFamily;
-use crate::machine::model::{Elaborator, ReturnType};
+use crate::machine::model::{Elaborator, ReturnType, TypeRegistry};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::Action;
@@ -190,6 +190,7 @@ pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>)
 fn check_value_type_kinds(
     elements: &[SignatureElement],
     return_type: &ReturnType<'_>,
+    types: &TypeRegistry,
 ) -> Result<(), KError> {
     use crate::machine::model::unsaturated_constructor_message;
     for element in elements {
@@ -197,13 +198,14 @@ fn check_value_type_kinds(
             if let Some(message) = unsaturated_constructor_message(
                 &argument.ktype,
                 &format!("the type of FN parameter `{}`", argument.name),
+                types,
             ) {
                 return Err(KError::new(KErrorKind::ShapeError(message)));
             }
         }
     }
     if let ReturnType::Resolved(kt) = return_type {
-        if let Some(message) = unsaturated_constructor_message(kt, "the FN return type") {
+        if let Some(message) = unsaturated_constructor_message(kt, "the FN return type", types) {
             return Err(KError::new(KErrorKind::ShapeError(message)));
         }
     }
@@ -220,8 +222,9 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     body_expr: KExpression<'a>,
     kind: FnKind,
     bind_index: BindingIndex,
+    types: &TypeRegistry,
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-    check_value_type_kinds(&elements, &return_type)?;
+    check_value_type_kinds(&elements, &return_type, types)?;
 
     // First Keyword keys the data table. Dispatch is by full signature via
     // `Bindings::functions`; `Bindings::data` is for discoverability /
@@ -250,7 +253,7 @@ pub(crate) fn finalize_fn_with_kind<'a>(
     // allocated into `scope`'s own region above, so the checked audit always passes; the paired
     // token carries the home-borrow bit the audit walk derives (the captured `&Scope` into home).
     let (obj, stored) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f))
+        .alloc_object_checked_stored(KObject::KFunction(f), types)
         .expect("f was just allocated into scope's own region");
     if !matches!(kind, FnKind::Anonymous) {
         let name = match name {
@@ -338,7 +341,7 @@ pub(crate) fn defer<'a>(
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                     "FN signature slot at part-index {slot_idx} expected a type expression, \
                      got a {} value",
-                    terminal.value.ktype().name(),
+                    terminal.value.ktype(fctx.types).name(fctx.types),
                 )))));
             }
             // The resolved type slot travels as its producer's own delivery envelope — carrier and
@@ -352,13 +355,14 @@ pub(crate) fn defer<'a>(
             };
         }
         let spliced_signature = KExpression::new(spliced_parts);
-        let return_type: ReturnType<'a> =
-            crate::try_action!(resolve_capture_at_finish(capture, fctx.scope, results));
+        let return_type: ReturnType<'a> = crate::try_action!(resolve_capture_at_finish(
+            capture, fctx.scope, results, fctx.types
+        ));
         let elements = match prebuilt_elements {
             Some(es) => es,
             None => {
                 let mut elaborator = Elaborator::new(fctx.scope);
-                match parse_fn_param_list(&spliced_signature, &mut elaborator) {
+                match parse_fn_param_list(&spliced_signature, &mut elaborator, fctx.types) {
                     ParamListOutcome::Done(es) => es,
                     ParamListOutcome::Err(msg) => {
                         return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
@@ -379,6 +383,7 @@ pub(crate) fn defer<'a>(
             body_expr.clone(),
             kind,
             bind_index,
+            fctx.types,
         ))
     });
     crate::machine::Action::AwaitDeps { deps, finish }

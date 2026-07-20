@@ -6,7 +6,7 @@
 use super::{Scope, ScopeKind};
 use crate::machine::core::bindings::{ApplyOutcome, BindKind, BindingIndex, NameLookup};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId, StoredReach};
-use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup};
+use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
 
 impl<'a> Scope<'a> {
@@ -94,11 +94,16 @@ impl<'a> Scope<'a> {
         cell: &DeliveredCarried,
         index: BindingIndex,
         project: impl for<'b> FnOnce(&Carried<'b>) -> Result<&'b KObject<'b>, KError>,
+        types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
         let stored = self.adopted_reach_of(cell);
         let allocated = cell.open(|live| {
             let projected = project(&live)?;
-            self.alloc_object_delivered(projected.deep_clone(), std::slice::from_ref(&stored))
+            self.alloc_object_delivered(
+                projected.deep_clone(),
+                std::slice::from_ref(&stored),
+                types,
+            )
         })?;
         self.bind_value(name, allocated, index, stored)?;
         Ok((allocated, stored))
@@ -116,8 +121,9 @@ impl<'a> Scope<'a> {
         name: String,
         value: KObject<'_>,
         index: BindingIndex,
+        types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let (obj, stored) = self.alloc_object_checked_stored(value)?;
+        let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
         self.bind_value(name, obj, index, stored)?;
         Ok((obj, stored))
     }
@@ -374,9 +380,10 @@ impl<'a> Scope<'a> {
         module: &'a crate::machine::model::Module<'a>,
         child: &Scope<'a>,
         index: BindingIndex,
+        types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
         let stored = self.child_module_reach(child);
-        let obj = self.alloc_object_reaching(KObject::Module(module), &stored)?;
+        let obj = self.alloc_object_reaching(KObject::Module(module), &stored, types)?;
         self.bind_value(name, obj, index, stored)?;
         Ok((obj, stored))
     }

@@ -1,3 +1,5 @@
+use crate::machine::model::TypeRegistry;
+
 use crate::machine::model::KKind;
 
 use crate::machine::model::KType;
@@ -47,7 +49,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Ok(None) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "inexhaustive match = no branch for value of type `{}`",
-                value.ktype().name()
+                value.ktype().name(ctx.types)
             )))))
         }
         Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
@@ -77,10 +79,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         } else {
             ItSource::Pure(value.deep_clone())
         };
-    arm_tail(ctx.scope, it_source, selected.body, contract)
+    arm_tail(ctx.scope, it_source, selected.body, contract, ctx.types)
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::Any,
         vec![
@@ -92,7 +94,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("branches", KType::KExpression),
         ],
     );
-    crate::builtins::register_builtin(scope, "MATCH", signature, body);
+    crate::builtins::register_builtin(scope, "MATCH", signature, body, types);
 }
 
 #[cfg(test)]

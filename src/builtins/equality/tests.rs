@@ -3,7 +3,8 @@
 //! `(TYPE OF m) ==` interface idiom all exercise the real dispatch path here.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -15,7 +16,10 @@ fn eval_bool(source_setup: &str, probe: &str) -> bool {
     }
     match run_one(scope, parse_one(probe)) {
         KObject::Bool(b) => *b,
-        other => panic!("expected Bool from `{probe}`, got {}", other.summarize()),
+        other => panic!(
+            "expected Bool from `{probe}`, got {}",
+            other.summarize(&TypeRegistry::new())
+        ),
     }
 }
 

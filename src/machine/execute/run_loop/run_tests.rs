@@ -273,7 +273,8 @@ fn let_type_to_value_name_rejected() {
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(parse_one("LET ty = Number"), scope);
     runtime.execute().unwrap();
-    match runtime.read_result_with(id, |v| format!("{:?}", v.ktype())) {
+    let types = crate::machine::model::TypeRegistry::new();
+    match runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&types))) {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ty") && msg.contains("Type-classified")),

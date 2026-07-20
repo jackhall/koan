@@ -9,6 +9,7 @@ use crate::machine::core::{BindingIndex, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Carried;
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::run_root_storage;
@@ -65,6 +66,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         outer_sig,
         body_outer_number,
         BindingIndex::value(1),
+        &TypeRegistry::new(),
     );
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -78,7 +80,13 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
             }),
         ],
     };
-    register_builtin(inner, "inner_loose", inner_sig, body_inner_any);
+    register_builtin(
+        inner,
+        "inner_loose",
+        inner_sig,
+        body_inner_any,
+        &TypeRegistry::new(),
+    );
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MARK".into())),
@@ -116,12 +124,14 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
         "any_first",
         one_slot_sig("v", KType::Any),
         body_marker_any,
+        &TypeRegistry::new(),
     );
     register_builtin(
         scope,
         "ident_second",
         one_slot_sig("v", KType::Identifier),
         body_identifier,
+        &TypeRegistry::new(),
     );
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
@@ -130,7 +140,8 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     let mut runtime = KoanRuntime::new();
     let id = runtime.dispatch_in_scope(expr, scope);
     runtime.execute().unwrap();
-    let err = match runtime.read_result_with(id, |v| v.summarize()) {
+    let types = TypeRegistry::new();
+    let err = match runtime.read_result_with(id, |v| v.summarize(&types)) {
         Err(e) => e.clone(),
         Ok(summary) => panic!(
             "stateful BareIdentifier must surface UnboundName for an unbound name; \
@@ -161,7 +172,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
             }),
         ],
     };
-    register_builtin(scope, "FOO", sig, body_lowercase);
+    register_builtin(scope, "FOO", sig, body_lowercase, &TypeRegistry::new());
 
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),

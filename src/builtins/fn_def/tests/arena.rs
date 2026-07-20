@@ -1,6 +1,7 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
+use crate::machine::model::TypeRegistry;
 use crate::machine::KoanRuntime;
 use crate::machine::{run_root_storage, KoanRegionTestExt};
 use crate::witnessed::region_metrics;
@@ -272,7 +273,7 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
     assert!(
         matches!(result, KObject::KString(s) if s == "ok"),
         "expected the MATCH arm's :Str contract to pass the 3-hop tail chain's Str result, got {}",
-        result.ktype().name(),
+        result.ktype().name(&TypeRegistry::new()),
     );
 }
 

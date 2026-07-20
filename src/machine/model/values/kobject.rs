@@ -4,7 +4,9 @@ use std::rc::Rc;
 use crate::machine::core::KFunction;
 use crate::machine::core::{FrameSet, KoanRegion, Residence};
 use crate::machine::model::ast::KExpression;
-use crate::machine::model::types::{KType, Parseable, Record, RecursiveSet, SignatureElement};
+use crate::machine::model::types::{
+    KType, Parseable, Record, RecursiveSet, SignatureElement, TypeRegistry,
+};
 
 use super::{Held, KKey, Module};
 
@@ -126,14 +128,14 @@ impl<'a> KObject<'a> {
     /// Fresh `List` carrier: memoizes the element type as the join (LUB) of contents.
     /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
     /// rule lives at the untyped-resolution boundary, not here.
-    pub fn list(items: Vec<KObject<'a>>) -> KObject<'a> {
-        KObject::list_of_held(items.into_iter().map(Held::Object).collect())
+    pub fn list(items: Vec<KObject<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        KObject::list_of_held(items.into_iter().map(Held::Object).collect(), types)
     }
 
     /// Fresh `List` carrier over [`Held`] cells — the type-aware path (a list element may be
     /// a first-class type). Memoizes the element type as the join (LUB) of the cells.
-    pub fn list_of_held(items: Vec<Held<'a>>) -> KObject<'a> {
-        let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
+    pub fn list_of_held(items: Vec<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        let elem = KType::join_iter(items.iter().map(|i| i.ktype(types)), types);
         KObject::List(Rc::new(items), Box::new(elem))
     }
 
@@ -145,15 +147,18 @@ impl<'a> KObject<'a> {
     }
 
     /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
-    pub fn dict(map: HashMap<KKey, KObject<'a>>) -> KObject<'a> {
-        KObject::dict_of_held(map.into_iter().map(|(k, v)| (k, Held::Object(v))).collect())
+    pub fn dict(map: HashMap<KKey, KObject<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        KObject::dict_of_held(
+            map.into_iter().map(|(k, v)| (k, Held::Object(v))).collect(),
+            types,
+        )
     }
 
     /// Fresh `Dict` carrier over [`Held`] value cells — the type-aware path (a dict value
     /// may be a first-class type; keys stay scalar).
-    pub fn dict_of_held(map: HashMap<KKey, Held<'a>>) -> KObject<'a> {
-        let k = KType::join_iter(map.keys().map(|k| k.ktype()));
-        let v = KType::join_iter(map.values().map(|v| v.ktype()));
+    pub fn dict_of_held(map: HashMap<KKey, Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        let k = KType::join_iter(map.keys().map(|k| k.ktype()), types);
+        let v = KType::join_iter(map.values().map(|v| v.ktype(types)), types);
         KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
     }
 
@@ -169,17 +174,18 @@ impl<'a> KObject<'a> {
     /// Fresh `Record` carrier: memoizes the per-field type record as each field's
     /// `ktype()`. Field order follows declaration; equality is order-blind per the
     /// `Record` substrate.
-    pub fn record(fields: Record<KObject<'a>>) -> KObject<'a> {
-        KObject::record_of_held(Record::from_pairs(
-            fields.into_pairs().map(|(k, v)| (k, Held::Object(v))),
-        ))
+    pub fn record(fields: Record<KObject<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        KObject::record_of_held(
+            Record::from_pairs(fields.into_pairs().map(|(k, v)| (k, Held::Object(v)))),
+            types,
+        )
     }
 
     /// Fresh `Record` carrier over [`Held`] field cells — the type-aware path (a field
     /// value may be a first-class type).
-    pub fn record_of_held(fields: Record<Held<'a>>) -> KObject<'a> {
-        let types = fields.map(|v| v.ktype());
-        KObject::Record(Rc::new(fields), Box::new(types))
+    pub fn record_of_held(fields: Record<Held<'a>>, types: &TypeRegistry) -> KObject<'a> {
+        let field_types = fields.map(|v| v.ktype(types));
+        KObject::Record(Rc::new(fields), Box::new(field_types))
     }
 
     /// `Record` carrier with an explicitly supplied per-field type record — for
@@ -438,35 +444,55 @@ impl<'a> Parseable for KObject<'a> {
     fn ktype(&self) -> KType {
         KObject::ktype(self)
     }
-    fn summarize(&self) -> String {
+}
+
+impl<'a> KObject<'a> {
+    /// Canonical surface rendering of a value. Carried types render through the registry.
+    pub fn summarize(&self, types: &TypeRegistry) -> String {
+        self.render_summary(Some(types))
+    }
+
+    /// The registry-free twin of [`Self::summarize`], for the `Formatter`-only renderers that
+    /// have no registry to hand.
+    pub fn summarize_without_registry(&self) -> String {
+        self.render_summary(None)
+    }
+
+    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => s.clone(),
             KObject::Bool(b) => b.to_string(),
             KObject::List(items, _) => {
-                let parts: Vec<String> = items.iter().map(|i| i.summarize()).collect();
+                let parts: Vec<String> = items.iter().map(|i| i.render_summary(types)).collect();
                 format!("[{}]", parts.join(", "))
             }
             KObject::Dict(entries, _, _) => {
                 let parts: Vec<String> = entries
                     .iter()
-                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize()))
+                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.render_summary(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(),
             KObject::KFunction(f) => f.summarize(),
-            KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
+            KObject::Tagged { tag, value, .. } => {
+                format!("{}({})", tag, value.render_summary(types))
+            }
             KObject::Record(fields, _) => {
                 let parts: Vec<String> = fields
                     .iter()
-                    .map(|(field, value)| format!("{} = {}", field, value.summarize()))
+                    .map(|(field, value)| format!("{} = {}", field, value.render_summary(types)))
                     .collect();
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::Null => "null".to_string(),
             KObject::Wrapped { inner, type_id } => {
-                format!("{}({})", type_id.name(), Parseable::summarize(inner.get()),)
+                format!(
+                    "{}({})",
+                    type_id.name_or_without_registry(types),
+                    inner.get().render_summary(types)
+                )
             }
             KObject::Module(m) => m.path.clone(),
         }

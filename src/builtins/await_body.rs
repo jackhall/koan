@@ -29,7 +29,7 @@ pub(crate) fn await_body_in_scope<'a>(
     child: &'a Scope<'a>,
     body: KExpression<'a>,
     seal: ChildScopeSeal,
-    finish: impl FnOnce(&FinishCtx<'a>) -> Action<'a> + 'a,
+    finish: impl for<'r> FnOnce(&FinishCtx<'a, 'r>) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let continuation: AwaitContinue<'a> = Box::new(move |fctx, _results| {
         if seal == ChildScopeSeal::SealBeforeFinish {

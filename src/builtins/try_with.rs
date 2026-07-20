@@ -10,6 +10,8 @@
 //! `expr` is `KExpression` so the catch path can intercept evaluation — an eager slot
 //! would short-circuit through eager-subs dep-error propagation before `TRY`'s body ran.
 
+use crate::machine::model::TypeRegistry;
+
 use crate::machine::model::KKind;
 
 use crate::machine::model::{KObject, KType};
@@ -42,7 +44,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 None,
             ),
             Err(e) => {
-                let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand());
+                let tagged: KObject<'a> = e.to_tagged(fctx.scope.brand(), fctx.types);
                 let (tag, payload) = match tagged {
                     KObject::Tagged { tag, value, .. } => (tag, (*value).deep_clone()),
                     _ => unreachable!("KError::to_tagged always returns Tagged"),
@@ -64,7 +66,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
             Err(msg) => return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         };
-        arm_tail(fctx.scope, it_source, body_expr, contract)
+        arm_tail(fctx.scope, it_source, body_expr, contract, fctx.types)
     });
     Action::Catch {
         watched: DepRequest::Dispatch {
@@ -75,7 +77,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::Any,
         vec![
@@ -87,7 +89,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("branches", KType::KExpression),
         ],
     );
-    crate::builtins::register_builtin(scope, "TRY", signature, body);
+    crate::builtins::register_builtin(scope, "TRY", signature, body, types);
 }
 
 #[cfg(test)]

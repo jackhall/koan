@@ -7,7 +7,7 @@ use crate::source::Spanned;
 
 use crate::machine::core::{BindKind, KError, KErrorKind, Scope};
 use crate::machine::model::TypeRegistry;
-use crate::machine::model::{ExpressionSignature, Parseable, Record, SignatureElement};
+use crate::machine::model::{ExpressionSignature, Record, SignatureElement};
 use crate::machine::model::{Held, NamedPairs};
 
 /// The scheduler-aware `Action` currency: the body shape every builtin returns, interpreted by
@@ -129,7 +129,7 @@ impl<'a> KFunction<'a> {
                     if !arg.matches(&part.value, types) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
-                            expected: arg.ktype.name(),
+                            expected: arg.ktype.name(types),
                             got: part.value.summarize(),
                         }));
                     }
@@ -162,7 +162,10 @@ impl<'a> KFunction<'a> {
         let mut args: Record<Held<'a>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             if let SignatureElement::Argument(arg) = el {
-                args.insert(arg.name.clone(), part.value.resolve_for(&arg.ktype, scope));
+                args.insert(
+                    arg.name.clone(),
+                    part.value.resolve_for(&arg.ktype, scope, types),
+                );
             }
         }
         Ok(args)

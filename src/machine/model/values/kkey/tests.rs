@@ -43,36 +43,40 @@ fn bool_and_number_zero_differ() {
 
 #[test]
 fn try_from_kobject_accepts_scalars() {
+    let types = TypeRegistry::new();
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::KString("a".into())),
+        KKey::try_from_kobject(&KObject::KString("a".into()), &types),
         Ok(KKey::String(s)) if s == "a"
     ));
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::Number(3.5)),
+        KKey::try_from_kobject(&KObject::Number(3.5), &types),
         Ok(KKey::Number(n)) if n == 3.5
     ));
     assert!(matches!(
-        KKey::try_from_kobject(&KObject::Bool(true)),
+        KKey::try_from_kobject(&KObject::Bool(true), &types),
         Ok(KKey::Bool(true))
     ));
 }
 
 #[test]
 fn try_from_kobject_rejects_null() {
-    let err = KKey::try_from_kobject(&KObject::Null).unwrap_err();
+    let types = TypeRegistry::new();
+    let err = KKey::try_from_kobject(&KObject::Null, &types).unwrap_err();
     assert!(err.contains("dict key must be String, Number, or Bool"));
 }
 
 #[test]
 fn try_from_kobject_rejects_nan() {
-    let err = KKey::try_from_kobject(&KObject::Number(f64::NAN)).unwrap_err();
+    let types = TypeRegistry::new();
+    let err = KKey::try_from_kobject(&KObject::Number(f64::NAN), &types).unwrap_err();
     assert!(err.contains("NaN"));
 }
 
 #[test]
 fn negative_zero_normalizes_and_matches_positive_zero() {
-    let neg = KKey::try_from_kobject(&KObject::Number(-0.0)).unwrap();
-    let pos = KKey::try_from_kobject(&KObject::Number(0.0)).unwrap();
+    let types = TypeRegistry::new();
+    let neg = KKey::try_from_kobject(&KObject::Number(-0.0), &types).unwrap();
+    let pos = KKey::try_from_kobject(&KObject::Number(0.0), &types).unwrap();
     // Normalization erases the sign bit, so the two zeros are one key by equality and hash.
     assert_eq!(neg, pos);
     assert_eq!(hash_of(&neg), hash_of(&pos));

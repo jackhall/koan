@@ -5,7 +5,6 @@
 //! [`park_resume`] closure that re-runs the fast lane on resume.
 
 use crate::machine::model::KObject;
-use crate::machine::model::Parseable;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId};
 
@@ -63,7 +62,7 @@ fn dispatch_callable_value<'step>(
             return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "KFunction or Type".to_string(),
-                got: other.summarize(),
+                got: other.summarize(ctx.types()),
             })))
         }
     };

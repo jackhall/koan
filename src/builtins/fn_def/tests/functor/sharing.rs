@@ -162,7 +162,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype()));
+    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&TypeRegistry::new())));
     assert!(
         res.is_err(),
         "MAKEBAD must fail return-type check (mismatched pin), got Ok({:?})",
@@ -196,7 +196,7 @@ fn functor_return_with_matching_sharing_constraint_passes() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype()));
+    let res = runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&TypeRegistry::new())));
     assert!(
         res.is_ok(),
         "MAKEGOOD must pass return-type check — the unascribed body module structurally \

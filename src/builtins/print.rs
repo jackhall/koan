@@ -1,3 +1,4 @@
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -10,7 +11,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // `msg` is an `Any` slot, so render whichever arm the carrier holds (object or type) via
     // `Held::summarize`.
     let rendered = match arg_held(ctx.args, "msg") {
-        Some(value) => value.summarize(),
+        Some(value) => value.summarize(ctx.types),
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("msg".to_string())))),
     };
     let line = format!("{rendered}\n");
@@ -25,7 +26,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     Action::Done(Ok(carrier))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(KType::Str, vec![kw("PRINT"), arg("msg", KType::Any)]);
-    crate::builtins::register_builtin(scope, "PRINT", signature, body);
+    crate::builtins::register_builtin(scope, "PRINT", signature, body, types);
 }

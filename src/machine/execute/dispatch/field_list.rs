@@ -24,7 +24,7 @@ use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
     FieldNameKind, ResultFeed,
 };
-use crate::machine::model::{KType, Record};
+use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::{KError, KErrorKind, NodeId, Scope, TraceFrame};
 use crate::scheduler::Deps;
 
@@ -46,8 +46,8 @@ pub(crate) type BrandCompose<'step> =
 /// [`Action::Done(Ok)`](crate::machine::core::Action::Done). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
 pub(crate) type FieldListFinalizeAction<'a> = Box<
-    dyn FnOnce(
-            &FinishCtx<'a>,
+    dyn for<'r> FnOnce(
+            &FinishCtx<'a, 'r>,
             Vec<(String, KType)>,
             &[&DeliveredCarried],
         ) -> Result<StepCarried<'a>, KError>
@@ -99,6 +99,7 @@ impl<'step> FieldListRewalk<'step> {
         self,
         scope: &Scope<'b>,
         feed: &[Carried<'b>],
+        types: &TypeRegistry,
     ) -> Result<Vec<(String, KType)>, KError> {
         let mut result_feed = ResultFeed::new(feed);
         let mut elaborator = Elaborator::new(scope)
@@ -110,6 +111,7 @@ impl<'step> FieldListRewalk<'step> {
             self.name_kind,
             &mut elaborator,
             Some(&mut result_feed),
+            types,
         ) {
             FieldListOutcome::Done(fields) => Ok(fields),
             FieldListOutcome::Err(msg) => {
@@ -140,8 +142,9 @@ fn compose_field_list<'step>(
     rewalk: FieldListRewalk<'step>,
     feed: &[Carried<'step>],
     compose: BrandCompose<'step>,
+    types: &TypeRegistry,
 ) -> Result<StepCarried<'step>, KError> {
-    let fields = rewalk.run(scope, feed)?;
+    let fields = rewalk.run(scope, feed, types)?;
     Ok(step_ctx.alloc_type(compose(fields)?))
 }
 
@@ -184,6 +187,7 @@ pub(crate) fn defer_field_list<'step>(
             rewalk,
             &owned,
             compose,
+            view.types(),
         ) {
             Ok(sealed) => Outcome::Done(Ok(sealed)),
             Err(e) => Outcome::Done(Err(e)),
@@ -243,7 +247,7 @@ pub(crate) fn defer_field_list_action<'a>(
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(
             rewalk
-                .run(fctx.scope, &owned)
+                .run(fctx.scope, &owned, fctx.types)
                 .and_then(|fields| finalize(fctx, fields, &carriers)),
         )
     });
@@ -289,7 +293,7 @@ pub(crate) fn defer_field_list_action_composed<'a>(
         // walk yields is cloned out as owned data, so the composed type needs no operand fold.
         let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
         Action::Done(compose_field_list(
-            &fctx.ctx, fctx.scope, rewalk, &owned, compose,
+            &fctx.ctx, fctx.scope, rewalk, &owned, compose, fctx.types,
         ))
     });
     Action::AwaitDeps { deps, finish }
@@ -312,6 +316,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         FieldNameKind::Identifier,
         &mut elaborator,
         None,
+        view.types(),
     ) {
         FieldListOutcome::Done(pairs) => {
             let kt = KType::record(Box::new(Record::from_pairs(pairs)));

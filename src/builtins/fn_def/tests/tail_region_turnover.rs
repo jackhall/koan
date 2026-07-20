@@ -11,6 +11,7 @@
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::KoanRuntime;
 use crate::witnessed::{region_metrics, reset_region_metrics};
@@ -173,7 +174,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
             }
             other => panic!(
                 "expected nested Lists bottoming out at Number(0), got {}",
-                other.ktype().name(),
+                other.ktype().name(&TypeRegistry::new()),
             ),
         }
     }

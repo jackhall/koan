@@ -9,22 +9,23 @@ use crate::builtins::test_support::{
     binds_module, parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
 };
 use crate::machine::model::Held;
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::{KObject, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// The numbers of a `KObject::List` — the member bodies below return one of their two list
 /// operands, so association is observable in which list comes back.
 fn list_numbers(object: &KObject<'_>) -> Vec<f64> {
+    let types = TypeRegistry::new();
     match object {
         KObject::List(items, _) => items
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,
-                other => panic!("expected a Number element, got {}", other.summarize()),
+                other => panic!("expected a Number element, got {}", other.summarize(&types)),
             })
             .collect(),
-        other => panic!("expected a list, got {}", other.ktype().name()),
+        other => panic!("expected a list, got {}", other.ktype().name(&types)),
     }
 }
 
@@ -137,7 +138,7 @@ fn pairwise_group_folds_pair_results_in_the_declared_direction() {
         assert!(
             matches!(result, KObject::Number(n) if *n == expected),
             "a {direction} fold of the pair results must give {expected}; got {}",
-            result.summarize(),
+            result.summarize(&TypeRegistry::new()),
         );
     }
 }

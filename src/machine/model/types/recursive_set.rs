@@ -34,6 +34,7 @@ use crate::machine::core::ScopeId;
 
 use super::kkind::KKind;
 use super::ktype::KType;
+use super::registry::TypeRegistry;
 use super::type_digest::{set_digest, TypeDigest};
 
 /// A member's schema, owned by value inside the set. Sibling references inside these
@@ -228,8 +229,9 @@ pub fn seal_recursive_refs(
     set: &Rc<RecursiveSet>,
     kt: &KType,
     missing: &RefCell<Vec<String>>,
+    types: &TypeRegistry,
 ) -> KType {
-    seal_refs_inner(set, None, kt, missing)
+    seal_refs_inner(set, None, kt, missing, types)
 }
 
 /// [`seal_recursive_refs`] with an extra binder rule: a [`KType::RecursiveRef`] naming
@@ -243,8 +245,9 @@ pub fn seal_union_refs(
     binder_union: &KType,
     kt: &KType,
     missing: &RefCell<Vec<String>>,
+    types: &TypeRegistry,
 ) -> KType {
-    seal_refs_inner(set, Some((binder_name, binder_union)), kt, missing)
+    seal_refs_inner(set, Some((binder_name, binder_union)), kt, missing, types)
 }
 
 /// Deep-seal core shared by [`seal_recursive_refs`] and [`seal_union_refs`]. `binder`, when
@@ -255,8 +258,9 @@ fn seal_refs_inner(
     binder: Option<(&str, &KType)>,
     kt: &KType,
     missing: &RefCell<Vec<String>>,
+    types: &TypeRegistry,
 ) -> KType {
-    let recurse = |inner: &KType| seal_refs_inner(set, binder, inner, missing);
+    let recurse = |inner: &KType| seal_refs_inner(set, binder, inner, missing, types);
     match kt {
         KType::RecursiveRef(name) => {
             if let Some((binder_name, binder_union)) = binder {
@@ -282,10 +286,10 @@ fn seal_refs_inner(
             KType::dict(Box::new(recurse(key)), Box::new(recurse(value)))
         }
         KType::Record { fields, .. } => KType::record(Box::new(
-            fields.map(|t| seal_refs_inner(set, binder, t, missing)),
+            fields.map(|t| seal_refs_inner(set, binder, t, missing, types)),
         )),
         KType::KFunction { params, ret, .. } => KType::function_type(
-            params.map(|t| seal_refs_inner(set, binder, t, missing)),
+            params.map(|t| seal_refs_inner(set, binder, t, missing, types)),
             Box::new(recurse(ret)),
         ),
         KType::ConstructorApply { ctor, args, .. } => {
@@ -293,7 +297,9 @@ fn seal_refs_inner(
         }
         // A union inside a schema seals member-wise, so a self / sibling reference among its
         // members folds to a `SetLocal` like any other.
-        KType::Union { members, .. } => KType::union_of(members.iter().map(recurse).collect()),
+        KType::Union { members, .. } => {
+            KType::union_of(members.iter().map(recurse).collect(), types)
+        }
         // Leaves and external handles pass through.
         other => other.clone(),
     }
@@ -304,32 +310,38 @@ fn seal_refs_inner(
 /// construction / matching, where a sibling reference must become a real handle. Other
 /// leaves pass through unchanged; nested `SetRef`s (references to *other* sets) are left
 /// alone — only the ambient set's own `SetLocal`s are bound.
-pub fn resolve_set_locals(set: &Rc<RecursiveSet>, kt: &KType) -> KType {
+pub fn resolve_set_locals(set: &Rc<RecursiveSet>, kt: &KType, types: &TypeRegistry) -> KType {
     match kt {
         KType::SetLocal(i) => KType::SetRef {
             set: Rc::clone(set),
             index: *i,
         },
-        KType::List { element, .. } => KType::list(Box::new(resolve_set_locals(set, element))),
+        KType::List { element, .. } => {
+            KType::list(Box::new(resolve_set_locals(set, element, types)))
+        }
         KType::Dict { key, value, .. } => KType::dict(
-            Box::new(resolve_set_locals(set, key)),
-            Box::new(resolve_set_locals(set, value)),
+            Box::new(resolve_set_locals(set, key, types)),
+            Box::new(resolve_set_locals(set, value, types)),
         ),
         KType::Record { fields, .. } => {
-            KType::record(Box::new(fields.map(|t| resolve_set_locals(set, t))))
+            KType::record(Box::new(fields.map(|t| resolve_set_locals(set, t, types))))
         }
         KType::KFunction { params, ret, .. } => KType::function_type(
-            params.map(|t| resolve_set_locals(set, t)),
-            Box::new(resolve_set_locals(set, ret)),
+            params.map(|t| resolve_set_locals(set, t, types)),
+            Box::new(resolve_set_locals(set, ret, types)),
         ),
         KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
-            Box::new(resolve_set_locals(set, ctor)),
-            args.map(|a| resolve_set_locals(set, a)),
+            Box::new(resolve_set_locals(set, ctor, types)),
+            args.map(|a| resolve_set_locals(set, a, types)),
         ),
         // Projecting a union member-wise binds each member's ambient `SetLocal`s to real handles.
-        KType::Union { members, .. } => {
-            KType::union_of(members.iter().map(|m| resolve_set_locals(set, m)).collect())
-        }
+        KType::Union { members, .. } => KType::union_of(
+            members
+                .iter()
+                .map(|m| resolve_set_locals(set, m, types))
+                .collect(),
+            types,
+        ),
         // Leaves and external handles pass through; only the ambient set's `SetLocal`s bind.
         other => other.clone(),
     }
@@ -359,21 +371,23 @@ impl RecursiveSet {
     /// Project member `index`'s filled schema with sibling `SetLocal`s resolved to external
     /// `SetRef`s into `set`. Panics if the member's schema is not yet filled — every
     /// construction / navigation site runs after the member finalized.
-    pub fn projected_schema(set: &Rc<Self>, index: usize) -> ProjectedSchema {
+    pub fn projected_schema(set: &Rc<Self>, index: usize, types: &TypeRegistry) -> ProjectedSchema {
         let member = set.member(index);
         let borrow = member.schema();
         let schema = borrow
             .as_ref()
             .expect("projected_schema on an unfilled member — finalize must run first");
         match schema {
-            NominalSchema::NewType(repr) => ProjectedSchema::NewType(resolve_set_locals(set, repr)),
+            NominalSchema::NewType(repr) => {
+                ProjectedSchema::NewType(resolve_set_locals(set, repr, types))
+            }
             NominalSchema::TypeConstructor {
                 schema,
                 param_names,
             } => ProjectedSchema::TypeConstructor {
                 schema: schema
                     .iter()
-                    .map(|(k, v)| (k.clone(), resolve_set_locals(set, v)))
+                    .map(|(k, v)| (k.clone(), resolve_set_locals(set, v, types)))
                     .collect(),
                 param_names: param_names.clone(),
             },

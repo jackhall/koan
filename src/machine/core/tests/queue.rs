@@ -6,6 +6,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::BindingIndex;
 
 use super::{body_no_op, unit_signature};
@@ -55,6 +56,7 @@ fn add_during_active_data_borrow_queues_and_drains() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_invariant_violation() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn1 = region.brand().alloc_function(KFunction::new(
@@ -66,7 +68,7 @@ fn drain_debug_asserts_on_invariant_violation() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn1))
+        .alloc_object_checked(KObject::KFunction(kfn1), &types)
         .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -77,7 +79,7 @@ fn drain_debug_asserts_on_invariant_violation() {
     ));
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn2))
+        .alloc_object_checked(KObject::KFunction(kfn2), &types)
         .expect("f was just allocated into region\'s own region");
 
     let snapshot = scope.bindings().data();
@@ -101,6 +103,7 @@ fn drain_debug_asserts_on_invariant_violation() {
 /// `Function` arm, landing in `functions` only (no `data` mirror).
 #[test]
 fn register_function_defers_and_drains_through_function_arm() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn = region.brand().alloc_function(KFunction::new(
@@ -112,7 +115,7 @@ fn register_function_defers_and_drains_through_function_arm() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn))
+        .alloc_object_checked(KObject::KFunction(kfn), &types)
         .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
     {
@@ -159,6 +162,7 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 /// deferred write is a `register_function`, contending on `functions` rather than `data`.
 #[test]
 fn drain_requeues_function_on_persistent_borrow_conflict() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn = region.brand().alloc_function(KFunction::new(
@@ -170,7 +174,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn))
+        .alloc_object_checked(KObject::KFunction(kfn), &types)
         .expect("f was just allocated into region\'s own region");
     let key = kfn.signature.untyped_key();
 
@@ -209,6 +213,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
 #[test]
 #[should_panic(expected = "PendingQueue::drain")]
 fn drain_debug_asserts_on_function_arm_invariant_violation() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let kfn1 = region.brand().alloc_function(KFunction::new(
@@ -220,7 +225,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     ));
     let obj1 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn1))
+        .alloc_object_checked(KObject::KFunction(kfn1), &types)
         .expect("f was just allocated into region\'s own region");
     let kfn2 = region.brand().alloc_function(KFunction::new(
         unit_signature(),
@@ -231,7 +236,7 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     ));
     let obj2 = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(kfn2))
+        .alloc_object_checked(KObject::KFunction(kfn2), &types)
         .expect("f was just allocated into region\'s own region");
 
     let snapshot = scope.bindings().functions();

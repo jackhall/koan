@@ -6,19 +6,20 @@
 //! dispatcher, so they cover the sub-dispatch parking path and the key-check diagnostics.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_one_type, run_root_silent};
-use crate::machine::model::{KType, Record};
+use crate::machine::model::{KType, Record, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// The `(name, arg)` pairs of a `ConstructorApply`, in the order the args record carries them —
 /// the constructor's declared parameter order.
 fn applied_args(kt: &KType) -> Vec<(String, KType)> {
+    let types = TypeRegistry::new();
     match kt {
         KType::ConstructorApply { args, .. } => args
             .iter()
             .map(|(name, arg)| (name.clone(), arg.clone()))
             .collect(),
-        other => panic!("expected a ConstructorApply, got {}", other.name()),
+        other => panic!("expected a ConstructorApply, got {}", other.name(&types)),
     }
 }
 
@@ -106,7 +107,7 @@ fn constructor_apply_name_round_trips() {
         ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
         let applied = run_one_type(scope, parse_one(source)).clone();
-        let rendered = applied.name();
+        let rendered = applied.name(&TypeRegistry::new());
         let reparsed = run_one_type(scope, parse_one(&rendered));
         assert_eq!(
             applied.digest(),
@@ -234,7 +235,7 @@ fn erased_result_carrier_admits_named_application() {
     let admitting = run_one_type(scope, parse_one(":(Result {Ok = Number, Error = Any})")).clone();
     let refusing = run_one_type(scope, parse_one(":(Result {Ok = Str, Error = Any})"));
     let value = scope.bindings().expect_value("wrapped");
-    let types = crate::machine::model::TypeRegistry::new();
+    let types = TypeRegistry::new();
     assert!(
         admitting.matches_value(value, &types),
         "an `Ok` carrier of a Number must inhabit `:(Result {{Ok = Number, Error = Any}})`",
@@ -279,5 +280,8 @@ fn constructor_apply_over_abstract_slot_is_a_type_constructor() {
         Box::new(ctor),
         Record::from_pairs([("Elem".to_string(), KType::Number)]),
     );
-    assert_eq!(applied.kind_of(), KKind::TypeConstructor);
+    assert_eq!(
+        applied.kind_of(&TypeRegistry::new()),
+        KKind::TypeConstructor
+    );
 }

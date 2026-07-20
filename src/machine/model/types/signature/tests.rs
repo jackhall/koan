@@ -43,12 +43,13 @@ fn most_specific_returns_none_when_tied() {
 
 #[test]
 fn return_type_clone_round_trips_all_arms() {
+    let types = TypeRegistry::new();
     let r = ReturnType::Resolved(KType::Number);
-    assert_eq!(r.name(), r.clone().name());
+    assert_eq!(r.name(&types), r.clone().name(&types));
     let d = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert_eq!(d.name(), d.clone().name());
+    assert_eq!(d.name(&types), d.clone().name(&types));
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
-    assert_eq!(e.name(), e.clone().name());
+    assert_eq!(e.name(&types), e.clone().name(&types));
 }
 
 #[test]
@@ -97,12 +98,13 @@ fn deferred_return_debug_renders_both_arms() {
 
 #[test]
 fn return_type_name_covers_all_arms() {
+    let types = TypeRegistry::new();
     let r = ReturnType::Resolved(KType::Number);
-    assert_eq!(r.name(), KType::Number.name());
+    assert_eq!(r.name(&types), KType::Number.name(&types));
     let t = ReturnType::Deferred(DeferredReturn::Type(TypeIdentifier::leaf("er".into())));
-    assert_eq!(t.name(), "er");
+    assert_eq!(t.name(&types), "er");
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
-    assert_eq!(e.name(), "FOO");
+    assert_eq!(e.name(&types), "FOO");
 }
 
 fn sig_with<'a>(ret: ReturnType<'a>, slot: KType) -> ExpressionSignature<'a> {

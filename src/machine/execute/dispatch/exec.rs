@@ -17,7 +17,7 @@ use crate::machine::core::ReturnContract;
 use crate::machine::core::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 use crate::machine::core::{Action, BlockEntry, FramePlacement, TailContract};
 use crate::machine::core::{Body, KFunction};
-use crate::machine::model::{Carried, Parseable};
+use crate::machine::model::Carried;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{Record, SignatureElement};
 use crate::machine::{DeliveredCarried, KError, KErrorKind};
@@ -134,7 +134,14 @@ pub(super) fn invoke<'step>(
     // A deferred-return FN dispatched as a tail call inside an established contract chain skips
     // resolving its own (keep-first-discarded) return type — see `run_user_fn`.
     let in_chain = view.in_contract_chain();
-    match run_user_fn(picked, bound, &named_carriers, &exec_frame, in_chain) {
+    match run_user_fn(
+        picked,
+        bound,
+        &named_carriers,
+        &exec_frame,
+        in_chain,
+        view.types(),
+    ) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // A resolved return reads its type off the signature; a deferred `Type` return carries
             // the per-call type (already re-homed into the captured-scope region by `run_user_fn`)
@@ -252,11 +259,14 @@ fn run_action_builtin<'step>(
             | crate::machine::model::Held::UnresolvedType(_) => None,
         })
         .collect();
-    let args_obj: &'step KObject<'step> =
-        match scope.alloc_object_delivered(KObject::record_of_held(args), &evidence) {
-            Ok(args_obj) => args_obj,
-            Err(e) => return Outcome::Done(Err(e)),
-        };
+    let args_obj: &'step KObject<'step> = match scope.alloc_object_delivered(
+        KObject::record_of_held(args, view.types()),
+        &evidence,
+        view.types(),
+    ) {
+        Ok(args_obj) => args_obj,
+        Err(e) => return Outcome::Done(Err(e)),
+    };
     let frame = view.current_frame();
     let chain = view.current_lexical_chain();
     let action = {
@@ -296,7 +306,7 @@ fn extract_carried_args<'step>(
             // scope (the run loop opens each step's scope from the Continue-installed cart), so the
             // fold never lands in the caller's scope.
             ExpressionPart::Spliced { cell } => {
-                args.push(view.current_scope().adopt_sealed_copied(cell))
+                args.push(view.current_scope().adopt_sealed_copied(cell, view.types()))
             }
             // Resolve a literal into the run region now (mirrors `literal_pass_through`) so it joins
             // the args as a `'step` `Carried`. A `#(...)` quote is a literal for this purpose: its
@@ -307,7 +317,7 @@ fn extract_carried_args<'step>(
                 let object = view
                     .current_scope()
                     .brand()
-                    .alloc_object_checked(part.value.resolve())
+                    .alloc_object_checked(part.value.resolve(view.types()), view.types())
                     .expect("a resolved literal or quoted expression is owned and splice-free");
                 args.push(Carried::Object(object));
             }

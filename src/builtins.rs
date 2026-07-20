@@ -102,6 +102,7 @@ pub(crate) fn register_builtin_full<'a>(
     body: crate::machine::ActionFn,
     binder_name: Option<(BinderNameFn, crate::machine::BindKind)>,
     binder_bucket: Option<crate::machine::BinderBucketFn>,
+    types: &TypeRegistry,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -112,7 +113,7 @@ pub(crate) fn register_builtin_full<'a>(
         binder_bucket,
     ));
     let obj: &'a KObject<'a> = region
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region's own region");
     let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
@@ -123,8 +124,9 @@ pub(crate) fn register_builtin<'a>(
     name: &str,
     signature: ExpressionSignature<'a>,
     body: crate::machine::ActionFn,
+    types: &TypeRegistry,
 ) {
-    register_builtin_full(scope, name, signature, body, None, None);
+    register_builtin_full(scope, name, signature, body, None, None, types);
 }
 
 /// Test-only: register one overload at an explicit [`BindingIndex`]. A test uses this to
@@ -138,6 +140,7 @@ pub(crate) fn register_overload_at<'a>(
     signature: ExpressionSignature<'a>,
     body: crate::machine::ActionFn,
     index: BindingIndex,
+    types: &TypeRegistry,
 ) {
     let region = scope.brand();
     let f: &'a KFunction<'a> = region.alloc_function(KFunction::new(
@@ -148,7 +151,7 @@ pub(crate) fn register_overload_at<'a>(
         None,
     ));
     let obj: &'a KObject<'a> = region
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region's own region");
     scope
         .register_function(name.into(), f, obj, index)
@@ -176,9 +179,9 @@ pub fn unseeded_scopes<'a>(
 ///
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
-pub fn seed_builtins<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
-    // TODO(interned-type-content): `_types` is the interning operand for seeding's own
-    // KType construction; the per-module `register` fan-out lands with that item.
+pub fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
+    // TODO(interned-type-content): `types` reaches every per-module `register`; seeding's own
+    // KType construction starts interning against it with that item.
     scope.register_builtin_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_builtin_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
     scope.register_builtin_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
@@ -215,33 +218,33 @@ pub fn seed_builtins<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
     );
     scope.register_builtin_type("Any".into(), KType::Any, BindingIndex::BUILTIN);
 
-    let_binding::register(scope);
-    print::register(scope);
-    fn_def::register(scope);
-    union::register(scope);
-    result::register(scope);
-    newtype_def::register(scope);
-    recursive_types::register(scope);
-    match_case::register(scope);
-    try_with::register(scope);
-    using_scope::register(scope);
-    catch::register(scope);
-    attr::register(scope);
-    eval::register(scope);
-    module_def::register(scope);
-    sig_def::register(scope);
-    val_decl::register(scope);
-    type_decl::register(scope);
-    ascribe::register(scope);
-    record_projection::register(scope);
-    type_ops::register(scope);
-    parameterized_types::register(scope);
-    type_union::register(scope);
-    op_def::register(scope);
-    group_def::register(scope);
-    arithmetic::register(scope);
-    arithmetic::register_builtin_operator_groups(scope);
-    equality::register(scope);
+    let_binding::register(scope, types);
+    print::register(scope, types);
+    fn_def::register(scope, types);
+    union::register(scope, types);
+    result::register(scope, types);
+    newtype_def::register(scope, types);
+    recursive_types::register(scope, types);
+    match_case::register(scope, types);
+    try_with::register(scope, types);
+    using_scope::register(scope, types);
+    catch::register(scope, types);
+    attr::register(scope, types);
+    eval::register(scope, types);
+    module_def::register(scope, types);
+    sig_def::register(scope, types);
+    val_decl::register(scope, types);
+    type_decl::register(scope, types);
+    ascribe::register(scope, types);
+    record_projection::register(scope, types);
+    type_ops::register(scope, types);
+    parameterized_types::register(scope, types);
+    type_union::register(scope, types);
+    op_def::register(scope, types);
+    group_def::register(scope, types);
+    arithmetic::register(scope, types);
+    arithmetic::register_builtin_operator_groups(scope, types);
+    equality::register(scope, types);
 }
 
 /// One-call constructor for tests and integration tests: allocate the scope pair, seed the

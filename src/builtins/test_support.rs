@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::machine::model::Module;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::KFunction;
 use crate::machine::KoanRuntime;
@@ -48,7 +48,11 @@ pub(crate) fn extract_terminal<'a>(
         .read_result_with(id, |live| match live {
             Carried::Object(obj) => Carried::Object(
                 scope
-                    .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach))
+                    .alloc_object_delivered(
+                        obj.deep_clone(),
+                        std::slice::from_ref(&reach),
+                        &TypeRegistry::new(),
+                    )
                     .expect("terminal object must be covered by its own stored reach"),
             ),
             // A type is owned data: it crosses into `scope`'s region by clone through the single
@@ -123,7 +127,10 @@ pub(crate) fn run_one_type<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &
     runtime.execute().expect("scheduler should succeed");
     match extract_terminal(&runtime, scope, id) {
         Carried::Type(kt) => kt,
-        Carried::Object(obj) => panic!("expected a type result, got value {}", obj.summarize()),
+        Carried::Object(obj) => panic!(
+            "expected a type result, got value {}",
+            obj.summarize(&TypeRegistry::new())
+        ),
         Carried::UnresolvedType(ti) => {
             panic!(
                 "expected a resolved type result, got the unlowered name {}",
@@ -195,7 +202,7 @@ pub(crate) fn lookup_module<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<
         Some(KObject::Module(module)) => module,
         other => panic!(
             "expected `{name}` to bind a module value in data, got {:?}",
-            other.map(|o| o.ktype().name()),
+            other.map(|o| o.ktype().name(&TypeRegistry::new())),
         ),
     }
 }

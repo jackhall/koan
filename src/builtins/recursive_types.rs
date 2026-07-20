@@ -18,6 +18,7 @@
 //! the block guarantees every forward reference resolved.
 
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -99,8 +100,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
 
-    let group_name =
-        crate::try_action!(require_bare_type_name(ctx.args, "name", "RECURSIVE TYPES"));
+    let group_name = crate::try_action!(require_bare_type_name(
+        ctx.args,
+        "name",
+        "RECURSIVE TYPES",
+        ctx.types
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "RECURSIVE TYPES", "body"));
     let members = crate::try_action!(discover_members(&body_expr));
 
@@ -161,7 +166,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     })
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::OfKind(KKind::AnyType),
         vec![
@@ -179,6 +184,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
 }
 

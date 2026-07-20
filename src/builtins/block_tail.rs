@@ -8,6 +8,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KExpression;
+use crate::machine::model::TypeRegistry;
 use crate::machine::Scope;
 use crate::machine::{split_body_statements, ReturnContract};
 use crate::machine::{Action, BlockEntry, FramePlacement, TailContract};
@@ -36,7 +37,9 @@ pub(crate) enum BlockScope<'a> {
 
 /// A step run against the block scope before the tail dispatches. `for<'b>` so it binds whether the
 /// block scope arrives as a short `with_scope` borrow (`FrameOwn`) or the `'a` overlay (`Overlay`).
-pub(crate) type BlockSeed<'a> = Box<dyn for<'b> FnOnce(&Scope<'b>) + 'a>;
+/// The run's type registry arrives as a parameter rather than a capture: [`block_tail`] runs the
+/// seed before it returns, so the seed borrows the registry for that call instead of owning a share.
+pub(crate) type BlockSeed<'a> = Box<dyn for<'b> FnOnce(&Scope<'b>, &TypeRegistry) + 'a>;
 
 /// Run a block and yield its last statement as the tail — the shared constructor.
 pub(crate) fn block_tail<'a>(
@@ -45,6 +48,7 @@ pub(crate) fn block_tail<'a>(
     seed: Option<BlockSeed<'a>>,
     body: BlockBody<'a>,
     contract: Option<ReturnContract<'a>>,
+    types: &TypeRegistry,
 ) -> Action<'a> {
     let block_entry = match block {
         BlockScope::None => {
@@ -56,13 +60,13 @@ pub(crate) fn block_tail<'a>(
                 unreachable!("a FrameOwn block is the FreshChild frame's own scope");
             };
             if let Some(seed) = seed {
-                frame.with_scope(|child| seed(child));
+                frame.with_scope(|child| seed(child, types));
             }
             BlockEntry::FrameScope(Rc::clone(frame))
         }
         BlockScope::Overlay(overlay) => {
             if let Some(seed) = seed {
-                seed(overlay);
+                seed(overlay, types);
             }
             BlockEntry::Overlay(overlay)
         }

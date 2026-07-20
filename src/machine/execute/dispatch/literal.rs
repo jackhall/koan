@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::{FoldingBrand, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
-use crate::machine::model::{Carried, Held, KKey, KObject, Record};
+use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
     CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
     NodeId, TraceFrame,
@@ -90,17 +90,21 @@ fn fold_cells(
 
 /// Read a dict key cell as a scalar [`KKey`]: a key is never folded (it is a scalar, reaching no
 /// region), so it is read out and converted in place. A `Type` arm or a non-scalar value errors.
-fn scalar_key(slot: &Slot, terminals: DepResults<'_, &DepTerminal<'_>>) -> Result<KKey, String> {
+fn scalar_key(
+    slot: &Slot,
+    terminals: DepResults<'_, &DepTerminal<'_>>,
+    types: &TypeRegistry,
+) -> Result<KKey, String> {
     match slot {
-        Slot::Static(delivered) => delivered.open(key_from_carried),
-        Slot::Park(i) => key_from_carried(terminals.park(*i).value),
-        Slot::Owned(j) => key_from_carried(terminals.owned(*j).value),
+        Slot::Static(delivered) => delivered.open(|c| key_from_carried(c, types)),
+        Slot::Park(i) => key_from_carried(terminals.park(*i).value, types),
+        Slot::Owned(j) => key_from_carried(terminals.owned(*j).value, types),
     }
 }
 
-fn key_from_carried(c: Carried<'_>) -> Result<KKey, String> {
+fn key_from_carried(c: Carried<'_>, types: &TypeRegistry) -> Result<KKey, String> {
     match c {
-        Carried::Object(o) => KKey::try_from_kobject(o),
+        Carried::Object(o) => KKey::try_from_kobject(o, types),
         Carried::Type(_) | Carried::UnresolvedType(_) => {
             Err("dict key must be a value, not a type".to_string())
         }
@@ -117,7 +121,7 @@ struct AggRow {
 /// Finish-side assemble hook: the resolved keys (empty unless the rows carry key slots) and the folded
 /// value cells become the aggregate object. Boxed higher-ranked so the record variant captures its
 /// field names and each shape builds its own `KObject` at the fold brand.
-type AggAssemble = Box<dyn for<'r> FnOnce(Vec<KKey>, Vec<Held<'r>>) -> KObject<'r>>;
+type AggAssemble = Box<dyn for<'r> FnOnce(Vec<KKey>, Vec<Held<'r>>, &TypeRegistry) -> KObject<'r>>;
 
 impl<'step> KoanRuntime<'step> {
     /// The one scheduling path behind the three aggregate literals: park a witnessed dep-finish on
@@ -139,7 +143,7 @@ impl<'step> KoanRuntime<'step> {
             let mut cells: Vec<DeliveredCarried> = Vec::with_capacity(n);
             for row in rows {
                 if let Some(key_slot) = row.key {
-                    let kkey = scalar_key(&key_slot, terminals).map_err(|msg| {
+                    let kkey = scalar_key(&key_slot, terminals, view.types()).map_err(|msg| {
                         KError::new(KErrorKind::ShapeError(msg))
                             .with_frame(TraceFrame::bare("<dict>", "dict literal"))
                     })?;
@@ -151,12 +155,17 @@ impl<'step> KoanRuntime<'step> {
             // The pin: the destination frame, whose arena holds the set the folds minted — through
             // it every producer the accumulated `Held` views point into.
             let dest_frame = view.dest_frame();
+            let types = view.types();
             Ok(StepCarried::born(
                 acc.map_pinned_placing::<CarriedFamily, KoanStorageProfile, _>(
                     &dest_frame,
                     move |(_region, value_helds), placement| {
                         let region = FoldingBrand::in_fold_closure(placement);
-                        Carried::Object(region.alloc_object_folded(assemble(keys, value_helds)))
+                        Carried::Object(region.alloc_object_folded(assemble(
+                            keys,
+                            value_helds,
+                            types,
+                        )))
                     },
                 ),
             ))
@@ -180,7 +189,7 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|_keys, cells| KObject::list_of_held(cells)),
+            Box::new(|_keys, cells, types| KObject::list_of_held(cells, types)),
         )
     }
 
@@ -204,9 +213,9 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(|keys, value_helds| {
+            Box::new(|keys, value_helds, types| {
                 let map: HashMap<KKey, Held<'_>> = keys.into_iter().zip(value_helds).collect();
-                KObject::dict_of_held(map)
+                KObject::dict_of_held(map, types)
             }),
         )
     }
@@ -229,9 +238,9 @@ impl<'step> KoanRuntime<'step> {
         self.schedule_aggregate(
             deps,
             rows,
-            Box::new(move |_keys, value_helds| {
+            Box::new(move |_keys, value_helds, types| {
                 let record: Record<Held<'_>> = names.into_iter().zip(value_helds).collect();
-                KObject::record_of_held(record)
+                KObject::record_of_held(record, types)
             }),
         )
     }
@@ -320,7 +329,14 @@ impl<'step> KoanRuntime<'step> {
                 ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
                 _ => unreachable!("resolve_aggregate_bare_name only sees Identifier / Type parts"),
             };
-            match resolve_name_part(s, &part_b, &self.sched, active_chain, None) {
+            match resolve_name_part(
+                s,
+                &part_b,
+                &self.sched,
+                active_chain,
+                None,
+                self.ambient.type_registry(),
+            ) {
                 // A first-class **type** resolved into the cell is witnessed in place: a `KType` is
                 // owned data stored in the resolving scope's own region, so the read travels under
                 // the read scope's home-frame pin alone.

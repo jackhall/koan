@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::KExpression;
-use crate::machine::model::{KKind, KType, NominalSchema, Parseable, Record, RecursiveSet};
+use crate::machine::model::{KKind, KType, NominalSchema, Record, RecursiveSet, TypeRegistry};
 use crate::machine::model::{KObject, WrappedPayload};
 use crate::machine::RegionBrand;
 use crate::source::{self, FileId, SourceLoc, Span};
@@ -172,7 +172,7 @@ impl KError {
     /// arm that returns the raw payload across a frame boundary inherits the general
     /// `Wrapped.type_id` re-anchor gap (the `inner` record itself rides an `Rc` and is
     /// lift-safe).
-    pub fn to_tagged<'a>(&self, region: RegionBrand<'a>) -> KObject<'a> {
+    pub fn to_tagged<'a>(&self, region: RegionBrand<'a>, types: &TypeRegistry) -> KObject<'a> {
         let (name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
             self.frames
@@ -188,10 +188,11 @@ impl KError {
                     KObject::KString(rendered)
                 })
                 .collect(),
+            types,
         );
         let mut pairs: Vec<(String, KObject<'a>)> = fields;
         pairs.push(("frames".to_string(), frames_list));
-        let record = KObject::record(Record::from_pairs(pairs));
+        let record = KObject::record(Record::from_pairs(pairs), types);
         // A freshly-minted synthetic `Rc` every call — no external identity to preserve.
         let type_id: &'a KType = region.alloc_ktype(KType::SetRef {
             set: synthetic_singleton(name.clone(), KKind::NewType),

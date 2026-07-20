@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::KObject;
+use koan::machine::model::TypeRegistry;
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -284,7 +285,9 @@ fn let_alias_via_module_qualified_type_resolves() {
     assert!(
         matches!(scope.resolve_type("MyT"), Some(KType::Number)),
         "expected MyT to resolve to Number via mo.Ty, got {:?}",
-        scope.resolve_type("MyT").map(|t| t.name()),
+        scope
+            .resolve_type("MyT")
+            .map(|t| t.name(&TypeRegistry::new())),
     );
 }
 

@@ -4,7 +4,7 @@
 use crate::builtins::test_support::{
     lookup_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
 };
-use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::model::{KObject, KType, TypeRegistry};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 use std::rc::Rc;
@@ -123,7 +123,7 @@ fn type_of_module_types_a_parameter_slot() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -143,7 +143,7 @@ fn type_of_parameter_defers_a_return_type() {
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -169,7 +169,7 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "the alias must admit the functor-minted module, got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 

@@ -126,10 +126,10 @@ fn digest_is_content_true_for_sealed_composites() {
         Box::new(KType::Str),
         Box::new(KType::Number)
     )));
-    assert!(digest_is_content(&KType::union_of(vec![
-        KType::Number,
-        KType::Str
-    ])));
+    assert!(digest_is_content(&KType::union_of(
+        vec![KType::Number, KType::Str],
+        &TypeRegistry::new()
+    )));
     assert!(digest_is_content(&KType::function_type(
         crate::machine::model::types::Record::from_pairs(vec![("x".to_string(), KType::Number)]),
         Box::new(KType::Str)

@@ -4,6 +4,7 @@
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::record::Record;
+use super::registry::TypeRegistry;
 use crate::machine::model::ast::TypeIdentifier;
 
 impl KType {
@@ -31,7 +32,10 @@ impl KType {
     /// builtin-table fallback: both the bind-time scopeless caller and the scope-aware
     /// [`elaborate_type_identifier`](crate::machine::model::types::elaborate_type_identifier)
     /// route their builtin fallback through here. Unknown names surface as `Err(_)`.
-    pub fn from_type_identifier(t: &TypeIdentifier) -> Result<KType, String> {
+    pub fn from_type_identifier(
+        t: &TypeIdentifier,
+        _types: &TypeRegistry,
+    ) -> Result<KType, String> {
         KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 
@@ -39,7 +43,7 @@ impl KType {
     /// union. Flattens any nested `Union` member into its members, deduplicates by `PartialEq`
     /// (O(n²) scan; member counts are small), and collapses a single surviving member to that
     /// member (`:(A | A)` is `:A`). Callers guarantee at least one member.
-    pub fn union_of(members: Vec<KType>) -> KType {
+    pub fn union_of(members: Vec<KType>, _types: &TypeRegistry) -> KType {
         debug_assert!(!members.is_empty(), "union_of requires at least one member");
         let mut flat: Vec<KType> = Vec::with_capacity(members.len());
         let push_unique = |m: KType, flat: &mut Vec<KType>| {
@@ -69,13 +73,13 @@ impl KType {
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
     /// `List<Any>`; nested containers join element-wise.
-    pub fn join(a: &KType, b: &KType) -> KType {
+    pub fn join(a: &KType, b: &KType, types: &TypeRegistry) -> KType {
         if a == b {
             return a.clone();
         }
         match (a, b) {
             (KType::List { element: x, .. }, KType::List { element: y, .. }) => {
-                KType::list(Box::new(KType::join(x, y)))
+                KType::list(Box::new(KType::join(x, y, types)))
             }
             (
                 KType::Dict {
@@ -84,7 +88,10 @@ impl KType {
                 KType::Dict {
                     key: yk, value: yv, ..
                 },
-            ) => KType::dict(Box::new(KType::join(xk, yk)), Box::new(KType::join(xv, yv))),
+            ) => KType::dict(
+                Box::new(KType::join(xk, yk, types)),
+                Box::new(KType::join(xv, yv, types)),
+            ),
             (
                 KType::KFunction {
                     params: xa,
@@ -96,8 +103,8 @@ impl KType {
                     ret: yr,
                     ..
                 },
-            ) => match join_param_record(xa, ya) {
-                Some(params) => KType::function_type(params, Box::new(KType::join(xr, yr))),
+            ) => match join_param_record(xa, ya, types) {
+                Some(params) => KType::function_type(params, Box::new(KType::join(xr, yr, types))),
                 None => KType::Any,
             },
             _ => KType::Any,
@@ -105,9 +112,9 @@ impl KType {
     }
 
     /// Reduce an iterator of types to their least upper bound. Empty iterator → `Any`.
-    pub fn join_iter<I: IntoIterator<Item = KType>>(iter: I) -> KType {
+    pub fn join_iter<I: IntoIterator<Item = KType>>(iter: I, types: &TypeRegistry) -> KType {
         iter.into_iter()
-            .reduce(|a, b| KType::join(&a, &b))
+            .reduce(|a, b| KType::join(&a, &b, types))
             .unwrap_or(KType::Any)
     }
 }
@@ -115,13 +122,17 @@ impl KType {
 /// Name-keyed join of two parameter records. `Some(joined)` when the records have equal
 /// length and the same key set; `None` on differing key sets, which callers coarsen to
 /// `KType::Any`.
-fn join_param_record(xa: &Record<KType>, ya: &Record<KType>) -> Option<Record<KType>> {
+fn join_param_record(
+    xa: &Record<KType>,
+    ya: &Record<KType>,
+    types: &TypeRegistry,
+) -> Option<Record<KType>> {
     if xa.len() != ya.len() || !xa.keys().all(|k| ya.get(k).is_some()) {
         return None;
     }
     Some(
         xa.iter()
-            .map(|(name, x)| (name.clone(), KType::join(x, ya.get(name).unwrap())))
+            .map(|(name, x)| (name.clone(), KType::join(x, ya.get(name).unwrap(), types)))
             .collect(),
     )
 }

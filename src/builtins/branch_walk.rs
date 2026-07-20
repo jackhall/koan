@@ -27,7 +27,10 @@ pub(crate) fn resolve_arm_contract<'a>(
 ) -> Result<ReturnContract<'a>, KError> {
     use crate::machine::{arg_type, arg_unresolved_type};
     let ret_kt = if let Some(te) = arg_unresolved_type(ctx.args, "return_type") {
-        match ctx.scope.resolve_type_identifier(te, ctx.chain.clone()) {
+        match ctx
+            .scope
+            .resolve_type_identifier(te, ctx.chain.clone(), ctx.types)
+        {
             TypeResolution::Done(kt) => kt.clone(),
             // The builtin fallback is already tried inside `resolve_type_identifier`; a
             // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
@@ -85,6 +88,7 @@ pub(crate) fn arm_tail<'a>(
     it_source: ItSource<'a>,
     body_expr: KExpression<'a>,
     contract: ReturnContract<'a>,
+    types: &TypeRegistry,
 ) -> crate::machine::Action<'a> {
     use super::block_tail::{block_tail, BlockBody, BlockScope, BlockSeed};
     use crate::machine::FramePlacement;
@@ -95,7 +99,7 @@ pub(crate) fn arm_tail<'a>(
     // living in the arm frame, so the stored reach is the copy's (`adopted_reach_of` — a
     // residence-only host is not carried; a tail loop's retiring frame must not ride the arm's
     // binding), and a later read of `it` rebuilds its carrier from it.
-    let seed: BlockSeed<'a> = Box::new(move |child| {
+    let seed: BlockSeed<'a> = Box::new(move |child, types: &TypeRegistry| {
         // Fused mint + copy + bind of `it` at idx 0 in the fresh arm frame. A region-pure value
         // takes the checked tier (its purity is an audit at the bind brand); a delivered scrutinee
         // takes the copied-adoption tier — one structural copy made directly into the arm frame's
@@ -105,7 +109,7 @@ pub(crate) fn arm_tail<'a>(
         // the payload lives inside the carried value, so its reach is a subset of the envelope's.
         match it_source {
             ItSource::Pure(value) => {
-                let _ = child.bind_checked("it".to_string(), value, BindingIndex::value(0));
+                let _ = child.bind_checked("it".to_string(), value, BindingIndex::value(0), types);
             }
             ItSource::Carrier(carrier, projection) => {
                 let _ = child.bind_delivered(
@@ -123,6 +127,7 @@ pub(crate) fn arm_tail<'a>(
                             },
                         })
                     },
+                    types,
                 );
             }
         }
@@ -133,6 +138,7 @@ pub(crate) fn arm_tail<'a>(
         Some(seed),
         BlockBody::Block(body_expr),
         Some(contract),
+        types,
     )
 }
 
@@ -238,8 +244,9 @@ fn resolve_head_type<'a>(
     scope: &Scope<'a>,
     token: &TypeIdentifier,
     chain: Option<Rc<LexicalFrame>>,
+    types: &TypeRegistry,
 ) -> Result<KType, String> {
-    match scope.resolve_type_identifier(token, chain) {
+    match scope.resolve_type_identifier(token, chain, types) {
         TypeResolution::Done(kt) => Ok(kt.clone()),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
@@ -373,7 +380,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                             });
                         }
                         None => {
-                            let kt = match resolve_head_type(scope, token, chain.clone()) {
+                            let kt = match resolve_head_type(scope, token, chain.clone(), types) {
                                 Ok(kt) => kt,
                                 Err(_) => {
                                     let variants: Vec<String> = set
@@ -410,7 +417,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                         }
                     }
                     HeadMode::Scope => {
-                        let kt = resolve_head_type(scope, token, chain.clone())?;
+                        let kt = resolve_head_type(scope, token, chain.clone(), types)?;
                         typed_arms.push(TypedArm {
                             head_label: label,
                             ktype: kt,
@@ -439,7 +446,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
             .collect();
         return Err(format!(
             "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-            scrutinee.ktype().name(),
+            scrutinee.ktype().name(types),
             heads.join(", ")
         ));
     }
@@ -485,7 +492,7 @@ pub(crate) fn find_branch_body_by_type<'a>(
                 .collect();
             Err(format!(
                 "ambiguous match: value of type `{}` admits arms {} with no most-specific arm",
-                scrutinee.ktype().name(),
+                scrutinee.ktype().name(types),
                 heads.join(", ")
             ))
         }

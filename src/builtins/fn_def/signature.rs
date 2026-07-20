@@ -1,6 +1,7 @@
 //! Signature parsing for the `FN` builtin.
 
 use crate::machine::model::Carried;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::{Argument, SignatureElement};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -62,6 +63,7 @@ pub(crate) enum ParamListOutcome<'a> {
 pub(crate) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, 'a>,
+    types: &TypeRegistry,
 ) -> ParamListOutcome<'a> {
     let parts = &signature.parts;
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
@@ -86,7 +88,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                 let ty = parts.get(i + 1).map(|p| &p.value);
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
-                        match elaborate_type_identifier(elaborator, t) {
+                        match elaborate_type_identifier(elaborator, t, types) {
                             TypeResolution::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
                                     name: name.clone(),
@@ -133,7 +135,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // own `Argument` — no adoption, no allocation.
                         let cloned = cell.open(|live| match live {
                             Carried::Type(kt) => Ok(kt.clone()),
-                            other => Err(other.summarize()),
+                            other => Err(other.summarize(types)),
                         });
                         match cloned {
                             Ok(ktype) => {

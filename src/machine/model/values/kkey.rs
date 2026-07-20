@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use super::kobject::KObject;
-use crate::machine::model::types::{KType, Parseable};
+use crate::machine::model::types::{KType, Parseable, TypeRegistry};
 
 /// Concrete dict-key value for the `KObject::Dict` map. Restricted to the hashable scalars;
 /// non-scalar keys are rejected at construction via [`Self::try_from_kobject`].
@@ -21,7 +21,7 @@ impl KKey {
     /// free of the runtime `KError` type; the caller wraps it into a structured error. NaN is
     /// rejected (it would be equal-to-nothing, breaking key lookup) and `-0.0` is normalized to
     /// `0.0` so the two zeros are one key.
-    pub fn try_from_kobject(obj: &KObject<'_>) -> Result<KKey, String> {
+    pub fn try_from_kobject(obj: &KObject<'_>, types: &TypeRegistry) -> Result<KKey, String> {
         match obj {
             KObject::KString(s) => Ok(KKey::String(s.clone())),
             KObject::Number(n) if n.is_nan() => Err("dict key must not be NaN".to_string()),
@@ -29,7 +29,7 @@ impl KKey {
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
             other => Err(format!(
                 "dict key must be String, Number, or Bool; got {}",
-                other.ktype().name()
+                other.ktype().name(types)
             )),
         }
     }
@@ -77,9 +77,12 @@ impl Parseable for KKey {
             KKey::Bool(_) => KType::Bool,
         }
     }
+}
 
-    /// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly.
-    fn summarize(&self) -> String {
+impl KKey {
+    /// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly. A key is a scalar,
+    /// so its rendering carries no type and needs no registry.
+    pub fn summarize(&self) -> String {
         match self {
             KKey::String(s) => format!("\"{}\"", s),
             KKey::Number(n) => n.to_string(),

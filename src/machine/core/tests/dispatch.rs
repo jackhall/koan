@@ -41,7 +41,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
+    register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a, &types);
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "foo".into(),
     ))]);
@@ -61,8 +61,20 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
-    register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+    register_builtin(
+        scope,
+        "NA",
+        two_slot_sig(KType::Number, KType::Any),
+        body_a,
+        &types,
+    );
+    register_builtin(
+        scope,
+        "AN",
+        two_slot_sig(KType::Any, KType::Number),
+        body_b,
+        &types,
+    );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
@@ -90,10 +102,23 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
         two_slot_sig(KType::Number, KType::Number),
         body_a,
         BindingIndex::value(1),
+        &TypeRegistry::new(),
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
-    register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
-    register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+    register_builtin(
+        inner,
+        "NA",
+        two_slot_sig(KType::Number, KType::Any),
+        body_a,
+        &types,
+    );
+    register_builtin(
+        inner,
+        "AN",
+        two_slot_sig(KType::Any, KType::Number),
+        body_b,
+        &types,
+    );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
@@ -141,6 +166,7 @@ fn resolve_carries_placeholder_name_for_binder_function() {
         body_a,
         Some((name_extractor, crate::machine::BindKind::Value)),
         None,
+        &types,
     );
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
@@ -170,6 +196,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
         "ONE_ID",
         one_slot_sig("v", KType::Identifier),
         body_a,
+        &types,
     );
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
         KLiteral::Number(5.0),
@@ -196,6 +223,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
         "PLUS",
         two_slot_sig(KType::Number, KType::Number),
         body_a,
+        &types,
     );
     let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "deep_call".into(),
@@ -286,6 +314,7 @@ fn inner_scope_pending_overload_shadows_outer_strict_pick() {
         outer_sig,
         body_a,
         BindingIndex::value(1),
+        &TypeRegistry::new(),
     );
 
     let inner = region.brand().alloc_scope(outer.child_for_call());
@@ -324,6 +353,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         "outer_plus",
         two_slot_sig(KType::Number, KType::Number),
         body_a,
+        &types,
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
     register_builtin(
@@ -331,6 +361,7 @@ fn inner_scope_eager_lean_shadows_outer_strict_pick() {
         "inner_plus",
         two_slot_sig(KType::Number, KType::Number),
         body_b,
+        &types,
     );
     let nested = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "deep_call".into(),
@@ -365,11 +396,18 @@ fn dead_bare_name_lean_does_not_preempt_outer_identifier_pick() {
         "outer_id",
         one_slot_sig("v", KType::Identifier),
         body_a,
+        &types,
     );
     let inner = region.brand().alloc_scope(outer.child_for_call());
     // Inner `:Number` overload: the unbound bare name rejects its shape, so the
     // inner scope's only contribution is a dead lean (must not terminate).
-    register_builtin(inner, "inner_num", one_slot_sig("v", KType::Number), body_b);
+    register_builtin(
+        inner,
+        "inner_num",
+        one_slot_sig("v", KType::Number),
+        body_b,
+        &types,
+    );
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
         "fwd".into(),
     ))]);
@@ -424,7 +462,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     ));
     let pick_num_obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(pick_num_fn))
+        .alloc_object_checked(KObject::KFunction(pick_num_fn), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function(
@@ -478,7 +516,7 @@ fn finalized_pick_with_pending_sibling_parks_until_finalize() {
     ));
     let sibling_obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(sibling))
+        .alloc_object_checked(KObject::KFunction(sibling), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function(

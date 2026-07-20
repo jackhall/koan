@@ -15,7 +15,7 @@
 //! [`Held::UnresolvedType`]: crate::machine::model::Held::UnresolvedType
 
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
-use crate::machine::model::{KKind, KObject, KType};
+use crate::machine::model::{KKind, KObject, KType, TypeRegistry};
 use crate::machine::FinishCtx;
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
@@ -23,7 +23,7 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
-fn typeexpr_from_carrier(kt: &KType) -> CarrierForm {
+fn typeexpr_from_carrier(kt: &KType, types: &TypeRegistry) -> CarrierForm {
     match kt {
         KType::Number
         | KType::Str
@@ -34,14 +34,16 @@ fn typeexpr_from_carrier(kt: &KType) -> CarrierForm {
         | KType::Any
         | KType::Identifier
         | KType::KExpression
-        | KType::OfKind(KKind::ProperType) => CarrierForm::Leaf(TypeIdentifier::leaf(kt.name())),
+        | KType::OfKind(KKind::ProperType) => {
+            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
+        }
         // `:Module` lowers to the empty signature (no declaring scope); its `name()` is
         // "Module", so it re-resolves against decl_scope through the same leaf path as the
         // other builtin type names. A user-declared signature (a real `sig_id`) stays `Direct`:
         // re-resolution is by name, and an aliased user SIG reached through a `LET` could miss
         // or hit a shadow.
         KType::Signature { content, .. } if content.sig_id == ScopeId::SENTINEL => {
-            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name()))
+            CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
         }
         _ => CarrierForm::Direct(kt.clone()),
     }
@@ -80,7 +82,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             return done_err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
                 expected: "Identifier".to_string(),
-                got: other.ktype().name(),
+                got: other.ktype().name(ctx.types),
             }));
         }
         None => return done_err(KError::new(KErrorKind::MissingArg("name".to_string()))),
@@ -98,13 +100,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let carrier = match arg_unresolved_type(ctx.args, "ty") {
         Some(te) => CarrierForm::Raw(te.clone()),
         None => match arg_type(ctx.args, "ty") {
-            Some(kt) => typeexpr_from_carrier(kt),
+            Some(kt) => typeexpr_from_carrier(kt, ctx.types),
             None => {
                 return done_err(match arg_object(ctx.args, "ty") {
                     Some(other) => KError::new(KErrorKind::TypeMismatch {
                         arg: "ty".to_string(),
                         expected: "ProperType".to_string(),
-                        got: other.ktype().name(),
+                        got: other.ktype().name(ctx.types),
                     }),
                     None => KError::new(KErrorKind::MissingArg("ty".to_string())),
                 });
@@ -141,7 +143,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// resident `&KType` — which [`Scope::resident_type_carrier`] seals into the terminal, born
 /// co-located with the stored slot rather than rebuilt from a second allocation.
 fn finalize_val<'a>(
-    fctx: &FinishCtx<'a>,
+    fctx: &FinishCtx<'a, '_>,
     name: String,
     declared_kt: KType,
 ) -> crate::machine::Action<'a> {
@@ -149,6 +151,7 @@ fn finalize_val<'a>(
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         &declared_kt,
         &format!("the type of SIG value slot `{name}`"),
+        fctx.types,
     ) {
         return Action::Done(Err(KError::new(KErrorKind::ShapeError(message))));
     }
@@ -161,7 +164,7 @@ fn finalize_val<'a>(
     )))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     let signature = sig(
         KType::Any,
@@ -175,7 +178,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope, "VAL", signature, body,
         // VAL installs no dispatch-time placeholder: it records into the decl scope's slot
         // collector, not into a binding map any name lookup or forward-reference walk can see.
-        None, None,
+        None, None, types,
     );
 }
 

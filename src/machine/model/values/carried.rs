@@ -12,7 +12,7 @@
 //!
 //! See [execution/calls-and-values.md § `KObject` and the model/core boundary](../../../../design/execution/calls-and-values.md#kobject-and-the-modelcore-boundary).
 
-use crate::machine::model::types::{KKind, KType, Parseable};
+use crate::machine::model::types::{KKind, KType, TypeRegistry};
 use crate::machine::model::TypeIdentifier;
 use crate::witnessed::reattachable;
 
@@ -54,7 +54,10 @@ impl<'a> Carried<'a> {
         match self {
             Carried::Object(o) => o,
             Carried::Type(t) => {
-                panic!("expected an Object value, got a Type arm: {}", t.name())
+                panic!(
+                    "expected an Object value, got a Type arm: {}",
+                    t.name_without_registry()
+                )
             }
             Carried::UnresolvedType(ti) => {
                 panic!(
@@ -67,20 +70,31 @@ impl<'a> Carried<'a> {
 
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
-    pub fn summarize(&self) -> String {
+    pub fn summarize(&self, types: &TypeRegistry) -> String {
+        self.render_summary(Some(types))
+    }
+
+    /// The registry-free twin of [`Self::summarize`], for the `Formatter`-only renderers that
+    /// have no registry to hand: [`std::fmt::Debug`] and the surface-only
+    /// [`ExpressionPart::summarize`](crate::machine::model::ast::ExpressionPart::summarize).
+    pub fn summarize_without_registry(&self) -> String {
+        self.render_summary(None)
+    }
+
+    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
-            Carried::Object(o) => Parseable::summarize(*o),
-            Carried::Type(t) => t.name(),
+            Carried::Object(o) => o.render_summary(types),
+            Carried::Type(t) => t.name_or_without_registry(types),
             Carried::UnresolvedType(ti) => ti.render(),
         }
     }
 
     /// The shallow type tag of the carried value: an object's `ktype()`, or a type-channel
     /// arm's own `OfKind` classification.
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self, types: &TypeRegistry) -> KType {
         match self {
             Carried::Object(o) => o.ktype(),
-            Carried::Type(t) => KType::OfKind(t.kind_of()),
+            Carried::Type(t) => KType::OfKind(t.kind_of(types)),
             // An unlowered name denotes a proper type once resolved.
             Carried::UnresolvedType(_) => KType::OfKind(KKind::ProperType),
         }
@@ -130,7 +144,10 @@ impl<'a> Held<'a> {
     pub fn object(&self) -> &KObject<'a> {
         match self {
             Held::Object(o) => o,
-            Held::Type(t) => panic!("expected an Object cell, got a Type arm: {}", t.name()),
+            Held::Type(t) => panic!(
+                "expected an Object cell, got a Type arm: {}",
+                t.name_without_registry()
+            ),
             Held::UnresolvedType(ti) => panic!(
                 "expected an Object cell, got an unresolved type name: {}",
                 ti.render()
@@ -149,20 +166,29 @@ impl<'a> Held<'a> {
 
     /// The cell's shallow type tag: an object's `ktype()`, or a type-channel arm's own
     /// `OfKind` classification (mirrors [`Carried::ktype`]).
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self, types: &TypeRegistry) -> KType {
         match self {
             Held::Object(o) => o.ktype(),
-            Held::Type(t) => KType::OfKind(t.kind_of()),
+            Held::Type(t) => KType::OfKind(t.kind_of(types)),
             Held::UnresolvedType(_) => KType::OfKind(KKind::ProperType),
         }
     }
 
     /// Surface rendering of any arm — an object's `summarize`, a type's `name`, or the
     /// unlowered name's surface form.
-    pub fn summarize(&self) -> String {
+    pub fn summarize(&self, types: &TypeRegistry) -> String {
+        self.render_summary(Some(types))
+    }
+
+    /// The registry-free twin of [`Self::summarize`] — see [`Carried::summarize_without_registry`].
+    pub fn summarize_without_registry(&self) -> String {
+        self.render_summary(None)
+    }
+
+    pub(crate) fn render_summary(&self, types: Option<&TypeRegistry>) -> String {
         match self {
-            Held::Object(o) => Parseable::summarize(o),
-            Held::Type(t) => t.name(),
+            Held::Object(o) => o.render_summary(types),
+            Held::Type(t) => t.name_or_without_registry(types),
             Held::UnresolvedType(ti) => ti.render(),
         }
     }

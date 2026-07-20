@@ -3,6 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
+use super::registry::TypeRegistry;
 use super::resolver::{elaborate_type_identifier, Elaborator, TypeResolution};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::values::Carried;
@@ -107,6 +108,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
     name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
     mut results: Option<&mut ResultFeed<'_, 'a>>,
+    types: &TypeRegistry,
 ) -> FieldListOutcome<'e> {
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<KExpression<'e>> = Vec::new();
@@ -123,12 +125,13 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
         let checked = |kt: KType| match super::sig_schema::unsaturated_constructor_message(
             &kt,
             &format!("the type of {context_member} `{name}`"),
+            types,
         ) {
             Some(message) => Err(message),
             None => Ok(kt),
         };
         match part {
-            ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t) {
+            ExpressionPart::Type(t) => match elaborate_type_identifier(elaborator, t, types) {
                 TypeResolution::Done(kt) => checked(kt),
                 TypeResolution::Park(producers) => {
                     parks.extend(producers);
@@ -165,7 +168,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                         Err(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
                             name,
-                            other.summarize(),
+                            other.summarize(types),
                         ))
                     }
                     None if results.is_some() => Err(format!(
@@ -194,6 +197,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                     FieldNameKind::Identifier,
                     elaborator,
                     results.as_deref_mut(),
+                    types,
                 ) {
                     FieldListOutcome::Done(pairs) => {
                         Ok(KType::record(Box::new(Record::from_pairs(pairs))))
@@ -216,7 +220,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                 other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,
-                    other.summarize(),
+                    other.summarize(types),
                 )),
             },
             other => Err(format!(

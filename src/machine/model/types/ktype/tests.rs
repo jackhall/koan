@@ -2,7 +2,7 @@ use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::model::Module;
+use crate::machine::model::{Module, TypeRegistry};
 
 /// A singleton `Rc<RecursiveSet>` over a record-repr newtype member named `name`, schema
 /// filled.
@@ -15,40 +15,45 @@ fn record_newtype_set(name: &str) -> Rc<RecursiveSet> {
 
 #[test]
 fn name_renders_parameterized_list() {
+    let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::list(Box::new(KType::Number))));
-    assert_eq!(t.name(), ":(LIST OF :(LIST OF Number))");
+    assert_eq!(t.name(&types), ":(LIST OF :(LIST OF Number))");
 }
 
 #[test]
 fn name_renders_dict() {
+    let types = TypeRegistry::new();
     let t = KType::dict(Box::new(KType::Str), Box::new(KType::Number));
-    assert_eq!(t.name(), ":(MAP Str -> Number)");
+    assert_eq!(t.name(&types), ":(MAP Str -> Number)");
 }
 
 #[test]
 fn name_renders_function() {
+    let types = TypeRegistry::new();
     let t = KType::function_type(
         Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
         Box::new(KType::Bool),
     );
-    assert_eq!(t.name(), ":(FN (x :Number y :Str) -> Bool)");
+    assert_eq!(t.name(&types), ":(FN (x :Number y :Str) -> Bool)");
 }
 
 /// A nested sigiled parameter type already opens with `:`, so the renderer must not
 /// prefix a second colon (`xs :(LIST OF Number)`, not `xs ::(LIST OF Number)`).
 #[test]
 fn name_renders_function_with_sigiled_param() {
+    let types = TypeRegistry::new();
     let t = KType::function_type(
         Record::from_pairs(vec![("xs".into(), KType::list(Box::new(KType::Number)))]),
         Box::new(KType::Bool),
     );
-    assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
+    assert_eq!(t.name(&types), ":(FN (xs :(LIST OF Number)) -> Bool)");
 }
 
 #[test]
 fn name_renders_function_nullary() {
+    let types = TypeRegistry::new();
     let t = KType::function_type(Record::new(), Box::new(KType::Any));
-    assert_eq!(t.name(), ":(FN () -> Any)");
+    assert_eq!(t.name(&types), ":(FN () -> Any)");
 }
 
 /// Function-slot identity is the record substrate's order-blind equality: the same
@@ -85,8 +90,9 @@ fn function_params_name_sensitive_inequality() {
 
 #[test]
 fn name_renders_recursive_ref_as_name() {
+    let types = TypeRegistry::new();
     let t = KType::RecursiveRef("Tree".into());
-    assert_eq!(t.name(), "Tree");
+    assert_eq!(t.name(&types), "Tree");
 }
 
 #[test]
@@ -97,9 +103,10 @@ fn nominal_kind_surface_keywords() {
 
 #[test]
 fn nominal_of_kind_name_renders_family_keyword() {
-    assert_eq!(KType::OfKind(KKind::NewType).name(), "NewType");
+    let types = TypeRegistry::new();
+    assert_eq!(KType::OfKind(KKind::NewType).name(&types), "NewType");
     assert_eq!(
-        KType::OfKind(KKind::TypeConstructor).name(),
+        KType::OfKind(KKind::TypeConstructor).name(&types),
         "TypeConstructor"
     );
 }
@@ -108,10 +115,11 @@ fn nominal_of_kind_name_renders_family_keyword() {
 /// `:Signature` is the `OfKind` wildcard and renders as its own keyword.
 #[test]
 fn any_module_and_any_signature_render_surface_keywords() {
+    let types = TypeRegistry::new();
     let am: KType = KType::empty_signature();
     let asg: KType = KType::OfKind(KKind::Signature);
-    assert_eq!(am.name(), "Module");
-    assert_eq!(asg.name(), "Signature");
+    assert_eq!(am.name(&types), "Module");
+    assert_eq!(asg.name(&types), "Signature");
 }
 
 // --- KType::Union ------------------------------------------------------------------
@@ -119,38 +127,46 @@ fn any_module_and_any_signature_render_surface_keywords() {
 /// `:(A | B)` renders members joined by ` | ` and wrapped in the type sigil.
 #[test]
 fn name_renders_union() {
-    let u = KType::union_of(vec![KType::Number, KType::Str]);
-    assert_eq!(u.name(), ":(Number | Str)");
+    let types = TypeRegistry::new();
+    let u = KType::union_of(vec![KType::Number, KType::Str], &types);
+    assert_eq!(u.name(&types), ":(Number | Str)");
 }
 
 /// A compound member already opens its own sigil, which nests without a doubled colon.
 #[test]
 fn name_renders_union_with_compound_member() {
-    let u = KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]);
-    assert_eq!(u.name(), ":(:(LIST OF Number) | Str)");
+    let types = TypeRegistry::new();
+    let u = KType::union_of(
+        vec![KType::list(Box::new(KType::Number)), KType::Str],
+        &types,
+    );
+    assert_eq!(u.name(&types), ":(:(LIST OF Number) | Str)");
 }
 
 /// Union equality is order-blind: the same members in a different order compare equal.
 #[test]
 fn union_equality_order_blind() {
-    let ab = KType::union_of(vec![KType::Number, KType::Str]);
-    let ba = KType::union_of(vec![KType::Str, KType::Number]);
+    let types = TypeRegistry::new();
+    let ab = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let ba = KType::union_of(vec![KType::Str, KType::Number], &types);
     assert_eq!(ab, ba);
 }
 
 /// Two unions of different member sets are unequal.
 #[test]
 fn union_inequality_different_members() {
-    let ns = KType::union_of(vec![KType::Number, KType::Str]);
-    let nb = KType::union_of(vec![KType::Number, KType::Bool]);
+    let types = TypeRegistry::new();
+    let ns = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let nb = KType::union_of(vec![KType::Number, KType::Bool], &types);
     assert_ne!(ns, nb);
 }
 
 /// Hash agrees with the order-blind equality: reordered-but-equal unions hash equal.
 #[test]
 fn union_hash_order_blind() {
-    let ab = KType::union_of(vec![KType::Number, KType::Str, KType::Bool]);
-    let ba = KType::union_of(vec![KType::Bool, KType::Number, KType::Str]);
+    let types = TypeRegistry::new();
+    let ab = KType::union_of(vec![KType::Number, KType::Str, KType::Bool], &types);
+    let ba = KType::union_of(vec![KType::Bool, KType::Number, KType::Str], &types);
     assert_eq!(ab, ba);
     assert_eq!(hash_of(&ab), hash_of(&ba));
 }
@@ -340,11 +356,12 @@ fn set_ref_pre_seal_window_pointer_then_digest() {
 
 #[test]
 fn set_ref_name_renders_member_name() {
+    let types = TypeRegistry::new();
     // Renders the member's declared `name`, not the kind keyword: a `Point` struct
     // slot shows `Point`, not `Struct`.
     let set = record_newtype_set("Point");
     let t = KType::SetRef { set, index: 0 };
-    assert_eq!(t.name(), "Point");
+    assert_eq!(t.name(&types), "Point");
 }
 
 /// `AbstractType` identity keys on its whole content, generativity included: two mints carrying

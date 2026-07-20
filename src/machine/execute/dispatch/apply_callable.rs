@@ -24,7 +24,7 @@ use std::rc::Rc;
 use crate::machine::core::{DepPlacement, KFunction};
 use crate::machine::model::{constructor_param_names, Carried, Record};
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, ProjectedSchema, RecursiveSet};
+use crate::machine::model::{KType, ProjectedSchema, RecursiveSet, TypeRegistry};
 use crate::machine::{KError, KErrorKind};
 use crate::scheduler::Deps;
 use crate::source::Spanned;
@@ -97,7 +97,7 @@ fn apply_constructor<'step>(
     // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
     // each of the family's parameters to a type. It precedes every construction arm: the two
     // surfaces are disjoint, and the record body is a type-argument list here, not a value.
-    if let Some(param_names) = constructor_param_names(identity) {
+    if let Some(param_names) = constructor_param_names(identity, ctx.types()) {
         if let Some(
             [Spanned {
                 value: ExpressionPart::RecordLiteral(fields),
@@ -125,10 +125,10 @@ fn apply_constructor<'step>(
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
-            got: identity.name(),
+            got: identity.name(ctx.types()),
         })));
     };
-    match RecursiveSet::projected_schema(set, *index) {
+    match RecursiveSet::projected_schema(set, *index, ctx.types()) {
         // A record-literal body builds per-field (literal fields bind synchronously); any
         // other trailing expression is wrapped as a single positional value.
         ProjectedSchema::NewType(_) => match expr.parts.get(1..) {
@@ -191,7 +191,7 @@ fn apply_named_type_args<'step>(
     // key check every other arity runs.
     if fields.is_empty() {
         return Outcome::Done(
-            build_apply_args(identity, &param_names, Vec::new()).map(|args| {
+            build_apply_args(identity, &param_names, Vec::new(), ctx.types()).map(|args| {
                 ctx.step_ctx()
                     .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args))
             }),
@@ -218,7 +218,7 @@ fn apply_named_type_args<'step>(
                 Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
                     arg: name.clone(),
                     expected: "Type".to_string(),
-                    got: object.ktype().name(),
+                    got: object.ktype().name(view.types()),
                 })),
                 Carried::UnresolvedType(ti) => {
                     Err(KError::new(KErrorKind::UnboundName(ti.render())))
@@ -226,7 +226,7 @@ fn apply_named_type_args<'step>(
             })
             .collect();
         Outcome::Done(supplied.and_then(|supplied| {
-            let args = build_apply_args(identity, &param_names, supplied)?;
+            let args = build_apply_args(identity, &param_names, supplied, view.types())?;
             Ok(view
                 .step_ctx()
                 .alloc_type(KType::constructor_apply(Box::new(identity.clone()), args)))
@@ -245,6 +245,7 @@ fn build_apply_args(
     identity: &KType,
     param_names: &[String],
     supplied: Vec<(String, KType)>,
+    types: &TypeRegistry,
 ) -> Result<Record<KType>, KError> {
     let mut supplied: HashMap<String, KType> = supplied.into_iter().collect();
     let missing: Vec<&str> = param_names
@@ -269,7 +270,7 @@ fn build_apply_args(
         let declared: Vec<&str> = param_names.iter().map(String::as_str).collect();
         return Err(KError::new(KErrorKind::ShapeError(format!(
             "`{}` takes type parameters {} — {}",
-            identity.name(),
+            identity.name(types),
             quoted_list(&declared),
             problems.join(", "),
         ))));

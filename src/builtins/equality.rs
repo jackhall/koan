@@ -76,15 +76,15 @@ pub fn body_ne<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 
 /// Register `==` / `!=` as binary-only builtins. Deliberately **not** seeded into any operator
 /// group (see [`super::arithmetic::register_builtin_operator_groups`]) — equality does not chain.
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let eq_sig = |op: &str| {
         sig(
             KType::Bool,
             vec![arg("left", KType::Any), kw(op), arg("right", KType::Any)],
         )
     };
-    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq);
-    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne);
+    crate::builtins::register_builtin(scope, "==", eq_sig("=="), body_eq, types);
+    crate::builtins::register_builtin(scope, "!=", eq_sig("!="), body_ne, types);
 }
 
 #[cfg(test)]

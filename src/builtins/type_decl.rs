@@ -19,6 +19,7 @@
 
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope};
@@ -58,7 +59,7 @@ pub fn body_bare<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::A
     if !ctx.scope.is_in_sig_body() {
         return Action::Done(Err(not_in_sig_body()));
     }
-    let name = match require_bare_type_name(ctx.args, "name", "TYPE") {
+    let name = match require_bare_type_name(ctx.args, "name", "TYPE", ctx.types) {
         Ok(name) => name,
         Err(e) => return Action::Done(Err(e)),
     };
@@ -149,7 +150,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let bare_signature = sig(
         KType::Any,
         vec![kw("TYPE"), arg("name", KType::OfKind(KKind::ProperType))],
@@ -161,6 +162,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_bare,
         Some((binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
     let hk_signature = sig(
         KType::Any,
@@ -173,6 +175,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_hk,
         Some((binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
 }
 

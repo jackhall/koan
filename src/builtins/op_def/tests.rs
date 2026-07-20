@@ -6,6 +6,7 @@ use crate::builtins::test_support::{
 };
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -16,10 +17,16 @@ fn list_numbers(object: &KObject<'_>) -> Vec<f64> {
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,
-                other => panic!("expected a Number element, got {}", other.summarize()),
+                other => panic!(
+                    "expected a Number element, got {}",
+                    other.summarize(&TypeRegistry::new())
+                ),
             })
             .collect(),
-        other => panic!("expected a list, got {}", other.ktype().name()),
+        other => panic!(
+            "expected a list, got {}",
+            other.ktype().name(&TypeRegistry::new())
+        ),
     }
 }
 
@@ -336,6 +343,6 @@ fn declaration_evaluates_to_the_operator_function() {
     assert!(
         matches!(value, KObject::KFunction(_)),
         "an OP statement evaluates to its synthesized function, got {}",
-        value.ktype().name(),
+        value.ktype().name(&TypeRegistry::new()),
     );
 }

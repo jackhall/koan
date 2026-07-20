@@ -9,6 +9,7 @@
 use crate::machine::model::KExpression;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigSchema};
 use crate::machine::BindingIndex;
 use crate::machine::StepCarried;
@@ -22,7 +23,9 @@ use super::{arg, kw, sig};
 pub fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     use crate::machine::{require_identifier_name, require_kexpression};
 
-    let name = crate::try_action!(require_identifier_name(ctx.args, "name", "MODULE"));
+    let name = crate::try_action!(require_identifier_name(
+        ctx.args, "name", "MODULE", ctx.types
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "MODULE", "body"));
     let child_scope = ctx
         .scope
@@ -91,10 +94,13 @@ pub(super) fn await_module_body<'a>(
             // before home-omission — and the Object-arm module value is allocated and bound
             // value-side (`bindings.data`) under it. The returned terminal witnesses that same value
             // from the same stored reach.
-            match fctx
-                .scope
-                .bind_module(name_for_finish.clone(), module, child_scope, bind_index)
-            {
+            match fctx.scope.bind_module(
+                name_for_finish.clone(),
+                module,
+                child_scope,
+                bind_index,
+                fctx.types,
+            ) {
                 Ok((obj, stored)) => Action::Done(Ok(StepCarried::born(
                     fctx.scope.resident_value_carrier(obj, stored),
                 ))),
@@ -114,7 +120,9 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     use crate::machine::require_bare_type_name;
     use crate::machine::{KError, KErrorKind};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "MODULE"));
+    let name = crate::try_action!(require_bare_type_name(
+        ctx.args, "name", "MODULE", ctx.types
+    ));
     Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
         "module `{name}` is named with a Type token, but a module is a value — the Type-token \
          namespace names what can type a field. Name it snake_case, e.g. `{suggestion}`",
@@ -122,7 +130,7 @@ pub(super) fn body_type_named<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     )))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let module_sig = |name_kt: KType| {
         sig(
             KType::empty_signature(),
@@ -144,6 +152,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             crate::machine::BindKind::Value,
         )),
         None,
+        types,
     );
     crate::builtins::register_builtin_full(
         scope,
@@ -152,6 +161,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_type_named,
         None,
         None,
+        types,
     );
 }
 
@@ -162,6 +172,7 @@ mod tests {
     };
     use crate::machine::model::KObject;
     use crate::machine::model::Module;
+    use crate::machine::model::TypeRegistry;
     use crate::machine::{run_root_storage, FrameStorageExt};
     use crate::machine::{BindingIndex, KErrorKind};
 
@@ -244,7 +255,7 @@ mod tests {
             KObject::Module(module) => assert_eq!(module.path, "foo"),
             other => panic!(
                 "bare module name must read back as an Object-arm module value, got {}",
-                other.ktype().name()
+                other.ktype().name(&TypeRegistry::new())
             ),
         }
         // PRINT returns the rendered string — a bare module renders as its path.
@@ -252,7 +263,7 @@ mod tests {
             KObject::KString(s) => assert_eq!(s, "foo"),
             other => panic!(
                 "PRINT foo returns the path string, got {}",
-                other.ktype().name()
+                other.ktype().name(&TypeRegistry::new())
             ),
         }
     }
@@ -269,7 +280,7 @@ mod tests {
         match run_one(scope, parse_one("[int_ord, int_ord]")) {
             KObject::List(items, elem) => {
                 assert_eq!(
-                    elem.name(),
+                    elem.name(&TypeRegistry::new()),
                     "int_ord",
                     "the memoized element type is the module self-sig"
                 );
@@ -281,7 +292,10 @@ mod tests {
                     "each element is the Object-arm module value",
                 );
             }
-            other => panic!("expected a list, got {}", other.ktype().name()),
+            other => panic!(
+                "expected a list, got {}",
+                other.ktype().name(&TypeRegistry::new())
+            ),
         }
     }
 
@@ -301,7 +315,7 @@ mod tests {
         match run_one(scope, parse_one("[(int_ord)]")) {
             KObject::List(items, elem) => {
                 assert_eq!(
-                    elem.name(),
+                    elem.name(&TypeRegistry::new()),
                     "int_ord",
                     "element memoizes to the module self-sig"
                 );
@@ -311,7 +325,10 @@ mod tests {
                     "the list element is the Object-arm module value",
                 );
             }
-            other => panic!("expected a list, got {}", other.ktype().name()),
+            other => panic!(
+                "expected a list, got {}",
+                other.ktype().name(&TypeRegistry::new())
+            ),
         }
     }
 
@@ -409,7 +426,13 @@ mod tests {
             .brand()
             .alloc_module(Module::new("foo".into(), child));
         scope
-            .bind_module("foo".into(), module, child, BindingIndex::value(0))
+            .bind_module(
+                "foo".into(),
+                module,
+                child,
+                BindingIndex::value(0),
+                &TypeRegistry::new(),
+            )
             .expect("pre-seed the module value binding");
         run(scope, "MODULE foo = (LET y = 2)");
         let foo = lookup_module(scope, "foo");

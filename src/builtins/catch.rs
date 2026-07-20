@@ -4,6 +4,7 @@
 //! wraps the outcome in the prelude [`Result`](super::result) carrier as
 //! either `Ok(v)` or `Error(KError::to_tagged())`.
 
+use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType, Record};
@@ -13,7 +14,7 @@ use crate::machine::{kerror_ktype, KoanRegionExt, KoanStorageProfile};
 
 use super::{arg, kw, sig};
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // CATCH yields `Result {Ok :Any, Error :KError}` — `Any` covers only the unpredictable
     // `Ok` payload, the `Error` arm is the `KError` carrier. `result::register` runs first, so
     // the `Result` `SetRef` resolves here. This is a documentary contract: the catch finish
@@ -34,7 +35,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         return_type,
         vec![kw("CATCH"), arg("expr", KType::KExpression)],
     );
-    crate::builtins::register_builtin(scope, "CATCH", signature, body);
+    crate::builtins::register_builtin(scope, "CATCH", signature, body, types);
 }
 
 /// Watches the captured `expr` and recovers into a `Result` carrier
@@ -102,7 +103,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 let payload = KoanRegion::alloc_witnessed(Rc::clone(&frame), |region| {
                     Carried::Object(
                         region
-                            .alloc_object_checked(e.to_tagged(region))
+                            .alloc_object_checked(e.to_tagged(region, fctx.types), fctx.types)
                             .expect("a freshly-built KError payload is always resident-in-self"),
                     )
                 });

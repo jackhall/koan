@@ -3,7 +3,8 @@
 use crate::builtins::test_support::{
     binds_module, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
-use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 use crate::witnessed::region_metrics;
 
@@ -30,7 +31,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         other => {
             panic!(
                 "expected the int_ord view satisfying the per-call signature, got {}",
-                other.summarize()
+                other.summarize(&TypeRegistry::new())
             )
         }
     }
@@ -98,7 +99,7 @@ fn functor_get_zero_on_opaque_view_re_tags_slot_read() {
                 type_id,
             );
             assert_eq!(
-                type_id.name(),
+                type_id.name(&TypeRegistry::new()),
                 "Carrier",
                 "the abstract identity is the SIG-named member `Carrier`",
             );

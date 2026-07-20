@@ -8,6 +8,7 @@ use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 
 use super::{body_no_op, unit_signature};
@@ -110,6 +111,7 @@ fn lookup_type_strict_less_than_hides_later_sibling() {
 
 #[test]
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
@@ -121,7 +123,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
@@ -135,6 +137,7 @@ fn lookup_function_chain_cutoff_none_returns_full_bucket() {
 
 #[test]
 fn lookup_function_filters_per_overload_visibility() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     // Two overloads sharing the same bucket key but differing on a value-side
@@ -177,11 +180,11 @@ fn lookup_function_filters_per_overload_visibility() {
     ));
     let obj_early = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f_early))
+        .alloc_object_checked(KObject::KFunction(f_early), &types)
         .expect("f was just allocated into region\'s own region");
     let obj_late = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f_late))
+        .alloc_object_checked(KObject::KFunction(f_late), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function(
@@ -227,6 +230,7 @@ fn lookup_function_surfaces_pending_overload_when_bucket_empty() {
 
 #[test]
 fn lookup_function_surfaces_pending_overload_alongside_bucket() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
@@ -238,7 +242,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
@@ -256,6 +260,7 @@ fn lookup_function_surfaces_pending_overload_alongside_bucket() {
 
 #[test]
 fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
+    let types = TypeRegistry::new();
     let region = run_root_storage();
     let scope = run_root_bare(&region);
     let f = region.brand().alloc_function(KFunction::new(
@@ -267,7 +272,7 @@ fn lookup_function_empty_bucket_under_full_filter_surfaces_no_overloads() {
     ));
     let obj = region
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &types)
         .expect("f was just allocated into region\'s own region");
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))

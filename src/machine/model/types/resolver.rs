@@ -20,6 +20,7 @@ use crate::machine::NodeId;
 use super::kkind::KKind;
 use super::ktype::KType;
 use super::recursive_set::{NominalMember, RecursiveSet};
+use super::registry::TypeRegistry;
 
 #[cfg(test)]
 mod tests;
@@ -94,6 +95,7 @@ impl<'b, 'a> Elaborator<'b, 'a> {
 pub fn elaborate_type_identifier(
     el: &mut Elaborator<'_, '_>,
     t: &TypeIdentifier,
+    types: &TypeRegistry,
 ) -> TypeResolution<KType> {
     let name = t.as_str();
     if el.threaded.contains(name) {
@@ -124,7 +126,7 @@ pub fn elaborate_type_identifier(
     // type universe, so a name reaching here can hold no value to layer a sharper miss over. What
     // remains is the builtin table — tried last so a fixture scope that skips builtin registration
     // still resolves builtin names — and then an unknown-name failure.
-    match KType::from_type_identifier(t) {
+    match KType::from_type_identifier(t, types) {
         Ok(kt) => TypeResolution::Done(kt),
         Err(msg) => TypeResolution::Unbound(msg),
     }

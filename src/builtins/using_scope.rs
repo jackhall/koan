@@ -22,6 +22,7 @@
 //! module reaches no per-call region and needs no fold.
 
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
@@ -41,7 +42,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
-                got: other.name(),
+                got: other.name(ctx.types),
             })))
         }
         Some(Held::UnresolvedType(ti)) => {
@@ -55,7 +56,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
                 expected: "Module".to_string(),
-                got: other.ktype().name().to_string(),
+                got: other.ktype().name(ctx.types).to_string(),
             })))
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("m".to_string())))),
@@ -71,7 +72,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // per-call region and a carrier-less module has no reach to root, so both fold nothing.
     let seed: Option<BlockSeed<'a>> = ctx.arg_carrier("m").map(|carrier| {
         let carrier = carrier.duplicate();
-        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope| {
+        let seed: BlockSeed<'a> = Box::new(move |overlay: &Scope, _types: &TypeRegistry| {
             let _ = overlay.host_reach_of(&carrier);
         });
         seed
@@ -82,10 +83,11 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         seed,
         BlockBody::Block(body_expr),
         None,
+        ctx.types,
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::Any,
         vec![
@@ -95,7 +97,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ],
     );
-    crate::builtins::register_builtin(scope, "USING", signature, body);
+    crate::builtins::register_builtin(scope, "USING", signature, body, types);
 }
 
 #[cfg(test)]

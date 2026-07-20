@@ -14,6 +14,7 @@
 use super::kkind::KKind;
 use super::record::Record;
 use super::recursive_set::{same_nominal, RecursiveSet};
+use super::registry::TypeRegistry;
 use super::sig_schema::{name_sets_equal, SigContent};
 use super::signature::DeferredReturnSurface;
 use super::type_digest::{self, TypeDigest};
@@ -248,21 +249,37 @@ impl KType {
     /// Surface-syntax rendering. The rendered form parses back to the same `KType`
     /// through the dispatch-driven type-language path (see
     /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
-    pub fn name(&self) -> String {
+    pub fn name(&self, _types: &TypeRegistry) -> String {
+        self.name_without_registry()
+    }
+
+    /// The registry-free rendering `name` delegates to, and the only renderer reachable from
+    /// [`std::fmt::Debug`], which has no registry to hand.
+    pub(crate) fn name_without_registry(&self) -> String {
         match self {
             KType::Number => "Number".into(),
             KType::Str => "Str".into(),
             KType::Bool => "Bool".into(),
             KType::Null => "Null".into(),
-            KType::List { element, .. } => format!(":(LIST OF {})", element.name()),
+            KType::List { element, .. } => {
+                format!(":(LIST OF {})", element.name_without_registry())
+            }
             KType::Dict { key, value, .. } => {
-                format!(":(MAP {} -> {})", key.name(), value.name())
+                format!(
+                    ":(MAP {} -> {})",
+                    key.name_without_registry(),
+                    value.name_without_registry()
+                )
             }
             // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
             // space-separated like FN params (the field-list parser accepts that).
             KType::Record { fields, .. } => format!(":{{{}}}", render_param_record(fields)),
             KType::KFunction { params, ret, .. } => {
-                format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
+                format!(
+                    ":(FN ({}) -> {})",
+                    render_param_record(params),
+                    ret.name_without_registry()
+                )
             }
             KType::DeferredReturn(s) => s.render(),
             KType::Identifier => "Identifier".into(),
@@ -277,7 +294,8 @@ impl KType {
             // `:(A | B)` — members joined by ` | ` and wrapped in the type sigil. A compound
             // member already opens its own sigil (`:(LIST OF Number)`), which nests fine.
             KType::Union { members, .. } => {
-                let rendered: Vec<String> = members.iter().map(|m| m.name()).collect();
+                let rendered: Vec<String> =
+                    members.iter().map(|m| m.name_without_registry()).collect();
                 format!(":({})", rendered.join(" | "))
             }
             // Diagnostic-only: a sibling reference renders against no ambient set here, so
@@ -298,7 +316,7 @@ impl KType {
                     // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
-                        .map(|(name, kt)| format!("{} = {}", name, kt.name()))
+                        .map(|(name, kt)| format!("{} = {}", name, kt.name_without_registry()))
                         .collect();
                     format!("({} WITH {{{}}})", content.path, inner.join(", "))
                 }
@@ -308,17 +326,30 @@ impl KType {
             KType::ConstructorApply { ctor, args, .. } => {
                 let bindings: Vec<String> = args
                     .iter()
-                    .map(|(name, kt)| format!("{name} = {}", kt.name()))
+                    .map(|(name, kt)| format!("{name} = {}", kt.name_without_registry()))
                     .collect();
-                format!(":({} {{{}}})", ctor.name(), bindings.join(", "))
+                format!(
+                    ":({} {{{}}})",
+                    ctor.name_without_registry(),
+                    bindings.join(", ")
+                )
             }
             KType::Any => "Any".into(),
         }
     }
 
+    /// [`Self::name`] when a registry is in hand, [`Self::name_without_registry`] when the caller
+    /// is a `Formatter`-only renderer. The single seam the value-summary renderers thread.
+    pub(crate) fn name_or_without_registry(&self, types: Option<&TypeRegistry>) -> String {
+        match types {
+            Some(types) => self.name(types),
+            None => self.name_without_registry(),
+        }
+    }
+
     /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
-    pub fn render(&self) -> String {
-        self.name()
+    pub fn render(&self, types: &TypeRegistry) -> String {
+        self.name(types)
     }
 
     /// Classify a *type* into its shallow dispatch [`KKind`] — the value-side direction of
@@ -327,13 +358,16 @@ impl KType {
     /// is its declared order, and every other type is `Proper`. Never returns `KKind::AnyType` (a
     /// slot-only expectation). Applied to the type a type value carries — or a runtime value's
     /// `ktype()` — to match it against an `OfKind` slot.
-    pub fn kind_of(&self) -> KKind {
+    // `types` reaches only the recursive `ConstructorApply` arm today; it is the registry the
+    // node reads flow through.
+    #[allow(clippy::only_used_in_recursion)]
+    pub fn kind_of(&self, types: &TypeRegistry) -> KKind {
         match self {
             KType::Signature { .. } => KKind::Signature,
             // A nominal carries its family on the set member; a `ConstructorApply` defers to
             // its `ctor` (a `TypeConstructor`-kind `SetRef` or an abstract constructor).
             KType::SetRef { set, index } => set.member(*index).kind,
-            KType::ConstructorApply { ctor, .. } => ctor.kind_of(),
+            KType::ConstructorApply { ctor, .. } => ctor.kind_of(types),
             // An abstract member with declared parameters is a constructor; without them it is a
             // proper type.
             KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
@@ -354,7 +388,7 @@ fn render_param_record(params: &Record<KType>) -> String {
     params
         .iter()
         .map(|(name, kt)| {
-            let surface = kt.name();
+            let surface = kt.name_without_registry();
             if surface.starts_with(':') {
                 format!("{name} {surface}")
             } else {
@@ -487,11 +521,12 @@ fn hash_set_identity<H: std::hash::Hasher>(set: &Rc<RecursiveSet>, state: &mut H
 }
 
 /// Manual `Debug` — a derived impl would recurse unboundedly through a self-referential
-/// `RecursiveSet` (`SetRef` / `RecursiveGroup`); rendering through [`Self::name`] is the stable,
-/// cycle-safe representation.
+/// `RecursiveSet` (`SetRef` / `RecursiveGroup`); rendering through
+/// [`Self::name_without_registry`] is the stable, cycle-safe representation, and the only one a
+/// `Formatter`-only signature can reach.
 impl std::fmt::Debug for KType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "KType({})", self.name())
+        write!(f, "KType({})", self.name_without_registry())
     }
 }
 

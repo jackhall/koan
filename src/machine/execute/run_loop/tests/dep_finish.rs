@@ -6,7 +6,7 @@ use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KExpression;
 use crate::machine::model::ReturnType;
-use crate::machine::model::{Carried, KObject};
+use crate::machine::model::{Carried, KObject, TypeRegistry};
 
 use super::let_expr;
 
@@ -148,6 +148,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
             elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
         },
         body,
+        &TypeRegistry::new(),
     );
 
     let mut runtime = KoanRuntime::new();

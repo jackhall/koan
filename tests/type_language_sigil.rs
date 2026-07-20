@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -223,10 +223,12 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let scope = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
     // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
     let fields = match scope.resolve_type("Foo") {
-        Some(KType::SetRef { set, index }) => match RecursiveSet::projected_schema(set, *index) {
-            ProjectedSchema::NewType(KType::Record { fields, .. }) => fields,
-            _ => panic!("Foo must project a record-repr NewType schema"),
-        },
+        Some(KType::SetRef { set, index }) => {
+            match RecursiveSet::projected_schema(set, *index, &TypeRegistry::new()) {
+                ProjectedSchema::NewType(KType::Record { fields, .. }) => fields,
+                _ => panic!("Foo must project a record-repr NewType schema"),
+            }
+        }
         other => panic!("Foo must be a NewType SetRef in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
@@ -254,7 +256,7 @@ fn union_field_accepts_keyworded_map_sigil() {
             .iter()
             .find_map(|m| match m {
                 KType::SetRef { set, index } if set.member(*index).name == "Some" => {
-                    match RecursiveSet::projected_schema(set, *index) {
+                    match RecursiveSet::projected_schema(set, *index, &TypeRegistry::new()) {
                         ProjectedSchema::NewType(repr) => Some(repr),
                         _ => None,
                     }
@@ -307,7 +309,8 @@ fn sigil_fn_forward_reference_defers_via_combine() {
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                ty.name().contains("Ordered") || *ty == KType::OfKind(KKind::Signature),
+                ty.name(&TypeRegistry::new()).contains("Ordered")
+                    || *ty == KType::OfKind(KKind::Signature),
                 "param `Ty` should carry Ordered identity, got {ty:?}",
             );
             assert_eq!(*ret, KType::empty_signature());

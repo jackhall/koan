@@ -36,6 +36,7 @@
 //!
 //! Surface design: [design/operators.md](../../design/operators.md).
 
+use crate::machine::model::TypeRegistry;
 use std::collections::HashSet;
 
 use crate::machine::body_statement_refs;
@@ -67,7 +68,9 @@ enum GroupMode {
 /// then run the body and bind the module value through the tail `MODULE` uses
 /// ([`super::module_def::await_module_body`]).
 fn build<'a>(ctx: &BodyCtx<'a, '_>, group_mode: GroupMode) -> Action<'a> {
-    let name = crate::try_action!(require_identifier_name(ctx.args, "name", "GROUP"));
+    let name = crate::try_action!(require_identifier_name(
+        ctx.args, "name", "GROUP", ctx.types
+    ));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "GROUP", "body"));
     let mode = crate::try_action!(reduction_mode(ctx, group_mode));
     let members = crate::try_action!(scan_members(&body_expr, &name));
@@ -172,7 +175,7 @@ fn body_pairwise_right<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     build(ctx, GroupMode::Pairwise(FoldDirection::Right))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     use crate::builtins::register_builtin_full;
 
     // `FOLD <LEFT|RIGHT>` and `PAIRWISE FOLD #(<combiner>) <LEFT|RIGHT>`, each over the two name
@@ -232,6 +235,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             fold_body,
             value_binder(),
             None,
+            types,
         );
         register_builtin_full(
             scope,
@@ -240,6 +244,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             pairwise_body,
             value_binder(),
             None,
+            types,
         );
         register_builtin_full(
             scope,
@@ -248,6 +253,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             super::module_def::body_type_named,
             None,
             None,
+            types,
         );
         register_builtin_full(
             scope,
@@ -256,6 +262,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             super::module_def::body_type_named,
             None,
             None,
+            types,
         );
     }
 }

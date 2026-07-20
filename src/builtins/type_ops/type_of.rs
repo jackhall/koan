@@ -17,7 +17,7 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
         Some(Held::Type(t)) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "`TYPE OF` takes a value; `{}` is already a type",
-                t.name(),
+                t.name(ctx.types),
             )))))
         }
         Some(Held::UnresolvedType(ti)) => {

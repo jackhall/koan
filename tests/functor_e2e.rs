@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, SignatureElement};
+use koan::machine::model::{KObject, KType, SignatureElement, TypeRegistry};
 use koan::machine::{run_root_storage, FrameStorage, KFunction, KoanRuntime, Scope};
 use koan::parse::parse;
 
@@ -120,7 +120,7 @@ fn functor_e2e_makeset_produces_module() {
     // The module value's `ktype()` is its principal signature, whose name renders as the
     // module path — the type a `:Signature` slot matches it against.
     assert_eq!(
-        KObject::Module(m).ktype().name(),
+        KObject::Module(m).ktype().name(&TypeRegistry::new()),
         m.path,
         "a module value is typed by its self-sig",
     );

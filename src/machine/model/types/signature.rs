@@ -11,7 +11,6 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeIdentifier};
 
-use super::ktraits::Parseable;
 use super::ktype::KType;
 use super::registry::TypeRegistry;
 
@@ -152,9 +151,9 @@ impl<'a> std::fmt::Debug for DeferredReturn<'a> {
 
 impl<'a> ReturnType<'a> {
     /// Surface name for diagnostics.
-    pub fn name(&self) -> String {
+    pub fn name(&self, types: &TypeRegistry) -> String {
         match self {
-            ReturnType::Resolved(kt) => kt.name(),
+            ReturnType::Resolved(kt) => kt.name(types),
             ReturnType::Deferred(DeferredReturn::Type(t)) => t.render(),
             ReturnType::Deferred(DeferredReturn::Expression(e)) => e.summarize(),
         }

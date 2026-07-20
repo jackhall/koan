@@ -5,6 +5,7 @@ pub(crate) mod signature;
 
 use crate::machine::model::Elaborator;
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Argument, KType, SignatureElement};
 use crate::machine::{KError, KErrorKind, Scope};
 
@@ -41,8 +42,9 @@ pub(crate) fn build_fn_like<'a>(
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
+        ctx.types,
     ));
-    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
+    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator, ctx.types) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(msg))))
@@ -67,6 +69,7 @@ pub(crate) fn build_fn_like<'a>(
             body_expr,
             kind,
             bind_index,
+            ctx.types,
         )),
         FnPlan::Deferred(inputs) => defer(signature_expr, inputs, body_expr, kind, bind_index),
     }
@@ -90,7 +93,12 @@ pub fn body_value_named_return<'a>(
 ) -> crate::machine::Action<'a> {
     use crate::machine::{require_identifier_name, Action};
 
-    let name = crate::try_action!(require_identifier_name(ctx.args, "return_type", "FN"));
+    let name = crate::try_action!(require_identifier_name(
+        ctx.args,
+        "return_type",
+        "FN",
+        ctx.types
+    ));
     Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
         "FN return-type slot names a type, but `{name}` is a value. For the type of a value — a \
          module-valued parameter, say — write `-> :(TYPE OF {name})`"
@@ -116,7 +124,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         Some(other) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "anonymous FN signature must be a record schema `:{{…}}`, got `{}`",
-                other.name(),
+                other.name(ctx.types),
             )))))
         }
         None => {
@@ -143,6 +151,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
         ctx.scope,
         ctx.chain.clone(),
         "FN return-type slot",
+        ctx.types,
     ));
     let bind_index = ctx.bind_index();
     match classify(return_type_state, ParamListResult::Done(Vec::new())) {
@@ -153,6 +162,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
             body_expr,
             FnKind::Anonymous,
             bind_index,
+            ctx.types,
         )),
         FnPlan::Deferred(mut inputs) => {
             inputs.prebuilt_elements = Some(elements);
@@ -167,7 +177,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Declared return is `KType::Any`: a function's structural type only exists
     // once its signature is known. The constructed `KObject::KFunction` projects
     // its full signature through `ktype()` at the call site.
@@ -256,8 +266,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
     use crate::builtins::register_builtin_full;
-    register_builtin_full(scope, "FN", typeexpr_sig(), body, None, Some(binder_bucket));
-    register_builtin_full(scope, "FN", sigil_sig(), body, None, Some(binder_bucket));
+    register_builtin_full(
+        scope,
+        "FN",
+        typeexpr_sig(),
+        body,
+        None,
+        Some(binder_bucket),
+        types,
+    );
+    register_builtin_full(
+        scope,
+        "FN",
+        sigil_sig(),
+        body,
+        None,
+        Some(binder_bucket),
+        types,
+    );
     register_builtin_full(
         scope,
         "FN",
@@ -265,8 +291,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_value_named_return,
         None,
         Some(binder_bucket),
+        types,
     );
-    register_builtin_full(scope, "FN", record_sig(), body_record_schema, None, None);
+    register_builtin_full(
+        scope,
+        "FN",
+        record_sig(),
+        body_record_schema,
+        None,
+        None,
+        types,
+    );
 }
 
 #[cfg(test)]

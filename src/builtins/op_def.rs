@@ -26,6 +26,7 @@
 //! Surface design: [design/operators.md](../../design/operators.md).
 
 use crate::machine::model::CarriedFamily;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind, UntypedKey};
@@ -195,8 +196,12 @@ fn capture_type_slot<'a>(
 ///
 /// The kind diagnostic reads `label` as the subject of "must be a proper type", so the bare slot
 /// noun takes its definite article here.
-fn checked_value_type(kt: KType, label: &str) -> Result<KType, KError> {
-    match crate::machine::model::unsaturated_constructor_message(&kt, &format!("the {label}")) {
+fn checked_value_type(kt: KType, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
+    match crate::machine::model::unsaturated_constructor_message(
+        &kt,
+        &format!("the {label}"),
+        types,
+    ) {
         Some(message) => Err(KError::new(KErrorKind::ShapeError(message))),
         None => Ok(kt),
     }
@@ -204,9 +209,9 @@ fn checked_value_type(kt: KType, label: &str) -> Result<KType, KError> {
 
 /// The `Done` arm alone — the synchronous path, taken exactly when no slot parked or
 /// sub-dispatched.
-fn done_type(capture: TypeCapture, label: &str) -> Result<KType, KError> {
+fn done_type(capture: TypeCapture, label: &str, types: &TypeRegistry) -> Result<KType, KError> {
     match capture {
-        TypeCapture::Done(kt) => checked_value_type(kt, label),
+        TypeCapture::Done(kt) => checked_value_type(kt, label, types),
         _ => Err(KError::new(KErrorKind::ShapeError(format!(
             "{label} is unresolved with no dependency to wait on"
         )))),
@@ -218,18 +223,20 @@ fn done_type(capture: TypeCapture, label: &str) -> Result<KType, KError> {
 /// terminal, so it crosses into the declaring scope by value.
 fn resolve_capture<'a>(
     capture: TypeCapture,
-    fctx: &FinishCtx<'a>,
+    fctx: &FinishCtx<'a, '_>,
     results: &DepResults<'_, &DepTerminal<'a>>,
     label: &str,
 ) -> Result<KType, KError> {
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
         TypeCapture::Park(te) => resolve_at_wake(fctx.scope, label, |s| {
-            classify_resolved_type(s.resolve_type_identifier(&te, None))
+            classify_resolved_type(s.resolve_type_identifier(&te, None, fctx.types))
         })?,
-        TypeCapture::Sub { owned_pos } => expect_type_terminal(results, owned_pos, label)?,
+        TypeCapture::Sub { owned_pos } => {
+            expect_type_terminal(results, owned_pos, label, fctx.types)?
+        }
     };
-    checked_value_type(kt, label)
+    checked_value_type(kt, label, fctx.types)
 }
 
 // ---------- body ----------
@@ -252,6 +259,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         ctx.scope,
         ctx.chain.clone(),
         OPERAND_SLOT,
+        ctx.types,
     ));
     let result_state = if has_result {
         let raw = crate::try_action!(extract_type_slot_raw(ctx.args, "return_type", RESULT_SLOT));
@@ -261,6 +269,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
             ctx.scope,
             ctx.chain.clone(),
             RESULT_SLOT,
+            ctx.types,
         )))
     } else {
         None
@@ -287,12 +296,16 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         bind_index: ctx.bind_index(),
     };
     if parks.is_empty() && subs.is_empty() {
-        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT));
+        let operand = crate::try_action!(done_type(operand_capture, OPERAND_SLOT, ctx.types));
         let result = match result_capture {
-            Some(capture) => Some(crate::try_action!(done_type(capture, RESULT_SLOT))),
+            Some(capture) => Some(crate::try_action!(done_type(
+                capture,
+                RESULT_SLOT,
+                ctx.types
+            ))),
             None => None,
         };
-        return op_action(plan.finalize(ctx.scope, operand, result));
+        return op_action(plan.finalize(ctx.scope, operand, result, ctx.types));
     }
     // Dep order is `[park… ++ sub…]` — the harness owns the subs in declaration order, the order
     // `capture_type_slot` recorded their positions in.
@@ -317,7 +330,7 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
             ))),
             None => None,
         };
-        op_action(plan.finalize(fctx.scope, operand, result))
+        op_action(plan.finalize(fctx.scope, operand, result, fctx.types))
     });
     Action::AwaitDeps { deps, finish }
 }
@@ -376,6 +389,7 @@ impl<'a> OpPlan<'a> {
         scope: &'a Scope<'a>,
         operand: KType,
         result: Option<KType>,
+        types: &TypeRegistry,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let OpPlan {
             sym,
@@ -398,6 +412,7 @@ impl<'a> OpPlan<'a> {
                     sig(result_type, elements),
                     Body::UserDefined(body_expr),
                     bind_index,
+                    types,
                 )?;
                 if !in_group {
                     let members = std::iter::once(sym.clone()).collect();
@@ -445,6 +460,7 @@ impl<'a> OpPlan<'a> {
                     },
                     in_group,
                     bind_index,
+                    types,
                 )?
             }
         };
@@ -483,6 +499,7 @@ pub(super) fn register_unary_operator<'a>(
     binary: OperatorForm<'a>,
     in_group: bool,
     bind_index: BindingIndex,
+    types: &TypeRegistry,
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
     let OperatorForm {
         signature: list_signature,
@@ -511,8 +528,8 @@ pub(super) fn register_unary_operator<'a>(
     );
     // The list body first: its function is the operator's primary value, the one an `OP`
     // declaration evaluates to.
-    let (obj, stored) = register_body(scope, sym, list_signature, list_body, bind_index)?;
-    register_body(scope, sym, binary_signature, binary_body, bind_index)?;
+    let (obj, stored) = register_body(scope, sym, list_signature, list_body, bind_index, types)?;
+    register_body(scope, sym, binary_signature, binary_body, bind_index, types)?;
     let members = std::iter::once(sym.to_string()).collect();
     let group = scope
         .brand()
@@ -531,12 +548,13 @@ fn register_body<'a>(
     signature: ExpressionSignature<'a>,
     body: Body<'a>,
     bind_index: BindingIndex,
+    types: &TypeRegistry,
 ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
     let f: &'a KFunction<'a> = scope
         .brand()
         .alloc_function(KFunction::new(signature, body, scope, None, None));
     let (obj, stored) = scope
-        .alloc_object_checked_stored(KObject::KFunction(f))
+        .alloc_object_checked_stored(KObject::KFunction(f), types)
         .expect("f was just allocated into scope's own region");
     scope.register_operator_function(sym.to_string(), f, obj, bind_index)?;
     Ok((obj, stored))
@@ -600,7 +618,7 @@ fn type_carriers() -> [KType; 2] {
     [KType::OfKind(KKind::ProperType), KType::SigiledTypeExpr]
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     use crate::builtins::register_builtin_full;
 
     // Declared return is `KType::Any`: an operator declaration evaluates to the function it
@@ -672,6 +690,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             body_binary,
             None,
             Some(binder_bucket),
+            types,
         );
         register_builtin_full(
             scope,
@@ -680,6 +699,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             body_unary_missing_result,
             None,
             None,
+            types,
         );
         for result in type_carriers() {
             register_builtin_full(
@@ -689,6 +709,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 body_binary,
                 None,
                 Some(binder_bucket),
+                types,
             );
             register_builtin_full(
                 scope,
@@ -697,6 +718,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
                 body_unary,
                 None,
                 Some(binder_bucket),
+                types,
             );
         }
     }

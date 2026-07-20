@@ -19,7 +19,9 @@ use std::rc::Rc;
 use crate::machine::core::{BindingIndex, CallFrame, KError, RegionBrand, Scope};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::model::{DeferredReturn, KType, Record, ReturnType, TypeResolution};
+use crate::machine::model::{
+    DeferredReturn, KType, Record, ReturnType, TypeRegistry, TypeResolution,
+};
 
 use super::body::{body_statement_refs, Body};
 use super::KFunction;
@@ -104,6 +106,7 @@ pub fn run_user_fn<'ast, 'step>(
     arg_carriers: &Record<&DeliveredCarried>,
     ctx: &ExecFrame,
     in_contract_chain: bool,
+    types: &TypeRegistry,
 ) -> ExecOutcome<'ast, 'step>
 where
     'ast: 'step,
@@ -123,15 +126,20 @@ where
                     // deep clone into the frame region, so the carrier's residence-only host is not
                     // part of its reach (a tail call's retiring frame must not ride this binding).
                     Some(cell) => {
-                        child.bind_delivered(name.clone(), cell, BindingIndex::value(0), |c| {
-                            Ok(c.object())
-                        })?;
+                        child.bind_delivered(
+                            name.clone(),
+                            cell,
+                            BindingIndex::value(0),
+                            |c| Ok(c.object()),
+                            types,
+                        )?;
                     }
                     None => {
                         child.bind_checked(
                             name.clone(),
                             object.deep_clone(),
                             BindingIndex::value(0),
+                            types,
                         )?;
                     }
                 },
@@ -199,7 +207,7 @@ where
                     let homed = ctx.region.with_scope(|child| {
                         let captured = func.captured_scope();
                         let homed: Result<&'step KType, KError> = match child
-                            .resolve_type_identifier(type_expr, None)
+                            .resolve_type_identifier(type_expr, None, types)
                         {
                             TypeResolution::Done(kt) => Ok(home_return_type(kt, captured)),
                             // A park at this point cannot be honored — the body is about to

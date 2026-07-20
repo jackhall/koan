@@ -21,8 +21,8 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
+use crate::machine::model::Carried;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, Parseable};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
 use crate::source::Spanned;
@@ -82,6 +82,7 @@ pub(super) fn resolve_name_part<'step>(
     scheduler: &Scheduler<KoanWorkload>,
     active_chain: Option<&std::rc::Rc<crate::machine::LexicalFrame>>,
     consumer: Option<NodeId>,
+    types: &crate::machine::model::TypeRegistry,
 ) -> NameOutcome<'step> {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (n.as_str(), None),
@@ -104,7 +105,7 @@ pub(super) fn resolve_name_part<'step>(
         // not-yet-sealed referent parks on its single producer (a visible type alias has
         // already resolved its RHS, so a leaf parks on at most one binder), reusing the
         // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned()) {
+        Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned(), types) {
             // The `&KType` rides the type channel; it is owned data stored in the resolving
             // scope's own region, so the read site needs nothing beyond the reference.
             TypeResolution::Done(kt) => NameOutcome::Resolved(Carried::Type(kt)),

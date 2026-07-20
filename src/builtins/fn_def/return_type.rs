@@ -4,6 +4,7 @@
 use crate::builtins::resolve_or_await::{
     classify_resolved_type, expect_type_terminal, resolve_at_wake, unbound_error,
 };
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
 use crate::machine::model::{KExpression, TypeIdentifier};
@@ -91,6 +92,7 @@ pub(crate) fn classify_return_type<'a>(
     scope: &Scope<'a>,
     chain: Option<Rc<LexicalFrame>>,
     label: &str,
+    types: &TypeRegistry,
 ) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
         ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
@@ -100,7 +102,7 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match classify_resolved_type(scope.resolve_type_identifier(&te, chain)) {
+            match classify_resolved_type(scope.resolve_type_identifier(&te, chain, types)) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
@@ -129,13 +131,14 @@ pub(super) fn resolve_capture_at_finish<'a>(
     capture: ReturnTypeCapture<'a>,
     scope: &Scope<'a>,
     results: DepResults<'_, &DepTerminal<'a>>,
+    types: &TypeRegistry,
 ) -> Result<ReturnType<'a>, KError> {
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeIdentifier::leaf(name);
             resolve_at_wake(scope, "FN return-type slot", |s| {
-                classify_resolved_type(s.resolve_type_identifier(&te, None))
+                classify_resolved_type(s.resolve_type_identifier(&te, None, types))
             })
             .map(ReturnType::Resolved)
         }
@@ -144,7 +147,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
             // The resolved return type is owned content, cloned out of the sub-dispatch's terminal,
             // and is folded straight into the `KFunction` `finalize_fn_with_kind` builds (via
             // `user_sig`).
-            let kt = expect_type_terminal(&results, owned_pos, "FN return-type slot")?;
+            let kt = expect_type_terminal(&results, owned_pos, "FN return-type slot", types)?;
             Ok(ReturnType::Resolved(kt))
         }
     }

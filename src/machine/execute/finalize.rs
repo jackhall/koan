@@ -108,7 +108,8 @@ impl NodeFinalize for KoanRuntime<'_> {
                                     declared_type,
                                     per_call,
                                     label,
-                                    object.ktype().name(),
+                                    object.ktype().name(types),
+                                    types,
                                 ));
                                 return Carried::Object(
                                     home_region.alloc_object_folded(object.deep_clone()),
@@ -225,17 +226,23 @@ fn match_declared_return<'c>(
         .open(pin, |(value, (_home_region, declared_type))| {
             let matched = match value {
                 Carried::Object(object) => declared_type.matches_value(object, types),
-                Carried::Type(t) => declared_type.matches_type(t),
+                Carried::Type(t) => declared_type.matches_type(t, types),
                 // Every delivered result is resolved; an unlowered name satisfies no contract.
                 Carried::UnresolvedType(_) => false,
             };
             if !matched {
                 let got = match value {
-                    Carried::Object(object) => object.ktype().name(),
-                    Carried::Type(t) => t.name(),
+                    Carried::Object(object) => object.ktype().name(types),
+                    Carried::Type(t) => t.name(types),
                     Carried::UnresolvedType(ti) => ti.render(),
                 };
-                mismatch = Some(return_type_mismatch(declared_type, per_call, label, got));
+                mismatch = Some(return_type_mismatch(
+                    declared_type,
+                    per_call,
+                    label,
+                    got,
+                    types,
+                ));
             }
         });
     mismatch
@@ -291,11 +298,17 @@ mod tests;
 
 /// The labelled `TypeMismatch` a failed declared-return check raises. `expected` names the declared
 /// type (tagged "per-call return type" for a `PerCall`); `got` names the produced carrier.
-fn return_type_mismatch(declared: &KType, per_call: bool, label: &str, got: String) -> KError {
+fn return_type_mismatch(
+    declared: &KType,
+    per_call: bool,
+    label: &str,
+    got: String,
+    types: &TypeRegistry,
+) -> KError {
     let expected = if per_call {
-        format!("{} (per-call return type)", declared.name())
+        format!("{} (per-call return type)", declared.name(types))
     } else {
-        declared.name()
+        declared.name(types)
     };
     KError::new(KErrorKind::TypeMismatch {
         arg: "<return>".to_string(),

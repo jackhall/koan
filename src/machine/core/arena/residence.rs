@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use super::{FrameSet, KoanRegion, KoanRegionExt, KoanStorageProfile};
 use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
-use crate::machine::model::{CarriedFamily, KObject, KType, Module};
+use crate::machine::model::{CarriedFamily, KObject, KType, Module, TypeRegistry};
 use crate::machine::CarrierWitness;
 use crate::witnessed::{AuditedStored, Witnessed};
 
@@ -35,8 +35,9 @@ impl<'a> Scope<'a> {
         &self,
         o: KObject<'_>,
         evidence: &StoredReach<'_>,
+        types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name();
+        let name = o.ktype().name(types);
         let sets: &[&FrameSet] = match &evidence.foreign {
             Some(fs) => std::slice::from_ref(fs),
             None => &[],
@@ -71,8 +72,9 @@ impl<'a> Scope<'a> {
         &self,
         o: KObject<'_>,
         evidence: &[StoredReach<'_>],
+        types: &TypeRegistry,
     ) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name();
+        let name = o.ktype().name(types);
         let sets: Vec<&FrameSet> = evidence.iter().filter_map(|r| r.foreign).collect();
         let ambient = |r: &KoanRegion| self.covers_region_ambiently(r);
         self.brand()
@@ -126,8 +128,9 @@ impl<'a> Scope<'a> {
     pub(crate) fn alloc_object_checked_stored(
         &self,
         value: KObject<'_>,
+        types: &TypeRegistry,
     ) -> Result<(&'a KObject<'a>, StoredReach<'a>), KError> {
-        let name = value.ktype().name();
+        let name = value.ktype().name(types);
         let seen = Cell::new(false);
         let obj = self
             .brand()
@@ -156,8 +159,9 @@ impl<'a> Scope<'a> {
     pub(crate) fn seal_fresh_object(
         &self,
         value: KObject<'_>,
+        types: &TypeRegistry,
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
-        let (obj, stored) = self.alloc_object_checked_stored(value)?;
+        let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
         Ok(self.resident_value_carrier(obj, stored))
     }
 

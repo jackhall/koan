@@ -13,7 +13,7 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_
 use crate::machine::core::{run_root_storage, CarrierWitness, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::{Carried, KObject};
+use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::CallFrame;
 use crate::witnessed::Delivered;
@@ -75,7 +75,10 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     );
     envelope.open(|carried| match carried {
         Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the hold"),
-        other => panic!("expected the retained Number, got {:?}", other.ktype()),
+        other => panic!(
+            "expected the retained Number, got {:?}",
+            other.ktype(&TypeRegistry::new())
+        ),
     });
     drop(envelope);
     assert!(
@@ -145,7 +148,7 @@ fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>) {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![SignatureElement::Keyword("PROBE".into())],
     };
-    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body);
+    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, &TypeRegistry::new());
 }
 
 /// The number of captured frames still live — the retention census read.
@@ -252,7 +255,10 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
         Carried::Object(KObject::Number(n)) => {
             assert_eq!(*n, 7.0, "adopted value reads live under the minted pin")
         }
-        other => panic!("expected the adopted Number, got {:?}", other.ktype()),
+        other => panic!(
+            "expected the adopted Number, got {:?}",
+            other.ktype(&TypeRegistry::new())
+        ),
     }
 }
 
@@ -310,7 +316,10 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
                 "and the value is intact"
             );
         }
-        Carried::Type(other) => panic!("expected the passed-through Number, got {}", other.name()),
+        Carried::Type(other) => panic!(
+            "expected the passed-through Number, got {}",
+            other.name(&TypeRegistry::new())
+        ),
         Carried::UnresolvedType(ti) => {
             panic!("expected the passed-through Number, got {}", ti.render())
         }

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::Scope;
 use crate::machine::core::{FrameSet, FrameStorage, KoanRegion, StoredReach};
-use crate::machine::model::{Carried, CarriedFamily, KObject, KType, TypeIdentifier};
+use crate::machine::model::{Carried, CarriedFamily, KObject, KType, TypeIdentifier, TypeRegistry};
 use crate::machine::{CarrierWitness, DeliveredCarried};
 use crate::witnessed::{Delivered, Reattachable, Residence, Witnessed};
 
@@ -202,7 +202,11 @@ impl<'a> Scope<'a> {
     /// ([`Delivered::open`]) — so the source backing stays live for the read; a resident-sealed
     /// envelope, or a frameless / run producer whose backing already outlives the read, reads under
     /// the carrier's bundled witness instead (the `None`-host arm of the envelope's open).
-    pub(crate) fn adopt_sealed_copied(&self, cell: &DeliveredCarried) -> Carried<'a> {
+    pub(crate) fn adopt_sealed_copied(
+        &self,
+        cell: &DeliveredCarried,
+        types: &TypeRegistry,
+    ) -> Carried<'a> {
         let is_object = cell.open(|live| matches!(live, Carried::Object(_)));
         if !is_object {
             return self.adopt_sealed(cell);
@@ -218,6 +222,7 @@ impl<'a> Scope<'a> {
                 self.alloc_object_delivered(
                     live.object().deep_clone(),
                     std::slice::from_ref(&reach),
+                    types,
                 )
                 .expect("a deep copy's own residence must be covered by its own reach evidence"),
             )

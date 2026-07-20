@@ -733,6 +733,7 @@ digraph {
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::sig_schema" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
@@ -753,15 +754,18 @@ digraph {
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::signature" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_predicates" -> "koan::machine::model::values" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_resolution" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::record" [label="uses", style="dashed"];
+    "koan::machine::model::types::ktype_resolution" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::record" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
+    "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::recursive_set" -> "koan::machine::model::types::type_digest" [label="uses", style="dashed"];
     "koan::machine::model::types::registry" -> "koan::machine::model::types" [label="uses", style="dashed"];
     "koan::machine::model::types::registry" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
@@ -775,6 +779,7 @@ digraph {
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::kkind" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::types::recursive_set" [label="uses", style="dashed"];
+    "koan::machine::model::types::resolver" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::resolver" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::machine::model::types::sig_schema" -> "koan::machine::core" [label="uses", style="dashed"];
@@ -787,7 +792,6 @@ digraph {
     "koan::machine::model::types::sig_schema" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types" [label="uses", style="dashed"];
-    "koan::machine::model::types::signature" -> "koan::machine::model::types::ktraits" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::signature" -> "koan::machine::model::values" [label="uses", style="dashed"];
@@ -805,6 +809,7 @@ digraph {
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::ast" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::ktype" [label="uses", style="dashed"];
+    "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::registry" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::types::resolver" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::machine::model::values" [label="uses", style="dashed"];
     "koan::machine::model::types::typed_field_list" -> "koan::parse" [label="uses", style="dashed"];

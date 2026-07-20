@@ -2,9 +2,9 @@
 //! keyword present, or a head that isn't a fast-lane shape.
 
 use crate::machine::core::{BlockEntry, FramePlacement};
+use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, Parseable};
 use crate::machine::{
     BindingIndex, DispatchOutcome, KError, KErrorKind, NameLookup, NameOutcome, NodeId, TraceFrame,
 };
@@ -418,10 +418,11 @@ fn part_walk<'step>(
                             // `Carried::Object` arm's `resolve_value_carrier` walks `data` and misses
                             // a types binding — and is witnessed in place from the hit's stored reach.
                             // A module is a value and takes the `Carried::Object` arm above.
-                            match ctx
-                                .current_scope()
-                                .resolve_type_identifier(t, ctx.active_chain())
-                            {
+                            match ctx.current_scope().resolve_type_identifier(
+                                t,
+                                ctx.active_chain(),
+                                ctx.types(),
+                            ) {
                                 TypeResolution::Done(kt) => {
                                     let scope = ctx.current_scope();
                                     scope.seal_resident_delivered(scope.resident_type_carrier(kt))

@@ -259,10 +259,13 @@ fn record_value_admission_and_matches() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     let storage = run_root_storage();
     let region = storage.brand();
-    let value: &KObject<'_> = region.alloc_object(KObject::record(Record::from_pairs(vec![
-        ("x".to_string(), KObject::Number(1.0)),
-        ("y".to_string(), KObject::KString("a".into())),
-    ])));
+    let value: &KObject<'_> = region.alloc_object(KObject::record(
+        Record::from_pairs(vec![
+            ("x".to_string(), KObject::Number(1.0)),
+            ("y".to_string(), KObject::KString("a".into())),
+        ]),
+        &types,
+    ));
 
     let narrow = record_ty(vec![("x", KType::Number)]);
     assert!(narrow.accepts_part(&spliced_part(Carried::Object(value)), &types));
@@ -328,7 +331,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     // A module is a value: it reaches a slot on the Object channel, and a `:Type` slot refuses it.
     let module_value = region
         .brand()
-        .alloc_object_checked(KObject::Module(module))
+        .alloc_object_checked(KObject::Module(module), &types)
         .expect("module was just allocated into region's own region");
     assert!(!t.accepts_part(&spliced_part(Carried::Object(module_value)), &types));
     let sig_scope = region
@@ -398,10 +401,13 @@ fn of_kind_nominal_is_type_channel_only() {
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
     let type_id: &KType = region.alloc_ktype(newtype_tv.clone());
     let w: &KObject<'_> = region
-        .alloc_object_checked(KObject::Wrapped {
-            inner: crate::machine::model::values::WrappedPayload::peel(inner),
-            type_id,
-        })
+        .alloc_object_checked(
+            KObject::Wrapped {
+                inner: crate::machine::model::values::WrappedPayload::peel(inner),
+                type_id,
+            },
+            &types,
+        )
         .expect("type_id was just allocated into region's own region");
     assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Object(w)), &types));
     assert!(!newtype_ty.matches_value(w, &types));
@@ -796,8 +802,8 @@ fn union_admits_member_typed_value() {
     let region = storage.brand();
     let n: &KObject<'_> = region.alloc_object(KObject::Number(7.0));
 
-    let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
-    let str_or_bool = KType::union_of(vec![KType::Str, KType::Bool]);
+    let number_or_str = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let str_or_bool = KType::union_of(vec![KType::Str, KType::Bool], &types);
 
     assert!(number_or_str.accepts_carried(Carried::Object(n), &types));
     assert!(!str_or_bool.accepts_carried(Carried::Object(n), &types));
@@ -819,8 +825,11 @@ fn union_honors_memoized_list_element_type() {
         KType::Number,
     ));
 
-    let with_list = KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]);
-    let without_list = KType::union_of(vec![KType::Number, KType::Str]);
+    let with_list = KType::union_of(
+        vec![KType::list(Box::new(KType::Number)), KType::Str],
+        &types,
+    );
+    let without_list = KType::union_of(vec![KType::Number, KType::Str], &types);
 
     assert!(with_list.accepts_carried(Carried::Object(list_value), &types));
     assert!(!without_list.accepts_carried(Carried::Object(list_value), &types));
@@ -832,8 +841,9 @@ fn union_honors_memoized_list_element_type() {
 fn union_specificity_ordering() {
     let types = TypeRegistry::new();
     let number = KType::Number;
-    let number_or_str = KType::union_of(vec![KType::Number, KType::Str]);
-    let number_or_str_or_bool = KType::union_of(vec![KType::Number, KType::Str, KType::Bool]);
+    let number_or_str = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let number_or_str_or_bool =
+        KType::union_of(vec![KType::Number, KType::Str, KType::Bool], &types);
 
     // Each member is a subtype of the union.
     assert!(number.is_more_specific_than(&number_or_str, &types));
@@ -845,7 +855,7 @@ fn union_specificity_ordering() {
     assert!(number_or_str.is_more_specific_than(&number_or_str_or_bool, &types));
     assert!(!number_or_str_or_bool.is_more_specific_than(&number_or_str, &types));
     // Equal unions (order-blind) are not strictly more specific than each other.
-    let str_or_number = KType::union_of(vec![KType::Str, KType::Number]);
+    let str_or_number = KType::union_of(vec![KType::Str, KType::Number], &types);
     assert!(!number_or_str.is_more_specific_than(&str_or_number, &types));
 }
 

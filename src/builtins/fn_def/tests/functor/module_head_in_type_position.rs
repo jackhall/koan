@@ -8,6 +8,7 @@ use crate::builtins::test_support::{
     lookup_fn, parse_one, run, run_one, run_one_err, run_root_silent,
 };
 use crate::machine::model::KObject;
+use crate::machine::model::TypeRegistry;
 use crate::machine::{run_root_storage, KErrorKind};
 
 /// `-> :(TYPE OF er)` with a module-valued parameter is a legal return: the return type defers as an
@@ -34,7 +35,7 @@ fn deferred_type_of_param_return_yields_the_module() {
         KObject::Module(m) => assert_eq!(m.path, "int_ord"),
         other => panic!(
             "USE_ORD int_ord must return the passed-through module value, got {}",
-            other.ktype().name(),
+            other.ktype().name(&TypeRegistry::new()),
         ),
     }
 }
@@ -61,7 +62,7 @@ fn deferred_type_of_param_return_admits_a_per_call_region_module() {
         KObject::Module(m) => assert_eq!(m.path, "generated"),
         other => panic!(
             "USE_ORD int_set must return the functor-minted module, got {}",
-            other.ktype().name(),
+            other.ktype().name(&TypeRegistry::new()),
         ),
     }
     run(scope, "LET back = (USE_ORD int_set)");

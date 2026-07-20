@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeRegistry};
 use crate::machine::KoanRuntime;
 
 #[test]
@@ -49,7 +49,8 @@ fn let_t_cycle_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
+    let types = TypeRegistry::new();
+    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
         // surfaces the elaborator's `unknown type name` diagnostic naming `Ty`. The
@@ -80,7 +81,8 @@ fn let_type_class_with_non_type_value_errors() {
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        match runtime.read_result_with(id, |v| format!("{:?}", v.ktype())) {
+        let types = TypeRegistry::new();
+        match runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&types))) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
                     if name == "Foo" && got == expected),
@@ -163,7 +165,8 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype()));
+    let types = TypeRegistry::new();
+    let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(_)),

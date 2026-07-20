@@ -210,6 +210,7 @@ mod tests {
     use crate::builtins::default_scope;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
+    use crate::machine::model::TypeRegistry;
     use crate::machine::BindingIndex;
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
@@ -221,8 +222,14 @@ mod tests {
     fn node_scope_yoked_child_erase_open_roundtrip() {
         let region = run_root_storage();
         let scope = default_scope(&region, Box::new(std::io::sink()));
+        let types = TypeRegistry::new();
         scope
-            .bind_checked("k".to_string(), KObject::Number(7.0), BindingIndex::BUILTIN)
+            .bind_checked(
+                "k".to_string(),
+                KObject::Number(7.0),
+                BindingIndex::BUILTIN,
+                &types,
+            )
             .unwrap();
 
         let ns = NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));

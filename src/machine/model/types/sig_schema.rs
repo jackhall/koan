@@ -176,13 +176,13 @@ impl SigContent {
 /// `TypeConstructor`-kind `SetRef`, whose names come off the projected schema) or a SIG's abstract
 /// higher-kinded member (an [`KType::AbstractType`] carrying them directly). `None` for a
 /// first-order type. Arity is the returned list's length.
-pub fn constructor_param_names(kt: &KType) -> Option<Vec<String>> {
+pub fn constructor_param_names(kt: &KType, types: &TypeRegistry) -> Option<Vec<String>> {
     match kt {
         KType::AbstractType { param_names, .. } if !param_names.is_empty() => {
             Some(param_names.clone())
         }
         KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
-            match RecursiveSet::projected_schema(set, *index) {
+            match RecursiveSet::projected_schema(set, *index, types) {
                 ProjectedSchema::TypeConstructor { param_names, .. } => Some(param_names),
                 ProjectedSchema::NewType(_) => None,
             }
@@ -207,9 +207,13 @@ pub fn constructor_param_names(kt: &KType) -> Option<Vec<String>> {
 /// subject of "must be a proper type". It names the type, never the value or field whose type it
 /// is: "the type of SIG value slot `boxed`", not "SIG value slot `boxed`", since a slot is not
 /// itself a type. The constructor's parameter names follow, since supplying them is the fix.
-pub fn unsaturated_constructor_message(kt: &KType, position: &str) -> Option<String> {
-    let param_names = constructor_param_names(kt)?;
-    let name = kt.name();
+pub fn unsaturated_constructor_message(
+    kt: &KType,
+    position: &str,
+    types: &TypeRegistry,
+) -> Option<String> {
+    let param_names = constructor_param_names(kt, types)?;
+    let name = kt.name(types);
     let plural = if param_names.len() == 1 { "" } else { "s" };
     let listed = param_names
         .iter()
@@ -253,6 +257,7 @@ pub fn substitute_sig_members(
     kt: &KType,
     sig_id: ScopeId,
     members: &HashMap<String, KType>,
+    types: &TypeRegistry,
 ) -> KType {
     match kt {
         KType::AbstractType {
@@ -261,28 +266,29 @@ pub fn substitute_sig_members(
             nonce: None,
             ..
         } if *source == sig_id => members.get(name).cloned().unwrap_or_else(|| kt.clone()),
-        KType::List { element, .. } => {
-            KType::list(Box::new(substitute_sig_members(element, sig_id, members)))
-        }
+        KType::List { element, .. } => KType::list(Box::new(substitute_sig_members(
+            element, sig_id, members, types,
+        ))),
         KType::Dict { key, value, .. } => KType::dict(
-            Box::new(substitute_sig_members(key, sig_id, members)),
-            Box::new(substitute_sig_members(value, sig_id, members)),
+            Box::new(substitute_sig_members(key, sig_id, members, types)),
+            Box::new(substitute_sig_members(value, sig_id, members, types)),
         ),
         KType::Record { fields, .. } => KType::record(Box::new(
-            fields.map(|v| substitute_sig_members(v, sig_id, members)),
+            fields.map(|v| substitute_sig_members(v, sig_id, members, types)),
         )),
         KType::KFunction { params, ret, .. } => KType::function_type(
-            params.map(|v| substitute_sig_members(v, sig_id, members)),
-            Box::new(substitute_sig_members(ret, sig_id, members)),
+            params.map(|v| substitute_sig_members(v, sig_id, members, types)),
+            Box::new(substitute_sig_members(ret, sig_id, members, types)),
         ),
         KType::Union { members: us, .. } => KType::union_of(
             us.iter()
-                .map(|m| substitute_sig_members(m, sig_id, members))
+                .map(|m| substitute_sig_members(m, sig_id, members, types))
                 .collect(),
+            types,
         ),
         KType::ConstructorApply { ctor, args, .. } => KType::constructor_apply(
-            Box::new(substitute_sig_members(ctor, sig_id, members)),
-            args.map(|a| substitute_sig_members(a, sig_id, members)),
+            Box::new(substitute_sig_members(ctor, sig_id, members, types)),
+            args.map(|a| substitute_sig_members(a, sig_id, members, types)),
         ),
         _ => kt.clone(),
     }
@@ -390,8 +396,8 @@ pub fn sig_subtype(
                 name: name.clone(),
             }));
         };
-        let sup_params = constructor_param_names(sup_repr);
-        let sub_params = constructor_param_names(sub_binding);
+        let sup_params = constructor_param_names(sup_repr, types);
+        let sub_params = constructor_param_names(sub_binding, types);
         let agrees = match (&sup_params, &sub_params) {
             (None, None) => true,
             (Some(expected), Some(got)) => name_sets_equal(expected, got),
@@ -401,7 +407,7 @@ pub fn sig_subtype(
             return Err(Box::new(SigSubtypeFailure::KindMismatch {
                 name: name.clone(),
                 expected_params: sup_params,
-                got: sub_binding.render(),
+                got: sub_binding.render(types),
             }));
         }
     }
@@ -413,8 +419,8 @@ pub fn sig_subtype(
             Some(got) => {
                 return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                     name: name.clone(),
-                    got: got.render(),
-                    expected: fixed.render(),
+                    got: got.render(types),
+                    expected: fixed.render(types),
                 }))
             }
             None => {
@@ -422,8 +428,8 @@ pub fn sig_subtype(
                 if let Some(repr) = sub.abstract_members.get(name) {
                     return Err(Box::new(SigSubtypeFailure::ManifestMismatch {
                         name: name.clone(),
-                        got: repr.render(),
-                        expected: fixed.render(),
+                        got: repr.render(types),
+                        expected: fixed.render(types),
                     }));
                 }
                 return Err(Box::new(SigSubtypeFailure::MissingTypeMember {
@@ -461,8 +467,8 @@ pub fn sig_subtype(
         if !ok {
             return Err(Box::new(SigSubtypeFailure::ValueSlotMismatch {
                 name: name.clone(),
-                got: sub_type.render(),
-                expected: declared.render(),
+                got: sub_type.render(types),
+                expected: declared.render(types),
             }));
         }
     }

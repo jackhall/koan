@@ -27,8 +27,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Some(KType::Signature { content, .. }) => content,
         other => {
             let got = match (other, arg_held(ctx.args, "sig")) {
-                (Some(kt), _) => kt.name(),
-                (None, Some(Held::Object(object))) => object.ktype().name(),
+                (Some(kt), _) => kt.name(ctx.types),
+                (None, Some(Held::Object(object))) => object.ktype().name(ctx.types),
                 (None, _) => {
                     return done_err(KError::new(KErrorKind::MissingArg("sig".to_string())))
                 }
@@ -77,7 +77,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             Held::Object(other) => {
                 return done_err(KError::new(KErrorKind::ShapeError(format!(
                     "WITH binding `{name}` value must be a type, got `{}`",
-                    other.ktype().name(),
+                    other.ktype().name(ctx.types),
                 ))));
             }
             Held::UnresolvedType(ti) => {
@@ -92,8 +92,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     "`{}.{name}` is a manifest type member fixed to `{}`; \
                      WITH cannot re-pin it to `{}`",
                     s.path,
-                    fixed.render(),
-                    pin_type.render(),
+                    fixed.render(ctx.types),
+                    pin_type.render(ctx.types),
                 ))));
             }
         }

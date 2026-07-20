@@ -16,6 +16,7 @@
 //! `RECURSIVE TYPES` block routes its `NEWTYPE` members through.
 
 use crate::machine::model::KKind;
+use crate::machine::model::TypeRegistry;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -41,7 +42,7 @@ use super::{arg, kw, sig};
 /// The identity is owned data allocated into this scope's own region, so it seals as a resident
 /// type carrier regardless of where `repr` was resolved from.
 fn finalize_newtype<'a>(
-    fctx: &FinishCtx<'a>,
+    fctx: &FinishCtx<'a, '_>,
     name: String,
     repr: KType,
     bind_index: BindingIndex,
@@ -51,6 +52,7 @@ fn finalize_newtype<'a>(
     if let Some(message) = crate::machine::model::unsaturated_constructor_message(
         &repr,
         &format!("the representation type of NEWTYPE `{name}`"),
+        fctx.types,
     ) {
         return Err(KError::new(KErrorKind::ShapeError(message)));
     }
@@ -69,7 +71,7 @@ fn finalize_newtype<'a>(
 /// `RECURSIVE TYPES` member), else a fresh singleton (standalone self-recursion). Shared by the
 /// synchronous and dep-finish paths.
 fn finalize_record_newtype<'a>(
-    fctx: &FinishCtx<'a>,
+    fctx: &FinishCtx<'a, '_>,
     name: String,
     fields: Vec<(String, KType)>,
     bind_index: BindingIndex,
@@ -88,7 +90,7 @@ fn finalize_record_newtype<'a>(
             let missing = RefCell::new(Vec::new());
             let sealed_pairs: Vec<(String, KType)> = fields
                 .into_iter()
-                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing)))
+                .map(|(field, kt)| (field, seal_recursive_refs(set, &kt, &missing, fctx.types)))
                 .collect();
             let sealed = Record::from_pairs(sealed_pairs);
             match missing.into_inner().into_iter().next() {
@@ -116,7 +118,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::builtins::resolve_or_await::{classify_name_lookup, resolve_or_await};
     use crate::machine::{arg_object, arg_type, require_bare_type_name, Action};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
+    let name = crate::try_action!(require_bare_type_name(
+        ctx.args, "name", "NEWTYPE", ctx.types
+    ));
     let chain = ctx.chain.clone();
     let bind_index = ctx.bind_index();
     if let Some(te) = crate::machine::arg_unresolved_type(ctx.args, "repr") {
@@ -132,6 +136,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
             move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
+            ctx.types,
         )
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
         Action::Done(finalize_newtype(
@@ -173,7 +178,9 @@ pub fn body_record_repr<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     use super::nominal_schema::nominal_schema_action;
     use crate::machine::{arg_object, require_bare_type_name, Action};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "NEWTYPE"));
+    let name = crate::try_action!(require_bare_type_name(
+        ctx.args, "name", "NEWTYPE", ctx.types
+    ));
     let fields = match arg_object(ctx.args, "repr") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
@@ -241,7 +248,7 @@ pub fn body_constructor_family<'a>(
     Action::Done(Ok(StepCarried::born(carrier)))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Three overloads, selected by the repr part-kind. Construction lives in the `TypeCall`
     // fast lane via `constructors::dispatch_construct_newtype`.
     let scalar_sig = || {
@@ -289,6 +296,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder, binder_kind)),
         None,
+        types,
     );
     register_builtin_full(
         scope,
@@ -297,6 +305,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((binder, binder_kind)),
         None,
+        types,
     );
     register_builtin_full(
         scope,
@@ -305,6 +314,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_record_repr,
         Some((binder, binder_kind)),
         None,
+        types,
     );
     // Constructor-family declarator `NEWTYPE (Type AS Wrapper)`. Its keyword set is `{NEWTYPE}`
     // (no `=`), so it lands in its own dispatch bucket, disjoint from the three `{NEWTYPE, =}`
@@ -324,6 +334,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             crate::machine::BindKind::Type,
         )),
         None,
+        types,
     );
 }
 
@@ -333,7 +344,9 @@ mod tests {
     use crate::builtins::test_support::{
         binds_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
     };
-    use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::{
+        KKind, NominalSchema, ProjectedSchema, RecursiveSet, TypeRegistry,
+    };
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::run_root_storage;
     use crate::machine::KoanRuntime;
@@ -381,7 +394,8 @@ mod tests {
             KType::SetRef { ref set, index } => {
                 assert_eq!(set.member(index).name, "Distance");
                 assert_eq!(set.member(index).kind, KKind::NewType);
-                match RecursiveSet::projected_schema(set, index) {
+                let types = TypeRegistry::new();
+                match RecursiveSet::projected_schema(set, index, &types) {
                     ProjectedSchema::NewType(repr) => assert_eq!(repr, KType::Number),
                     _ => panic!("expected a NewType schema"),
                 }
@@ -863,8 +877,9 @@ mod tests {
         let kt = scope
             .resolve_type("Wrapper")
             .expect("Wrapper must bind a type");
+        let types = TypeRegistry::new();
         assert_eq!(
-            crate::machine::model::constructor_param_names(kt),
+            crate::machine::model::constructor_param_names(kt, &types),
             Some(vec!["One".to_string(), "Two".to_string()]),
         );
     }

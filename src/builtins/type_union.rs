@@ -14,6 +14,7 @@ use crate::machine::model::KExpression;
 use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::{arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
 
@@ -28,9 +29,11 @@ const MEMBERS_SLOT: &str = "`|` members";
 /// union directly — mirroring `parameterized_types::body_map`. The composite allocates into this
 /// step's own region through the single type door.
 fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
-    let left = crate::try_action!(require_ktype(ctx.args, "left"));
-    let right = crate::try_action!(require_ktype(ctx.args, "right"));
-    Action::Done(Ok(ctx.ctx.alloc_type(KType::union_of(vec![left, right]))))
+    let left = crate::try_action!(require_ktype(ctx.args, "left", ctx.types));
+    let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
+    Action::Done(Ok(ctx
+        .ctx
+        .alloc_type(KType::union_of(vec![left, right], ctx.types))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
@@ -65,10 +68,17 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let mut members: Vec<KType> = Vec::with_capacity(count);
         for position in 0..count {
-            let kt = crate::try_action!(expect_type_terminal(&results, position, MEMBERS_SLOT));
+            let kt = crate::try_action!(expect_type_terminal(
+                &results,
+                position,
+                MEMBERS_SLOT,
+                fctx.types
+            ));
             members.push(kt);
         }
-        Action::Done(Ok(fctx.ctx.alloc_type(KType::union_of(members))))
+        Action::Done(Ok(fctx
+            .ctx
+            .alloc_type(KType::union_of(members, fctx.types))))
     });
     Action::AwaitDeps { deps, finish }
 }
@@ -77,7 +87,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
 /// `A | B`, and its own single-member `Unary` operator group — through the shared unary-operator
 /// door in [`super::op_def`]. The bodies are native: a `KType` composed from owned members, not a
 /// synthesized koan AST. A single-member group must never share a group with another operator.
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     super::op_def::register_unary_operator(
         scope,
         "|",
@@ -102,6 +112,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         // A natively seeded builtin has no group context at all.
         false,
         BindingIndex::BUILTIN,
+        types,
     )
     .expect("builtin `|` unary-operator seeding must not collide");
 }

@@ -12,7 +12,7 @@ use crate::builtins::default_scope;
 use crate::builtins::test_support::lookup_module;
 use crate::machine::core::{run_root_storage, FrameStorage};
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::{KObject, TypeRegistry};
 use crate::machine::{KError, KErrorKind, Scope};
 use crate::parse::parse;
 
@@ -103,7 +103,9 @@ fn returned_block_locals_visible_from_outer_chain() {
     assert!(
         matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 7.0),
         "expected result = 7 via mo.inside; got {:?}",
-        scope.lookup("result").map(|o| o.summarize()),
+        scope
+            .lookup("result")
+            .map(|o| o.summarize(&TypeRegistry::new())),
     );
 }
 
@@ -156,7 +158,9 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 42.0),
         "expected out = 42 via mutual PING/PONG; got {:?}",
-        scope.lookup("out").map(|o| o.summarize()),
+        scope
+            .lookup("out")
+            .map(|o| o.summarize(&TypeRegistry::new())),
     );
 }
 
@@ -173,7 +177,9 @@ fn using_block_post_reference_visible() {
     assert!(
         matches!(scope.lookup("visible"), Some(KObject::Number(n)) if *n == 99.0),
         "expected visible = 99 via USING mo SCOPE; got {:?}",
-        scope.lookup("visible").map(|o| o.summarize()),
+        scope
+            .lookup("visible")
+            .map(|o| o.summarize(&TypeRegistry::new())),
     );
 }
 
@@ -192,7 +198,9 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     assert!(
         matches!(scope.lookup("result"), Some(KObject::KString(s)) if s == "numbers"),
         "expected result = 'numbers' (only earlier overload visible); got {:?}",
-        scope.lookup("result").map(|o| o.summarize()),
+        scope
+            .lookup("result")
+            .map(|o| o.summarize(&TypeRegistry::new())),
     );
 }
 
@@ -266,6 +274,8 @@ fn fn_return_type_backward_reference_resolves() {
     assert!(
         scope.lookup("out").is_some(),
         "a backward return-type reference must resolve; got {:?}",
-        scope.lookup("out").map(|o| o.summarize()),
+        scope
+            .lookup("out")
+            .map(|o| o.summarize(&TypeRegistry::new())),
     );
 }

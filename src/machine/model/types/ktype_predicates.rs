@@ -280,7 +280,7 @@ impl KType {
             Held::Object(o) => self.matches_value(o, types),
             Held::Type(t) => match self {
                 KType::Any => true,
-                KType::OfKind(k) => k.admits(t.kind_of()),
+                KType::OfKind(k) => k.admits(t.kind_of(types)),
                 _ => self == t,
             },
             // An aggregate cell holds a value or a resolved type; the bind seam's unlowered
@@ -413,7 +413,7 @@ impl KType {
     /// module surfaces on the Object channel, matched by [`matches_value`]. Other concrete slots
     /// compare against the `OfKind(Proper)` dispatch identity a non-signature type carrier reports,
     /// so they admit no bare type value.
-    pub fn matches_type(&self, t: &KType) -> bool {
+    pub fn matches_type(&self, t: &KType, types: &TypeRegistry) -> bool {
         // The shallow dispatch identity a concrete slot compares against: a signature carries its
         // identity directly; every other type fills the `OfKind(Proper)` marker.
         let carrier_ktype = match t {
@@ -426,9 +426,9 @@ impl KType {
             // channel (matched by `matches_value`); a signature *value* is admitted by the
             // `OfKind(Signature)` wildcard, never here.
             KType::Signature { .. } => false,
-            KType::OfKind(k) => k.admits(t.kind_of()),
+            KType::OfKind(k) => k.admits(t.kind_of(types)),
             // A union slot is satisfied by any type its members are satisfied by.
-            KType::Union { members, .. } => members.iter().any(|m| m.matches_type(t)),
+            KType::Union { members, .. } => members.iter().any(|m| m.matches_type(t, types)),
             _ => *self == carrier_ktype,
         }
     }
@@ -485,18 +485,18 @@ impl KType {
             // type, `Signature` takes only its own carrier, and a nominal-kind slot only its own
             // family. An object value reports a non-type `kind_of` and is refused.
             KType::OfKind(k) => match c {
-                Carried::Type(ty) => k.admits(ty.kind_of()),
+                Carried::Type(ty) => k.admits(ty.kind_of(types)),
                 _ => false,
             },
             // Strict `(set ptr, index)` equality is the per-declaration identity check for a sealed
             // nominal type — `ktype()` yields a `SetRef` whose `PartialEq` keys on the shared
             // allocation and index. A per-variant newtype value carries that member `SetRef`, so a
             // union-typed slot admits each variant via the member delegation below.
-            KType::SetRef { .. } => &c.ktype() == self,
+            KType::SetRef { .. } => &c.ktype(types) == self,
             // A union slot admits an argument any of its members admits. `Carried` is `Copy`,
             // so each member reads the same carried value.
             KType::Union { members, .. } => members.iter().any(|m| m.accepts_carried(c, types)),
-            KType::AbstractType { .. } => c.ktype() == *self,
+            KType::AbstractType { .. } => c.ktype(types) == *self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
             // signature source (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
             // required. A module is a value, so both the overload-picker probe and the built

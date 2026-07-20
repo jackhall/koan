@@ -10,6 +10,7 @@ use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
 use crate::witnessed::FoldedPlacement;
@@ -81,6 +82,7 @@ fn list_relocation_shares_inner_rc() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     let items = Rc::new(vec![
         Held::Object(KObject::Number(1.0)),
@@ -88,7 +90,10 @@ fn list_relocation_shares_inner_rc() {
     ]);
     let list: &KObject = source
         .brand()
-        .alloc_object_checked(KObject::list_with_type(Rc::clone(&items), KType::Any))
+        .alloc_object_checked(
+            KObject::list_with_type(Rc::clone(&items), KType::Any),
+            &types,
+        )
         .expect("a fresh owned List is always resident-in-self");
     let before = Rc::strong_count(&items);
 
@@ -126,17 +131,17 @@ fn dict_relocation_shares_inner_rc() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
     let entries = Rc::new(map);
     let dict: &KObject = source
         .brand()
-        .alloc_object_checked(KObject::dict_with_type(
-            Rc::clone(&entries),
-            KType::Any,
-            KType::Any,
-        ))
+        .alloc_object_checked(
+            KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any),
+            &types,
+        )
         .expect("a fresh owned Dict is always resident-in-self");
 
     let relocated = copy_carried(
@@ -168,6 +173,7 @@ fn tagged_relocation_shares_value_and_set_rc() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     let inner = Rc::new(KObject::Number(42.0));
     let set = RecursiveSet::singleton(
@@ -179,13 +185,16 @@ fn tagged_relocation_shares_value_and_set_rc() {
     );
     let tagged: &KObject = source
         .brand()
-        .alloc_object_checked(KObject::Tagged {
-            tag: "Just".into(),
-            value: Rc::clone(&inner),
-            set: Rc::clone(&set),
-            index: 0,
-            type_args: Rc::new(Record::new()),
-        })
+        .alloc_object_checked(
+            KObject::Tagged {
+                tag: "Just".into(),
+                value: Rc::clone(&inner),
+                set: Rc::clone(&set),
+                index: 0,
+                type_args: Rc::new(Record::new()),
+            },
+            &types,
+        )
         .expect("a fresh owned Tagged is always resident-in-self");
 
     let relocated = copy_carried(
@@ -223,11 +232,12 @@ fn kfunction_borrow_preserved_verbatim() {
     let scope = default_scope(&root, Box::new(std::io::sink()));
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
+    let types = TypeRegistry::new();
 
     let kf_ref = alloc_local_kf(&source);
     let obj: &KObject = source
         .brand()
-        .alloc_object_checked(KObject::KFunction(kf_ref))
+        .alloc_object_checked(KObject::KFunction(kf_ref), &types)
         .expect("f was just allocated into region\'s own region");
 
     let relocated = copy_carried(

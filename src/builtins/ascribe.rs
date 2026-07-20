@@ -27,7 +27,7 @@ use super::{arg, kw, sig};
 pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
 
     let region = ctx.scope.brand();
     let new_scope = region.alloc_scope(Scope::child_under_module(
@@ -125,7 +125,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     }
 
     // Seal the view's self-sig after the type-member / slot-tag writes that feed the derivation.
-    seal_view_self_sig(new_module, &s);
+    seal_view_self_sig(new_module, &s, ctx.types);
 
     if let Err(e) = check_satisfies(m, &s, ctx.types) {
         return Action::Done(Err(e));
@@ -140,9 +140,11 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
     // The view surfaces as the Object-arm module value (`new_module` lives in `region`'s own
     // region, so the audit passes on the dest-only check alone); a LET around it binds that value
     // like any other.
-    let obj = crate::try_action!(ctx
-        .scope
-        .alloc_object_reaching(KObject::Module(new_module), &stored));
+    let obj = crate::try_action!(ctx.scope.alloc_object_reaching(
+        KObject::Module(new_module),
+        &stored,
+        ctx.types
+    ));
     Action::Done(Ok(StepCarried::born(
         ctx.scope.resident_value_carrier(obj, stored),
     )))
@@ -155,7 +157,7 @@ pub fn body_opaque<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action<'a> {
     use crate::machine::Action;
 
-    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args));
+    let (m, s) = crate::try_action!(resolve_module_and_signature(ctx.args, ctx.types));
     if let Err(e) = check_satisfies(m, &s, ctx.types) {
         return Action::Done(Err(e));
     }
@@ -174,12 +176,14 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
     );
     // Seal the view's self-sig off the source child scope it reuses; SIG-declared value slots
     // read the source's concrete types after substitution.
-    seal_view_self_sig(new_module, &s);
+    seal_view_self_sig(new_module, &s, ctx.types);
     // The view surfaces as the Object-arm module value under the same token that pins the reused
     // source's (foreign) child-scope region; a LET around it binds that value like any other.
-    let obj = crate::try_action!(ctx
-        .scope
-        .alloc_object_reaching(KObject::Module(new_module), &stored));
+    let obj = crate::try_action!(ctx.scope.alloc_object_reaching(
+        KObject::Module(new_module),
+        &stored,
+        ctx.types
+    ));
     Action::Done(Ok(StepCarried::born(
         ctx.scope.resident_value_carrier(obj, stored),
     )))
@@ -191,7 +195,11 @@ pub fn body_transparent<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mac
 /// per-call abstract mints, a transparent view's concrete source types). Without this a slot
 /// typed against an abstract member would read concrete off the underlying value and the view
 /// would not structurally satisfy its own signature.
-fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent) {
+fn seal_view_self_sig<'a>(
+    module: &Module<'a>,
+    content: &SigContent,
+    types: &crate::machine::model::TypeRegistry,
+) {
     let mut view_sig = SigSchema::raw_self_sig(module);
     let member_map: std::collections::HashMap<String, KType> = view_sig
         .manifest_members
@@ -201,7 +209,7 @@ fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent) {
     for (slot_name, declared) in &content.schema.value_slots {
         view_sig.value_slots.insert(
             slot_name.clone(),
-            substitute_sig_members(declared, content.sig_id, &member_map),
+            substitute_sig_members(declared, content.sig_id, &member_map, types),
         );
     }
     module.seal_self_sig(view_sig);
@@ -212,6 +220,7 @@ fn seal_view_self_sig<'a>(module: &Module<'a>, content: &SigContent) {
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
     args: &crate::machine::model::KObject<'a>,
+    types: &crate::machine::model::TypeRegistry,
 ) -> Result<(&'a crate::machine::model::Module<'a>, Rc<SigContent>), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
 
@@ -219,12 +228,13 @@ fn resolve_module_and_signature<'a>(
         args: &crate::machine::model::KObject<'_>,
         name: &str,
         expected: &str,
+        types: &crate::machine::model::TypeRegistry,
     ) -> KError {
         match arg_held(args, name) {
             Some(held) => KError::new(KErrorKind::TypeMismatch {
                 arg: name.to_string(),
                 expected: expected.to_string(),
-                got: held.ktype().name(),
+                got: held.ktype(types).name(types),
             }),
             None => KError::new(KErrorKind::MissingArg(name.to_string())),
         }
@@ -232,11 +242,11 @@ fn resolve_module_and_signature<'a>(
 
     let m = match arg_object(args, "m") {
         Some(KObject::Module(module)) => *module,
-        _ => return Err(type_mismatch_or_missing(args, "m", "Module")),
+        _ => return Err(type_mismatch_or_missing(args, "m", "Module", types)),
     };
     let s = match arg_type(args, "s") {
         Some(KType::Signature { content, .. }) => Rc::clone(content),
-        _ => return Err(type_mismatch_or_missing(args, "s", "Signature")),
+        _ => return Err(type_mismatch_or_missing(args, "s", "Signature", types)),
     };
     Ok((m, s))
 }
@@ -261,7 +271,7 @@ fn check_satisfies<'a>(m: &Module<'a>, c: &SigContent, types: &TypeRegistry) -> 
     }
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Slots are typed `Module` / `Signature`. A bare module operand (`int_ord :| Ordered`) is an
     // Identifier that resolves value-side and rides the auto-wrap rails into a value-typed future,
     // so no parallel Type-Type overload is required.
@@ -281,8 +291,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("s", KType::OfKind(KKind::Signature)),
         ],
     );
-    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque);
-    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent);
+    crate::builtins::register_builtin(scope, ":|", opaque_sig, body_opaque, types);
+    crate::builtins::register_builtin(scope, ":!", transparent_sig, body_transparent, types);
 }
 
 #[cfg(test)]

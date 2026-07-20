@@ -5,7 +5,8 @@
 use crate::builtins::test_support::{
     lookup_module, parse_one, run, run_one, run_one_type, run_root_silent,
 };
-use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 
 /// A held `KModule` from a functor body keeps its child-scope region alive across
@@ -131,7 +132,7 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
         other => {
             panic!(
                 "MAKESET ord_view must return the passed-through module carrier, got {}",
-                other.summarize()
+                other.summarize(&TypeRegistry::new())
             )
         }
     }

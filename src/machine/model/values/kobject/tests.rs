@@ -11,26 +11,33 @@ fn newtype_singleton(name: &str, repr: KType) -> std::rc::Rc<RecursiveSet> {
 
 #[test]
 fn ktype_of_homogeneous_number_list() {
-    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let types = TypeRegistry::new();
+    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
     assert_eq!(l.ktype(), KType::list(Box::new(KType::Number)));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
-    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
+    let types = TypeRegistry::new();
+    let l: KObject<'_> = KObject::list(
+        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        &types,
+    );
     assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 #[test]
 fn ktype_of_empty_list_is_list_any() {
-    let l: KObject<'_> = KObject::list(vec![]);
+    let types = TypeRegistry::new();
+    let l: KObject<'_> = KObject::list(vec![], &types);
     assert_eq!(l.ktype(), KType::list(Box::new(KType::Any)));
 }
 
 #[test]
 fn ktype_of_nested_list() {
-    let inner: KObject<'_> = KObject::list(vec![KObject::Number(1.0)]);
-    let outer: KObject<'_> = KObject::list(vec![inner]);
+    let types = TypeRegistry::new();
+    let inner: KObject<'_> = KObject::list(vec![KObject::Number(1.0)], &types);
+    let outer: KObject<'_> = KObject::list(vec![inner], &types);
     assert_eq!(
         outer.ktype(),
         KType::list(Box::new(KType::list(Box::new(KType::Number))))
@@ -39,10 +46,11 @@ fn ktype_of_nested_list() {
 
 #[test]
 fn ktype_of_dict_string_number() {
+    let types = TypeRegistry::new();
     let mut map: HashMap<KKey, KObject<'static>> = HashMap::new();
     map.insert(KKey::String("a".into()), KObject::Number(1.0));
     map.insert(KKey::String("b".into()), KObject::Number(2.0));
-    let d: KObject<'_> = KObject::dict(map);
+    let d: KObject<'_> = KObject::dict(map, &types);
     assert_eq!(
         d.ktype(),
         KType::dict(Box::new(KType::Str), Box::new(KType::Number))
@@ -51,8 +59,9 @@ fn ktype_of_dict_string_number() {
 
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
+    let types = TypeRegistry::new();
     let map: HashMap<KKey, KObject<'static>> = HashMap::new();
-    let d: KObject<'_> = KObject::dict(map);
+    let d: KObject<'_> = KObject::dict(map, &types);
     assert_eq!(
         d.ktype(),
         KType::dict(Box::new(KType::Any), Box::new(KType::Any))
@@ -63,7 +72,10 @@ fn ktype_of_empty_dict_is_dict_any_any() {
 fn matches_value_list_number_rejects_string_element() {
     let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Number));
-    let bad: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
+    let bad: KObject<'_> = KObject::list(
+        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        &types,
+    );
     assert!(!t.matches_value(&bad, &types));
 }
 
@@ -71,7 +83,7 @@ fn matches_value_list_number_rejects_string_element() {
 fn matches_value_list_number_accepts_all_numbers() {
     let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Number));
-    let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
     assert!(t.matches_value(&good, &types));
 }
 
@@ -79,8 +91,10 @@ fn matches_value_list_number_accepts_all_numbers() {
 fn matches_value_list_any_accepts_any_list() {
     let types = TypeRegistry::new();
     let t = KType::list(Box::new(KType::Any));
-    let mixed: KObject<'_> =
-        KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
+    let mixed: KObject<'_> = KObject::list(
+        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        &types,
+    );
     assert!(t.matches_value(&mixed, &types));
 }
 
@@ -147,7 +161,8 @@ fn type_constructor_ktype_erased_vs_applied() {
 
 #[test]
 fn stamp_type_coarsens_list_carrier() {
-    let value = KObject::list(vec![KObject::Number(1.0)]);
+    let types = TypeRegistry::new();
+    let value = KObject::list(vec![KObject::Number(1.0)], &types);
     assert_eq!(value.ktype(), KType::list(Box::new(KType::Number)));
     let stamped = value.stamp_type(&KType::list(Box::new(KType::Any)));
     assert_eq!(stamped.ktype(), KType::list(Box::new(KType::Any)));
@@ -157,13 +172,17 @@ fn stamp_type_coarsens_list_carrier() {
 fn unstamped_empty_container_detection() {
     use std::collections::HashMap;
     use std::rc::Rc;
-    assert!(KObject::list(vec![]).is_unstamped_empty_container());
+    let types = TypeRegistry::new();
+    assert!(KObject::list(vec![], &types).is_unstamped_empty_container());
     let stamped = KObject::list_with_type(Rc::new(vec![]), KType::Number);
     assert!(!stamped.is_unstamped_empty_container());
-    let hetero = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
+    let hetero = KObject::list(
+        vec![KObject::Number(1.0), KObject::KString("x".into())],
+        &types,
+    );
     assert!(!hetero.is_unstamped_empty_container());
     let map: HashMap<KKey, KObject<'static>> = HashMap::new();
-    assert!(KObject::dict(map).is_unstamped_empty_container());
+    assert!(KObject::dict(map, &types).is_unstamped_empty_container());
 }
 
 /// `Wrapped.ktype()` reports a clone of the `SetRef` identity the dispatcher reads for
@@ -191,7 +210,7 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 #[test]
 fn wrapped_summarize_renders_surface_form() {
     use crate::machine::core::{run_root_storage, FrameStorageExt};
-    use crate::machine::model::types::Parseable;
+    let types = TypeRegistry::new();
     let storage = run_root_storage();
     let region = storage.brand();
     let inner = region.alloc_object(KObject::Number(3.0));
@@ -201,7 +220,7 @@ fn wrapped_summarize_renders_surface_form() {
         inner: WrappedPayload::peel(inner),
         type_id,
     };
-    assert_eq!(w.summarize(), "Distance(3)");
+    assert_eq!(w.summarize(&types), "Distance(3)");
 }
 
 /// `deep_clone` is shallow: it `Rc::clone`s the inner (sharing the same allocation as the
@@ -313,7 +332,8 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
 fn resident_in_true_for_owned_list() {
     use crate::machine::core::run_root_storage;
 
-    let o = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let types = TypeRegistry::new();
+    let o = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)], &types);
     let dest = run_root_storage();
     assert!(o.resident_in(dest.region()));
 }

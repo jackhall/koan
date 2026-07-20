@@ -209,6 +209,7 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
                     self.sched,
                     active_chain,
                     None,
+                    self.types(),
                 )),
                 _ => None,
             })

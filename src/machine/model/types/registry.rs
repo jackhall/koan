@@ -44,8 +44,14 @@ pub struct TypeRegistry {
     misses: std::cell::Cell<usize>,
 }
 
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeRegistry {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             verdicts: RefCell::new(HashMap::new()),
             #[cfg(test)]

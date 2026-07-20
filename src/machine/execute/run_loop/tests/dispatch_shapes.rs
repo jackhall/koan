@@ -20,7 +20,7 @@ use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Held;
 use crate::machine::model::KExpression;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
-use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
 fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
@@ -50,7 +50,7 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
         Some(obj) => Action::done_resident(Carried::Object(
             ctx.scope
                 .brand()
-                .alloc_object_checked(obj.deep_clone())
+                .alloc_object_checked(obj.deep_clone(), ctx.types)
                 .expect("a deep-cloned Number is always resident-in-self"),
         )),
         None => Action::Done(Err(crate::machine::KError::new(
@@ -78,7 +78,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     ));
     let obj = scope
         .brand()
-        .alloc_object_checked(KObject::KFunction(f))
+        .alloc_object_checked(KObject::KFunction(f), &TypeRegistry::new())
         .expect("f was just allocated into region\'s own region");
     scope
         .bind_value(
@@ -107,7 +107,7 @@ fn bare_type_leaf_short_circuits() {
     assert!(
         matches!(result, Carried::Type(KType::Number)),
         "(Number) must terminate to a Number type; got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -134,7 +134,7 @@ fn function_value_call_named_args_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(f {{x = 7}}) must evaluate to 7.0 (DOUBLE returns x); got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -162,7 +162,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 1.0).abs() < 1e-9),
         "(f {{b = 2, a = 1}}) returning `a` must yield 1.0; got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -186,7 +186,7 @@ fn function_value_call_named_args_missing_short_circuits() {
     runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match runtime.read_result_with(id, |v| v.summarize()) {
+    let err = match runtime.read_result_with(id, |v| v.summarize(&TypeRegistry::new())) {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
     };
@@ -388,7 +388,7 @@ fn fast_lane_on_newtype_record_type_constructs() {
     );
     match result {
         KObject::Wrapped { inner, type_id } => {
-            assert_eq!(type_id.name(), "Pt");
+            assert_eq!(type_id.name(&TypeRegistry::new()), "Pt");
             match inner.get() {
                 KObject::Record(values, _) => {
                     assert!(
@@ -467,7 +467,6 @@ fn fast_lane_unbound_returns_error() {
 #[test]
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    use crate::machine::model::Parseable;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -479,7 +478,7 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     assert!(
         matches!(result, KObject::KString(s) if s == "hi"),
         "expected KString(\"hi\"), got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -507,7 +506,6 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 #[test]
 fn fast_lane_list_of_closures_escapes_outer_call() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
-    use crate::machine::model::Parseable;
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(
@@ -517,7 +515,10 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
     let result = run_one(scope, parse_one("(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
-        other => panic!("expected MAKE to return a List, got {}", other.summarize()),
+        other => panic!(
+            "expected MAKE to return a List, got {}",
+            other.summarize(&TypeRegistry::new())
+        ),
     };
     assert_eq!(items.len(), 1, "list should hold the single inner closure");
     assert!(
@@ -743,7 +744,10 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         .expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
     match scope.lookup("out") {
         Some(KObject::KString(s)) => assert_eq!(s.as_str(), "numbers"),
-        Some(other) => panic!("expected KString(\"numbers\"), got {}", other.summarize()),
+        Some(other) => panic!(
+            "expected KString(\"numbers\"), got {}",
+            other.summarize(&TypeRegistry::new())
+        ),
         None => panic!("LET out = ... must bind `out` in scope"),
     }
 }
@@ -796,7 +800,7 @@ fn operator_chain_undeclared_errors_cleanly() {
     runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let msg = match runtime.read_result_with(id, |v| v.summarize()) {
+    let msg = match runtime.read_result_with(id, |v| v.summarize(&TypeRegistry::new())) {
         Err(e) => e.to_string(),
         Ok(summary) => {
             panic!("an undeclared operator chain must terminate with an error; got {summary}")
@@ -842,7 +846,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .execute()
         .expect("scheduler drains without deadlock");
     let inner_result = inner_runtime
-        .read_result_with(inner_id, |v| v.summarize())
+        .read_result_with(inner_id, |v| v.summarize(&TypeRegistry::new()))
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
         inner_result, "9",
@@ -855,7 +859,7 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .execute()
         .expect("scheduler drains without deadlock");
     let root_result = root_runtime
-        .read_result_with(root_id, |v| v.summarize())
+        .read_result_with(root_id, |v| v.summarize(&TypeRegistry::new()))
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
         root_result, "5",
@@ -895,7 +899,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .execute()
         .expect("scheduler drains without deadlock");
     let infix = runtime
-        .read_result_with(infix_id, |v| v.summarize())
+        .read_result_with(infix_id, |v| v.summarize(&TypeRegistry::new()))
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
         infix, "[1, 2, 3, 4]",
@@ -908,7 +912,7 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
         .execute()
         .expect("scheduler drains without deadlock");
     let prefix = runtime
-        .read_result_with(prefix_id, |v| v.summarize())
+        .read_result_with(prefix_id, |v| v.summarize(&TypeRegistry::new()))
         .unwrap_or_else(|e| {
             panic!(
                 "the prefix form must dispatch to the same body as the infix chain; got error {e}"
@@ -933,7 +937,12 @@ fn type_call_constructs_struct() {
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one("Point {x = 1, y = 2}"));
-    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+    assert_eq!(
+        out.ktype().name(&TypeRegistry::new()),
+        "Point",
+        "got {}",
+        out.summarize(&TypeRegistry::new())
+    );
 }
 
 /// `HeadDeferred` → function. A head that evaluates to a function value
@@ -952,7 +961,7 @@ fn head_deferred_calls_returned_function() {
     assert!(
         matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
-        out.summarize(),
+        out.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -973,7 +982,7 @@ fn head_deferred_applies_returned_functor_to_module() {
     assert!(
         matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
-        out.summarize(),
+        out.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -988,7 +997,12 @@ fn head_deferred_constructs_from_returned_type_value() {
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
     // type leaf to `KTypeValue(Point)`, then the body constructs.
     let out = run_one(scope, parse_one("(Point) {x = 1, y = 2}"));
-    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+    assert_eq!(
+        out.ktype().name(&TypeRegistry::new()),
+        "Point",
+        "got {}",
+        out.summarize(&TypeRegistry::new())
+    );
 }
 
 /// `HeadDeferred` → non-callable error. A head that evaluates to a `Number`
@@ -1040,7 +1054,12 @@ fn type_head_deferred_constructs_from_sigil_type() {
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
     let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
-    assert_eq!(out.ktype().name(), "Point", "got {}", out.summarize());
+    assert_eq!(
+        out.ktype().name(&TypeRegistry::new()),
+        "Point",
+        "got {}",
+        out.summarize(&TypeRegistry::new())
+    );
 }
 
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not

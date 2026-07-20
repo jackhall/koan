@@ -4,6 +4,7 @@
 //! routing site states its own carrier shape and slot name and nothing else.
 
 use crate::machine::model::KExpression;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KType};
 use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx};
@@ -68,13 +69,14 @@ pub(crate) fn resolve_or_await<'a>(
     scope: &'a Scope<'a>,
     slot: &'static str,
     resolve: impl Fn(&Scope<'a>) -> TypeResolution<KType> + 'a,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType) -> Action<'a> + 'a,
+    on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
+    types: &TypeRegistry,
 ) -> Action<'a> {
     match resolve(scope) {
         // The synchronous arm hands the continuation the same `FinishCtx` a wake-time finish
         // receives: `FinishCtx::for_scope` reconstructs the step context over the scope's own frame,
         // matching the wake side's provenance, so both arms allocate in the same region.
-        TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope), kt),
+        TypeResolution::Done(kt) => on_resolved(&FinishCtx::for_scope(scope, types), kt),
         TypeResolution::Park(producers) => {
             let finish: AwaitContinue<'a> = Box::new(move |fctx, _results| {
                 let kt = crate::try_action!(resolve_at_wake(fctx.scope, slot, resolve));
@@ -97,11 +99,12 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
     results: &DepResults<'_, &'d DepTerminal<'a>>,
     owned_pos: usize,
     slot: &str,
+    types: &TypeRegistry,
 ) -> Result<KType, KError> {
     let terminal: &'d DepTerminal<'a> = results.owned(owned_pos);
     match terminal.value {
         Carried::Type(kt) => Ok(kt.clone()),
-        Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name())),
+        Carried::Object(other) => Err(non_type_result_error(slot, other.ktype().name(types))),
         Carried::UnresolvedType(ti) => Err(non_type_result_error(slot, ti.render())),
     }
 }
@@ -111,10 +114,10 @@ pub(crate) fn expect_type_terminal<'a, 'd>(
 pub(crate) fn dispatch_type_then<'a>(
     expr: KExpression<'a>,
     slot: &'static str,
-    on_resolved: impl FnOnce(&FinishCtx<'a>, KType) -> Action<'a> + 'a,
+    on_resolved: impl for<'r> FnOnce(&FinishCtx<'a, 'r>, KType) -> Action<'a> + 'a,
 ) -> Action<'a> {
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        let kt = crate::try_action!(expect_type_terminal(&results, 0, slot));
+        let kt = crate::try_action!(expect_type_terminal(&results, 0, slot, fctx.types));
         on_resolved(fctx, kt)
     });
     Action::AwaitDeps {

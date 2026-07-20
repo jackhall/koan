@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::{KObject, TypeRegistry};
 use crate::machine::{BindingIndex, Scope};
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
@@ -48,7 +48,7 @@ fn pairwise_combiner_folds_left() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 8.0),
         "a left fold nests ((p1 ⊙ p2) ⊙ p3) = (14 - 5) - 1 = 8; got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -63,7 +63,7 @@ fn pairwise_combiner_folds_right() {
     assert!(
         matches!(result, KObject::Number(n) if *n == 10.0),
         "a right fold nests (p1 ⊙ (p2 ⊙ p3)) = 14 - (5 - 1) = 10; got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
 }
 
@@ -82,7 +82,7 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `MINUS` to 3 - 5 = -2; got {}",
-        result.summarize(),
+        result.summarize(&TypeRegistry::new()),
     );
     let bytes = captured.borrow().clone();
     assert_eq!(

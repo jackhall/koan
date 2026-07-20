@@ -16,7 +16,8 @@
 
 use crate::machine::core::DepPlacement;
 use crate::machine::model::KType;
-use crate::machine::model::{Carried, KObject, Parseable};
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind};
 use crate::source::Spanned;
@@ -63,7 +64,7 @@ fn park_on_head<'step>(
         // Adopt the head's carrier copy-free: fold its reach so a callable's captured foreign
         // environment outlives the application, and re-anchor the value at the consumer scope brand.
         let head = ctx.current_scope().adopt_sealed(&head_terminal.delivered);
-        let callable = match classify_head(head, type_only) {
+        let callable = match classify_head(head, type_only, ctx.types()) {
             Ok(c) => c,
             Err(e) => return Outcome::Done(Err(e)),
         };
@@ -83,6 +84,7 @@ fn park_on_head<'step>(
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
+    types: &TypeRegistry,
 ) -> Result<ResolvedCallable<'step>, KError> {
     match head {
         // A function value is the pruned arm under `type_only` — the type-only lane admits no
@@ -92,10 +94,10 @@ fn classify_head<'step>(
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),
-                got: other.summarize(),
+                got: other.summarize(types),
             })),
             other => Err(KError::new(KErrorKind::DispatchFailed {
-                expr: other.summarize(),
+                expr: other.summarize(types),
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },
@@ -108,10 +110,10 @@ fn classify_head<'step>(
             other if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "Type".to_string(),
-                got: other.name(),
+                got: other.name(types),
             })),
             other => Err(KError::new(KErrorKind::DispatchFailed {
-                expr: other.name(),
+                expr: other.name(types),
                 reason: "head evaluates to a non-callable value".to_string(),
             })),
         },

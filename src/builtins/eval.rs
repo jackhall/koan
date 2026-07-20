@@ -1,3 +1,4 @@
+use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
 use crate::machine::model::KType;
@@ -23,7 +24,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             return Action::Done(Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "expr".to_string(),
                 expected: "KExpression".to_string(),
-                got: other.ktype().name(),
+                got: other.ktype().name(ctx.types),
             })))
         }
         None => return Action::Done(Err(KError::new(KErrorKind::MissingArg("expr".to_string())))),
@@ -39,12 +40,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         None,
         BlockBody::Single(inner),
         None,
+        ctx.types,
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]);
-    crate::builtins::register_builtin(scope, "EVAL", signature, body);
+    crate::builtins::register_builtin(scope, "EVAL", signature, body, types);
 }
 
 #[cfg(test)]

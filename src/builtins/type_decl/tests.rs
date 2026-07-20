@@ -2,6 +2,7 @@ use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_sile
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::KObject;
 use crate::machine::model::Record;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{constructor_param_names, KKind, KType, NominalSchema, RecursiveSet};
 use crate::machine::run_root_storage;
 use crate::machine::KoanRuntime;
@@ -77,12 +78,13 @@ fn abstract_member_kind_tracks_parameters() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "SIG Monad = ((TYPE Elt) (TYPE (Type AS Wrap)))");
+    let types = TypeRegistry::new();
     assert_eq!(
-        member_type(scope, "Monad", "Wrap").kind_of(),
+        member_type(scope, "Monad", "Wrap").kind_of(&types),
         KKind::TypeConstructor,
     );
     assert_eq!(
-        member_type(scope, "Monad", "Elt").kind_of(),
+        member_type(scope, "Monad", "Elt").kind_of(&types),
         KKind::ProperType,
     );
 }
@@ -234,7 +236,7 @@ fn sig_decl_scope_id(scope: &crate::machine::Scope<'_>, sig_name: &str) -> Scope
 /// constructor slot (`AbstractType`) — whose parameter names equal `expected`; returns its name.
 fn assert_type_constructor(kt: &KType, expected: &[&str]) -> String {
     let want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
-    let param_names = constructor_param_names(kt)
+    let param_names = constructor_param_names(kt, &TypeRegistry::new())
         .unwrap_or_else(|| panic!("expected a type constructor, got {kt:?}"));
     assert_eq!(param_names, want);
     match kt {

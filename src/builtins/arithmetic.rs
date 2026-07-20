@@ -21,7 +21,7 @@
 use std::collections::HashSet;
 
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, TypeRegistry};
 use crate::machine::BindingIndex;
 use crate::machine::{arg_object, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -29,43 +29,49 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn number_arg(args: &KObject<'_>, name: &str) -> Result<f64, KError> {
+fn number_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<f64, KError> {
     match arg_object(args, name) {
         Some(KObject::Number(n)) => Ok(*n),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "Number".to_string(),
-            got: other.ktype().name(),
+            got: other.ktype().name(types),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
     }
 }
 
 /// Read the `left` / `right` `:Number` operands.
-fn number_operands(args: &KObject<'_>) -> Result<(f64, f64), KError> {
-    Ok((number_arg(args, "left")?, number_arg(args, "right")?))
+fn number_operands(args: &KObject<'_>, types: &TypeRegistry) -> Result<(f64, f64), KError> {
+    Ok((
+        number_arg(args, "left", types)?,
+        number_arg(args, "right", types)?,
+    ))
 }
 
 /// Read a `:Bool` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn bool_arg(args: &KObject<'_>, name: &str) -> Result<bool, KError> {
+fn bool_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<bool, KError> {
     match arg_object(args, name) {
         Some(KObject::Bool(b)) => Ok(*b),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "Bool".to_string(),
-            got: other.ktype().name(),
+            got: other.ktype().name(types),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
     }
 }
 
 /// Read the `left` / `right` `:Bool` operands.
-fn bool_operands(args: &KObject<'_>) -> Result<(bool, bool), KError> {
-    Ok((bool_arg(args, "left")?, bool_arg(args, "right")?))
+fn bool_operands(args: &KObject<'_>, types: &TypeRegistry) -> Result<(bool, bool), KError> {
+    Ok((
+        bool_arg(args, "left", types)?,
+        bool_arg(args, "right", types)?,
+    ))
 }
 
 pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -73,7 +79,7 @@ pub fn body_add<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -81,7 +87,7 @@ pub fn body_sub<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -93,7 +99,7 @@ pub fn body_mul<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 /// (`KErrorKind::User`, the in-language-error landing pad) rather than following IEEE 754's
 /// infinity/NaN convention — no NaN value is ever minted onto a koan `Number`.
 pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     if right == 0.0 {
         return Action::Done(Err(KError::new(KErrorKind::User(
             "/ : division by zero".to_string(),
@@ -106,7 +112,7 @@ pub fn body_div<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -114,7 +120,7 @@ pub fn body_lt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -122,7 +128,7 @@ pub fn body_le<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -130,7 +136,7 @@ pub fn body_gt<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(number_operands(ctx.args));
+    let (left, right) = crate::try_action!(number_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
@@ -138,14 +144,14 @@ pub fn body_ge<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
 }
 
 pub fn body_and<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
-    let (left, right) = crate::try_action!(bool_operands(ctx.args));
+    let (left, right) = crate::try_action!(bool_operands(ctx.args, ctx.types));
     Action::Done(Ok(ctx
         .scope
         .brand()
         .alloc_object_witnessed(KObject::Bool(left && right))))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let number_sig = |op: &str| {
         sig(
             KType::Number,
@@ -167,15 +173,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         )
     };
 
-    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add);
-    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub);
-    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul);
-    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div);
+    crate::builtins::register_builtin(scope, "+", number_sig("+"), body_add, types);
+    crate::builtins::register_builtin(scope, "-", number_sig("-"), body_sub, types);
+    crate::builtins::register_builtin(scope, "*", number_sig("*"), body_mul, types);
+    crate::builtins::register_builtin(scope, "/", number_sig("/"), body_div, types);
 
-    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt);
-    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le);
-    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt);
-    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge);
+    crate::builtins::register_builtin(scope, "<", comparison_sig("<"), body_lt, types);
+    crate::builtins::register_builtin(scope, "<=", comparison_sig("<="), body_le, types);
+    crate::builtins::register_builtin(scope, ">", comparison_sig(">"), body_gt, types);
+    crate::builtins::register_builtin(scope, ">=", comparison_sig(">="), body_ge, types);
 
     let and_sig = sig(
         KType::Bool,
@@ -185,7 +191,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("right", KType::Bool),
         ],
     );
-    crate::builtins::register_builtin(scope, "AND", and_sig, body_and);
+    crate::builtins::register_builtin(scope, "AND", and_sig, body_and, types);
 }
 
 /// Seeds the three builtin operator groups: comparison (`< <= > >=`, pairwise, combined by
@@ -200,7 +206,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 /// A comparison chain (`1 < 2 < 3`, `1 <= x < 10`) resolves to this group and reduces through the
 /// pairwise reducer (`operator_chain::reduce_pairwise`): each adjacent pair dispatches through its
 /// own operator's body above, and the pair results fold left through the `AND` keyword combiner.
-pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>) {
+pub fn register_builtin_operator_groups<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
     let region = scope.brand();
 
     let comparison_operators = ["<", "<=", ">", ">="];

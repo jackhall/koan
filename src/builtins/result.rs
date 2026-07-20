@@ -13,12 +13,13 @@
 //! `(set ptr, index)` and never descends the schema, so every `:(Result …)` resolves to
 //! the one identity.
 
+use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 use crate::machine::model::{KType, NominalSchema, RecursiveSet};
 use crate::machine::{BindingIndex, Scope};
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, _types: &TypeRegistry) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("Ok".into(), KType::Any);
     schema.insert("Error".into(), KType::Any);

@@ -4,7 +4,6 @@ use crate::machine::model::ast::{
 use crate::machine::model::types::KKind;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::Held;
-use crate::machine::model::Parseable;
 use crate::machine::model::TypeRegistry;
 use crate::source::Spanned;
 
@@ -26,13 +25,14 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 
 #[test]
 fn resolve_for_lowers_builtin_leaf_to_type_arm() {
+    let types = TypeRegistry::new();
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".into()));
     let slot = KType::OfKind(KKind::ProperType);
     // Consume the scope-tied `Held` inside `matches!` so no borrow outlives `storage`.
     assert!(matches!(
-        part.resolve_for(&slot, scope),
+        part.resolve_for(&slot, scope, &types),
         Held::Type(KType::Number)
     ));
 }
@@ -44,13 +44,14 @@ fn resolve_for_lowers_builtin_leaf_to_type_arm() {
 fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let types = TypeRegistry::new();
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::ProperType);
-    match part.resolve_for(&slot, scope) {
+    match part.resolve_for(&slot, scope, &types) {
         Held::UnresolvedType(te) => assert_eq!(te.render(), "MyType"),
         other => panic!(
             "expected the unlowered-name carrier, got {}",
-            other.summarize()
+            other.summarize(&types)
         ),
     }
 }
@@ -61,10 +62,14 @@ fn resolve_for_defers_user_bound_leaf_to_unresolved_carrier() {
 fn unresolved_carrier_classifies_as_a_proper_type() {
     let storage = crate::machine::core::run_root_storage();
     let scope = crate::builtins::test_support::run_root_bare(&storage);
+    let types = TypeRegistry::new();
     let part = ExpressionPart::Type(TypeIdentifier::leaf("MyType".into()));
     let slot = KType::OfKind(KKind::ProperType);
-    let held = part.resolve_for(&slot, scope);
-    assert!(matches!(held.ktype(), KType::OfKind(KKind::ProperType)));
+    let held = part.resolve_for(&slot, scope, &types);
+    assert!(matches!(
+        held.ktype(&types),
+        KType::OfKind(KKind::ProperType)
+    ));
     assert!(held.as_type().is_none(), "it carries no type handle");
     assert!(held.as_object().is_none(), "and it is not a value");
 }

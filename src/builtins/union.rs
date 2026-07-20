@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
     seal_union_refs, FieldNameKind, NominalMember, NominalSchema, RecursiveSet,
 };
@@ -33,6 +34,7 @@ fn recover_union(
     name: &str,
     bind_index: BindingIndex,
     n: usize,
+    types: &TypeRegistry,
 ) -> UnionRecovery {
     let (bound, installed_at) = match scope.bindings().committed_type_binding(name) {
         Some(entry) => entry,
@@ -54,7 +56,7 @@ fn recover_union(
         && set.len() == n
         && set.members().iter().all(NominalMember::is_filled)
     {
-        return UnionRecovery::Sealed(KType::union_of(members.clone()));
+        return UnionRecovery::Sealed(KType::union_of(members.clone(), types));
     }
     UnionRecovery::Fresh
 }
@@ -66,7 +68,7 @@ fn recover_union(
 /// indices. `bindings.types[name]` binds `KType::Union { members: [SetRef{set,0}, …], .. }` through
 /// [`KType::union_of`] — type-only, no value-side carrier.
 fn finalize_union<'a>(
-    fctx: &FinishCtx<'a>,
+    fctx: &FinishCtx<'a, '_>,
     name: String,
     fields: Vec<(String, KType)>,
     bind_index: BindingIndex,
@@ -79,7 +81,7 @@ fn finalize_union<'a>(
     let scope = fctx.scope;
     let n = fields.len();
 
-    let set = match recover_union(scope, &name, bind_index, n) {
+    let set = match recover_union(scope, &name, bind_index, n, fctx.types) {
         // Idempotent re-finalize: the union is already bound. Allocate the recovered union into this
         // scope's own region and cross it as a declared operand, folding the carriers' reach onto the
         // placement — the same coverage the register-success path produces.
@@ -97,7 +99,7 @@ fn finalize_union<'a>(
 
     // Ruling F2: the declaring name maps to the union of every member; `union_of` collapses a
     // one-variant union to that member. Variant-sibling references seal via `index_of`.
-    let binder_union = KType::union_of((0..n).map(KType::SetLocal).collect());
+    let binder_union = KType::union_of((0..n).map(KType::SetLocal).collect(), fctx.types);
     let missing = std::cell::RefCell::new(Vec::new());
     let sealed: Vec<(usize, KType)> = fields
         .into_iter()
@@ -105,7 +107,7 @@ fn finalize_union<'a>(
         .map(|(index, (_tag, payload))| {
             (
                 index,
-                seal_union_refs(&set, &name, &binder_union, &payload, &missing),
+                seal_union_refs(&set, &name, &binder_union, &payload, &missing, fctx.types),
             )
         })
         .collect();
@@ -125,6 +127,7 @@ fn finalize_union<'a>(
                 index,
             })
             .collect(),
+        fctx.types,
     );
     match scope.register_nominal_upsert(name.clone(), union_ty, bind_index) {
         // `register_type_upsert` hands back the region-allocated `&KType`. Cross it as a declared
@@ -143,7 +146,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use crate::machine::model::KObject;
     use crate::machine::{arg_object, require_bare_type_name, Action};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION"));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "UNION", ctx.types));
     let schema_expr = match arg_object(ctx.args, "schema") {
         Some(KObject::KExpression(e)) => e.clone(),
         _ => {
@@ -164,7 +167,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::OfKind(KKind::AnyType),
         vec![
@@ -181,6 +184,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
 }
 
@@ -189,13 +193,14 @@ mod tests {
     use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
-    use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
+    use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet, TypeRegistry};
     use crate::machine::run_root_storage;
     use crate::machine::{BindingIndex, KErrorKind, Scope};
 
     /// The projected (`SetLocal`s resolved) newtype repr of union `name`'s `variant` member —
     /// each variant is a per-tag newtype under the dissolved model.
     fn variant_repr<'a>(scope: &'a Scope<'a>, name: &str, variant: &str) -> KType {
+        let types = TypeRegistry::new();
         let members = match scope.resolve_type(name) {
             Some(KType::Union { members, .. }) => members,
             other => panic!("expected {name} to be a Union in types, got {other:?}"),
@@ -203,7 +208,7 @@ mod tests {
         for member in members {
             if let KType::SetRef { set, index } = member {
                 if set.member(*index).name == variant {
-                    return match RecursiveSet::projected_schema(set, *index) {
+                    return match RecursiveSet::projected_schema(set, *index, &types) {
                         ProjectedSchema::NewType(repr) => repr,
                         _ => panic!("variant `{variant}` must project a NewType repr"),
                     };
@@ -321,7 +326,8 @@ mod tests {
     fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();
         let scope = run_root_silent(&region);
-        let fctx = crate::machine::FinishCtx::for_scope(scope);
+        let types = TypeRegistry::new();
+        let fctx = crate::machine::FinishCtx::for_scope(scope, &types);
         let fields = || {
             vec![
                 ("Some".to_string(), KType::Number),

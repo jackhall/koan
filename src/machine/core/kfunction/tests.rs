@@ -55,7 +55,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
             }),
         ],
     };
-    register_builtin(scope, "OP", sig, body_any);
+    register_builtin(scope, "OP", sig, body_any, &types);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Identifier("someName".into())),
@@ -89,7 +89,7 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
             }),
         ],
     };
-    register_builtin(scope, "ident_call_probe", sig, body_any);
+    register_builtin(scope, "ident_call_probe", sig, body_any, &types);
     let inner = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Identifier("x".into())),
         Spanned::bare(ExpressionPart::Keyword(":".into())),
@@ -148,7 +148,7 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
             }),
         ],
     };
-    register_builtin(scope, "OP", sig, body_any);
+    register_builtin(scope, "OP", sig, body_any, &types);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd".into()))),
@@ -207,7 +207,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
             }),
         ],
     };
-    register_builtin(scope, "OP", sig, body_any);
+    register_builtin(scope, "OP", sig, body_any, &types);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number".into()))),

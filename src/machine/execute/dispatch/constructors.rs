@@ -140,15 +140,15 @@ fn check_newtype_repr<'a>(
         KType::SetRef { set, index } => (set, *index),
         _ => unreachable!("TypeCall fast lane routed a non-SetRef identity into newtype construct"),
     };
-    let repr = match RecursiveSet::projected_schema(set, index) {
+    let repr = match RecursiveSet::projected_schema(set, index, types) {
         ProjectedSchema::NewType(repr) => repr,
         _ => unreachable!("newtype construct ran on a non-NewType member"),
     };
     if !repr.matches_value(value, types) {
         return Err(KError::new(KErrorKind::TypeMismatch {
             arg: "value".to_string(),
-            expected: repr.name(),
-            got: value.ktype().name(),
+            expected: repr.name(types),
+            got: value.ktype().name(types),
         }));
     }
     let collapse = matches!(value, KObject::Wrapped { .. }) && repr == value.ktype();
@@ -333,7 +333,11 @@ fn finish_witnessed<'step>(
                     .zip(terminals.iter().map(|t| t.value.object().deep_clone())),
             );
             // A record probe is never a `Wrapped`, so the repr check never asks to collapse.
-            check_newtype_repr(identity, &KObject::record(probe), view.types())?;
+            check_newtype_repr(
+                identity,
+                &KObject::record(probe, view.types()),
+                view.types(),
+            )?;
             // The fold accumulator is yoked into the dest frame's own region up front (mirroring
             // `dispatch::literal`'s `AggBuildFamily`), so each field's `transfer_into` composes by
             // minting that field's reach into the accumulator's own arena rather than by plain union.
@@ -359,6 +363,7 @@ fn finish_witnessed<'step>(
             let home = build_type_operand(scope, view.dest_frame(), identity);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
+            let types = view.types();
             Ok(fields
                 .merge_pinned_placing::<RegionTypeFamily, CarriedFamily, KoanStorageProfile, _>(
                     home,
@@ -367,7 +372,7 @@ fn finish_witnessed<'step>(
                         let region = FoldingBrand::in_fold_closure(placement);
                         let record = Record::from_pairs(fields);
                         Carried::Object(region.alloc_object_folded(KObject::Wrapped {
-                            inner: WrappedPayload::hold(&KObject::record(record)),
+                            inner: WrappedPayload::hold(&KObject::record(record, types)),
                             type_id: identity_ty,
                         }))
                     },
@@ -390,8 +395,13 @@ fn finish_witnessed<'step>(
             if !expected.matches_value(terminals[0].value.object(), view.types()) {
                 return Err(KError::new(KErrorKind::TypeMismatch {
                     arg: "value".to_string(),
-                    expected: expected.name().to_string(),
-                    got: terminals[0].value.object().ktype().name().to_string(),
+                    expected: expected.name(view.types()).to_string(),
+                    got: terminals[0]
+                        .value
+                        .object()
+                        .ktype()
+                        .name(view.types())
+                        .to_string(),
                 }));
             }
             // The tag's `SetRef` identity crosses the brand as a `&KType` so the built `Tagged` names
@@ -436,7 +446,7 @@ fn finish_witnessed<'step>(
             });
             // An identity wrapper takes exactly one type parameter; its name keys the applied
             // arg in the built `ConstructorApply`.
-            let param_name = match RecursiveSet::projected_schema(set, *index) {
+            let param_name = match RecursiveSet::projected_schema(set, *index, view.types()) {
                 ProjectedSchema::TypeConstructor { param_names, .. } => param_names
                     .first()
                     .cloned()

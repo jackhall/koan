@@ -302,7 +302,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(
                                     format!(
                                         "FN deferred return-type expression produced a non-type {} value",
-                                        other.ktype().name(),
+                                        other.ktype().name(view.types()),
                                     ),
                                 ))))
                             }
@@ -367,6 +367,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                     ctx: view.step_ctx(),
+                    types: view.types(),
                 };
                 run_action(view, finish(&fctx, results))
             });
@@ -382,6 +383,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 let fctx = FinishCtx {
                     scope: view.current_scope(),
                     ctx: view.step_ctx(),
+                    types: view.types(),
                 };
                 run_action(view, finish(&fctx, result))
             });

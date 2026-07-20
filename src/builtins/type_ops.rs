@@ -10,11 +10,12 @@ mod with;
 use crate::machine::model::KKind;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
+use crate::machine::model::TypeRegistry;
 use crate::machine::Scope;
 
 use super::{arg, kw, sig};
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Infix `<sig> WITH {Slot = Type, …}`. A lone binary
     // keyword classifies as `Keyworded` (leading-slot signature like `FROM` / `:|`), and
     // the record-literal `bindings` operand eager-evaluates so its `(name, Held::Type)`
@@ -29,7 +30,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         )
     };
-    crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body);
+    crate::builtins::register_builtin(scope, "WITH", with_sig(), with::body, types);
     // `TYPE OF <value>`. Keys on the full `[TYPE, OF]` bucket, so it shares no candidate bucket
     // with the SIG-body `TYPE <name>` declarator ([`super::type_decl`]). The `value` slot is
     // `Any` because a module and a container are both ordinary values here; the body rejects a
@@ -42,5 +43,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             vec![kw("TYPE"), kw("OF"), arg("value", KType::Any)],
         ),
         type_of::body,
+        types,
     );
 }

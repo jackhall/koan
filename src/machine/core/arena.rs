@@ -22,7 +22,7 @@ use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::{Carried, CarriedFamily, KObject, Module};
-use crate::machine::model::{KType, TypeIdentifier};
+use crate::machine::model::{KType, TypeIdentifier, TypeRegistry};
 use crate::witnessed::reattachable;
 use crate::witnessed::{
     Erased, FamilyArena, FoldedPlacement, Reattachable, Region, RegionHandle, RegionSet, StorageOf,
@@ -131,8 +131,12 @@ impl<'a> RegionBrand<'a> {
     /// region. A `Wrapped { type_id }` tag needs no walk: the `&KType` points at owned data
     /// allocated region-locally through [`Self::alloc_ktype`], so it reaches nothing the audit
     /// could reject.
-    pub fn alloc_object_checked(self, o: KObject<'_>) -> Result<&'a KObject<'a>, KError> {
-        let name = o.ktype().name();
+    pub fn alloc_object_checked(
+        self,
+        o: KObject<'_>,
+        types: &TypeRegistry,
+    ) -> Result<&'a KObject<'a>, KError> {
+        let name = o.ktype().name(types);
         self.0
             .alloc_resident_checked::<KObject<'static>>(o, ResidenceEvidence::dest_only())
             .ok_or_else(|| {
@@ -236,8 +240,9 @@ impl<'a> RegionBrand<'a> {
     pub(crate) fn alloc_object_witnessed_checked(
         self,
         value: KObject<'_>,
+        types: &TypeRegistry,
     ) -> Result<StepCarried<'a>, KError> {
-        let name = value.ktype().name();
+        let name = value.ktype().name(types);
         self.0
             .alloc_resident_checked::<KObject<'static>>(value, ResidenceEvidence::dest_only())
             .map(|live| StepCarried::born(Witnessed::resident(Carried::Object(live))))

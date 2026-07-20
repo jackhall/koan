@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, KObject, KType, Parseable, RecursiveSet};
+use crate::machine::model::{Carried, KObject, KType, RecursiveSet};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
@@ -81,7 +81,7 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     s: &'b Scope<'b>,
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
-    match s.resolve_type_identifier(t, ctx.active_chain()) {
+    match s.resolve_type_identifier(t, ctx.active_chain(), ctx.types()) {
         // A resolved type leaf is witnessed in place under `s` (the scope it was resolved
         // against): a `KType` is owned data, so the read travels under `s`'s home-frame pin
         // alone — no reach to name, no `alloc_ktype` re-home, no `child_scope()` walk.
@@ -199,7 +199,7 @@ pub(super) fn literal_pass_through<'step>(
         ExpressionPart::QuotedExpression(body) => Outcome::Done(
             ctx.current_scope()
                 .brand()
-                .alloc_object_witnessed_checked(KObject::KExpression(*body)),
+                .alloc_object_witnessed_checked(KObject::KExpression(*body), ctx.types()),
         ),
         ExpressionPart::Expression(boxed) => become_dispatch(ctx, *boxed),
         ExpressionPart::ListLiteral(items) => park_on_literal(DepRequest::ListLit(items)),

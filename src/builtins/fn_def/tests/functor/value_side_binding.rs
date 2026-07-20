@@ -3,7 +3,8 @@
 //! its `ktype()` is `KType::KFunction`. `bindings.types` holds no callable value.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::model::TypeRegistry;
+use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 
 const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
@@ -61,7 +62,7 @@ fn module_returning_fn_applies_by_the_keyworded_call_convention() {
         KObject::Module(module) => module,
         other => panic!(
             "(MAKESET int_ord) must return a module, got {}",
-            other.summarize(),
+            other.summarize(&TypeRegistry::new()),
         ),
     };
     let inner = module

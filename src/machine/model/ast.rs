@@ -141,7 +141,11 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
                 f.debug_tuple("QuotedExpression").field(e).finish()
             }
             ExpressionPart::Spliced { cell, .. } => {
-                write!(f, "Spliced({})", cell.open(|c| c.summarize()))
+                write!(
+                    f,
+                    "Spliced({})",
+                    cell.open(|c| c.summarize_without_registry())
+                )
             }
         }
     }
@@ -212,7 +216,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Boolean(b) => b.to_string(),
                 KLiteral::Null => "null".to_string(),
             },
-            ExpressionPart::Spliced { cell, .. } => cell.open(|c| c.summarize()),
+            ExpressionPart::Spliced { cell, .. } => cell.open(|c| c.summarize_without_registry()),
         }
     }
 
@@ -231,6 +235,7 @@ impl<'a> ExpressionPart<'a> {
         &self,
         slot: &crate::machine::model::KType,
         scope: &'a crate::machine::core::Scope<'a>,
+        types: &crate::machine::model::types::TypeRegistry,
     ) -> Held<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced { cell, .. } = self {
@@ -245,7 +250,7 @@ impl<'a> ExpressionPart<'a> {
             KType::OfKind(KKind::ProperType) | KType::OfKind(KKind::AnyType),
         ) = (self, slot)
         {
-            return match KType::from_type_identifier(t) {
+            return match KType::from_type_identifier(t, types) {
                 Ok(kt) => Held::Type(kt),
                 Err(_) => Held::UnresolvedType(t.clone()),
             };
@@ -263,10 +268,10 @@ impl<'a> ExpressionPart<'a> {
             let parts = items.iter().cloned().map(Spanned::bare).collect();
             return Held::Object(KObject::KExpression(KExpression::new(parts)));
         }
-        Held::Object(self.resolve())
+        Held::Object(self.resolve(types))
     }
 
-    pub fn resolve(&self) -> KObject<'a> {
+    pub fn resolve(&self, types: &crate::machine::model::types::TypeRegistry) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
             ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
@@ -290,27 +295,27 @@ impl<'a> ExpressionPart<'a> {
                 unreachable!("RecordType only valid in type-context dispatch")
             }
             ExpressionPart::ListLiteral(items) => {
-                KObject::list(items.iter().map(|p| p.resolve()).collect())
+                KObject::list(items.iter().map(|p| p.resolve(types)).collect(), types)
             }
             // Non-scalar keys reaching here are a scheduler bug — it must surface them as
             // a structured `ShapeError` before resolve.
             ExpressionPart::DictLiteral(pairs) => {
                 let mut map: HashMap<KKey, KObject<'a>> = HashMap::new();
                 for (k, v) in pairs {
-                    let key_obj = k.resolve();
-                    let kkey = KKey::try_from_kobject(&key_obj).unwrap_or_else(|e| {
+                    let key_obj = k.resolve(types);
+                    let kkey = KKey::try_from_kobject(&key_obj, types).unwrap_or_else(|e| {
                         panic!("DictLiteral::resolve = non-scalar key reached resolve(): {e}")
                     });
-                    map.insert(kkey, v.resolve());
+                    map.insert(kkey, v.resolve(types));
                 }
-                KObject::dict(map)
+                KObject::dict(map, types)
             }
             ExpressionPart::RecordLiteral(pairs) => {
                 let fields: Record<KObject<'a>> = pairs
                     .iter()
-                    .map(|(name, v)| (name.clone(), v.resolve()))
+                    .map(|(name, v)| (name.clone(), v.resolve(types)))
                     .collect();
-                KObject::record(fields)
+                KObject::record(fields, types)
             }
             // A spliced cell is opened / adopted at the consuming scope's brand before resolution, so
             // its value never reaches the region-less `resolve()`. The container arms above recurse
@@ -720,7 +725,11 @@ impl<'a> Parseable for KExpression<'a> {
     fn ktype(&self) -> crate::machine::model::KType {
         crate::machine::model::KType::KExpression
     }
-    fn summarize(&self) -> String {
+}
+
+impl<'a> KExpression<'a> {
+    /// Surface rendering of the whole expression — parts only, so no registry is needed.
+    pub fn summarize(&self) -> String {
         self.parts
             .iter()
             .map(|p| p.value.summarize())

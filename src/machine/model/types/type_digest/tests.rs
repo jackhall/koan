@@ -9,6 +9,7 @@ use crate::machine::core::ScopeId;
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Record, RecursiveSet,
 };
+use crate::machine::model::TypeRegistry;
 
 fn record(pairs: Vec<(&str, KType)>) -> KType {
     KType::record(Box::new(Record::from_pairs(
@@ -26,8 +27,9 @@ fn same_content_built_twice_digests_equal() {
     let r2 = record(vec![("x", KType::Number), ("y", KType::Str)]);
     assert_eq!(digest_of(&r1), digest_of(&r2));
 
-    let u1 = KType::union_of(vec![KType::Number, KType::Str]);
-    let u2 = KType::union_of(vec![KType::Number, KType::Str]);
+    let types = TypeRegistry::new();
+    let u1 = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let u2 = KType::union_of(vec![KType::Number, KType::Str], &types);
     assert_eq!(digest_of(&u1), digest_of(&u2));
 }
 
@@ -52,8 +54,9 @@ fn record_digest_is_order_blind_but_binds_name_to_type() {
 
 #[test]
 fn union_digest_is_order_blind() {
-    let forward = KType::union_of(vec![KType::Number, KType::Str]);
-    let reversed = KType::union_of(vec![KType::Str, KType::Number]);
+    let types = TypeRegistry::new();
+    let forward = KType::union_of(vec![KType::Number, KType::Str], &types);
+    let reversed = KType::union_of(vec![KType::Str, KType::Number], &types);
     assert_eq!(digest_of(&forward), digest_of(&reversed));
 }
 

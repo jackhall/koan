@@ -3,7 +3,7 @@ use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::execute::KoanRuntime;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{Carried, KObject, KType, TypeRegistry};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::BindingIndex;
 use crate::machine::NameOutcome;
@@ -24,7 +24,14 @@ fn resolve_name_part_identifier_resolved() {
         .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     let runtime = KoanRuntime::new();
-    match resolve_name_part(scope, &part, runtime.scheduler(), None, None) {
+    match resolve_name_part(
+        scope,
+        &part,
+        runtime.scheduler(),
+        None,
+        None,
+        &TypeRegistry::new(),
+    ) {
         NameOutcome::Resolved(Carried::Object(KObject::Number(n))) => assert_eq!(*n, 7.0),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
     }
@@ -36,7 +43,14 @@ fn resolve_name_part_type_resolved() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let part = ExpressionPart::Type(TypeIdentifier::leaf("Number".to_string()));
     let runtime = KoanRuntime::new();
-    match resolve_name_part(scope, &part, runtime.scheduler(), None, None) {
+    match resolve_name_part(
+        scope,
+        &part,
+        runtime.scheduler(),
+        None,
+        None,
+        &TypeRegistry::new(),
+    ) {
         NameOutcome::Resolved(Carried::Type(KType::Number)) => {}
         other => {
             let kind = match other {
@@ -69,7 +83,14 @@ fn resolve_name_part_parked() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());
-    match resolve_name_part(scope, &part, runtime.scheduler(), None, None) {
+    match resolve_name_part(
+        scope,
+        &part,
+        runtime.scheduler(),
+        None,
+        None,
+        &TypeRegistry::new(),
+    ) {
         NameOutcome::Parked(p) => assert_eq!(p, producer),
         _ => panic!("expected NameOutcome::Parked(producer)"),
     }
@@ -81,7 +102,14 @@ fn resolve_name_part_unbound() {
     let scope = default_scope(&region, Box::new(std::io::sink()));
     let part = ExpressionPart::Identifier("missing".to_string());
     let runtime = KoanRuntime::new();
-    match resolve_name_part(scope, &part, runtime.scheduler(), None, None) {
+    match resolve_name_part(
+        scope,
+        &part,
+        runtime.scheduler(),
+        None,
+        None,
+        &TypeRegistry::new(),
+    ) {
         NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
     }
@@ -108,7 +136,14 @@ fn resolve_name_part_self_park_is_cycle() {
         )
         .unwrap();
     let part = ExpressionPart::Identifier("self_ref".to_string());
-    match resolve_name_part(scope, &part, runtime.scheduler(), None, Some(slot)) {
+    match resolve_name_part(
+        scope,
+        &part,
+        runtime.scheduler(),
+        None,
+        Some(slot),
+        &TypeRegistry::new(),
+    ) {
         NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),
         _ => panic!("expected NameOutcome::Cycle"),
     }

@@ -11,6 +11,7 @@
 //! re-tagging the carrier so only one arm admits. See
 //! [design/typing/ktype/parameterization-and-variance.md § Variance](../../design/typing/ktype/parameterization-and-variance.md#variance).
 
+use crate::machine::model::TypeRegistry;
 use std::rc::Rc;
 
 use crate::machine::model::Carried;
@@ -60,7 +61,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Some(other) => {
             return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(
                 "FROM record operand must be a record, got `{}`",
-                other.ktype().name(),
+                other.ktype().name(ctx.types),
             )))));
         }
         None => {
@@ -92,7 +93,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     let lhs: &crate::machine::DeliveredCarried = match ctx.arg_carrier("record") {
         Some(c) => c,
         None => {
-            resident = match ctx.scope.seal_fresh_object(record_obj.deep_clone()) {
+            resident = match ctx
+                .scope
+                .seal_fresh_object(record_obj.deep_clone(), ctx.types)
+            {
                 Ok(witnessed) => ctx.scope.seal_resident_delivered(witnessed),
                 Err(e) => return Action::Done(Err(e)),
             };
@@ -129,7 +133,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     })))
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Return type `:{}` is contract-only ("FROM returns a record"): a native
     // `Outcome::Done(Value)` flows straight to Done without being stamped against the
     // declared return, so the empty `:{}` does not coarsen the body's narrowed
@@ -143,7 +147,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("record", KType::record(Box::new(Record::new()))),
         ],
     );
-    crate::builtins::register_builtin(scope, "FROM", signature, body);
+    crate::builtins::register_builtin(scope, "FROM", signature, body, types);
 }
 
 #[cfg(test)]

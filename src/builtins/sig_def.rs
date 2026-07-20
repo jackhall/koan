@@ -11,6 +11,7 @@
 //! operators (`:|` / `:!`) read the stored schema at ascription time.
 
 use crate::machine::model::KType;
+use crate::machine::model::TypeRegistry;
 use crate::machine::model::{KKind, SigContent, SigSchema};
 use crate::machine::{Scope, TraceFrame};
 use std::rc::Rc;
@@ -25,7 +26,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     use super::await_body::{await_body_in_scope, ChildScopeSeal};
     use crate::machine::{require_bare_type_name, require_kexpression, Action};
 
-    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG"));
+    let name = crate::try_action!(require_bare_type_name(ctx.args, "name", "SIG", ctx.types));
     let body_expr = crate::try_action!(require_kexpression(ctx.args, "SIG", "body"));
 
     let decl_scope = ctx
@@ -61,7 +62,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     )
 }
 
-pub fn register<'a>(scope: &'a Scope<'a>) {
+pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let signature = sig(
         KType::OfKind(KKind::Signature),
         vec![
@@ -78,6 +79,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some((super::type_part_binder_name, crate::machine::BindKind::Type)),
         None,
+        types,
     );
 }
 

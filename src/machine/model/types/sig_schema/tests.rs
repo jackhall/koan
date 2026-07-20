@@ -447,6 +447,7 @@ fn sig_to_sig_entailment_over_shared_abstract() {
 /// the nonce separates them — and must not be mistaken for a reference to that declaration.
 #[test]
 fn substitute_leaves_a_generative_mint_alone() {
+    let types = TypeRegistry::new();
     let mut map: HashMap<String, KType> = HashMap::new();
     map.insert("Type".into(), KType::Number);
 
@@ -456,22 +457,23 @@ fn substitute_leaves_a_generative_mint_alone() {
         param_names: Vec::new(),
         nonce: Some(ScopeId::from_raw(0, 0xBEEF)),
     };
-    assert_eq!(substitute_sig_members(&mint, SUP_ID, &map), mint);
+    assert_eq!(substitute_sig_members(&mint, SUP_ID, &map, &types), mint);
     // The declaration it was minted from still substitutes.
     assert_eq!(
-        substitute_sig_members(&sig_abstract(SUP_ID, "Type"), SUP_ID, &map),
+        substitute_sig_members(&sig_abstract(SUP_ID, "Type"), SUP_ID, &map, &types),
         KType::Number
     );
 }
 
 #[test]
 fn substitute_top_level_and_nested() {
+    let types = TypeRegistry::new();
     let mut map: HashMap<String, KType> = HashMap::new();
     map.insert("Type".into(), KType::Number);
 
     // Top level.
     assert_eq!(
-        substitute_sig_members(&sig_abstract(SUP_ID, "Type"), SUP_ID, &map),
+        substitute_sig_members(&sig_abstract(SUP_ID, "Type"), SUP_ID, &map, &types),
         KType::Number
     );
     // Inside KFunction params and ret.
@@ -480,7 +482,7 @@ fn substitute_top_level_and_nested() {
         sig_abstract(SUP_ID, "Type"),
     );
     assert_eq!(
-        substitute_sig_members(&f, SUP_ID, &map),
+        substitute_sig_members(&f, SUP_ID, &map, &types),
         fn_type(vec![("x", KType::Number)], KType::Number)
     );
     // Inside List, Record, Union.
@@ -488,7 +490,8 @@ fn substitute_top_level_and_nested() {
         substitute_sig_members(
             &KType::list(Box::new(sig_abstract(SUP_ID, "Type"))),
             SUP_ID,
-            &map
+            &map,
+            &types
         ),
         KType::list(Box::new(KType::Number))
     );
@@ -497,21 +500,22 @@ fn substitute_top_level_and_nested() {
         sig_abstract(SUP_ID, "Type"),
     )])));
     assert_eq!(
-        substitute_sig_members(&rec, SUP_ID, &map),
+        substitute_sig_members(&rec, SUP_ID, &map, &types),
         KType::record(Box::new(Record::from_pairs([(
             "f".to_string(),
             KType::Number
         )])))
     );
-    let union = KType::union_of(vec![sig_abstract(SUP_ID, "Type"), KType::Str]);
+    let union = KType::union_of(vec![sig_abstract(SUP_ID, "Type"), KType::Str], &types);
     assert_eq!(
-        substitute_sig_members(&union, SUP_ID, &map),
-        KType::union_of(vec![KType::Number, KType::Str])
+        substitute_sig_members(&union, SUP_ID, &map, &types),
+        KType::union_of(vec![KType::Number, KType::Str], &types)
     );
 }
 
 #[test]
 fn substitute_constructor_apply_abstract_ctor_position() {
+    let types = TypeRegistry::new();
     let mut map: HashMap<String, KType> = HashMap::new();
     let real = ctor("MyWrap", 1);
     map.insert("Wrap".into(), real.clone());
@@ -520,7 +524,7 @@ fn substitute_constructor_apply_abstract_ctor_position() {
         Record::from_pairs([("Type".to_string(), KType::Number)]),
     );
     assert_eq!(
-        substitute_sig_members(&applied, SUP_ID, &map),
+        substitute_sig_members(&applied, SUP_ID, &map, &types),
         KType::constructor_apply(
             Box::new(real),
             Record::from_pairs([("Type".to_string(), KType::Number)])
@@ -530,29 +534,40 @@ fn substitute_constructor_apply_abstract_ctor_position() {
 
 #[test]
 fn substitute_leaves_non_matching_sig_id_and_unknown_names() {
+    let types = TypeRegistry::new();
     let map: HashMap<String, KType> = HashMap::new();
     // Unknown name — untouched even at the matching sig_id.
     let unknown = sig_abstract(SUP_ID, "Other");
-    assert_eq!(substitute_sig_members(&unknown, SUP_ID, &map), unknown);
+    assert_eq!(
+        substitute_sig_members(&unknown, SUP_ID, &map, &types),
+        unknown
+    );
     // Non-matching sig_id — untouched.
     let mut with_type: HashMap<String, KType> = HashMap::new();
     with_type.insert("Type".into(), KType::Number);
     let other_sig = sig_abstract(SUP_ID, "Type");
     assert_eq!(
-        substitute_sig_members(&other_sig, REAL_ID, &with_type),
+        substitute_sig_members(&other_sig, REAL_ID, &with_type, &types),
         other_sig
     );
 }
 
 #[test]
 fn constructor_param_names_probe() {
+    let types = TypeRegistry::new();
     assert_eq!(
-        constructor_param_names(&sig_abstract_ctor(SUP_ID, "Wrap", 1)),
+        constructor_param_names(&sig_abstract_ctor(SUP_ID, "Wrap", 1), &types),
         Some(params(1)),
     );
-    assert_eq!(constructor_param_names(&ctor("Wrap", 2)), Some(params(2)),);
-    assert_eq!(constructor_param_names(&KType::Number), None);
-    assert_eq!(constructor_param_names(&sig_abstract(SUP_ID, "Elt")), None);
+    assert_eq!(
+        constructor_param_names(&ctor("Wrap", 2), &types),
+        Some(params(2)),
+    );
+    assert_eq!(constructor_param_names(&KType::Number, &types), None);
+    assert_eq!(
+        constructor_param_names(&sig_abstract(SUP_ID, "Elt"), &types),
+        None
+    );
 }
 
 /// Parameter names are interface: a family declaring a differently-named parameter does not

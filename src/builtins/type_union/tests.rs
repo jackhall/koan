@@ -1,6 +1,7 @@
 use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
 use crate::machine::model::KType;
 use crate::machine::model::ReductionMode;
+use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 
 /// AC7: `|` is registered as a single-member `Unary`-mode operator group, so a `|` run reduces
@@ -27,7 +28,7 @@ fn two_member_union_lowers_to_union() {
     let result = run_one_type(scope, parse_one(":(Number | Str)"));
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::Number, KType::Str]),
+        KType::union_of(vec![KType::Number, KType::Str], &TypeRegistry::new()),
         "two-member `|` builds the union of its members",
     );
 }
@@ -41,7 +42,10 @@ fn three_member_run_builds_flat_union() {
     let result = run_one_type(scope, parse_one(":(Number | Str | Bool)"));
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::Number, KType::Str, KType::Bool]),
+        KType::union_of(
+            vec![KType::Number, KType::Str, KType::Bool],
+            &TypeRegistry::new()
+        ),
     );
 }
 
@@ -73,7 +77,10 @@ fn prefix_form_builds_union() {
     let result = run_one_type(scope, parse_one(":(| [Number Str Bool])"));
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::Number, KType::Str, KType::Bool]),
+        KType::union_of(
+            vec![KType::Number, KType::Str, KType::Bool],
+            &TypeRegistry::new()
+        ),
     );
 }
 
@@ -86,7 +93,10 @@ fn parenthesized_compound_member() {
     let result = run_one_type(scope, parse_one(":((LIST OF Number) | Str)"));
     assert_eq!(
         *result,
-        KType::union_of(vec![KType::list(Box::new(KType::Number)), KType::Str]),
+        KType::union_of(
+            vec![KType::list(Box::new(KType::Number)), KType::Str],
+            &TypeRegistry::new()
+        ),
     );
 }
 
@@ -103,7 +113,9 @@ fn binary_union_with_reaching_member_correlates() {
         KType::Union { members, .. } => {
             assert_eq!(members.len(), 2, "expected a flat two-member union");
             assert!(
-                members.iter().any(|m| m.name() == "Wrapped"),
+                members
+                    .iter()
+                    .any(|m| m.name(&TypeRegistry::new()) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
             assert!(
@@ -128,7 +140,9 @@ fn nary_union_with_reaching_member_correlates() {
         KType::Union { members, .. } => {
             assert_eq!(members.len(), 3, "expected a flat three-member union");
             assert!(
-                members.iter().any(|m| m.name() == "Wrapped"),
+                members
+                    .iter()
+                    .any(|m| m.name(&TypeRegistry::new()) == "Wrapped"),
                 "the reaching member must survive the carrier-view crossing, got {members:?}",
             );
             assert!(members.contains(&KType::Number), "got {members:?}");
@@ -156,7 +170,10 @@ fn union_with_signature_member_admits_module_and_number() {
     for call in ["EITHER widget", "EITHER 5"] {
         match run_one(scope, parse_one(call)) {
             KObject::KString(s) => assert_eq!(s, "admitted", "for `{call}`"),
-            other => panic!("`{call}` should dispatch, got {}", other.ktype().name()),
+            other => panic!(
+                "`{call}` should dispatch, got {}",
+                other.ktype().name(&TypeRegistry::new())
+            ),
         }
     }
 }

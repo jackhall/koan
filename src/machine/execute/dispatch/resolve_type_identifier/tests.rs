@@ -1,18 +1,20 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
 use crate::machine::core::run_root_storage;
+use crate::machine::model::TypeRegistry;
 
 #[test]
 fn resolve_type_expr_builtin_leaf_caches() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
+    let types = TypeRegistry::new();
     let te = TypeIdentifier::leaf("Number".into());
-    let first = match scope.resolve_type_identifier(&te, None) {
+    let first = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
     assert_eq!(*first, KType::Number);
-    let second = match scope.resolve_type_identifier(&te, None) {
+    let second = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
@@ -26,8 +28,9 @@ fn resolve_type_expr_builtin_leaf_caches() {
 fn resolve_type_expr_unbound_returns_unbound() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
+    let types = TypeRegistry::new();
     let te = TypeIdentifier::leaf("NotABuiltin".into());
-    match scope.resolve_type_identifier(&te, None) {
+    match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Unbound(_) => {}
         _ => panic!("expected Unbound for unknown leaf"),
     }
@@ -41,8 +44,9 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
     let region = run_root_storage();
     let scope = run_root_silent(&region);
     run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
+    let types = TypeRegistry::new();
     let te = TypeIdentifier::leaf("Point".into());
-    let kt = match scope.resolve_type_identifier(&te, None) {
+    let kt = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after STRUCT declaration"),
     };
@@ -50,7 +54,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         KType::SetRef { set, index } => assert_eq!(set.member(*index).name, "Point"),
         _ => panic!("expected SetRef for Point"),
     }
-    let kt2 = match scope.resolve_type_identifier(&te, None) {
+    let kt2 = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on memo hit"),
     };
@@ -134,6 +138,7 @@ mod bare_leaf_resolution {
     use crate::machine::core::BindingIndex;
     use crate::machine::model::KType;
     use crate::machine::model::TypeIdentifier;
+    use crate::machine::model::TypeRegistry;
     use crate::machine::model::TypeResolution;
 
     #[test]
@@ -141,8 +146,9 @@ mod bare_leaf_resolution {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
         scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+        let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
-        match scope.resolve_type_identifier(&leaf, None) {
+        match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(resolved) if *resolved == KType::Number => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
@@ -152,8 +158,9 @@ mod bare_leaf_resolution {
     fn unbound_returns_unbound() {
         let region = run_root_storage();
         let scope = run_root_bare(&region);
+        let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Missing".to_string());
-        match scope.resolve_type_identifier(&leaf, None) {
+        match scope.resolve_type_identifier(&leaf, None, &types) {
             // The bridge surfaces the elaborator's `unknown type name` diagnostic, which
             // names the leaf rather than carrying the bare name.
             TypeResolution::Unbound(message) => assert!(
@@ -206,8 +213,9 @@ mod bare_leaf_resolution {
             )
             .expect("placeholder install");
 
+        let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Node".to_string());
-        match scope.resolve_type_identifier(&leaf, None) {
+        match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Park(producers) => {
                 assert_eq!(producers, vec![NodeId(7)], "parks on the single producer");
             }
@@ -225,7 +233,7 @@ mod bare_leaf_resolution {
         );
         drop(pending_guard);
 
-        match scope.resolve_type_identifier(&leaf, None) {
+        match scope.resolve_type_identifier(&leaf, None, &types) {
             TypeResolution::Done(resolved) => match resolved {
                 KType::SetRef { set: s, index } => {
                     assert_eq!(s.member(*index).name, "Node");

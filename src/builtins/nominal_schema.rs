@@ -20,7 +20,7 @@ use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
 /// and the deferred finish without `Clone`.
 pub(crate) type SchemaFinalize<'a> = fn(
-    &FinishCtx<'a>,
+    &FinishCtx<'a, '_>,
     String,
     Vec<(String, KType)>,
     BindingIndex,
@@ -55,6 +55,7 @@ pub(crate) fn nominal_schema_action<'a>(
         name_kind,
         &mut elaborator,
         None,
+        ctx.types,
     ) {
         FieldListOutcome::Done(fields) => {
             Action::Done(finalize(&ctx.finish_ctx(), name, fields, bind_index))

@@ -18,6 +18,7 @@ use crate::machine::core::ScopeId;
 use crate::machine::model::types::{
     KKind, KType, NominalMember, NominalSchema, Record, RecursiveSet, SigSchema,
 };
+use crate::machine::model::TypeRegistry;
 
 #[track_caller]
 fn assert_pinned(label: &str, actual: TypeDigest, expected: u128) {
@@ -56,10 +57,13 @@ fn chain() -> Rc<RecursiveSet> {
 
 /// A newtype whose representation is a union naming itself — the binder shape a self-referencing
 /// union declaration seals to.
-fn recursive_union() -> Rc<RecursiveSet> {
+fn recursive_union(types: &TypeRegistry) -> Rc<RecursiveSet> {
     RecursiveSet::singleton(
         "Tree".into(),
-        newtype(KType::union_of(vec![KType::Number, KType::SetLocal(0)])),
+        newtype(KType::union_of(
+            vec![KType::Number, KType::SetLocal(0)],
+            types,
+        )),
     )
 }
 
@@ -294,14 +298,15 @@ fn self_recursive_newtype_digests_are_pinned() {
 
 #[test]
 fn self_referencing_union_digests_are_pinned() {
+    let types = TypeRegistry::new();
     assert_pinned(
         "Tree set",
-        recursive_union().digest().expect("sealed on fill"),
+        recursive_union(&types).digest().expect("sealed on fill"),
         0xd0d777d4_90760cd1_778b02fd_6ecdf5ca,
     );
     assert_pinned(
         "Tree member reference",
-        digest_of(&member_ref(recursive_union(), 0)),
+        digest_of(&member_ref(recursive_union(&types), 0)),
         0xeee5c699_feb5a1c8_4b913ea2_313272cd,
     );
 }

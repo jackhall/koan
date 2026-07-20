@@ -98,13 +98,17 @@ pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
 /// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
-pub fn require_ktype<'a>(args: &KObject<'a>, name: &str) -> Result<KType, KError> {
+pub fn require_ktype<'a>(
+    args: &KObject<'a>,
+    name: &str,
+    types: &TypeRegistry,
+) -> Result<KType, KError> {
     match arg_held(args, name) {
         Some(Held::Type(kt)) => Ok(kt.clone()),
         Some(Held::Object(o)) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: name.to_string(),
             expected: "ProperType".to_string(),
-            got: o.ktype().name(),
+            got: o.ktype().name(types),
         })),
         // Every slot reaching here is `OfKind(AnyType)`, which dispatch auto-wraps into a
         // resolved type carrier, so an unlowered name is not a shape this door serves.
@@ -126,12 +130,13 @@ pub fn require_identifier_name<'a>(
     args: &KObject<'a>,
     slot: &str,
     surface: &str,
+    types: &TypeRegistry,
 ) -> Result<String, KError> {
     match arg_object(args, slot) {
         Some(KObject::KString(s)) => Ok(s.clone()),
         Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {slot} must be a bare identifier, got `{}`",
-            other.ktype().name(),
+            other.ktype().name(types),
         )))),
         None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
@@ -146,12 +151,13 @@ pub fn require_bare_type_name<'a>(
     args: &KObject<'a>,
     slot: &str,
     surface: &str,
+    types: &TypeRegistry,
 ) -> Result<String, KError> {
     match arg_held(args, slot) {
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet.
         Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
-        Some(Held::Type(t)) => bare_type_name(t, slot, surface),
+        Some(Held::Type(t)) => bare_type_name(t, slot, surface, types),
         Some(Held::Object(_)) | None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
 }
@@ -160,7 +166,12 @@ pub fn require_bare_type_name<'a>(
 /// `KObject::Record` type cell. A simple / nominal leaf yields its `name()`; a structural type
 /// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
 /// embedded in the message.
-fn bare_type_name(t: &KType, name: &str, surface: &str) -> Result<String, KError> {
+fn bare_type_name(
+    t: &KType,
+    name: &str,
+    surface: &str,
+    types: &TypeRegistry,
+) -> Result<String, KError> {
     match t {
         KType::Number
         | KType::Str
@@ -174,7 +185,7 @@ fn bare_type_name(t: &KType, name: &str, surface: &str) -> Result<String, KError
         | KType::Any
         | KType::SetRef { .. }
         | KType::Signature { .. }
-        | KType::AbstractType { .. } => Ok(t.name()),
+        | KType::AbstractType { .. } => Ok(t.name(types)),
         KType::List { .. }
         | KType::Dict { .. }
         | KType::Record { .. }
@@ -186,7 +197,7 @@ fn bare_type_name(t: &KType, name: &str, surface: &str) -> Result<String, KError
         | KType::RecursiveGroup(_)
         | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
             "{surface} {name} must be a bare type name, got `{}`",
-            t.render(),
+            t.render(types),
         )))),
     }
 }
@@ -237,8 +248,10 @@ pub struct BodyCtx<'a, 'c> {
     /// `'a`: its doors return a [`StepCarried`] that cannot outlive the step. The same allocator a
     /// wake-time [`FinishCtx`] carries.
     pub ctx: StepAllocator<'a>,
-    /// The run's subtype-verdict registry, reached from the scheduler view at the call. A builtin
-    /// body that runs a type predicate (ascription, MATCH arm selection, `==`) passes it down.
+    /// The run's subtype-verdict registry, borrowed from the scheduler view at the call. A builtin
+    /// body that runs a type predicate (ascription, MATCH arm selection, `==`) passes it down. The
+    /// registry is owned by the run frame and outlives the call, so the body forwards the borrow
+    /// rather than sharing ownership.
     pub types: &'c TypeRegistry,
 }
 
@@ -262,10 +275,11 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
     /// A [`FinishCtx`] over this body's own scope and context — for a synchronous body that hands its
     /// resolve/dispatch continuation the same shape a wake-time finish receives (e.g.
     /// `resolve_or_await`'s synchronous arm).
-    pub fn finish_ctx(&self) -> FinishCtx<'a> {
+    pub fn finish_ctx(&self) -> FinishCtx<'a, 'c> {
         FinishCtx {
             scope: self.scope,
             ctx: self.ctx.clone(),
+            types: self.types,
         }
     }
 }
@@ -275,21 +289,27 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
 /// context wrapping the frame storage owning that scope's region, resolved by the step machinery so
 /// a finish allocates with no failure path (`ctx.region()` / `ctx.alloc()` / `ctx.alloc_with()`;
 /// `design/scheduler-library.md` guarantees 3 and 5).
-pub struct FinishCtx<'a> {
+pub struct FinishCtx<'a, 'r> {
     pub scope: &'a Scope<'a>,
     pub ctx: StepAllocator<'a>,
+    /// The run's subtype-verdict registry, mirroring [`BodyCtx::types`] so a wake-time finish
+    /// runs the same type predicates a synchronous body does. Borrowed for the duration of the
+    /// finish call: the site building this context holds the registry and consumes the context as
+    /// a short `&FinishCtx`, so `'r` is independent of the step brand `'a`.
+    pub types: &'r TypeRegistry,
 }
 
-impl<'a> FinishCtx<'a> {
+impl<'a, 'r> FinishCtx<'a, 'r> {
     /// Build a `FinishCtx` from a scope alone, reconstructing the step context over the scope's own
     /// frame — for a synchronous site that holds a scope but no live step context (a resolve
     /// combinator's `Done` arm, a unit test). `scope_frame(scope)` names the same dest frame the
     /// harness step context wraps at wake, so both allocate in the same region. A site that already
     /// holds the live step context (a builtin body) uses [`BodyCtx::finish_ctx`] instead.
-    pub fn for_scope(scope: &'a Scope<'a>) -> Self {
+    pub fn for_scope(scope: &'a Scope<'a>, types: &'r TypeRegistry) -> Self {
         FinishCtx {
             scope,
             ctx: StepAllocator::for_scope(scope),
+            types,
         }
     }
 }
@@ -318,14 +338,16 @@ pub struct DepTerminal<'a> {
 /// (addressed by `park` / `owned` position) of un-relocated [`DepTerminal`]s — each carrying its
 /// step-brand `value` and its own reach `carrier` — yielding another `Action` the harness recurses
 /// into. Reads only a `FinishCtx`, never the scheduler — exec's continuation pattern.
-pub type AwaitContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a>;
+pub type AwaitContinue<'a> = Box<
+    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, DepResults<'_, &DepTerminal<'a>>) -> Action<'a> + 'a,
+>;
 
 /// A `Catch` finish: re-entered with the watched slot's delivery envelope (value, reach, and
 /// retained producer pin as one unit, adopted or opened at the finish's own step brand) or the
 /// watched `KError`.
-pub type CatchContinue<'a> =
-    Box<dyn FnOnce(&FinishCtx<'a>, Result<DeliveredCarried, KError>) -> Action<'a> + 'a>;
+pub type CatchContinue<'a> = Box<
+    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, Result<DeliveredCarried, KError>) -> Action<'a> + 'a,
+>;
 
 /// The return contract a [`Action::Tail`] carries — eager, or resolved from the last leading
 /// statement's result at finish time (a deferred-`Expression` FN return: the return-type

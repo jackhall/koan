@@ -76,10 +76,10 @@ fn cross_variant_scalars_are_unequal() {
 #[test]
 fn list_element_and_length() {
     let types = TypeRegistry::new();
-    let a = KObject::list(vec![num(1.0), num(2.0)]);
-    let b = KObject::list(vec![num(1.0), num(2.0)]);
-    let c = KObject::list(vec![num(1.0), num(3.0)]);
-    let short = KObject::list(vec![num(1.0)]);
+    let a = KObject::list(vec![num(1.0), num(2.0)], &types);
+    let b = KObject::list(vec![num(1.0), num(2.0)], &types);
+    let c = KObject::list(vec![num(1.0), num(3.0)], &types);
+    let short = KObject::list(vec![num(1.0)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     assert_eq!(a.value_equal(&c, &types), Ok(false));
     assert_eq!(a.value_equal(&short, &types), Ok(false));
@@ -89,7 +89,7 @@ fn list_element_and_length() {
 fn list_nan_self_compare_is_false() {
     let types = TypeRegistry::new();
     // No Rc-ptr fast path: a self-comparison of a NaN-holding list is element-wise false.
-    let l = KObject::list(vec![num(f64::NAN)]);
+    let l = KObject::list(vec![num(f64::NAN)], &types);
     assert_eq!(l.value_equal(&l, &types), Ok(false));
 }
 
@@ -109,9 +109,9 @@ fn list_comparability_gate_is_intransitive() {
 #[test]
 fn list_of_types_compares_by_digest() {
     let types = TypeRegistry::new();
-    let a = KObject::list_of_held(vec![Held::Type(KType::Number)]);
-    let b = KObject::list_of_held(vec![Held::Type(KType::Number)]);
-    let c = KObject::list_of_held(vec![Held::Type(KType::Str)]);
+    let a = KObject::list_of_held(vec![Held::Type(KType::Number)], &types);
+    let b = KObject::list_of_held(vec![Held::Type(KType::Number)], &types);
+    let c = KObject::list_of_held(vec![Held::Type(KType::Str)], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
     // Different element type parameters (a `Type OF Number` vs `Type OF Str` list) close the gate.
     assert_eq!(a.value_equal(&c, &types), Ok(false));
@@ -119,64 +119,80 @@ fn list_of_types_compares_by_digest() {
 
 // --- dicts ------------------------------------------------------------------------
 
-fn dict(pairs: Vec<(KKey, KObject<'static>)>) -> KObject<'static> {
+fn dict(pairs: Vec<(KKey, KObject<'static>)>, types: &TypeRegistry) -> KObject<'static> {
     let mut map: HashMap<KKey, KObject<'static>> = HashMap::new();
     for (k, v) in pairs {
         map.insert(k, v);
     }
-    KObject::dict(map)
+    KObject::dict(map, types)
 }
 
 #[test]
 fn dict_key_and_value_equality() {
     let types = TypeRegistry::new();
-    let a = dict(vec![
-        (KKey::String("x".into()), num(1.0)),
-        (KKey::String("y".into()), num(2.0)),
-    ]);
-    let b = dict(vec![
-        (KKey::String("y".into()), num(2.0)),
-        (KKey::String("x".into()), num(1.0)),
-    ]);
+    let a = dict(
+        vec![
+            (KKey::String("x".into()), num(1.0)),
+            (KKey::String("y".into()), num(2.0)),
+        ],
+        &types,
+    );
+    let b = dict(
+        vec![
+            (KKey::String("y".into()), num(2.0)),
+            (KKey::String("x".into()), num(1.0)),
+        ],
+        &types,
+    );
     assert_eq!(a.value_equal(&b, &types), Ok(true));
 
-    let missing_key = dict(vec![
-        (KKey::String("x".into()), num(1.0)),
-        (KKey::String("z".into()), num(2.0)),
-    ]);
+    let missing_key = dict(
+        vec![
+            (KKey::String("x".into()), num(1.0)),
+            (KKey::String("z".into()), num(2.0)),
+        ],
+        &types,
+    );
     assert_eq!(a.value_equal(&missing_key, &types), Ok(false));
 
-    let diff_value = dict(vec![
-        (KKey::String("x".into()), num(1.0)),
-        (KKey::String("y".into()), num(9.0)),
-    ]);
+    let diff_value = dict(
+        vec![
+            (KKey::String("x".into()), num(1.0)),
+            (KKey::String("y".into()), num(9.0)),
+        ],
+        &types,
+    );
     assert_eq!(a.value_equal(&diff_value, &types), Ok(false));
 }
 
 #[test]
 fn dict_length_mismatch_is_false() {
     let types = TypeRegistry::new();
-    let a = dict(vec![(KKey::String("x".into()), num(1.0))]);
-    let b = dict(vec![
-        (KKey::String("x".into()), num(1.0)),
-        (KKey::String("y".into()), num(2.0)),
-    ]);
+    let a = dict(vec![(KKey::String("x".into()), num(1.0))], &types);
+    let b = dict(
+        vec![
+            (KKey::String("x".into()), num(1.0)),
+            (KKey::String("y".into()), num(2.0)),
+        ],
+        &types,
+    );
     assert_eq!(a.value_equal(&b, &types), Ok(false));
 }
 
 // --- records ----------------------------------------------------------------------
 
-fn record(pairs: Vec<(&str, KObject<'static>)>) -> KObject<'static> {
-    KObject::record(Record::from_pairs(
-        pairs.into_iter().map(|(k, v)| (k.to_string(), v)),
-    ))
+fn record(pairs: Vec<(&str, KObject<'static>)>, types: &TypeRegistry) -> KObject<'static> {
+    KObject::record(
+        Record::from_pairs(pairs.into_iter().map(|(k, v)| (k.to_string(), v))),
+        types,
+    )
 }
 
 #[test]
 fn record_field_order_blind_equality() {
     let types = TypeRegistry::new();
-    let a = record(vec![("x", num(1.0)), ("y", num(2.0))]);
-    let b = record(vec![("y", num(2.0)), ("x", num(1.0))]);
+    let a = record(vec![("x", num(1.0)), ("y", num(2.0))], &types);
+    let b = record(vec![("y", num(2.0)), ("x", num(1.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(true));
 }
 
@@ -185,16 +201,16 @@ fn record_width_mismatch_comparable_but_unequal() {
     let types = TypeRegistry::new();
     // `{x:Number}` and `{x:Number, y:Number}` are related by record subtyping (gate open),
     // but the field sets differ → unequal.
-    let narrow = record(vec![("x", num(1.0))]);
-    let wide = record(vec![("x", num(1.0)), ("y", num(2.0))]);
+    let narrow = record(vec![("x", num(1.0))], &types);
+    let wide = record(vec![("x", num(1.0)), ("y", num(2.0))], &types);
     assert_eq!(narrow.value_equal(&wide, &types), Ok(false));
 }
 
 #[test]
 fn record_field_value_differs() {
     let types = TypeRegistry::new();
-    let a = record(vec![("x", num(1.0))]);
-    let b = record(vec![("x", num(2.0))]);
+    let a = record(vec![("x", num(1.0))], &types);
+    let b = record(vec![("x", num(2.0))], &types);
     assert_eq!(a.value_equal(&b, &types), Ok(false));
 }
 
@@ -439,8 +455,14 @@ fn function_operand_is_error_at_any_position() {
     );
     // Nested: a function inside a list propagates the error.
     let storage2 = run_root_storage();
-    let list_f = KObject::list_of_held(vec![Held::Object(a_function(&storage2).deep_clone())]);
-    let list_g = KObject::list_of_held(vec![Held::Object(a_function(&storage2).deep_clone())]);
+    let list_f = KObject::list_of_held(
+        vec![Held::Object(a_function(&storage2).deep_clone())],
+        &types,
+    );
+    let list_g = KObject::list_of_held(
+        vec![Held::Object(a_function(&storage2).deep_clone())],
+        &types,
+    );
     assert_eq!(
         list_f.value_equal(&list_g, &types),
         Err(ValueEqualityError::Function)
@@ -454,8 +476,11 @@ fn length_mismatch_short_circuits_before_banned_cell() {
     // cell returns `Ok(false)` before any `Err`.
     use crate::machine::core::run_root_storage;
     let storage = run_root_storage();
-    let list_f = KObject::list_of_held(vec![Held::Object(a_function(&storage).deep_clone())]);
-    let empty = KObject::list(vec![]);
+    let list_f = KObject::list_of_held(
+        vec![Held::Object(a_function(&storage).deep_clone())],
+        &types,
+    );
+    let empty = KObject::list(vec![], &types);
     assert_eq!(list_f.value_equal(&empty, &types), Ok(false));
 }
 

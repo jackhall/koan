@@ -34,6 +34,7 @@ impl<'step> Scope<'step> {
         &self,
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
+        types: &crate::machine::model::TypeRegistry,
     ) -> TypeResolution<&'step KType> {
         use crate::machine::model::{elaborate_type_identifier, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
@@ -45,7 +46,7 @@ impl<'step> Scope<'step> {
         let mut elaborator = Elaborator::new(self).with_chain(chain);
         // A referenced type still in flight demotes this `Done` to a `Park`; `Park` /
         // `Unbound` forward unchanged.
-        elaborate_type_identifier(&mut elaborator, te).and_then_done(|kt| {
+        elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self }.pending_producers(&kt);
             if pending.is_empty() {
                 // The elaborated type is owned data; it stores into this scope's own region

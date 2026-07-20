@@ -47,7 +47,7 @@ fn let_binds_an_empty_record_literal() {
         Some(KObject::Record(fields, _)) => assert!(fields.is_empty(), "expected empty record"),
         other => panic!(
             "expected `d` bound to an empty Record, got {:?}",
-            other.map(|o| o.ktype().name())
+            other.map(|o| o.ktype().name(&crate::machine::model::TypeRegistry::new()))
         ),
     }
 }
