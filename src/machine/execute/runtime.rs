@@ -91,6 +91,20 @@ impl<'run> KoanRuntime<'run> {
             _run: PhantomData,
         }
     }
+
+    /// Drop the scheduler's slot store and start a fresh one, keeping the ambient run frame — and
+    /// with it the run's [`TypeRegistry`](crate::machine::model::TypeRegistry) and every binding
+    /// already installed on the run root. Call at quiescence.
+    ///
+    /// This is the teardown a test needs between phases when it measures something the drained
+    /// slots hold onto: the scheduler's slot store is a free-list whose length is a high-water
+    /// mark, and a finished slot's terminal retains its producer frame. Both are program-lifetime
+    /// facts about the scheduler, not the run, so a test measuring one program's slot footprint or
+    /// frame retention releases the prior phase's slots first.
+    #[cfg(test)]
+    pub(crate) fn reset_slots(&mut self) {
+        self.sched = Scheduler::new();
+    }
 }
 
 impl Default for KoanRuntime<'_> {

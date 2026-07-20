@@ -419,12 +419,15 @@ fn kexpression_length_and_variant_mismatch() {
 
 // --- banned operands --------------------------------------------------------------
 
-fn a_function(storage: &Rc<crate::machine::core::FrameStorage>) -> KObject<'_> {
-    use crate::builtins::default_scope;
+/// A function value allocated in `storage`, closing over `scope` — the run root's own scope, so
+/// the value is the one a real run would build.
+fn a_function<'a>(
+    storage: &'a Rc<crate::machine::core::FrameStorage>,
+    scope: &'a crate::machine::Scope<'a>,
+) -> KObject<'a> {
     use crate::machine::core::{Body, FrameStorageExt};
     use crate::machine::model::types::{ExpressionSignature, ReturnType};
     use crate::machine::KFunction;
-    let scope = default_scope(storage, Box::new(std::io::sink()));
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: Vec::new(),
@@ -441,10 +444,12 @@ fn a_function(storage: &Rc<crate::machine::core::FrameStorage>) -> KObject<'_> {
 
 #[test]
 fn function_operand_is_error_at_any_position() {
-    let types = TypeRegistry::new();
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
     let storage = run_root_storage();
-    let f = a_function(&storage);
+    let test_run = TestRun::silent(&storage);
+    let types = test_run.types.clone();
+    let f = a_function(&storage, test_run.scope);
     assert_eq!(
         f.value_equal(&num(1.0), &types),
         Err(ValueEqualityError::Function)
@@ -455,12 +460,17 @@ fn function_operand_is_error_at_any_position() {
     );
     // Nested: a function inside a list propagates the error.
     let storage2 = run_root_storage();
+    let second_run = TestRun::silent(&storage2);
     let list_f = KObject::list_of_held(
-        vec![Held::Object(a_function(&storage2).deep_clone())],
+        vec![Held::Object(
+            a_function(&storage2, second_run.scope).deep_clone(),
+        )],
         &types,
     );
     let list_g = KObject::list_of_held(
-        vec![Held::Object(a_function(&storage2).deep_clone())],
+        vec![Held::Object(
+            a_function(&storage2, second_run.scope).deep_clone(),
+        )],
         &types,
     );
     assert_eq!(
@@ -471,13 +481,17 @@ fn function_operand_is_error_at_any_position() {
 
 #[test]
 fn length_mismatch_short_circuits_before_banned_cell() {
-    let types = TypeRegistry::new();
     // The asymmetry the design accepts: a shape short-circuit that never reaches the banned
     // cell returns `Ok(false)` before any `Err`.
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
     let storage = run_root_storage();
+    let test_run = TestRun::silent(&storage);
+    let types = test_run.types.clone();
     let list_f = KObject::list_of_held(
-        vec![Held::Object(a_function(&storage).deep_clone())],
+        vec![Held::Object(
+            a_function(&storage, test_run.scope).deep_clone(),
+        )],
         &types,
     );
     let empty = KObject::list(vec![], &types);
@@ -486,13 +500,13 @@ fn length_mismatch_short_circuits_before_banned_cell() {
 
 #[test]
 fn module_operand_is_error() {
-    let types = TypeRegistry::new();
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
     use crate::machine::model::values::Module;
     let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
-    let m = Module::new("m".into(), scope);
+    let test_run = TestRun::silent(&storage);
+    let types = test_run.types.clone();
+    let m = Module::new("m".into(), test_run.scope);
     let module = KObject::Module(&m);
     assert_eq!(
         module.value_equal(&num(1.0), &types),

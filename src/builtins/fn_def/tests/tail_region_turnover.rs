@@ -8,12 +8,10 @@
 //! - A loop-carried aggregate correctly crosses a tail hop (Lemma 2 — the retiring region
 //!   outlives the adoption that reads it).
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
-use crate::machine::KoanRuntime;
 use crate::witnessed::{region_metrics, reset_region_metrics};
 
 /// A depth-1000 tail-recursive countdown runs on one scheduler slot and in `O(1)` live regions.
@@ -28,7 +26,8 @@ use crate::witnessed::{region_metrics, reset_region_metrics};
 fn tail_recursive_countdown_stays_o1_in_regions() {
     reset_region_metrics();
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
 
     // Enough hops to distinguish O(1) from O(depth) — a non-TCO recursion would leave DEPTH slots
     // and DEPTH live regions — while staying tractable under Miri's interpreter (the whole audit
@@ -45,21 +44,26 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     for i in 1..=DEPTH {
         source.push_str(&format!("LET n{i} = (Nat (Succ n{}))\n", i - 1));
     }
-    run(scope, &source);
+    test_run.run(&source);
+    // Measure the countdown's own slot footprint: release the setup phase's slots so the store's
+    // high-water mark starts at zero.
+    test_run.reset_slots();
 
     // Only the setup's own (no-mint) top-level statements have run so far; the run-root mint is
     // the sole contributor to `peak` at this point.
     let baseline = region_metrics().peak;
 
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
-    runtime
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one(&format!("COUNTDOWN n{DEPTH}")), scope);
+    test_run
+        .runtime
         .execute()
         .expect("the countdown should run to completion");
     assert!(
-        runtime.result_error(id).is_ok(),
+        test_run.runtime.result_error(id).is_ok(),
         "countdown should complete without error: {:?}",
-        runtime.result_error(id).err(),
+        test_run.runtime.result_error(id).err(),
     );
 
     // A MATCH-based tail loop peaks at two slots — the tail-replaced main slot plus the MATCH
@@ -67,10 +71,10 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
     // `super::arena`) — constant regardless of depth, never the depth-`N` slot-per-hop a naive
     // (non-TCO) recursion would leave behind.
     assert_eq!(
-        runtime.len(),
+        test_run.runtime.len(),
         2,
         "a depth-{DEPTH} tail loop must stay on O(1) scheduler slots, got {}",
-        runtime.len(),
+        test_run.runtime.len(),
     );
     // The transient ceiling is three per-call regions, the floor the design's own lemmas set for a
     // MATCH-mediated hop: when the fresh COUNTDOWN cart mints (eagerly, at the arm step's apply —
@@ -97,28 +101,30 @@ fn tail_recursive_countdown_stays_o1_in_regions() {
 fn no_mint_categories_add_no_region_mints() {
     reset_region_metrics();
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
 
     // Setup: a module to open a `USING` window on. Whatever this costs (module bodies are not
     // among the four categories under test) is folded into `baseline` below.
-    run(scope, "MODULE mo = ((LET hidden = 99))");
+    test_run.run("MODULE mo = ((LET hidden = 99))");
     let baseline = region_metrics().minted_total;
 
-    run(
-        scope,
+    test_run.run(
         // Top-level sequence: every statement here is itself the fourth no-mint category.
         "LET a = 42\n\
          LET b = ((a))\n\
          LET visible = (USING mo SCOPE (hidden))",
     );
     // Bare-name forward: a submission that is just a name, spliced onto its existing producer.
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("a"), scope);
-    runtime.execute().expect("bare-name forward should run");
+    let id = test_run.runtime.dispatch_in_scope(parse_one("a"), scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("bare-name forward should run");
     assert!(
-        runtime.result_error(id).is_ok(),
+        test_run.runtime.result_error(id).is_ok(),
         "bare-name forward should resolve cleanly: {:?}",
-        runtime.result_error(id).err(),
+        test_run.runtime.result_error(id).err(),
     );
 
     let minted = region_metrics().minted_total;
@@ -140,9 +146,8 @@ fn no_mint_categories_add_no_region_mints() {
 #[test]
 fn loop_carried_aggregate_survives_tail_hop_adoption() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (DD acc :(LIST OF Any)) -> :(LIST OF Any) = (acc)\n\
          FN (CC acc :(LIST OF Any)) -> :(LIST OF Any) = (DD [(acc)])\n\
          FN (BB acc :(LIST OF Any)) -> :(LIST OF Any) = (CC [(acc)])\n\
@@ -150,7 +155,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
     );
     // Each hop rewraps the previous hop's own list (`[(acc)]`), so unwrapping the wraps back down
     // must reach the original seed `0` unharmed.
-    let result = run_one(scope, parse_one("AA [0]"));
+    let result = test_run.run_one(parse_one("AA [0]"));
     let mut depth = 0;
     let mut current = result;
     loop {
@@ -174,7 +179,7 @@ fn loop_carried_aggregate_survives_tail_hop_adoption() {
             }
             other => panic!(
                 "expected nested Lists bottoming out at Number(0), got {}",
-                other.ktype().name(&TypeRegistry::new()),
+                other.ktype().name(&test_run.types),
             ),
         }
     }

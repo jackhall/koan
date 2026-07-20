@@ -2,23 +2,23 @@
 //! The comparability gate's intransitivity, nominal identity, the function/module ban, and the
 //! `(TYPE OF m) ==` interface idiom all exercise the real dispatch path here.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
-use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 fn eval_bool(source_setup: &str, probe: &str) -> bool {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     if !source_setup.is_empty() {
-        run(scope, source_setup);
+        test_run.run(source_setup);
     }
-    match run_one(scope, parse_one(probe)) {
+    let result = test_run.run_one(parse_one(probe));
+    match result {
         KObject::Bool(b) => *b,
         other => panic!(
             "expected Bool from `{probe}`, got {}",
-            other.summarize(&TypeRegistry::new())
+            other.summarize(&test_run.types)
         ),
     }
 }
@@ -148,11 +148,11 @@ fn opaque_views_have_distinct_type_of() {
 
 fn err_kind_user(setup: &str, probe: &str) -> String {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     if !setup.is_empty() {
-        run(scope, setup);
+        test_run.run(setup);
     }
-    let err = run_one_err(scope, parse_one(probe));
+    let err = test_run.run_one_err(parse_one(probe));
     match &err.kind {
         KErrorKind::User(msg) => msg.clone(),
         _ => panic!("expected a User error, got: {err}"),
@@ -186,8 +186,8 @@ fn equality_does_not_chain() {
     // `==` is in no operator group, so a three-operand chain resolves to nothing and surfaces a
     // real (non-empty) resolution error rather than reducing pairwise.
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("1 == 2 == 3"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("1 == 2 == 3"));
     assert!(
         !err.to_string().is_empty(),
         "a chain of `==` should surface a resolution error",

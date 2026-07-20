@@ -1,16 +1,14 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
 
-use crate::builtins::test_support::{
-    parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
-};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 fn run_program(source: &str) -> Vec<u8> {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
-    run(scope, source);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes
 }
@@ -31,11 +29,10 @@ fn ok_binds_it_to_success_value() {
 fn arm_violating_declared_return_type_errors() {
     // Declared `:Number`, but the `ok` arm returns a Str (PRINT's rendered string).
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one(
+        "TRY (PRINT \"v\") -> :Number WITH (Ok -> (PRINT \"caught\"))",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
         "expected <return> TypeMismatch from the arm result, got {err}",
@@ -100,11 +97,10 @@ fn type_mismatch_arm_catches_record_newtype_value_mismatch() {
 #[test]
 fn re_raise_when_no_arm_matches_error_kind() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one(
+        "TRY (foo) -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "foo"),
         "expected re-raised UnboundName, got {err}",
@@ -114,11 +110,10 @@ fn re_raise_when_no_arm_matches_error_kind() {
 #[test]
 fn missing_ok_arm_on_success_raises_shape_error() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one(
+        "TRY (PRINT \"x\") -> :Str WITH (TypeMismatch -> (PRINT \"never\"))",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing Ok arm")),
         "expected ShapeError about missing Ok arm, got {err}",

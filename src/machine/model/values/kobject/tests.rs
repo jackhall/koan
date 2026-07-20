@@ -265,7 +265,7 @@ fn wrapped_deep_clone_shares_inner_rc_and_type_id() {
 /// A `KFunction` allocated into `dest`'s own region is dest-resident.
 #[test]
 fn resident_in_true_for_same_region_kfunction() {
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
@@ -273,7 +273,8 @@ fn resident_in_true_for_same_region_kfunction() {
     use crate::machine::KFunction;
 
     let storage = run_root_storage();
-    let scope = default_scope(&storage, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&storage);
+    let scope = test_run.scope;
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: Vec::new(),
@@ -294,7 +295,7 @@ fn resident_in_true_for_same_region_kfunction() {
 /// region.
 #[test]
 fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::Body;
     use crate::machine::core::{run_root_storage, FrameSet, FrameStorageExt};
     use crate::machine::model::ast::KExpression;
@@ -303,7 +304,8 @@ fn resident_in_delivered_true_when_evidence_covers_foreign_kfunction() {
     use std::rc::Rc;
 
     let foreign = run_root_storage();
-    let foreign_scope = default_scope(&foreign, Box::new(std::io::sink()));
+    let foreign_test_run = TestRun::silent(&foreign);
+    let foreign_scope = foreign_test_run.scope;
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: Vec::new(),

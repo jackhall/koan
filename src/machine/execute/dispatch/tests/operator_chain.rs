@@ -9,18 +9,23 @@
 
 use std::collections::HashSet;
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
+use crate::machine::model::KObject;
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::{KObject, TypeRegistry};
-use crate::machine::{BindingIndex, Scope};
+use crate::machine::BindingIndex;
 
 /// Registers the `%` pairwise group in the given mode, the `%` pair body (a sum), and the `MINUS`
 /// combiner the pair results fold through — declared with `OP`, the surface that gives a combiner
 /// the infix keyword shape the reducer synthesizes. The `%` body is a plain `FN` rather than an
 /// `OP`: `OP` would write its own singleton `%` registry entry, and a fold-left singleton conflicts
 /// with the pairwise group the fixture registers by hand under the same probe.
-fn register_pairwise_fixture<'a>(scope: &'a Scope<'a>, combiner: &str, direction: FoldDirection) {
+fn register_pairwise_fixture<'a>(
+    test_run: &mut TestRun<'a>,
+    combiner: &str,
+    direction: FoldDirection,
+) {
+    let scope = test_run.scope;
     let members: HashSet<String> = ["%"].iter().map(|s| s.to_string()).collect();
     let group = scope.brand().alloc_operator_group(OperatorGroup::new(
         members,
@@ -32,8 +37,8 @@ fn register_pairwise_fixture<'a>(scope: &'a Scope<'a>, combiner: &str, direction
     scope
         .register_operator_group("%".to_string(), group, BindingIndex::BUILTIN)
         .expect("register the pairwise operator group");
-    run(scope, "FN (a :Number % b :Number) -> Number = (a + b)");
-    run(scope, "OP #(MINUS) OVER Number = (left - right)");
+    test_run.run("FN (a :Number % b :Number) -> Number = (a + b)");
+    test_run.run("OP #(MINUS) OVER Number = (left - right)");
 }
 
 /// The combiner fold: the reducer synthesizes `[pair, MINUS, pair]` over the pair results, an
@@ -42,13 +47,13 @@ fn register_pairwise_fixture<'a>(scope: &'a Scope<'a>, combiner: &str, direction
 #[test]
 fn pairwise_combiner_folds_left() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    register_pairwise_fixture(scope, "MINUS", FoldDirection::Left);
-    let result = run_one(scope, parse_one("10 % 4 % 1 % 0"));
+    let mut test_run = TestRun::silent(&region);
+    register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
+    let result = test_run.run_one(parse_one("10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 8.0),
         "a left fold nests ((p1 ⊙ p2) ⊙ p3) = (14 - 5) - 1 = 8; got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -57,13 +62,13 @@ fn pairwise_combiner_folds_left() {
 #[test]
 fn pairwise_combiner_folds_right() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    register_pairwise_fixture(scope, "MINUS", FoldDirection::Right);
-    let result = run_one(scope, parse_one("10 % 4 % 1 % 0"));
+    let mut test_run = TestRun::silent(&region);
+    register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Right);
+    let result = test_run.run_one(parse_one("10 % 4 % 1 % 0"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 10.0),
         "a right fold nests (p1 ⊙ (p2 ⊙ p3)) = 14 - (5 - 1) = 10; got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -75,14 +80,14 @@ fn pairwise_combiner_folds_right() {
 #[test]
 fn pairwise_combiner_evaluates_a_shared_operand_once() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
-    register_pairwise_fixture(scope, "MINUS", FoldDirection::Left);
-    run(scope, "FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
-    let result = run_one(scope, parse_one("1 % (LOUD 2) % 3"));
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    register_pairwise_fixture(&mut test_run, "MINUS", FoldDirection::Left);
+    test_run.run("FN (LOUD x :Number) -> Number = ((PRINT x) (x))");
+    let result = test_run.run_one(parse_one("1 % (LOUD 2) % 3"));
     assert!(
         matches!(result, KObject::Number(n) if *n == -2.0),
         "the pairs are 1 + 2 = 3 and 2 + 3 = 5, folded through `MINUS` to 3 - 5 = -2; got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
     let bytes = captured.borrow().clone();
     assert_eq!(
@@ -99,10 +104,10 @@ fn pairwise_combiner_evaluates_a_shared_operand_once() {
 #[test]
 fn pairwise_undeclared_combiner_errors_at_the_use_site() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    register_pairwise_fixture(scope, "NOWHERE", FoldDirection::Left);
+    let mut test_run = TestRun::silent(&region);
+    register_pairwise_fixture(&mut test_run, "NOWHERE", FoldDirection::Left);
 
-    let error = crate::builtins::test_support::run_one_err(scope, parse_one("1 % 2 % 3"));
+    let error = test_run.run_one_err(parse_one("1 % 2 % 3"));
     let message = error.to_string();
     assert!(
         message.contains("NOWHERE"),
@@ -117,10 +122,10 @@ fn pairwise_undeclared_combiner_errors_at_the_use_site() {
 #[test]
 fn fold_left_run_over_named_operands_resolves_the_trailing_name() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET x = 1\nLET y = 2\nLET z = 4");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET x = 1\nLET y = 2\nLET z = 4");
     assert!(
-        matches!(run_one(scope, parse_one("x + y + z")), KObject::Number(n) if *n == 7.0),
+        matches!(test_run.run_one(parse_one("x + y + z")), KObject::Number(n) if *n == 7.0),
         "every operand of a named run reaches its binding",
     );
 }

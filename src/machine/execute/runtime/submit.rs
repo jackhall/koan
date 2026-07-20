@@ -64,7 +64,7 @@ impl<'run> KoanRuntime<'run> {
     /// Establish the run frame on the first run-lifetime submission, so every top-level slot carries
     /// a frame cart and `active_frame` is never `None` during a top-level step. Idempotent (guarded
     /// on `has_run_frame`); the scheduler owns the minted frame's lifecycle.
-    pub(in crate::machine::execute) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
+    pub(crate) fn ensure_run_frame<'a>(&mut self, scope: &'a Scope<'a>) {
         if !self.has_run_frame() {
             // Adopting the run-root scope's `region_owner` storage makes the run frame's region the
             // run-root region, so top-level FN owners resolve.
@@ -80,7 +80,10 @@ impl<'run> KoanRuntime<'run> {
     /// - The active cart's outer-chain reaches `scope`'s region → [`NodeScope::YokedChild`]: `scope` is
     ///   a block scope a builtin allocated in a cart *ancestor* region, pinned by the cart's
     ///   `FrameStorage.outer` chain. Stored erased, reattached frame-bounded.
-    /// - No active frame but the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`.
+    /// - No active frame and the `run_frame` (which adopts the run root) *is* `scope` → `Yoked`.
+    /// - No active frame and the run frame's chain reaches `scope`'s region → `YokedChild`, the
+    ///   frameless peer of the second case: `scope` is a child allocated in the run region, so the
+    ///   run frame pins it just as a cart pins an ancestor-region block scope.
     pub(in crate::machine::execute) fn resolve_node_scope<'a>(
         &self,
         scope: &'a Scope<'a>,
@@ -94,13 +97,15 @@ impl<'run> KoanRuntime<'run> {
             }
             unreachable!("a framed submission's scope is the cart's own or a cart-ancestor child");
         }
-        if self
-            .run_frame_ref()
-            .is_some_and(|rf| rf.with_scope(|rs| scopes_eq(rs, scope)))
-        {
-            return NodeScope::Yoked;
+        if let Some(rf) = self.run_frame_ref() {
+            if rf.with_scope(|rs| scopes_eq(rs, scope)) {
+                return NodeScope::Yoked;
+            }
+            if rf.with_scope(|rs| rs.chain_reaches_region(scope.region())) {
+                return NodeScope::YokedChild(SealedExtern::<ScopeRefFamily>::erase(scope));
+            }
         }
-        unreachable!("a frameless submission targets the run root adopted by the run frame");
+        unreachable!("a frameless submission targets the run root or a child in its region");
     }
 
     /// Submit `work` against the executing slot's own [`NodeScope`] handle, read back from the

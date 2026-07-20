@@ -2,11 +2,10 @@
 //! comparable when one structurally `sig_subtype`s the other. See
 //! [design/typing/modules.md](../../../../design/typing/modules.md).
 
-use crate::builtins::test_support::{lookup_module, parse_one, run, run_root_silent};
+use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::KObject;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 
 /// `SIG Wide` requires everything `SIG Base` does, plus more (`Wide` strictly `sig_subtype`s
 /// `Base`), so `Wide` is strictly more specific: a module satisfying both dispatches to the
@@ -14,28 +13,19 @@ use crate::machine::KoanRuntime;
 #[test]
 fn strict_cross_sig_subtype_wins_dispatch() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Base = ((VAL x :Number))\n\
          SIG Wide = ((VAL x :Number) (VAL y :Str))",
     );
-    run(
-        scope,
-        "FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))",
-    );
-    run(
-        scope,
-        "FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))",
-    );
-    run(
-        scope,
-        "MODULE implementation = ((LET x = 1) (LET y = \"s\"))",
-    );
-    run(scope, "LET arg = implementation");
-    run(scope, "LET picked = (PICK arg)");
+    test_run.run("FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("MODULE implementation = ((LET x = 1) (LET y = \"s\"))");
+    test_run.run("LET arg = implementation");
+    test_run.run("LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "picked");
+    let m = lookup_module(scope, "picked", &test_run.types);
     let tag = m
         .child_scope()
         .bindings()
@@ -54,28 +44,19 @@ fn strict_cross_sig_subtype_wins_dispatch() {
 #[test]
 fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Base = ((VAL x :Number))\n\
          SIG Wide = ((VAL x :Number) (VAL y :Str))",
     );
-    run(
-        scope,
-        "FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))",
-    );
-    run(
-        scope,
-        "FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))",
-    );
-    run(
-        scope,
-        "MODULE implementation = ((LET x = 1) (LET y = \"s\"))",
-    );
-    run(scope, "LET arg = implementation");
-    run(scope, "LET picked = (PICK arg)");
+    test_run.run("FN (PICK m :Base) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("FN (PICK m :Wide) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("MODULE implementation = ((LET x = 1) (LET y = \"s\"))");
+    test_run.run("LET arg = implementation");
+    test_run.run("LET picked = (PICK arg)");
 
-    let m = lookup_module(scope, "picked");
+    let m = lookup_module(scope, "picked", &test_run.types);
     let tag = m
         .child_scope()
         .bindings()
@@ -98,29 +79,26 @@ fn strict_cross_sig_subtype_wins_regardless_of_declaration_order() {
 #[test]
 fn incomparable_distinct_sigs_are_ambiguous() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Alpha = ((VAL x :Number))\n\
          SIG Beta = ((VAL y :Number))",
     );
-    run(
-        scope,
-        "FN (CHOOSE m :Alpha) -> Module = (MODULE generated = (LET tag = 1))",
-    );
-    run(
-        scope,
-        "FN (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))",
-    );
-    run(scope, "MODULE implementation = ((LET x = 1) (LET y = 2))");
-    run(scope, "LET arg = implementation");
+    test_run.run("FN (CHOOSE m :Alpha) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("FN (CHOOSE m :Beta) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("MODULE implementation = ((LET x = 1) (LET y = 2))");
+    test_run.run("LET arg = implementation");
 
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("CHOOSE arg"), scope);
-    runtime
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("CHOOSE arg"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = runtime
+    let error = test_run
+        .runtime
         .result_error(root)
         .expect_err("a module satisfying two mutually-satisfying distinct SIGs must be ambiguous");
     assert!(
@@ -135,28 +113,23 @@ fn incomparable_distinct_sigs_are_ambiguous() {
 #[test]
 fn cross_sig_specificity_with_pinned_abstract_member() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Base = ((TYPE Elt) (VAL x :Number))\n\
          SIG Wide = ((TYPE Elt) (VAL x :Number) (VAL y :Str))",
     );
-    run(
-        scope,
+    test_run.run(
         "FN (PICKPIN m :(Wide WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 1))",
     );
-    run(
-        scope,
+    test_run.run(
         "FN (PICKPIN m :(Base WITH {Elt = Number})) -> Module = (MODULE generated = (LET tag = 2))",
     );
-    run(
-        scope,
-        "MODULE implementation = ((LET Elt = Number) (LET x = 1) (LET y = \"s\"))",
-    );
-    run(scope, "LET arg = implementation");
-    run(scope, "LET picked = (PICKPIN arg)");
+    test_run.run("MODULE implementation = ((LET Elt = Number) (LET x = 1) (LET y = \"s\"))");
+    test_run.run("LET arg = implementation");
+    test_run.run("LET picked = (PICKPIN arg)");
 
-    let m = lookup_module(scope, "picked");
+    let m = lookup_module(scope, "picked", &test_run.types);
     let tag = m
         .child_scope()
         .bindings()

@@ -1,20 +1,18 @@
 //! Typed parameters: dispatch routing on parameter types, overloads, shape errors.
 
-use crate::builtins::test_support::{
-    fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
-};
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 
 use super::capture_program_output;
 
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
     match f.signature.elements.as_slice() {
@@ -30,9 +28,9 @@ fn fn_typed_param_records_ktype_on_signature() {
 #[test]
 fn fn_typed_param_dispatches_on_matching_call() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
-    let result = run_one(scope, parse_one("DOUBLE 7"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    let result = test_run.run_one(parse_one("DOUBLE 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
@@ -41,14 +39,18 @@ fn fn_typed_param_dispatches_on_matching_call() {
 #[test]
 fn fn_typed_param_rejects_mismatched_call() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("DOUBLE \"hi\""), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let err = runtime
+    let err = test_run
+        .runtime
         .result_error(root)
         .expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
@@ -73,13 +75,16 @@ fn fn_overloads_dispatch_by_param_type() {
 #[test]
 fn fn_param_without_annotation_is_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("untyped parameter should error"),
     };
@@ -96,13 +101,16 @@ fn fn_param_without_annotation_is_rejected() {
 #[test]
 fn fn_param_with_unknown_type_name_is_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown param type should error"),
     };

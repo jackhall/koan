@@ -1,10 +1,9 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `classify_dispatch` (see
 //! [design/execution/name-placeholders.md § Dispatch-time name placeholders](../../../../design/execution/name-placeholders.md#dispatch-time-name-placeholders)).
-use crate::builtins::default_scope;
 use crate::builtins::test_support::binds_module;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{KObject, KType};
 use crate::machine::KErrorKind;
 use crate::parse::parse;
@@ -22,8 +21,9 @@ fn parse_all<'run>(src: &str) -> Vec<crate::machine::model::KExpression<'run>> {
 #[test]
 fn single_identifier_short_circuit_returns_value_when_bound() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all("LET x = 42") {
         runtime.dispatch_in_scope(e, scope);
     }
@@ -43,8 +43,9 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
     runtime.execute().unwrap();
     let err = runtime
@@ -61,8 +62,9 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
 #[test]
 fn single_identifier_short_circuit_falls_through_when_unbound() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("(missing)"), scope);
     runtime.execute().unwrap();
     let err = match runtime.result_error(id) {
@@ -78,8 +80,9 @@ fn single_identifier_short_circuit_falls_through_when_unbound() {
 #[test]
 fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all("LET z = 7\nLET y = z") {
         runtime.dispatch_in_scope(e, scope);
     }
@@ -92,8 +95,9 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
 #[test]
 fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
     runtime.execute().unwrap();
     let err = runtime
@@ -112,8 +116,9 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET aa = 3\n\
@@ -131,8 +136,9 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         scope.id,
         parse_all(
@@ -159,8 +165,9 @@ fn forward_keyword_function_reference_is_unbound() {
 #[test]
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 11\n\
@@ -179,8 +186,9 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all("LET z = 11\nLET y = z") {
         runtime.dispatch_in_scope(e, scope);
     }
@@ -193,8 +201,9 @@ fn lift_park_minimal_program_for_miri() {
 #[test]
 fn replay_park_minimal_program_for_miri() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all(
         "FN (DOUBLE x :Number) -> Number = (x)\n\
          LET aa = 7\n\
@@ -212,8 +221,9 @@ fn replay_park_minimal_program_for_miri() {
 #[test]
 fn replay_park_propagates_producer_error() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids: Vec<_> = parse_all(
         "LET y = (x)\n\
          LET x = (UNDEFINED_FN)",
@@ -244,8 +254,9 @@ fn replay_park_propagates_producer_error() {
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     for e in parse_all(
         "LET a_result = (int_ord :| Ordered)\n\
          MODULE int_ord = (LET compare = 0)\n\
@@ -269,12 +280,17 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 #[test]
 fn let_type_to_value_name_rejected() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("LET ty = Number"), scope);
-    runtime.execute().unwrap();
-    let types = crate::machine::model::TypeRegistry::new();
-    match runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&types))) {
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("LET ty = Number"), scope);
+    test_run.runtime.execute().unwrap();
+    let types = test_run.types.clone();
+    match test_run
+        .runtime
+        .read_result_with(id, |v| format!("{:?}", v.ktype(&types)))
+    {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ty") && msg.contains("Type-classified")),
@@ -284,10 +300,9 @@ fn let_type_to_value_name_rejected() {
     }
 
     // The Type-classified alias is the legal form: it lands type-side.
-    let mut runtime = KoanRuntime::new();
     for e in parse_all("LET Ty = Number") {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime.execute().unwrap();
+    test_run.runtime.execute().unwrap();
     assert_eq!(scope.resolve_type("Ty"), Some(&KType::Number));
 }

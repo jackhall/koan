@@ -40,8 +40,7 @@ mod val_decl;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 /// Signature-element constructor for a keyword slot.
 pub(crate) fn kw(s: &str) -> SignatureElement {
@@ -180,8 +179,6 @@ pub fn unseeded_scopes<'a>(
 /// Registration order does not affect dispatch — [`Scope::resolve_dispatch`] buckets by
 /// untyped signature shape and picks overloads by `KType` specificity.
 pub fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
-    // TODO(interned-type-content): `types` reaches every per-module `register`; seeding's own
-    // KType construction starts interning against it with that item.
     scope.register_builtin_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
     scope.register_builtin_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
     scope.register_builtin_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
@@ -245,17 +242,4 @@ pub fn seed_builtins<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     arithmetic::register(scope, types);
     arithmetic::register_builtin_operator_groups(scope, types);
     equality::register(scope, types);
-}
-
-/// One-call constructor for tests and integration tests: allocate the scope pair, seed the
-/// root, and hand back the `RunScope` child. Production ([`crate::machine::execute`]'s
-/// `interpret`) sequences [`unseeded_scopes`] and [`seed_builtins`] itself so seeding
-/// receives the run frame's own registry rather than a cold one.
-pub fn default_scope<'a>(
-    run_storage: &'a std::rc::Rc<crate::machine::FrameStorage>,
-    out: Box<dyn std::io::Write + 'a>,
-) -> &'a Scope<'a> {
-    let (root, child) = unseeded_scopes(run_storage, out);
-    seed_builtins(root, &TypeRegistry::new());
-    child
 }

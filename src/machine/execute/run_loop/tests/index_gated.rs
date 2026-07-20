@@ -4,53 +4,31 @@
 //! `i < c` — type binders included, with no source-order exemption. `chain.index_for(scope)
 //! = None` (a "complete" scope) makes every entry visible.
 
-use std::cell::RefCell;
-use std::io::Write;
 use std::rc::Rc;
 
-use crate::builtins::default_scope;
-use crate::builtins::test_support::lookup_module;
+use crate::builtins::test_support::{lookup_module, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorage};
-use crate::machine::execute::KoanRuntime;
-use crate::machine::model::{KObject, TypeRegistry};
-use crate::machine::{KError, KErrorKind, Scope};
+use crate::machine::model::KObject;
+use crate::machine::{KError, KErrorKind};
 use crate::parse::parse;
 
-struct Sink;
-impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> &'run Scope<'run> {
-    let scope = default_scope(region, Box::new(Sink));
+/// Run `source` as one top-level block and hand back the whole bundle, so callers read
+/// both the post-run scope and the run's registry.
+fn run_scope<'run>(region: &'run Rc<FrameStorage>, source: &str) -> TestRun<'run> {
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(source).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
-    runtime.enter_block(scope.id, exprs, scope);
-    let _ = runtime.execute();
-    scope
+    test_run.runtime.enter_block(scope.id, exprs, scope);
+    let _ = test_run.runtime.execute();
+    test_run
 }
 
 fn run_collect_err(source: &str) -> Option<KError> {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(Sink));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse(source).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
     let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
     if let Err(e) = runtime.execute() {
         return Some(e);
@@ -85,7 +63,8 @@ fn later_sibling_reference_is_unbound_name() {
 #[test]
 fn backward_value_let_resolves() {
     let region = run_root_storage();
-    let scope = run_scope(&region, "LET z = 1\nLET y = z");
+    let test_run = run_scope(&region, "LET z = 1\nLET y = z");
+    let scope = test_run.scope;
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -95,17 +74,16 @@ fn backward_value_let_resolves() {
 #[test]
 fn returned_block_locals_visible_from_outer_chain() {
     let region = run_root_storage();
-    let scope = run_scope(
+    let test_run = run_scope(
         &region,
         "MODULE mo = ((LET inside = 7) (LET also = 9))\n\
          LET result = mo.inside",
     );
+    let scope = test_run.scope;
     assert!(
         matches!(scope.lookup("result"), Some(KObject::Number(n)) if *n == 7.0),
         "expected result = 7 via mo.inside; got {:?}",
-        scope
-            .lookup("result")
-            .map(|o| o.summarize(&TypeRegistry::new())),
+        scope.lookup("result").map(|o| o.summarize(&test_run.types)),
     );
 }
 
@@ -114,12 +92,12 @@ fn returned_block_locals_visible_from_outer_chain() {
 #[test]
 fn nested_block_cutoff_is_per_scope() {
     let region = run_root_storage();
-    let scope = run_scope(
+    let test_run = run_scope(
         &region,
         "LET top = 1\n\
          MODULE mo = ((LET a = 2) (LET b = a))",
     );
-    let m = lookup_module(scope, "mo");
+    let m = lookup_module(test_run.scope, "mo", &test_run.types);
     let data = m.child_scope().bindings().data();
     assert!(
         matches!(data.get("b").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 2.0),
@@ -133,8 +111,8 @@ fn nested_block_cutoff_is_per_scope() {
 #[test]
 fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     let region = run_root_storage();
-    let buf = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(&region, Box::new(SharedBuf(buf.clone())));
+    let (mut test_run, _buf) = TestRun::with_buf(&region);
+    let scope = test_run.scope;
     let exprs = parse(
         "UNION Tick = (More :Null Done :Null)\n\
          FN (PING n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
@@ -148,19 +126,17 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
          LET out = (PING 42 (Tick (More null)))",
     )
     .expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("mutual FN recursion via body chain should succeed");
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 42.0),
         "expected out = 42 via mutual PING/PONG; got {:?}",
-        scope
-            .lookup("out")
-            .map(|o| o.summarize(&TypeRegistry::new())),
+        scope.lookup("out").map(|o| o.summarize(&test_run.types)),
     );
 }
 
@@ -169,17 +145,18 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
 #[test]
 fn using_block_post_reference_visible() {
     let region = run_root_storage();
-    let scope = run_scope(
+    let test_run = run_scope(
         &region,
         "MODULE mo = ((LET hidden = 99))\n\
          LET visible = (USING mo SCOPE (hidden))",
     );
+    let scope = test_run.scope;
     assert!(
         matches!(scope.lookup("visible"), Some(KObject::Number(n)) if *n == 99.0),
         "expected visible = 99 via USING mo SCOPE; got {:?}",
         scope
             .lookup("visible")
-            .map(|o| o.summarize(&TypeRegistry::new())),
+            .map(|o| o.summarize(&test_run.types)),
     );
 }
 
@@ -188,19 +165,18 @@ fn using_block_post_reference_visible() {
 #[test]
 fn overload_pre_filter_hides_later_sibling_overload() {
     let region = run_root_storage();
-    let scope = run_scope(
+    let test_run = run_scope(
         &region,
         "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
          LET xs = [1 2 3]\n\
          LET result = (DESCRIBE xs)\n\
          FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
+    let scope = test_run.scope;
     assert!(
         matches!(scope.lookup("result"), Some(KObject::KString(s)) if s == "numbers"),
         "expected result = 'numbers' (only earlier overload visible); got {:?}",
-        scope
-            .lookup("result")
-            .map(|o| o.summarize(&TypeRegistry::new())),
+        scope.lookup("result").map(|o| o.summarize(&test_run.types)),
     );
 }
 
@@ -265,17 +241,16 @@ fn fn_return_type_forward_reference_is_position_error() {
 #[test]
 fn fn_return_type_backward_reference_resolves() {
     let region = run_root_storage();
-    let scope = run_scope(
+    let test_run = run_scope(
         &region,
         "NEWTYPE Early = :{n :Number}\n\
          FN (FOO x :Number) -> Early = (Early {n = x})\n\
          LET out = (FOO 5)",
     );
+    let scope = test_run.scope;
     assert!(
         scope.lookup("out").is_some(),
         "a backward return-type reference must resolve; got {:?}",
-        scope
-            .lookup("out")
-            .map(|o| o.summarize(&TypeRegistry::new())),
+        scope.lookup("out").map(|o| o.summarize(&test_run.types)),
     );
 }

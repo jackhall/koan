@@ -190,7 +190,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run_one_err, run_one_type, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet, TypeRegistry};
@@ -199,8 +199,12 @@ mod tests {
 
     /// The projected (`SetLocal`s resolved) newtype repr of union `name`'s `variant` member —
     /// each variant is a per-tag newtype under the dissolved model.
-    fn variant_repr<'a>(scope: &'a Scope<'a>, name: &str, variant: &str) -> KType {
-        let types = TypeRegistry::new();
+    fn variant_repr<'a>(
+        scope: &'a Scope<'a>,
+        name: &str,
+        variant: &str,
+        types: &TypeRegistry,
+    ) -> KType {
         let members = match scope.resolve_type(name) {
             Some(KType::Union { members, .. }) => members,
             other => panic!("expected {name} to be a Union in types, got {other:?}"),
@@ -208,7 +212,7 @@ mod tests {
         for member in members {
             if let KType::SetRef { set, index } = member {
                 if set.member(*index).name == variant {
-                    return match RecursiveSet::projected_schema(set, *index, &types) {
+                    return match RecursiveSet::projected_schema(set, *index, types) {
                         ProjectedSchema::NewType(repr) => repr,
                         _ => panic!("variant `{variant}` must project a NewType repr"),
                     };
@@ -228,10 +232,11 @@ mod tests {
     #[test]
     fn union_named_registers_type_in_scope() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         // UNION is type-only: the declaration binds an anonymous `KType::Union` over one
         // per-variant newtype `SetRef` each, registered into `types`.
-        let result = run_one_type(scope, parse_one("UNION Maybe = (Some :Number None :Null)"));
+        let result = test_run.run_one_type(parse_one("UNION Maybe = (Some :Number None :Null)"));
         match result {
             KType::Union { members, .. } => {
                 assert_eq!(members.len(), 2, "one member per variant");
@@ -246,8 +251,14 @@ mod tests {
             }
             other => panic!("expected Union type for Maybe, got {other:?}"),
         }
-        assert_eq!(variant_repr(scope, "Maybe", "Some"), KType::Number);
-        assert_eq!(variant_repr(scope, "Maybe", "None"), KType::Null);
+        assert_eq!(
+            variant_repr(scope, "Maybe", "Some", &test_run.types),
+            KType::Number
+        );
+        assert_eq!(
+            variant_repr(scope, "Maybe", "None", &test_run.types),
+            KType::Null
+        );
         assert!(
             scope.bindings().data().get("Maybe").is_none(),
             "UNION must not write a value-side carrier into data",
@@ -262,11 +273,10 @@ mod tests {
     /// [scheduler.md § In-walk dispatch precedence](../../design/typing/scheduler.md#in-walk-dispatch-precedence)).
     #[test]
     fn anonymous_union_fails_dispatch() {
-        use crate::machine::KoanRuntime;
-
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let mut runtime = KoanRuntime::new();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let runtime = &mut test_run.runtime;
         let root = runtime.dispatch_in_scope(parse_one("UNION (Ok :Number Err :Str)"), scope);
         runtime
             .execute()
@@ -283,8 +293,8 @@ mod tests {
     #[test]
     fn union_rejects_unknown_type_name() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("UNION Bad = (Some :Bogus)"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("UNION Bad = (Some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -294,8 +304,8 @@ mod tests {
     #[test]
     fn union_rejects_empty_schema() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("UNION Empty = ()"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("UNION Empty = ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one tag")),
             "expected ShapeError on empty schema, got {err}",
@@ -305,8 +315,8 @@ mod tests {
     #[test]
     fn union_rejects_duplicate_tag() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("UNION Dupe = (Some :Number Some :Str)"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("UNION Dupe = (Some :Number Some :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`Some`")),
             "expected ShapeError on duplicate tag, got {err}",
@@ -325,8 +335,9 @@ mod tests {
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let types = TypeRegistry::new();
+        let test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let types = test_run.types.clone();
         let fctx = crate::machine::FinishCtx::for_scope(scope, &types);
         let fields = || {
             vec![
@@ -338,8 +349,14 @@ mod tests {
         // and registered.
         let first = super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0));
         assert!(first.is_ok());
-        assert_eq!(variant_repr(scope, "Maybe", "Some"), KType::Number);
-        assert_eq!(variant_repr(scope, "Maybe", "None"), KType::Null);
+        assert_eq!(
+            variant_repr(scope, "Maybe", "Some", &test_run.types),
+            KType::Number
+        );
+        assert_eq!(
+            variant_repr(scope, "Maybe", "None", &test_run.types),
+            KType::Null
+        );
         // Second finalize: every member is filled, so `recover_union` short-circuits, returning
         // the bound union type unchanged.
         let second = super::finalize_union(&fctx, "Maybe".into(), fields(), BindingIndex::value(0));
@@ -366,14 +383,14 @@ mod tests {
     /// what gives the statements their distinct lexical indices.
     #[test]
     fn same_scope_union_redeclare_rebinds() {
-        use crate::machine::KoanRuntime;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let exprs = crate::parse::parse(
             "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Str None :Null)",
         )
         .expect("parse should succeed");
-        let mut runtime = KoanRuntime::new();
+        let runtime = &mut test_run.runtime;
         let ids = runtime.enter_block(scope.id, exprs, scope);
         runtime
             .execute()
@@ -397,8 +414,8 @@ mod tests {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are
         // rejected by the pair-list walker.
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("UNION Pair = (Some :Number None)"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("UNION Pair = (Some :Number None)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
             "expected ShapeError on odd part count, got {err}",

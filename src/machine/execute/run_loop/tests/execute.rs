@@ -1,8 +1,7 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KObject;
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::source::Spanned;
@@ -12,8 +11,9 @@ use super::let_expr;
 #[test]
 fn dispatches_independent_expressions_in_order() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(root.id, vec![let_expr("x", 1.0), let_expr("y", 2.0)], root);
     let id1 = ids[0];
     let id2 = ids[1];
@@ -42,8 +42,9 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     // The second top-level expression spawns a sub-Dispatch for `(x)`; the earlier
     // LET runs first because its NodeId is smaller. Guards in-order processing.
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
+    let runtime = &mut test_run.runtime;
 
     let lookup_a = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),

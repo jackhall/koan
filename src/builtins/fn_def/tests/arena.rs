@@ -1,23 +1,24 @@
 //! Run-root region and scheduler-slot reclamation invariants for user FN calls.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::model::TypeRegistry;
-use crate::machine::KoanRuntime;
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::{run_root_storage, KoanRegionTestExt};
 use crate::witnessed::region_metrics;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let scope = test_run.scope;
 
-    run(
-        scope,
+    test_run.run(
         "FN (BB) -> Null = (PRINT \"ok\")\n\
          FN (AA) -> Null = (BB)",
     );
 
-    let mut runtime = KoanRuntime::new();
+    // The slot count below is absolute, so release the definition statements' slots first: the
+    // store's length is a high-water mark over the whole scheduler's life.
+    test_run.reset_slots();
+    let runtime = &mut test_run.runtime;
     runtime.dispatch_in_scope(parse_one("AA"), scope);
     runtime.execute().expect("AA should run");
 
@@ -33,17 +34,20 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 #[test]
 fn chained_tail_calls_reuse_frames() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let scope = test_run.scope;
 
-    run(
-        scope,
+    test_run.run(
         "FN (DD) -> Null = (PRINT \"ok\")\n\
          FN (CC) -> Null = (DD)\n\
          FN (BB) -> Null = (CC)\n\
          FN (AA) -> Null = (BB)",
     );
 
-    let mut runtime = KoanRuntime::new();
+    // The slot count below is absolute, so release the definition statements' slots first: the
+    // store's length is a high-water mark over the whole scheduler's life.
+    test_run.reset_slots();
+    let runtime = &mut test_run.runtime;
     let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(parse_one("AA"), scope);
     runtime.execute().expect("AA should run");
@@ -70,19 +74,16 @@ fn chained_tail_calls_reuse_frames() {
 #[test]
 fn leading_statements_run_before_tail_across_chain() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
 
-    run(
-        scope,
+    test_run.run(
         "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
          FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
          FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(parse_one("AA"), scope);
-    runtime.execute().expect("AA should run");
+    test_run.run("AA");
 
     assert_eq!(
         String::from_utf8_lossy(&captured.borrow()),
@@ -100,17 +101,20 @@ fn leading_statements_run_before_tail_across_chain() {
 #[test]
 fn chained_tail_calls_with_leading_stay_tco_flat() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
 
-    run(
-        scope,
+    test_run.run(
         "FN (DD) -> Str = ((PRINT \"d\") (PRINT \"ok\"))\n\
          FN (CC) -> Str = ((PRINT \"c\") (DD))\n\
          FN (BB) -> Str = ((PRINT \"b\") (CC))\n\
          FN (AA) -> Str = ((PRINT \"a\") (BB))",
     );
 
-    let mut runtime = KoanRuntime::new();
+    // The slot count below is absolute, so release the definition statements' slots first: the
+    // store's length is a high-water mark over the whole scheduler's life.
+    test_run.reset_slots();
+    let runtime = &mut test_run.runtime;
     let minted_before = region_metrics().minted_total;
     runtime.dispatch_in_scope(parse_one("AA"), scope);
     runtime.execute().expect("AA should run");
@@ -138,10 +142,9 @@ fn chained_tail_calls_with_leading_stay_tco_flat() {
 #[test]
 fn match_driven_tail_recursion_completes() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
 
-    run(
-        scope,
+    test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
              One -> (HOP (Bit (Zero null)))\
@@ -149,9 +152,7 @@ fn match_driven_tail_recursion_completes() {
          ))",
     );
 
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
-    runtime.execute().expect("HOP should run");
+    test_run.run("HOP (Bit (One null))");
 
     assert_eq!(captured.borrow().as_slice(), b"done\n");
 }
@@ -164,10 +165,9 @@ fn match_driven_tail_recursion_completes() {
 #[test]
 fn match_arm_leading_statement_runs_before_tail_recursion() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
 
-    run(
-        scope,
+    test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (HOP b :Any) -> Any = (MATCH (b) -> :Str WITH (\
              One -> ((PRINT \"hop\") (HOP (Bit (Zero null))))\
@@ -175,9 +175,7 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
          ))",
     );
 
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(parse_one("HOP (Bit (One null))"), scope);
-    runtime.execute().expect("HOP should run");
+    test_run.run("HOP (Bit (One null))");
 
     assert_eq!(
         String::from_utf8_lossy(&captured.borrow()),
@@ -192,15 +190,14 @@ fn match_arm_leading_statement_runs_before_tail_recursion() {
 #[test]
 fn tail_call_enforces_first_callers_return_contract() {
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRuntime;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "FN (GG) -> Str = (\"hello\")\n\
          FN (FF) -> Number = (GG)",
     );
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("FF"), scope);
     runtime
         .execute()
@@ -223,13 +220,12 @@ fn tail_call_enforces_first_callers_return_contract() {
 fn tail_call_stamps_result_against_first_callers_return_contract() {
     use crate::machine::model::{KObject, KType};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (GG) -> :(LIST OF Number) = ([1 2 3])\n\
          FN (FF) -> :(LIST OF Any) = (GG)",
     );
-    let result = run_one(scope, parse_one("FF"));
+    let result = test_run.run_one(parse_one("FF"));
     match result {
         KObject::List(_, elem) => assert!(
             matches!(elem.as_ref(), KType::Any),
@@ -252,28 +248,25 @@ fn tail_call_stamps_result_against_first_callers_return_contract() {
 fn deep_tail_chain_satisfies_arm_return_contract() {
     use crate::machine::model::KObject;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (CC) -> Any = (\"ok\")\n\
          FN (BB) -> Any = (CC)\n\
          FN (AA) -> Any = (BB)\n\
          LET b = (Bit (One null))",
     );
-    let result = run_one(
-        scope,
-        parse_one(
-            "MATCH (b) -> :Str WITH (\
+    let types = test_run.types.clone();
+    let result = test_run.run_one(parse_one(
+        "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
              )",
-        ),
-    );
+    ));
     assert!(
         matches!(result, KObject::KString(s) if s == "ok"),
         "expected the MATCH arm's :Str contract to pass the 3-hop tail chain's Str result, got {}",
-        result.ktype().name(&TypeRegistry::new()),
+        result.ktype().name(&types),
     );
 }
 
@@ -283,27 +276,22 @@ fn deep_tail_chain_satisfies_arm_return_contract() {
 /// either panic/UB under Miri or silently skip the check rather than raise this error.
 #[test]
 fn deep_tail_chain_violates_arm_return_contract() {
-    use crate::builtins::test_support::run_one_err;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (CC) -> Any = (42)\n\
          FN (BB) -> Any = (CC)\n\
          FN (AA) -> Any = (BB)\n\
          LET b = (Bit (One null))",
     );
-    let err = run_one_err(
-        scope,
-        parse_one(
-            "MATCH (b) -> :Str WITH (\
+    let err = test_run.run_one_err(parse_one(
+        "MATCH (b) -> :Str WITH (\
                  One -> (AA)\
                  Zero -> (\"unused\")\
              )",
-        ),
-    );
+    ));
     assert!(
         matches!(err.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "<return>"),
         "expected a <return> TypeMismatch against the MATCH arm's :Str contract, got {err}",
@@ -313,11 +301,11 @@ fn deep_tail_chain_violates_arm_return_contract() {
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (ECHO v :Number) -> Number = (v)");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (ECHO v :Number) -> Number = (v)");
     let baseline = region.region().alloc_count();
     for _ in 0..50 {
-        let _ = run_one(scope, parse_one("ECHO 7"));
+        let _ = test_run.run_one(parse_one("ECHO 7"));
     }
     let after = region.region().alloc_count();
     let growth = after - baseline;
@@ -338,10 +326,10 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    let scope = test_run.scope;
 
-    run(
-        scope,
+    test_run.run(
         "UNION Bit = (One :Null Zero :Null)\n\
          FN (LOOK b :Any) -> Any = (MATCH (b) -> :Str WITH (\
              One -> (PRINT \"one\")\
@@ -349,7 +337,7 @@ fn body_subexpression_slots_recycle_across_calls() {
          ))",
     );
 
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
 
     // Warmup: populates the free-list with the body's transient pool.
     runtime.dispatch_in_scope(parse_one("LOOK (Bit (One null))"), scope);
@@ -397,14 +385,13 @@ fn body_subexpression_slots_recycle_across_calls() {
 fn captured_per_call_value_survives_let_bind_and_call() {
     use crate::machine::model::KObject;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          LET hold = (MAKE_HOLDER 99)",
     );
-    let result = run_one(scope, parse_one("hold {q = 0}"));
+    let result = test_run.run_one(parse_one("hold {q = 0}"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 99.0),
         "the let-bound closure must read its captured base=99, got {:?}",
@@ -420,15 +407,14 @@ fn captured_per_call_value_survives_let_bind_and_call() {
 fn closure_argument_stays_live_through_user_fn_call() {
     use crate::machine::model::KObject;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          FN (CALL_IT f :(FN (q :Number) -> Number)) -> Number = (f {q = 0})\n\
          LET answer = (CALL_IT (MAKE_HOLDER 77))",
     );
-    let result = run_one(scope, parse_one("answer"));
+    let result = test_run.run_one(parse_one("answer"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 77.0),
         "the closure arg invoked inside CALL_IT must read base=77, got {:?}",
@@ -445,14 +431,13 @@ fn closure_argument_stays_live_through_user_fn_call() {
 fn let_bound_list_reaching_two_call_regions_keeps_both_live() {
     use crate::machine::model::{Held, KObject};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (MAKE_HOLDER base :Number) -> :(FN (q :Number) -> Number) = \
          (FN (GET q :Number) -> Number = (base))\n\
          LET holders = [(MAKE_HOLDER 1) (MAKE_HOLDER 2)]",
     );
-    let result = run_one(scope, parse_one("holders"));
+    let result = test_run.run_one(parse_one("holders"));
     match result {
         KObject::List(items, _) => {
             assert_eq!(items.len(), 2, "list should hold both holder closures");

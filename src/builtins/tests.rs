@@ -9,7 +9,7 @@
 //!
 //! [`unsaturated_constructor_message`]: crate::machine::model::unsaturated_constructor_message
 
-use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
@@ -51,9 +51,9 @@ fn assert_kind_error_after(
     position: &str,
 ) {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, setup);
-    let error = run_one_err(scope, parse_one(source));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(setup);
+    let error = test_run.run_one_err(parse_one(source));
     let KErrorKind::ShapeError(message) = &error.kind else {
         panic!("expected a ShapeError for `{source}`, got {error}");
     };
@@ -74,12 +74,16 @@ fn assert_kind_error(source: &str, constructor: &str, params: &[&str], position:
 #[track_caller]
 fn assert_accepted(setup: &str, source: &str) {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, setup);
-    let mut runtime = crate::machine::KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one(source), scope);
-    runtime.execute().expect("scheduler should succeed");
-    if let Err(error) = runtime.result_error(id) {
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(setup);
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one(source), test_run.scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    if let Err(error) = test_run.runtime.result_error(id) {
         panic!("`{source}` must be accepted, got {error}");
     }
 }

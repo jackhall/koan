@@ -1,9 +1,7 @@
 //! `OP` surface tests: the declaration forms, what each registers, the shadowing/type-gating
 //! semantics against the builtin operators, and the errors the surface rejects.
 
-use crate::builtins::test_support::{
-    binds_module, parse_one, run, run_one, run_one_err, run_root_silent,
-};
+use crate::builtins::test_support::{binds_module, parse_one, TestRun};
 use crate::machine::model::Held;
 use crate::machine::model::KObject;
 use crate::machine::model::TypeRegistry;
@@ -11,22 +9,16 @@ use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 
 /// The numbers of a `KObject::List`, for the unary tests that collect a run into one list.
-fn list_numbers(object: &KObject<'_>) -> Vec<f64> {
+fn list_numbers(object: &KObject<'_>, types: &TypeRegistry) -> Vec<f64> {
     match object {
         KObject::List(items, _) => items
             .iter()
             .map(|item| match item {
                 Held::Object(KObject::Number(n)) => *n,
-                other => panic!(
-                    "expected a Number element, got {}",
-                    other.summarize(&TypeRegistry::new())
-                ),
+                other => panic!("expected a Number element, got {}", other.summarize(types)),
             })
             .collect(),
-        other => panic!(
-            "expected a list, got {}",
-            other.ktype().name(&TypeRegistry::new())
-        ),
+        other => panic!("expected a list, got {}", other.ktype().name(types)),
     }
 }
 
@@ -36,9 +28,8 @@ fn list_numbers(object: &KObject<'_>) -> Vec<f64> {
 #[test]
 fn module_operator_run_reduces_fold_left_through_the_body() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE vectors = (\
            (LET bump = 10)\
            (OP #(⊕) OVER Number = ((left + right) + bump))\
@@ -46,7 +37,7 @@ fn module_operator_run_reduces_fold_left_through_the_body() {
     );
     // fold-left: (1 ⊕ 2) = 13, (13 ⊕ 3) = 26.
     assert!(
-        matches!(run_one(scope, parse_one("vectors.total")), KObject::Number(n) if *n == 26.0),
+        matches!(test_run.run_one(parse_one("vectors.total")), KObject::Number(n) if *n == 26.0),
         "the run reduces fold-left through the operator body, which reads its sibling `bump`",
     );
 }
@@ -56,17 +47,16 @@ fn module_operator_run_reduces_fold_left_through_the_body() {
 #[test]
 fn same_symbol_in_two_modules_resolves_by_scope() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE takes_left = ((OP #(⊗) OVER Number = (left)) (LET result = (1 ⊗ 2 ⊗ 3)))\n\
          MODULE takes_right = ((OP #(⊗) OVER Str = (right)) (LET result = (\"x\" ⊗ \"y\" ⊗ \"z\")))",
     );
     assert!(
-        matches!(run_one(scope, parse_one("takes_left.result")), KObject::Number(n) if *n == 1.0),
+        matches!(test_run.run_one(parse_one("takes_left.result")), KObject::Number(n) if *n == 1.0),
     );
     assert!(
-        matches!(run_one(scope, parse_one("takes_right.result")), KObject::KString(s) if s == "z"),
+        matches!(test_run.run_one(parse_one("takes_right.result")), KObject::KString(s) if s == "z"),
     );
 }
 
@@ -75,15 +65,15 @@ fn same_symbol_in_two_modules_resolves_by_scope() {
 #[test]
 fn sigiled_operand_type_declares_over_lists() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    test_run.run(
         "LET xs = [1 2]\n\
          LET ys = [3]\n\
          MODULE lists = ((OP #(&) OVER :(LIST OF Number) = (right)) (LET result = (xs & ys)))",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("lists.result"))),
+        list_numbers(test_run.run_one(parse_one("lists.result")), &types),
         vec![3.0],
     );
 }
@@ -94,9 +84,9 @@ fn sigiled_operand_type_declares_over_lists() {
 #[test]
 fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
          LET zs = [3]\n\
@@ -107,16 +97,16 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
            (LET chained = (xs + ys + zs)))",
     );
     assert!(
-        matches!(run_one(scope, parse_one("lists.numbers")), KObject::Number(n) if *n == 3.0),
+        matches!(test_run.run_one(parse_one("lists.numbers")), KObject::Number(n) if *n == 3.0),
         "`1 + 2` still hits the builtin — the root bucket type-gates on Number operands",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("lists.pair"))),
+        list_numbers(test_run.run_one(parse_one("lists.pair")), &types),
         vec![2.0],
         "list operands miss the builtin's strict gate and fall through to the module body",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("lists.chained"))),
+        list_numbers(test_run.run_one(parse_one("lists.chained")), &types),
         vec![3.0],
         "the three-operand run resolves the module's singleton `+` group and folds left",
     );
@@ -127,13 +117,10 @@ fn declared_plus_over_lists_leaves_number_arithmetic_alone() {
 #[test]
 fn declaring_plus_over_number_registers_but_the_builtin_still_wins() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "MODULE shadowed = ((OP #(+) OVER Number = (999)) (LET result = (1 + 2)))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("MODULE shadowed = ((OP #(+) OVER Number = (999)) (LET result = (1 + 2)))");
     assert!(
-        matches!(run_one(scope, parse_one("shadowed.result")), KObject::Number(n) if *n == 3.0),
+        matches!(test_run.run_one(parse_one("shadowed.result")), KObject::Number(n) if *n == 3.0),
         "the builtin `+` wins for the operand types it declares",
     );
 }
@@ -144,9 +131,9 @@ fn declaring_plus_over_number_registers_but_the_builtin_still_wins() {
 #[test]
 fn unary_operator_collects_the_run_prefix_infix_and_pair() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    test_run.run(
         "LET one = 1\n\
          LET two = 2\n\
          MODULE gather = (\
@@ -157,22 +144,22 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
            (LET prefix = (~ [6 7 8])))",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("gather.named"))),
+        list_numbers(test_run.run_one(parse_one("gather.named")), &types),
         vec![1.0, 2.0, 3.0],
         "a named operand of a run is an element expression, not an interned symbol",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("gather.chained"))),
+        list_numbers(test_run.run_one(parse_one("gather.chained")), &types),
         vec![1.0, 2.0, 3.0],
         "an infix run collects into `operands`",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("gather.pair"))),
+        list_numbers(test_run.run_one(parse_one("gather.pair")), &types),
         vec![4.0, 5.0],
         "a two-operand call reaches the list body through the binary bridge",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("gather.prefix"))),
+        list_numbers(test_run.run_one(parse_one("gather.prefix")), &types),
         vec![6.0, 7.0, 8.0],
         "the prefix form is the same keyword-first shape a reduced run takes",
     );
@@ -183,8 +170,8 @@ fn unary_operator_collects_the_run_prefix_infix_and_pair() {
 #[test]
 fn unquoted_symbol_does_not_declare_an_operator() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let error = run_one_err(scope, parse_one("OP + OVER Number = (left)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("OP + OVER Number = (left)"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { .. }),
         "an unquoted symbol keys no OP overload, got {error}",
@@ -195,8 +182,8 @@ fn unquoted_symbol_does_not_declare_an_operator() {
 #[test]
 fn multi_token_quote_is_not_an_operator_symbol() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let error = run_one_err(scope, parse_one("OP #(1 + 2) OVER Number = (left)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("OP #(1 + 2) OVER Number = (left)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("one quoted token")),
         "expected the quoted-symbol diagnostic, got {error}",
@@ -207,8 +194,8 @@ fn multi_token_quote_is_not_an_operator_symbol() {
 #[test]
 fn reserved_symbol_is_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let error = run_one_err(scope, parse_one("OP #(OVER) OVER Number = (left)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("OP #(OVER) OVER Number = (left)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("reserved")),
         "expected the reserved-symbol diagnostic, got {error}",
@@ -219,12 +206,10 @@ fn reserved_symbol_is_rejected() {
 #[test]
 fn all_caps_symbol_is_a_legal_operator() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "MODULE picks = ((OP #(MAX) OVER Number = (left)) (LET result = (1 MAX 2 MAX 3)))",
-    );
-    assert!(matches!(run_one(scope, parse_one("picks.result")), KObject::Number(n) if *n == 1.0),);
+    let mut test_run = TestRun::silent(&region);
+    test_run
+        .run("MODULE picks = ((OP #(MAX) OVER Number = (left)) (LET result = (1 MAX 2 MAX 3)))");
+    assert!(matches!(test_run.run_one(parse_one("picks.result")), KObject::Number(n) if *n == 1.0),);
 }
 
 /// A heterogeneous binary member is admissible only inside a PAIRWISE group, where a combiner
@@ -232,8 +217,8 @@ fn all_caps_symbol_is_a_legal_operator() {
 #[test]
 fn heterogeneous_binary_operator_outside_a_pairwise_group_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let error = run_one_err(scope, parse_one("OP #(≺) OVER Number -> Bool = (true)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("OP #(≺) OVER Number -> Bool = (true)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("PAIRWISE")),
         "expected the PAIRWISE diagnostic, got {error}",
@@ -245,8 +230,8 @@ fn heterogeneous_binary_operator_outside_a_pairwise_group_errors() {
 #[test]
 fn unary_operator_without_a_result_type_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let error = run_one_err(scope, parse_one("UNARY OP #(~) OVER Number = (operands)"));
+    let mut test_run = TestRun::silent(&region);
+    let error = test_run.run_one_err(parse_one("UNARY OP #(~) OVER Number = (operands)"));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains("must declare its result type")),
         "expected the missing-result diagnostic, got {error}",
@@ -258,12 +243,11 @@ fn unary_operator_without_a_result_type_errors() {
 #[test]
 fn same_scope_mode_conflict_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "OP #(⊙) OVER Number = (left)");
-    let error = run_one_err(
-        scope,
-        parse_one("UNARY OP #(⊙) OVER Str -> :(LIST OF Str) = (operands)"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("OP #(⊙) OVER Number = (left)");
+    let error = test_run.run_one_err(parse_one(
+        "UNARY OP #(⊙) OVER Str -> :(LIST OF Str) = (operands)",
+    ));
     assert!(
         matches!(&error.kind, KErrorKind::ShapeError(msg) if msg.contains('⊙')),
         "expected the mode-conflict diagnostic naming the operator, got {error}",
@@ -275,17 +259,16 @@ fn same_scope_mode_conflict_errors() {
 #[test]
 fn two_operand_types_under_one_symbol_upsert_to_one_group() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE both = (\
            (OP #(⊚) OVER Number = (left))\
            (OP #(⊚) OVER Str = (right))\
            (LET numbers = (1 ⊚ 2 ⊚ 3))\
            (LET strings = (\"a\" ⊚ \"b\" ⊚ \"c\")))",
     );
-    assert!(matches!(run_one(scope, parse_one("both.numbers")), KObject::Number(n) if *n == 1.0),);
-    assert!(matches!(run_one(scope, parse_one("both.strings")), KObject::KString(s) if s == "c"),);
+    assert!(matches!(test_run.run_one(parse_one("both.numbers")), KObject::Number(n) if *n == 1.0),);
+    assert!(matches!(test_run.run_one(parse_one("both.strings")), KObject::KString(s) if s == "c"),);
 }
 
 /// Parking: the declaration's operand type sub-dispatches, so the `OP` slot is still in flight
@@ -294,9 +277,9 @@ fn two_operand_types_under_one_symbol_upsert_to_one_group() {
 #[test]
 fn a_run_parks_on_a_still_finalizing_declaration() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    test_run.run(
         "LET xs = [1]\n\
          LET ys = [2]\n\
          LET zs = [3]\n\
@@ -305,7 +288,7 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
            (LET result = (xs ⊛ ys ⊛ zs)))",
     );
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("deferred.result"))),
+        list_numbers(test_run.run_one(parse_one("deferred.result")), &types),
         vec![1.0],
     );
 }
@@ -317,9 +300,9 @@ fn a_run_parks_on_a_still_finalizing_declaration() {
 #[test]
 fn a_run_above_the_declaration_does_not_see_it() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE early = ((LET result = (1 ⊘ 2 ⊘ 3)) (OP #(⊘) OVER Number = (left)))\n\
          MODULE ordered = ((OP #(⊘) OVER Number = (left)) (LET result = (1 ⊘ 2 ⊘ 3)))",
     );
@@ -331,18 +314,20 @@ fn a_run_above_the_declaration_does_not_see_it() {
         binds_module(scope, "ordered"),
         "the same statements in declaration order resolve",
     );
-    assert!(matches!(run_one(scope, parse_one("ordered.result")), KObject::Number(n) if *n == 1.0),);
+    assert!(
+        matches!(test_run.run_one(parse_one("ordered.result")), KObject::Number(n) if *n == 1.0),
+    );
 }
 
 /// The declaration evaluates to the function it declares, as a bare `FN` does.
 #[test]
 fn declaration_evaluates_to_the_operator_function() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let value = run_one(scope, parse_one("OP #(⊹) OVER Number = (left)"));
+    let mut test_run = TestRun::silent(&region);
+    let value = test_run.run_one(parse_one("OP #(⊹) OVER Number = (left)"));
     assert!(
         matches!(value, KObject::KFunction(_)),
         "an OP statement evaluates to its synthesized function, got {}",
-        value.ktype().name(&TypeRegistry::new()),
+        value.ktype().name(&test_run.types),
     );
 }

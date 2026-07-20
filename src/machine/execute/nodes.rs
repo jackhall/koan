@@ -207,10 +207,9 @@ mod tests {
     //! Miri reports UB, not on values.
 
     use super::*;
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KObject;
-    use crate::machine::model::TypeRegistry;
     use crate::machine::BindingIndex;
 
     /// A `NodeScope::YokedChild` erases a cart-ancestor block scope to a
@@ -221,8 +220,9 @@ mod tests {
     #[test]
     fn node_scope_yoked_child_erase_open_roundtrip() {
         let region = run_root_storage();
-        let scope = default_scope(&region, Box::new(std::io::sink()));
-        let types = TypeRegistry::new();
+        let test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let types = test_run.types.clone();
         scope
             .bind_checked(
                 "k".to_string(),

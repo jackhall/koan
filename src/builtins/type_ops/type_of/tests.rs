@@ -1,10 +1,8 @@
 //! `TYPE OF <value>` — the value's own reported type, surfaced as a type value. General over the
 //! value channel (scalar, container, module, view), and the door a module takes to type position.
 
-use crate::builtins::test_support::{
-    lookup_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
-};
-use crate::machine::model::{KObject, KType, TypeRegistry};
+use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
+use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
 use std::rc::Rc;
@@ -12,8 +10,8 @@ use std::rc::Rc;
 #[test]
 fn type_of_number_literal_is_number() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let result = run_one_type(scope, parse_one("TYPE OF 5"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one_type(parse_one("TYPE OF 5"));
     assert_eq!(*result, KType::Number);
 }
 
@@ -21,9 +19,9 @@ fn type_of_number_literal_is_number() {
 #[test]
 fn type_of_bound_list_is_list_of_element_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET xs = [1, 2, 3]");
-    let result = run_one_type(scope, parse_one("TYPE OF xs"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET xs = [1, 2, 3]");
+    let result = test_run.run_one_type(parse_one("TYPE OF xs"));
     assert_eq!(*result, KType::list(Box::new(KType::Number)));
 }
 
@@ -32,13 +30,11 @@ fn type_of_bound_list_is_list_of_element_type() {
 #[test]
 fn type_of_module_is_its_self_sig() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))",
-    );
-    let module = lookup_module(scope, "int_ord");
-    match run_one_type(scope, parse_one("TYPE OF int_ord")) {
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
+    let module = lookup_module(scope, "int_ord", &test_run.types);
+    match test_run.run_one_type(parse_one("TYPE OF int_ord")) {
         KType::Signature { content, .. } => assert!(
             Rc::ptr_eq(content, module.self_sig_content()),
             "the self-sig must source the module itself",
@@ -52,16 +48,16 @@ fn type_of_module_is_its_self_sig() {
 #[test]
 fn type_of_opaque_view_reports_the_view_not_its_source() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let view = lookup_module(scope, "view");
-    let source = lookup_module(scope, "int_ord");
-    match run_one_type(scope, parse_one("TYPE OF view")) {
+    let view = lookup_module(scope, "view", &test_run.types);
+    let source = lookup_module(scope, "int_ord", &test_run.types);
+    match test_run.run_one_type(parse_one("TYPE OF view")) {
         KType::Signature { content, .. } => {
             assert!(
                 Rc::ptr_eq(content, view.self_sig_content()),
@@ -89,14 +85,13 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
 #[test]
 fn type_of_transparent_view_reports_concrete_slots() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :! Ordered)",
     );
-    match run_one_type(scope, parse_one("TYPE OF view")) {
+    match test_run.run_one_type(parse_one("TYPE OF view")) {
         KType::Signature { content, .. } => {
             assert_eq!(
                 content.schema.manifest_members.get("Elt"),
@@ -113,17 +108,16 @@ fn type_of_transparent_view_reports_concrete_slots() {
 #[test]
 fn type_of_module_types_a_parameter_slot() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (TAKE_ORD m :(TYPE OF int_ord)) -> Number = (m.zero)",
     );
-    let result = run_one(scope, parse_one("TAKE_ORD int_ord"));
+    let result = test_run.run_one(parse_one("TAKE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 7.0),
         "expected the module's `zero`, got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -132,18 +126,17 @@ fn type_of_module_types_a_parameter_slot() {
 #[test]
 fn type_of_parameter_defers_a_return_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
-    let result = run_one(scope, parse_one("USE_ORD int_ord"));
+    let result = test_run.run_one(parse_one("USE_ORD int_ord"));
     assert!(
         matches!(result, KObject::Module(_)),
         "the deferred return must admit the module it was resolved from, got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -154,9 +147,8 @@ fn type_of_parameter_defers_a_return_type() {
 #[test]
 fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          FN (MAKESET er :Ordered) -> Module = \
            (MODULE generated = ((LET Elt = Number) (LET zero = 3)))\n\
@@ -165,11 +157,11 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
          LET SetType = (TYPE OF int_set)\n\
          FN (TAKE m :SetType) -> Number = (m.zero)",
     );
-    let result = run_one(scope, parse_one("TAKE int_set"));
+    let result = test_run.run_one(parse_one("TAKE int_set"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "the alias must admit the functor-minted module, got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -179,8 +171,8 @@ fn type_of_module_binds_as_a_type_alias_carrying_the_module_reach() {
 #[test]
 fn type_of_a_type_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("TYPE OF Number"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("TYPE OF Number"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("is already a type")),
         "expected a value-channel ShapeError, got {err}",
@@ -191,8 +183,8 @@ fn type_of_a_type_errors() {
 #[test]
 fn type_of_unstamped_empty_container_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("TYPE OF []"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("TYPE OF []"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknowable")),
         "expected an unknowable-element-type ShapeError, got {err}",
@@ -206,16 +198,16 @@ fn type_of_unstamped_empty_container_errors() {
 #[test]
 fn identical_modules_share_type_of() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE m1 = ((LET Elt = Number) (LET zero = 7))\n\
          MODULE m2 = ((LET Elt = Number) (LET zero = 7))\n\
          MODULE m3 = ((LET Elt = Str) (LET zero = 7))",
     );
-    let m1 = lookup_module(scope, "m1");
-    let m2 = lookup_module(scope, "m2");
-    let m3 = lookup_module(scope, "m3");
+    let m1 = lookup_module(scope, "m1", &test_run.types);
+    let m2 = lookup_module(scope, "m2", &test_run.types);
+    let m3 = lookup_module(scope, "m3", &test_run.types);
     assert_eq!(
         KObject::Module(m1).ktype(),
         KObject::Module(m2).ktype(),

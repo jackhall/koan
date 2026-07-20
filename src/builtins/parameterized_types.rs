@@ -239,18 +239,16 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        parse_one, run, run_one_err, run_one_type, run_root_silent,
-    };
-    use crate::machine::model::{KKind, KType, Record, TypeRegistry};
+    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::machine::model::{KKind, KType, Record};
     use crate::machine::run_root_storage;
-    use crate::machine::{KErrorKind, Scope};
+    use crate::machine::KErrorKind;
 
     #[test]
     fn list_of_number_lowers_to_list_number() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(LIST OF Number)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(LIST OF Number)"));
         assert_eq!(*result, KType::list(Box::new(KType::Number)));
     }
 
@@ -261,7 +259,8 @@ mod tests {
         use crate::machine::model::{KKind, NominalSchema, RecursiveSet};
         use crate::machine::BindingIndex;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let wrap_set = RecursiveSet::singleton(
             "Wrap".into(),
             NominalSchema::TypeConstructor {
@@ -277,7 +276,7 @@ mod tests {
             },
             BindingIndex::BUILTIN,
         );
-        let result = run_one_type(scope, parse_one(":(Number AS Wrap)"));
+        let result = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
         match result {
             KType::ConstructorApply { ctor, args, .. } => {
                 match ctor.as_ref() {
@@ -298,8 +297,8 @@ mod tests {
     #[test]
     fn map_str_number_lowers_to_dict() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(MAP Str -> Number)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(MAP Str -> Number)"));
         assert_eq!(
             *result,
             KType::dict(Box::new(KType::Str), Box::new(KType::Number))
@@ -309,8 +308,8 @@ mod tests {
     #[test]
     fn fn_lowers_to_kfunction() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(FN (x :Number, y :Str) -> Bool)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         assert_eq!(
             *result,
             KType::function_type(
@@ -323,8 +322,8 @@ mod tests {
     #[test]
     fn fn_nullary_lowers_to_kfunction() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(FN () -> Number)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(FN () -> Number)"));
         assert_eq!(
             *result,
             KType::function_type(Record::new(), Box::new(KType::Number),)
@@ -336,8 +335,8 @@ mod tests {
     #[test]
     fn fn_with_type_param_and_module_return_lowers_to_kfunction() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(FN (Ty :Signature) -> Module)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(FN (Ty :Signature) -> Module)"));
         assert_eq!(
             *result,
             KType::function_type(
@@ -352,8 +351,8 @@ mod tests {
     #[test]
     fn fn_with_nested_list_param_lowers_to_kfunction() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         assert_eq!(
             *result,
             KType::function_type(
@@ -371,9 +370,9 @@ mod tests {
     #[test]
     fn record_sigil_defers_and_mixes_scope_read_with_sub_dispatch() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "LET Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("LET Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":{x :Wrapped, y :(LIST OF Number)}"));
         assert_eq!(
             *result,
             KType::record(Box::new(Record::from_pairs(vec![
@@ -398,9 +397,9 @@ mod tests {
     #[test]
     fn fn_deferred_with_reaching_ret_composes_from_carrier_view() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
         match result {
             KType::KFunction { params, ret, .. } => {
                 assert_eq!(
@@ -409,7 +408,7 @@ mod tests {
                     "the sigil param must lower to LIST OF Number",
                 );
                 assert_eq!(
-                    ret.name(&TypeRegistry::new()),
+                    ret.name(&test_run.types),
                     "Wrapped",
                     "the reaching return type must survive the carrier-view crossing",
                 );
@@ -424,8 +423,8 @@ mod tests {
     #[test]
     fn record_field_sub_dispatch_to_non_type_value_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one(":{x :(1)}"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(":{x :(1)}"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("resolved to non-type value")),
             "expected a non-type-value ShapeError through the deferred side-channel, got {err}",
@@ -435,9 +434,9 @@ mod tests {
     /// `t.name()` round-trips: rendering `expected` and re-running its surface form yields
     /// a type carrier equal to `expected`. The expected value is built at each call site so
     /// it shares the scope's lifetime, keeping the comparison off `'static`.
-    fn assert_round_trips<'a>(scope: &'a Scope<'a>, expected: KType) {
-        let rendered = expected.name(&TypeRegistry::new());
-        let result = run_one_type(scope, parse_one(&rendered));
+    fn assert_round_trips(test_run: &mut TestRun<'_>, expected: KType) {
+        let rendered = expected.name(&test_run.types);
+        let result = test_run.run_one_type(parse_one(&rendered));
         assert_eq!(
             *result, expected,
             "round-trip of `{rendered}` did not reproduce the original KType",
@@ -447,9 +446,9 @@ mod tests {
     #[test]
     fn fn_multi_param_round_trips() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
         assert_round_trips(
-            scope,
+            &mut test_run,
             KType::function_type(
                 Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
                 Box::new(KType::Bool),
@@ -460,9 +459,9 @@ mod tests {
     #[test]
     fn fn_nullary_round_trips() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
         assert_round_trips(
-            scope,
+            &mut test_run,
             KType::function_type(Record::new(), Box::new(KType::Any)),
         );
     }
@@ -470,9 +469,9 @@ mod tests {
     #[test]
     fn fn_nested_param_round_trips() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
         assert_round_trips(
-            scope,
+            &mut test_run,
             KType::function_type(
                 Record::from_pairs(vec![("xs".into(), KType::list(Box::new(KType::Number)))]),
                 Box::new(KType::Bool),
@@ -483,14 +482,14 @@ mod tests {
     #[test]
     fn fn_capitalized_param_round_trips_and_preserves_name() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
         let expected = KType::function_type(
             Record::from_pairs(vec![("Ty".into(), KType::OfKind(KKind::Signature))]),
             Box::new(KType::empty_signature()),
         );
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
         assert!(matches!(&expected, KType::KFunction { params, .. } if params.get("Ty").is_some()),);
-        assert_round_trips(scope, expected);
+        assert_round_trips(&mut test_run, expected);
     }
 
     /// `:(MAP Str -> Wrapped)` correlates a scalar-literal key with no carrier (`k`) and a
@@ -499,16 +498,16 @@ mod tests {
     #[test]
     fn map_scalar_key_reaching_value_correlates() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(MAP Str -> Wrapped)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(MAP Str -> Wrapped)"));
         match result {
             KType::Dict {
                 key: k, value: v, ..
             } => {
                 assert_eq!(**k, KType::Str, "scalar key must lower to Str");
                 assert_eq!(
-                    v.name(&TypeRegistry::new()),
+                    v.name(&test_run.types),
                     "Wrapped",
                     "reaching value type must survive the carrier-view crossing",
                 );
@@ -522,15 +521,15 @@ mod tests {
     #[test]
     fn map_reaching_key_scalar_value_correlates() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(MAP Wrapped -> Str)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(MAP Wrapped -> Str)"));
         match result {
             KType::Dict {
                 key: k, value: v, ..
             } => {
                 assert_eq!(
-                    k.name(&TypeRegistry::new()),
+                    k.name(&test_run.types),
                     "Wrapped",
                     "reaching key type must survive the carrier-view crossing",
                 );
@@ -546,14 +545,14 @@ mod tests {
     #[test]
     fn record_sync_reaching_field_folds_at_brand() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":{x :Wrapped}"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":{x :Wrapped}"));
         match result {
             KType::Record { fields: record, .. } => {
                 let field = record.get("x").expect("record must have field x");
                 assert_eq!(
-                    field.name(&TypeRegistry::new()),
+                    field.name(&test_run.types),
                     "Wrapped",
                     "the reaching field must survive the sync brand re-fold",
                 );
@@ -568,13 +567,13 @@ mod tests {
     #[test]
     fn fn_sync_reaching_param_folds_at_brand() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(FN (x :Wrapped) -> Bool)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(FN (x :Wrapped) -> Bool)"));
         match result {
             KType::KFunction { params, ret, .. } => {
                 assert_eq!(
-                    params.get("x").map(|kt| kt.name(&TypeRegistry::new())),
+                    params.get("x").map(|kt| kt.name(&test_run.types)),
                     Some("Wrapped".to_string()),
                     "the SetRef param must survive the sync compose",
                 );
@@ -594,9 +593,9 @@ mod tests {
     #[test]
     fn fn_sync_reaching_ret_folds_at_brand() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(FN (x :Number) -> Wrapped)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(FN (x :Number) -> Wrapped)"));
         match result {
             KType::KFunction { params, ret, .. } => {
                 assert_eq!(
@@ -605,7 +604,7 @@ mod tests {
                     "the region-free param must be Number",
                 );
                 assert_eq!(
-                    ret.name(&TypeRegistry::new()),
+                    ret.name(&test_run.types),
                     "Wrapped",
                     "the SetRef return type must survive the carrier-view crossing",
                 );
@@ -619,13 +618,13 @@ mod tests {
     #[test]
     fn list_of_reaching_elem_lowers() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Wrapped = :{a :Number}");
-        let result = run_one_type(scope, parse_one(":(LIST OF Wrapped)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Wrapped = :{a :Number}");
+        let result = test_run.run_one_type(parse_one(":(LIST OF Wrapped)"));
         match result {
             KType::List { element: elem, .. } => {
                 assert_eq!(
-                    elem.name(&TypeRegistry::new()),
+                    elem.name(&test_run.types),
                     "Wrapped",
                     "reaching elem type must survive the carrier-view crossing",
                 );

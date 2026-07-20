@@ -23,13 +23,13 @@ mod record_types;
 mod return_type;
 mod tail_region_turnover;
 
-use crate::builtins::test_support::{run, run_root_with_buf};
+use crate::builtins::test_support::TestRun;
 use crate::machine::run_root_storage;
 
 pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
-    run(scope, source);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes
 }

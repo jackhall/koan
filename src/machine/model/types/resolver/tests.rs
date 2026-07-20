@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtins::test_support::run_root_silent;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
@@ -17,7 +17,8 @@ fn leaf(n: &str) -> TypeIdentifier {
 fn type_token_cannot_bind_value_side() {
     use crate::machine::model::values::KObject;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let error = scope
         .bind_value(
             "Gee".into(),
@@ -31,7 +32,7 @@ fn type_token_cannot_bind_value_side() {
             if msg.contains("`Gee` is a Type token")),
         "expected the token-class partition error, got {error}",
     );
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("Gee"), &types) {
         TypeResolution::Unbound(msg) => assert!(
@@ -45,8 +46,9 @@ fn type_token_cannot_bind_value_side() {
 #[test]
 fn unbound_leaf_names_unknown_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let types = TypeRegistry::new();
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let mut el = Elaborator::new(scope);
     match elaborate_type_identifier(&mut el, &leaf("NopeType"), &types) {
         TypeResolution::Unbound(msg) => assert!(
@@ -63,7 +65,8 @@ fn unbound_leaf_names_unknown_type() {
 #[test]
 fn recursive_group_member_lowers_to_recursive_ref() {
     let region = run_root_storage();
-    let parent = run_root_silent(&region);
+    let parent_test_run = TestRun::silent(&region);
+    let parent = parent_test_run.scope;
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
         NominalMember::pending("A".into(), KKind::NewType),
         NominalMember::pending("B".into(), KKind::NewType),
@@ -71,7 +74,7 @@ fn recursive_group_member_lowers_to_recursive_ref() {
     let child = region
         .brand()
         .alloc_scope(Scope::child_recursive_group(parent, set));
-    let types = TypeRegistry::new();
+    let types = parent_test_run.types.clone();
     let mut el = Elaborator::new(child);
     match elaborate_type_identifier(&mut el, &leaf("B"), &types) {
         TypeResolution::Done(KType::RecursiveRef(name)) => assert_eq!(name, "B"),
@@ -98,7 +101,8 @@ fn recursive_group_member_lowers_to_recursive_ref() {
 fn block_member_seals_shared_set_then_short_circuits_before_rebind() {
     use crate::machine::model::types::NominalSchema;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let set = std::rc::Rc::new(RecursiveSet::new(vec![
         NominalMember::pending("Node".into(), KKind::NewType),
         NominalMember::pending("Leaf".into(), KKind::NewType),

@@ -4,13 +4,13 @@
 //! `KObject::KExpression`, an argument one binds that value without evaluating the body, and `$`
 //! dispatches it back.
 
-use crate::builtins::test_support::{run, run_root_with_buf};
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 
 fn run_program(source: &str) -> Vec<u8> {
     let region = run_root_storage();
-    let (scope, captured) = run_root_with_buf(&region);
-    run(scope, source);
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    test_run.run(source);
     let bytes = captured.borrow().clone();
     bytes
 }

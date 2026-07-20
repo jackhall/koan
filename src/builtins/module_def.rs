@@ -167,12 +167,9 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
-    };
+    use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::model::Module;
-    use crate::machine::model::TypeRegistry;
     use crate::machine::{run_root_storage, FrameStorageExt};
     use crate::machine::{BindingIndex, KErrorKind};
 
@@ -191,8 +188,9 @@ mod tests {
     #[test]
     fn type_token_module_name_errors_with_the_snake_case_respelling() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("MODULE IntOrd = (LET x = 1)"));
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let err = test_run.run_one_err(parse_one("MODULE IntOrd = (LET x = 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("a module is a value") && msg.contains("`int_ord`")),
@@ -214,11 +212,11 @@ mod tests {
     #[test]
     fn module_member_named_type_collides_with_builtin_type() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MODULE int_ord = ((LET Type = Number) (LET zero = 0))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let err = test_run.run_one_err(parse_one(
+            "MODULE int_ord = ((LET Type = Number) (LET zero = 0))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Type"),
             "a MODULE member named `Type` must be a Rebind naming `Type`, got {err}",
@@ -232,8 +230,9 @@ mod tests {
     #[test]
     fn module_binds_under_name_in_scope() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = (LET x = 1)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("MODULE foo = (LET x = 1)");
         assert!(
             matches!(scope.bindings().data().get("foo").map(|(o, _, _)| *o),
                 Some(KObject::Module(m)) if m.path == "foo"),
@@ -248,22 +247,24 @@ mod tests {
     #[test]
     fn bare_module_name_surfaces_as_object_value() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = (LET x = 1)");
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE foo = (LET x = 1)");
         // A module named in expression position reads back on the value channel's Object arm.
-        match run_one(scope, parse_one("foo")) {
+        let bare = test_run.run_one(parse_one("foo"));
+        match bare {
             KObject::Module(module) => assert_eq!(module.path, "foo"),
             other => panic!(
                 "bare module name must read back as an Object-arm module value, got {}",
-                other.ktype().name(&TypeRegistry::new())
+                other.ktype().name(&test_run.types)
             ),
         }
         // PRINT returns the rendered string — a bare module renders as its path.
-        match run_one(scope, parse_one("PRINT foo")) {
+        let printed = test_run.run_one(parse_one("PRINT foo"));
+        match printed {
             KObject::KString(s) => assert_eq!(s, "foo"),
             other => panic!(
                 "PRINT foo returns the path string, got {}",
-                other.ktype().name(&TypeRegistry::new())
+                other.ktype().name(&test_run.types)
             ),
         }
     }
@@ -275,12 +276,13 @@ mod tests {
     fn bare_module_names_in_list_resolve_and_memoize_self_sig() {
         use crate::machine::model::Held;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE int_ord = (LET compare = 7)");
-        match run_one(scope, parse_one("[int_ord, int_ord]")) {
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE int_ord = (LET compare = 7)");
+        let listed = test_run.run_one(parse_one("[int_ord, int_ord]"));
+        match listed {
             KObject::List(items, elem) => {
                 assert_eq!(
-                    elem.name(&TypeRegistry::new()),
+                    elem.name(&test_run.types),
                     "int_ord",
                     "the memoized element type is the module self-sig"
                 );
@@ -294,7 +296,7 @@ mod tests {
             }
             other => panic!(
                 "expected a list, got {}",
-                other.ktype().name(&TypeRegistry::new())
+                other.ktype().name(&test_run.types)
             ),
         }
     }
@@ -303,19 +305,19 @@ mod tests {
     fn module_in_list_surfaces_as_object_element_memoized_to_self_sig() {
         use crate::machine::model::Held;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
             "SIG Ordered = (VAL compare :Number)\n\
              MODULE int_ord = (LET compare = 7)",
         );
         // A parenthesized module expression evaluates to the Object-arm module value, so the list
         // element is `Held::Object` memoized as the module's self-sig (`Signature{SelfOf}`, whose
         // name renders as the module path).
-        match run_one(scope, parse_one("[(int_ord)]")) {
+        let listed = test_run.run_one(parse_one("[(int_ord)]"));
+        match listed {
             KObject::List(items, elem) => {
                 assert_eq!(
-                    elem.name(&TypeRegistry::new()),
+                    elem.name(&test_run.types),
                     "int_ord",
                     "element memoizes to the module self-sig"
                 );
@@ -327,7 +329,7 @@ mod tests {
             }
             other => panic!(
                 "expected a list, got {}",
-                other.ktype().name(&TypeRegistry::new())
+                other.ktype().name(&test_run.types)
             ),
         }
     }
@@ -335,19 +337,19 @@ mod tests {
     #[test]
     fn module_member_access_via_attr() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = (LET x = 1)");
-        let result = run_one(scope, parse_one("foo.x"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE foo = (LET x = 1)");
+        let result = test_run.run_one(parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
     #[test]
     fn module_with_multiple_statements_in_parens() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = ((LET x = 1) (LET y = 2))");
-        assert!(matches!(run_one(scope, parse_one("foo.x")), KObject::Number(n) if *n == 1.0));
-        assert!(matches!(run_one(scope, parse_one("foo.y")), KObject::Number(n) if *n == 2.0));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE foo = ((LET x = 1) (LET y = 2))");
+        assert!(matches!(test_run.run_one(parse_one("foo.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(test_run.run_one(parse_one("foo.y")), KObject::Number(n) if *n == 2.0));
     }
 
     #[test]
@@ -355,21 +357,19 @@ mod tests {
         // `LET <name> = (FN ...)` binds under a clean identifier; bare FN lands under
         // its signature key and isn't reachable as `foo.<name>` via ATTR.
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "MODULE foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
-        );
-        let foo = lookup_module(scope, "foo");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("MODULE foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))");
+        let foo = lookup_module(scope, "foo", &test_run.types);
         assert!(foo.child_scope().bindings().data().contains_key("double"));
     }
 
     #[test]
     fn module_unknown_member_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = (LET x = 1)");
-        let err = run_one_err(scope, parse_one("foo.bogus"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE foo = (LET x = 1)");
+        let err = test_run.run_one_err(parse_one("foo.bogus"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("foo") && msg.contains("`bogus`")),
@@ -380,9 +380,9 @@ mod tests {
     #[test]
     fn nested_module_accessible_via_chained_attr() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE outer =\n  MODULE inner = (LET x = 7)");
-        let result = run_one(scope, parse_one("outer.inner.x"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("MODULE outer =\n  MODULE inner = (LET x = 7)");
+        let result = test_run.run_one(parse_one("outer.inner.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
@@ -391,9 +391,9 @@ mod tests {
     #[test]
     fn module_body_parks_on_outer_placeholder() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "LET y = 7\nMODULE foo = (LET x = y)");
-        let result = run_one(scope, parse_one("foo.x"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("LET y = 7\nMODULE foo = (LET x = y)");
+        let result = test_run.run_one(parse_one("foo.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
@@ -401,8 +401,9 @@ mod tests {
     #[test]
     fn module_body_error_short_circuits_finalize() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "MODULE foo = (LET x = nonexistent_name)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("MODULE foo = (LET x = nonexistent_name)");
         assert!(
             scope.bindings().data().get("foo").is_none(),
             "foo must not bind when its body errors",
@@ -415,7 +416,8 @@ mod tests {
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let child = region
             .brand()
             .alloc_scope(crate::machine::Scope::child_under_module(
@@ -431,11 +433,11 @@ mod tests {
                 module,
                 child,
                 BindingIndex::value(0),
-                &TypeRegistry::new(),
+                &test_run.types,
             )
             .expect("pre-seed the module value binding");
-        run(scope, "MODULE foo = (LET y = 2)");
-        let foo = lookup_module(scope, "foo");
+        test_run.run("MODULE foo = (LET y = 2)");
+        let foo = lookup_module(scope, "foo", &test_run.types);
         assert!(std::ptr::eq(foo, module));
     }
 
@@ -444,9 +446,10 @@ mod tests {
     #[test]
     fn module_body_dispatch_does_not_dangle() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
-        let foo = lookup_module(scope, "foo");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("LET y = 7\nMODULE foo = ((LET x = y) (LET z = 11))");
+        let foo = lookup_module(scope, "foo", &test_run.types);
         let inner = foo.child_scope().bindings().data();
         assert!(
             matches!(inner.get("x").map(|(o, _, _)| *o), Some(KObject::Number(n)) if *n == 7.0)

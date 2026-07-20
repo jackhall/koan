@@ -1,5 +1,4 @@
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-use crate::machine::model::TypeRegistry;
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{KKind, ProjectedSchema, RecursiveSet};
 use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
@@ -8,7 +7,8 @@ use crate::machine::KErrorKind;
 #[test]
 fn result_registers_type_constructor_with_schema() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
 
     // Type-only: `Result`'s `TypeConstructor` member carries both `param_names` and the
     // variant `schema`; no value-side carrier in `data`.
@@ -18,7 +18,7 @@ fn result_registers_type_constructor_with_schema() {
     match identity {
         KType::SetRef { set, index } if set.member(*index).kind == KKind::TypeConstructor => {
             assert_eq!(set.member(*index).name, "Result");
-            match RecursiveSet::projected_schema(set, *index, &TypeRegistry::new()) {
+            match RecursiveSet::projected_schema(set, *index, &test_run.types) {
                 ProjectedSchema::TypeConstructor {
                     param_names,
                     schema,
@@ -41,8 +41,8 @@ fn result_registers_type_constructor_with_schema() {
 #[test]
 fn result_constructs_ok_variant() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let result = run_one(scope, parse_one("Result (Ok 1)"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("Result (Ok 1)"));
     match result {
         KObject::Tagged {
             tag,
@@ -62,8 +62,8 @@ fn result_constructs_ok_variant() {
 #[test]
 fn result_constructs_error_variant() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let result = run_one(scope, parse_one("Result (Error \"x\")"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("Result (Error \"x\")"));
     match result {
         KObject::Tagged {
             tag,
@@ -83,8 +83,8 @@ fn result_constructs_error_variant() {
 #[test]
 fn result_rejects_unknown_tag() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("Result (Bogus 1)"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("Result (Bogus 1)"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`Bogus`")),
         "expected ShapeError mentioning `Bogus`, got {err}",
@@ -95,11 +95,8 @@ fn result_rejects_unknown_tag() {
 #[test]
 fn result_matches_ok_branch() {
     let region = run_root_storage();
-    let (scope, buf) = crate::builtins::test_support::run_root_with_buf(&region);
-    run(
-        scope,
-        "MATCH (Result (Ok 1)) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))",
-    );
+    let (mut test_run, buf) = TestRun::with_buf(&region);
+    test_run.run("MATCH (Result (Ok 1)) -> :Str WITH (Ok -> (PRINT it) Error -> (PRINT \"no\"))");
     assert_eq!(buf.borrow().as_slice(), b"1\n");
 }
 
@@ -108,8 +105,8 @@ fn result_matches_ok_branch() {
 #[test]
 fn redeclaring_result_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("UNION Result = (Ok :Str Err :Str)"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("UNION Result = (Ok :Str Err :Str)"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "Result"),
         "expected Rebind on Result, got {err}",

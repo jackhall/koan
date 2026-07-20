@@ -5,12 +5,11 @@
 //! value reaches are pinned by the carrier's witness set at the `transfer_into` layer, not here.
 
 use super::*;
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FoldingBrand, KoanRegionExt};
 use crate::machine::model::Held;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
-use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::CallFrame;
 use crate::witnessed::FoldedPlacement;
@@ -49,7 +48,8 @@ fn alloc_local_kf<'run>(home: &'run Rc<CallFrame>) -> &'run crate::machine::KFun
 #[test]
 fn object_top_node_relocates_into_dest() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
 
@@ -79,10 +79,11 @@ fn object_top_node_relocates_into_dest() {
 #[test]
 fn list_relocation_shares_inner_rc() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     let items = Rc::new(vec![
         Held::Object(KObject::Number(1.0)),
@@ -128,10 +129,11 @@ fn dict_relocation_shares_inner_rc() {
     use crate::machine::model::KKey;
     use std::collections::HashMap;
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     let mut map: HashMap<KKey, Held> = HashMap::new();
     map.insert(KKey::String("a".into()), Held::Object(KObject::Number(1.0)));
@@ -170,10 +172,11 @@ fn dict_relocation_shares_inner_rc() {
 fn tagged_relocation_shares_value_and_set_rc() {
     use crate::machine::model::{NominalSchema, RecursiveSet};
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     let inner = Rc::new(KObject::Number(42.0));
     let set = RecursiveSet::singleton(
@@ -229,10 +232,11 @@ fn tagged_relocation_shares_value_and_set_rc() {
 #[test]
 fn kfunction_borrow_preserved_verbatim() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let source = CallFrame::new(scope);
     let dest = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     let kf_ref = alloc_local_kf(&source);
     let obj: &KObject = source
@@ -268,7 +272,8 @@ fn kfunction_borrow_preserved_verbatim() {
 fn type_recursive_setref_relocates_and_navigates() {
     use crate::machine::model::{NominalSchema, Record, RecursiveSet};
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let dest = CallFrame::new(scope);
 
     // A self-recursive `Tree` whose `children` field is `List(SetLocal(0))` — the shape a

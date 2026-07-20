@@ -2,8 +2,7 @@
 //! snake_case name in `bindings.data`, is applied by the ordinary keyworded call convention, and
 //! its `ktype()` is `KType::KFunction`. `bindings.types` holds no callable value.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::model::TypeRegistry;
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 
@@ -15,8 +14,9 @@ const SETUP: &str = "SIG Ordered = (VAL compare :Number)\n\
 #[test]
 fn module_returning_fn_binds_value_side() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, SETUP);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(SETUP);
 
     let bound = scope
         .bindings()
@@ -37,8 +37,9 @@ fn module_returning_fn_binds_value_side() {
 #[test]
 fn module_returning_fn_ktype_is_kfunction() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, SETUP);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(SETUP);
 
     let bound = scope
         .lookup("make_set")
@@ -54,15 +55,15 @@ fn module_returning_fn_ktype_is_kfunction() {
 #[test]
 fn module_returning_fn_applies_by_the_keyworded_call_convention() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, SETUP);
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(SETUP);
 
-    let result = run_one(scope, parse_one("MAKESET int_ord"));
+    let result = test_run.run_one(parse_one("MAKESET int_ord"));
     let module = match result {
         KObject::Module(module) => module,
         other => panic!(
             "(MAKESET int_ord) must return a module, got {}",
-            other.summarize(&TypeRegistry::new()),
+            other.summarize(&test_run.types),
         ),
     };
     let inner = module

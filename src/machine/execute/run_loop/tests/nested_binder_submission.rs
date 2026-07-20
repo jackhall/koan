@@ -5,34 +5,21 @@
 //! dispatches a call shape matching the still-uninstalled bucket would
 //! hard-error under strict-only admission instead of parking.
 
-use std::io::Write;
-
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::UntypedElement;
 use crate::parse::parse;
-
-struct Sink;
-impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 #[test]
 fn nested_binder_installs_inner_placeholder_at_outer_submission() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(Sink));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let mut exprs =
         parse("LET f = (FN (HELPER x :Number) -> Number = (x))").expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test fixture: single top-level expression");
     let expr = exprs.remove(0);
-    let mut runtime = KoanRuntime::new();
-    let _id = runtime.dispatch_in_scope(expr, scope);
+    let _id = test_run.runtime.dispatch_in_scope(expr, scope);
     // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();
     assert!(

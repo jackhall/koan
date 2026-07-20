@@ -1,19 +1,19 @@
 //! Branch coverage for the FN-def `body()` routing matrix and `ReturnTypeCapture`
 //! variants on the dep-finish path, plus the Stage B param-name scan utility arms.
 
-use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KType, ReturnType};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 
 /// Parens-form return type carrying a bare lowercase identifier matching a parameter
 /// name must defer.
 #[test]
 fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (USE xs :Number) -> :(somefn xs) = (xs)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE xs :Number) -> :(somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -26,8 +26,9 @@ fn fn_def_sigil_return_type_with_identifier_param_ref_defers() {
 #[test]
 fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (USE xs :Number) -> :([xs]) = (xs)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE xs :Number) -> :([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -40,8 +41,9 @@ fn fn_def_sigil_return_type_with_list_literal_param_ref_defers() {
 #[test]
 fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE xs :Number) -> :({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -56,9 +58,9 @@ fn fn_def_sigil_return_type_with_dict_literal_param_ref_defers() {
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          FN (USE_ORD er :Ordered) -> :(TYPE OF er) = (er)",
     );
@@ -77,9 +79,9 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "FN (USE xs :MyT) -> :(LIST OF Number) = ([1])\n\
          LET MyT = Number",
     );
@@ -95,9 +97,9 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "FN (NOP) -> MyT = (1)\n\
          LET MyT = Number",
     );
@@ -114,8 +116,9 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
 #[test]
 fn fn_def_parens_param_type_non_type_value_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
     runtime
         .execute()
@@ -137,8 +140,9 @@ fn fn_def_parens_param_type_non_type_value_errors() {
 #[test]
 fn fn_def_sigil_return_type_non_type_value_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("FN (NOP) -> :(1) = (1)"), scope);
     runtime
         .execute()

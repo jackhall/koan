@@ -85,7 +85,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
@@ -102,8 +102,9 @@ mod tests {
     fn sig_binds_under_name_in_scope() {
         use crate::machine::model::KType;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "SIG Ordered = (VAL x :Number)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
         assert!(scope.bindings().data().get("Ordered").is_none());
         assert!(matches!(
@@ -116,8 +117,9 @@ mod tests {
     fn sig_path_records_name() {
         use crate::machine::model::KType;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "SIG Ordered = (VAL x :Number)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Ordered = (VAL x :Number)");
         let content = match scope.resolve_type("Ordered") {
             Some(KType::Signature { content, .. }) => content,
             _ => panic!("Ordered should be a signature"),
@@ -130,8 +132,9 @@ mod tests {
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::KType;
         let content = match scope.resolve_type("Foo") {
             Some(KType::Signature { content, .. }) => content,
@@ -156,11 +159,11 @@ mod tests {
     #[test]
     fn sig_member_named_type_collides_with_builtin_type() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("SIG Ordered = ((TYPE Type) (VAL compare :Number))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let err = test_run.run_one_err(parse_one(
+            "SIG Ordered = ((TYPE Type) (VAL compare :Number))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Type"),
             "a SIG member named `Type` must be a Rebind naming `Type`, got {err}",
@@ -176,8 +179,9 @@ mod tests {
     #[test]
     fn sig_body_error_short_circuits_finalize() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "SIG Foo = (VAL x :NonexistentType)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Foo = (VAL x :NonexistentType)");
         assert!(
             scope.resolve_type("Foo").is_none(),
             "Foo must not bind (type side) when its body errors",
@@ -191,9 +195,9 @@ mod tests {
     fn identical_sigs_share_identity_differing_members_distinguish() {
         use crate::machine::model::KType;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run(
             "SIG Alpha = ((VAL x :Number) (VAL y :Str))\n\
              SIG Beta = ((VAL x :Number) (VAL y :Str))\n\
              SIG Gamma = ((VAL x :Number) (VAL y :Bool))\n\
@@ -216,9 +220,9 @@ mod tests {
     fn sig_self_referential_slot_canonicalizes() {
         use crate::machine::model::KType;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run(
             "SIG OrdA = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
              SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
              SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
@@ -246,8 +250,9 @@ mod tests {
     fn with_pins_distinguish_signature_identity() {
         use crate::machine::model::KType;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "SIG Container = ((TYPE Elem) (VAL item :Elem))");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let container = match scope.resolve_type("Container") {
             Some(KType::Signature { content, .. }) => std::rc::Rc::clone(content),
             _ => panic!("Container should be a signature"),

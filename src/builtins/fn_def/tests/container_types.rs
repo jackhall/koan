@@ -1,11 +1,10 @@
 //! Parameterized container types in FN parameter and return slots:
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 
 use super::capture_program_output;
 
@@ -15,9 +14,9 @@ use super::capture_program_output;
 #[test]
 fn fn_return_coarsens_list_carrier_to_declared() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
-    let result = run_one(scope, parse_one("NUMS"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (NUMS) -> :(LIST OF Any) = ([1 2 3])");
+    let result = test_run.run_one(parse_one("NUMS"));
     assert_eq!(result.ktype(), KType::list(Box::new(KType::Any)));
 }
 
@@ -25,9 +24,9 @@ fn fn_return_coarsens_list_carrier_to_declared() {
 #[test]
 fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
-    let result = run_one(scope, parse_one("NUMS"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (NUMS) -> :(LIST OF Number) = ([1 2 3])");
+    let result = test_run.run_one(parse_one("NUMS"));
     assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }
 
@@ -36,9 +35,10 @@ fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
 #[test]
 fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (BAD) -> :(LIST OF Number) = ([2 \"hello\"])");
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("BAD"), scope);
     runtime.execute().expect("scheduler runs to completion");
     assert!(runtime.result_error(id).is_err());
@@ -49,9 +49,9 @@ fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
 #[test]
 fn fn_return_empty_list_stamps_declared_element_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (EMPTY) -> :(LIST OF Number) = ([])");
-    let result = run_one(scope, parse_one("EMPTY"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (EMPTY) -> :(LIST OF Number) = ([])");
+    let result = test_run.run_one(parse_one("EMPTY"));
     assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }
 
@@ -124,9 +124,10 @@ fn fn_returning_typed_list_accepts_matching_value() {
 #[test]
 fn fn_returning_typed_list_rejects_wrong_element_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (BAD) -> :(LIST OF Number) = ([1 \"x\"])");
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(parse_one("BAD"), scope);
     runtime.execute().expect("scheduler runs to completion");
     let res = runtime.result_error(id);
@@ -162,12 +163,10 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 #[test]
 fn fn_with_typed_function_param_rejects_name_mismatch() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
-    );
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(
         parse_one("USE (FN (SHOW n :Number) -> Str = (\"hi\"))"),
         scope,
@@ -225,12 +224,10 @@ fn fn_with_typed_function_param_admits_width_drop() {
 #[test]
 fn fn_with_typed_function_param_rejects_width_extra() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
-    );
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(
         parse_one("USE (FN (SHOW x :Number, y :Str) -> Str = (\"hi\"))"),
         scope,
@@ -273,13 +270,11 @@ fn fn_typed_function_param_contravariant_tiebreak() {
 #[test]
 fn fn_typed_function_param_incomparable_is_ambiguous() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")",
-    );
-    run(scope, "FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"num\")");
+    test_run.run("FN (USE f :(FN (x :Str) -> Str)) -> Str = (\"str\")");
+    let runtime = &mut test_run.runtime;
     let root =
         runtime.dispatch_in_scope(parse_one("USE (FN (GET x :Any) -> Str = (\"v\"))"), scope);
     runtime
@@ -382,16 +377,11 @@ fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
 #[test]
 fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
-    );
-    run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
-    );
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(parse_one("DESCRIBE nope"), scope);
     runtime
         .execute()
@@ -411,16 +401,11 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
 #[test]
 fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
-    );
-    run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
-    );
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(parse_one("DESCRIBE [1 \"a\"]"), scope);
     runtime
         .execute()
@@ -483,9 +468,10 @@ fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
 #[test]
 fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(parse_one("HEAD [\"a\"]"), scope);
     runtime
         .execute()
@@ -505,12 +491,9 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
 #[test]
 fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)",
-    );
-    let result = run_one(scope, parse_one("ECHO [1]"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
+    let result = test_run.run_one(parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), KType::list(Box::new(KType::Any)));
 }
 
@@ -518,11 +501,8 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
 #[test]
 fn fn_typed_list_param_accepts_matching_element_at_call() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",
-    );
-    let result = run_one(scope, parse_one("ECHO [1]"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
+    let result = test_run.run_one(parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), KType::list(Box::new(KType::Number)));
 }

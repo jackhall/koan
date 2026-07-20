@@ -290,13 +290,14 @@ fn record_value_admission_and_matches() {
 /// (the proper tier is the non-signature tier), and non-type-denoting carriers reject.
 #[test]
 fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
-    let types = TypeRegistry::new();
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::{SigContent, SigSchema};
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let t = KType::OfKind(KKind::AnyType);
     let kt_number: &KType = region.brand().alloc_ktype(KType::Number);
     let kt_str: &KType = region.brand().alloc_ktype(KType::Str);
@@ -460,12 +461,13 @@ fn user_type_specificity_lattice() {
 /// - A `Signature` (pinned or not) strictly refines `OfKind(Module)`.
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
-    let types = TypeRegistry::new();
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::{SigContent, SigSchema};
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     // Two distinct decl_scopes → two distinct `sig_id`s.
     let ordered_scope = region
         .brand()
@@ -864,13 +866,14 @@ fn union_specificity_ordering() {
 /// distinguishes them.
 #[test]
 fn module_object_ktype_reports_self_sig() {
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::Scope;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
 
     let child = region
         .brand()
@@ -923,15 +926,16 @@ fn module_object_ktype_reports_self_sig() {
 /// value.
 #[test]
 fn matches_value_admits_module_object_via_signature_slot() {
-    let types = TypeRegistry::new();
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, FrameStorageExt};
     use crate::machine::model::values::Module;
     use crate::machine::model::KObject;
     use crate::machine::model::{SigContent, SigSchema};
     use crate::machine::Scope;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
     // An empty signature (empty decl scope): every module bare-satisfies it, so the pins gate.
     let sig_scope = region
@@ -971,16 +975,16 @@ fn matches_value_admits_module_object_via_signature_slot() {
 /// collapse into one type and there would be no ordering to test.
 #[test]
 fn specificity_self_sig_refines_declared_and_empty() {
-    let types = TypeRegistry::new();
-    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
     // `Ordered` requires a `compare` slot; `int_ord` supplies it plus an extra member, so its
     // self-sig strictly satisfies `Ordered`.
-    run(
-        scope,
+    test_run.run(
         "SIG Ordered = ((VAL compare :Number))\n\
          MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
     );
@@ -988,7 +992,7 @@ fn specificity_self_sig_refines_declared_and_empty() {
         Some(KType::Signature { content, .. }) => Rc::clone(content),
         _ => panic!("Ordered must bind a Signature KType"),
     };
-    let m = lookup_module(scope, "int_ord");
+    let m = lookup_module(scope, "int_ord", &types);
 
     let self_of = KType::signature(Rc::clone(m.self_sig_content()), Vec::new());
     let declared = KType::signature(sig, Vec::new());
@@ -1009,21 +1013,22 @@ fn specificity_self_sig_refines_declared_and_empty() {
 /// self-sig type equals the declared signature by digest, not merely by mutual satisfaction.
 #[test]
 fn self_sig_type_equals_member_free_declared_sig() {
-    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
-    run(
-        scope,
+    test_run.run(
         "SIG HasLabel = ((VAL label :Str))\n\
          MODULE widget = ((LET label = (\"button\")))",
     );
     let declared = scope
         .resolve_type("HasLabel")
         .expect("HasLabel must bind a type");
-    let m = lookup_module(scope, "widget");
+    let m = lookup_module(scope, "widget", &types);
     assert_eq!(
         &KObject::Module(m).ktype(),
         declared,
@@ -1038,21 +1043,22 @@ fn self_sig_type_equals_member_free_declared_sig() {
 /// through the manifest member to the same slot type the module's binding derives.
 #[test]
 fn self_sig_type_equals_fully_manifest_declared_sig() {
-    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
-    run(
-        scope,
+    test_run.run(
         "SIG Pinned = ((LET Elem = Number) (VAL x :Elem))\n\
          MODULE pinned_mod = ((LET Elem = Number) (LET x = 5))",
     );
     let declared = scope
         .resolve_type("Pinned")
         .expect("Pinned must bind a type");
-    let m = lookup_module(scope, "pinned_mod");
+    let m = lookup_module(scope, "pinned_mod", &types);
     assert_eq!(
         &KObject::Module(m).ktype(),
         declared,
@@ -1067,22 +1073,22 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
 /// digest-equal yet verdict-divergent across modules, breaking digest-is-identity.
 #[test]
 fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
-    let types = TypeRegistry::new();
-    use crate::builtins::test_support::{lookup_module, run, run_root_silent};
+    use crate::builtins::test_support::{lookup_module, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
-    run(
-        scope,
+    test_run.run(
         "SIG Abstracted = ((TYPE Elem) (VAL x :Elem))\n\
          MODULE concrete = ((LET Elem = Number) (LET x = 5))",
     );
     let declared = scope
         .resolve_type("Abstracted")
         .expect("Abstracted must bind a type");
-    let m = lookup_module(scope, "concrete");
+    let m = lookup_module(scope, "concrete", &types);
     let self_of = KObject::Module(m).ktype();
 
     assert_ne!(

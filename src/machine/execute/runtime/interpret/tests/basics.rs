@@ -13,7 +13,8 @@ use super::run;
 fn interprets_let_and_print() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET x = 42\nPRINT \"hello\"\n", &region, captured.clone());
+    let test_run = run("LET x = 42\nPRINT \"hello\"\n", &region, captured.clone());
+    let scope = test_run.scope;
 
     assert_eq!(captured.borrow().as_slice(), b"hello\n");
     let data = scope.bindings().data();
@@ -53,11 +54,12 @@ fn match_unmatched_branch_skips_let_side_effect() {
     // execute and `y` must remain unbound.
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
+    let test_run = run(
         "MATCH false -> :Null WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
         &region,
         captured.clone(),
     );
+    let scope = test_run.scope;
     assert!(
         scope.bindings().data().get("y").is_none(),
         "unmatched branch's LET must not have bound y"
@@ -69,11 +71,12 @@ fn match_unmatched_branch_skips_let_side_effect() {
 fn interprets_nested_expression() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
+    let test_run = run(
         r#"(PRINT (LET msg = "hello world!"))"#,
         &region,
         captured.clone(),
     );
+    let scope = test_run.scope;
 
     assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
     let data = scope.bindings().data();
@@ -86,7 +89,8 @@ fn interprets_nested_expression() {
 fn let_binds_a_list_literal_of_numbers() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET xs = [1 2 3]\n", &region, captured);
+    let test_run = run("LET xs = [1 2 3]\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
@@ -105,11 +109,12 @@ fn let_binds_a_list_literal_of_numbers() {
 fn let_binds_stamped_empty_list_from_typed_fn_return() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
+    let test_run = run(
         "FN (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
         &region,
         captured,
     );
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(obj @ KObject::List(items, _)) => {
@@ -143,7 +148,8 @@ fn let_binds_an_empty_list_literal_errors() {
 fn list_literal_with_subexpression_element_evaluates_eagerly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET xs = [1 (LET y = 7) 3]\n", &region, captured);
+    let test_run = run("LET xs = [1 (LET y = 7) 3]\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
@@ -161,7 +167,8 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
 fn multiline_list_literal_binds_correctly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET xs = [\n  1\n  2\n  3\n]\n", &region, captured);
+    let test_run = run("LET xs = [\n  1\n  2\n  3\n]\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(items, _)) => {
@@ -177,7 +184,8 @@ fn multiline_list_literal_binds_correctly() {
 fn nested_list_literal_produces_list_of_lists() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET xs = [[1 2] [3 4]]\n", &region, captured);
+    let test_run = run("LET xs = [[1 2] [3 4]]\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(outer, _)) => {

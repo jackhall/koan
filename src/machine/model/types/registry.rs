@@ -44,14 +44,11 @@ pub struct TypeRegistry {
     misses: std::cell::Cell<usize>,
 }
 
-impl Default for TypeRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TypeRegistry {
-    pub fn new() -> Self {
+    /// Crate-internal: the run frame is the only production site that mints one
+    /// (`CallFrame::adopting`), and tests reach the run's registry through the
+    /// `builtins::test_support::TestRun` bundle rather than minting a cold one.
+    pub(crate) fn new() -> Self {
         Self {
             verdicts: RefCell::new(HashMap::new()),
             #[cfg(test)]

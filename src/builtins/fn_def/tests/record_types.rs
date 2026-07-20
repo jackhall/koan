@@ -2,12 +2,11 @@
 //! width/depth subtyping, and specificity tournaments. Records subtype the *dual* way to
 //! function params — a wider record value is more specific (fills a narrower slot).
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::model::Record;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 
 use super::capture_program_output;
 
@@ -72,8 +71,8 @@ fn fn_returning_record_accepts_matching_value() {
 #[test]
 fn record_value_reports_record_ktype() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let result = run_one(scope, parse_one("{x = 1, y = \"a\"}"));
+    let mut test_run = TestRun::silent(&region);
+    let result = test_run.run_one(parse_one("{x = 1, y = \"a\"}"));
     assert_eq!(
         result.ktype(),
         KType::record(Box::new(Record::from_pairs(vec![
@@ -90,15 +89,19 @@ fn record_value_reports_record_ktype() {
 #[test]
 fn record_field_type_mismatch_is_dispatch_failure() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET r = {x = \"s\"}");
-    run(scope, "FN (USE r :{x :Number}) -> Str = (\"ok\")");
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("USE r"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("LET r = {x = \"s\"}");
+    test_run.run("FN (USE r :{x :Number}) -> Str = (\"ok\")");
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("USE r"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = runtime
+    let error = test_run
+        .runtime
         .result_error(root)
         .expect_err("a `:{x :Str}` value must not fill a `:{x :Number}` slot");
     assert!(
@@ -112,15 +115,19 @@ fn record_field_type_mismatch_is_dispatch_failure() {
 #[test]
 fn record_missing_field_is_dispatch_failure() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET r = {x = 1}");
-    run(scope, "FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("NEED r"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("LET r = {x = 1}");
+    test_run.run("FN (NEED r :{x :Number, q :Bool}) -> Str = (\"ok\")");
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("NEED r"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = runtime
+    let error = test_run
+        .runtime
         .result_error(root)
         .expect_err("a `{x = 1}` value must not fill a `:{x :Number, q :Bool}` slot");
     assert!(
@@ -136,15 +143,19 @@ fn record_missing_field_is_dispatch_failure() {
 #[test]
 fn record_incomparable_overloads_are_ambiguous() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
-    run(scope, "FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")");
+    test_run.run("FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")");
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("PICK {x = 1, y = \"a\", z = \"b\"}"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let error = runtime
+    let error = test_run
+        .runtime
         .result_error(root)
         .expect_err("a value matching two incomparable record slots must be ambiguous");
     assert!(

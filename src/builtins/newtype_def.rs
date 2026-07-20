@@ -341,15 +341,10 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 #[cfg(test)]
 mod tests {
 
-    use crate::builtins::test_support::{
-        binds_module, parse_one, run, run_one, run_one_err, run_one_type, run_root_silent,
-    };
-    use crate::machine::model::{
-        KKind, NominalSchema, ProjectedSchema, RecursiveSet, TypeRegistry,
-    };
+    use crate::builtins::test_support::{binds_module, parse_one, TestRun};
+    use crate::machine::model::{KKind, NominalSchema, ProjectedSchema, RecursiveSet};
     use crate::machine::model::{KObject, KType, Record};
     use crate::machine::run_root_storage;
-    use crate::machine::KoanRuntime;
     use crate::machine::{KErrorKind, Scope};
     use std::rc::Rc;
 
@@ -384,8 +379,9 @@ mod tests {
     #[test]
     fn declare_mints_newtype_identity() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Distance = Number");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Distance = Number");
         let types = scope.bindings().types();
         let (kt, _) = types
             .get("Distance")
@@ -394,8 +390,7 @@ mod tests {
             KType::SetRef { ref set, index } => {
                 assert_eq!(set.member(index).name, "Distance");
                 assert_eq!(set.member(index).kind, KKind::NewType);
-                let types = TypeRegistry::new();
-                match RecursiveSet::projected_schema(set, index, &types) {
+                match RecursiveSet::projected_schema(set, index, &test_run.types) {
                     ProjectedSchema::NewType(repr) => assert_eq!(repr, KType::Number),
                     _ => panic!("expected a NewType schema"),
                 }
@@ -415,9 +410,9 @@ mod tests {
     #[test]
     fn construct_wraps_repr_matching_value() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Distance = Number");
-        let result = run_one(scope, parse_one("Distance (3.0)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Distance = Number");
+        let result = test_run.run_one(parse_one("Distance (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -437,9 +432,9 @@ mod tests {
     #[test]
     fn construct_rejects_non_matching_repr() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Distance = Number");
-        let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Distance = Number");
+        let err = test_run.run_one_err(parse_one("Distance (\"hi\")"));
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { expected, got, .. }
                 if expected == "Number" && got == "Str"),
@@ -455,11 +450,9 @@ mod tests {
     #[test]
     fn dependent_newtype_parks_on_record_repr_dependency() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point",
-        );
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Point = :{x :Number, y :Number}\nNEWTYPE Boxed = Point");
         // No placeholder may survive the declaration run: a leaked one corrupts the next
         // scheduler on this REPL-persistent scope.
         assert!(
@@ -467,7 +460,7 @@ mod tests {
             "NEWTYPE declarations must leave no value-side placeholder, got {:?}",
             *scope.bindings().placeholders(),
         );
-        let result = run_one(scope, parse_one("(Boxed (Point {x = 1, y = 2}))"));
+        let result = test_run.run_one(parse_one("(Boxed (Point {x = 1, y = 2}))"));
         assert!(
             matches!(result, KObject::Wrapped { .. }),
             "expected Wrapped, got {:?}",
@@ -481,14 +474,15 @@ mod tests {
     #[test]
     fn unknown_repr_errors_without_leaking_placeholder() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Boxed = Nope");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Boxed = Nope");
         assert!(
             scope.bindings().placeholders().is_empty(),
             "a failed NEWTYPE must not leak its placeholder, got {:?}",
             *scope.bindings().placeholders(),
         );
-        let err = run_one_err(scope, parse_one("(Boxed (3.0))"));
+        let err = test_run.run_one_err(parse_one("(Boxed (3.0))"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(n) if n == "Boxed"),
             "expected UnboundName(Boxed) after failed declaration, got {err}",
@@ -502,20 +496,22 @@ mod tests {
     #[test]
     fn same_scope_record_repr_redeclare_rebinds() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let exprs = crate::parse::parse("NEWTYPE Foo = :{x :Number}\nNEWTYPE Foo = :{x :Str}")
             .expect("parse should succeed");
-        let mut runtime = KoanRuntime::new();
-        let ids = runtime.enter_block(scope.id, exprs, scope);
-        runtime
+        let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
+        test_run
+            .runtime
             .execute()
             .expect("execute does not surface per-slot errors");
         assert!(
-            runtime.result_error(ids[0]).is_ok(),
+            test_run.runtime.result_error(ids[0]).is_ok(),
             "the first declaration should succeed, got {:?}",
-            runtime.result_error(ids[0]).err(),
+            test_run.runtime.result_error(ids[0]).err(),
         );
-        let err = runtime
+        let err = test_run
+            .runtime
             .result_error(ids[1])
             .expect_err("redeclaring Foo in the same scope should error");
         assert!(
@@ -531,8 +527,9 @@ mod tests {
     #[test]
     fn record_repr_self_recursion_seals_set_local() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Node = :{value :Number, next :Node}");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Node = :{value :Number, next :Node}");
         let (set, fields) = record_fields(scope, "Node");
         let node_idx = set.index_of("Node").expect("Node is its own set member");
         assert_eq!(
@@ -555,8 +552,9 @@ mod tests {
     #[test]
     fn record_repr_list_of_self_field_seals_set_local() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Tree = :{children :(LIST OF Tree)}");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Tree = :{children :(LIST OF Tree)}");
         let (set, fields) = record_fields(scope, "Tree");
         let tree_idx = set.index_of("Tree").expect("Tree is its own set member");
         assert_eq!(
@@ -580,8 +578,9 @@ mod tests {
     #[test]
     fn nested_record_field_threads_self_reference() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Outer = :{inner :{owner :Outer}}");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE Outer = :{inner :{owner :Outer}}");
         let (set, fields) = record_fields(scope, "Outer");
         let outer_idx = set.index_of("Outer").expect("Outer is its own set member");
         let inner_ty = fields
@@ -607,9 +606,9 @@ mod tests {
     #[test]
     fn sigil_repr_non_record_seals_newtype_over_resolved_type() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Nums = :(LIST OF Number)");
-        let result = run_one(scope, parse_one("(Nums [1.0, 2.0])"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Nums = :(LIST OF Number)");
+        let result = test_run.run_one(parse_one("(Nums [1.0, 2.0])"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -633,9 +632,9 @@ mod tests {
     #[test]
     fn newtype_over_newtype_collapses() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
-        let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
+        let result = test_run.run_one(parse_one("Bar (Foo (3.0))"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -662,41 +661,47 @@ mod tests {
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run(
             "NEWTYPE Distance = Number\n\
              FN (TAKES_NUM x :Number) -> Str = (\"num\")\n\
              FN (TAKES_DIST x :Distance) -> Str = (\"dist\")",
         );
-        let r1 = run_one(scope, parse_one("TAKES_DIST (Distance (3.0))"));
+        let r1 = test_run.run_one(parse_one("TAKES_DIST (Distance (3.0))"));
         match r1 {
             KObject::KString(s) => assert_eq!(s, "dist"),
             other => panic!("expected \"dist\", got {:?}", other.ktype()),
         }
-        let r2 = run_one(scope, parse_one("TAKES_NUM (3.0)"));
+        let r2 = test_run.run_one(parse_one("TAKES_NUM (3.0)"));
         match r2 {
             KObject::KString(s) => assert_eq!(s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
-        let mut sched1 = KoanRuntime::new();
-        let root = sched1.dispatch_in_scope(parse_one("TAKES_NUM (Distance (3.0))"), scope);
-        sched1
+        let root = test_run
+            .runtime
+            .dispatch_in_scope(parse_one("TAKES_NUM (Distance (3.0))"), scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = sched1
+        let err = test_run
+            .runtime
             .result_error(root)
             .expect_err("TAKES_NUM on Distance should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
-        let mut sched2 = KoanRuntime::new();
-        let root2 = sched2.dispatch_in_scope(parse_one("TAKES_DIST (3.0)"), scope);
-        sched2
+        let root2 = test_run
+            .runtime
+            .dispatch_in_scope(parse_one("TAKES_DIST (3.0)"), scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err2 = sched2
+        let err2 = test_run
+            .runtime
             .result_error(root2)
             .expect_err("TAKES_DIST on raw Number should fail dispatch");
         assert!(
@@ -710,9 +715,9 @@ mod tests {
     #[test]
     fn construct_with_identifier_value() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
-        let result = run_one(scope, parse_one("Distance (x)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Distance = Number\nLET x = 3.0");
+        let result = test_run.run_one(parse_one("Distance (x)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -731,9 +736,9 @@ mod tests {
     #[test]
     fn construct_arity_zero_rejects() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Distance = Number");
-        let err = run_one_err(scope, parse_one("Distance ()"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Distance = Number");
+        let err = test_run.run_one_err(parse_one("Distance ()"));
         assert!(
             matches!(
                 &err.kind,
@@ -752,13 +757,12 @@ mod tests {
     #[test]
     fn construct_with_operator_value() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
             "NEWTYPE Distance = Number\n\
              FN (MAKE_NUM x :Number) -> Number = (x)",
         );
-        let result = run_one(scope, parse_one("Distance (MAKE_NUM 3.0)"));
+        let result = test_run.run_one(parse_one("Distance (MAKE_NUM 3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -779,8 +783,9 @@ mod tests {
     #[test]
     fn constructor_family_mints_declared_identity() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (Type AS Wrapper)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE (Type AS Wrapper)");
         let types = scope.bindings().types();
         let (kt, _) = types
             .get("Wrapper")
@@ -820,9 +825,9 @@ mod tests {
     #[test]
     fn constructor_family_applies_with_as() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (Type AS Wrapper)");
-        let result = run_one_type(scope, parse_one(":(Number AS Wrapper)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE (Type AS Wrapper)");
+        let result = test_run.run_one_type(parse_one(":(Number AS Wrapper)"));
         match result {
             KType::ConstructorApply { ctor, args, .. } => {
                 match ctor.as_ref() {
@@ -845,19 +850,22 @@ mod tests {
     #[test]
     fn constructor_family_declared_inside_module_satisfies_hk_slot() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let src = "SIG Monad = ((TYPE (Type AS Wrap)))\n\
                    MODULE int_list = ((NEWTYPE (Type AS Wrap)))\n\
                    LET view = (int_list :| Monad)";
         let exprs = crate::parse::parse(src).expect("parse should succeed");
-        let mut runtime = KoanRuntime::new();
         let mut ids = Vec::new();
         for expr in exprs {
-            ids.push(runtime.dispatch_in_scope(expr, scope));
+            ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
         }
-        runtime.execute().expect("scheduler should succeed");
+        test_run
+            .runtime
+            .execute()
+            .expect("scheduler should succeed");
         for (i, id) in ids.iter().enumerate() {
-            if let Err(e) = runtime.result_error(*id) {
+            if let Err(e) = test_run.runtime.result_error(*id) {
                 panic!("expr {i} errored: {e}");
             }
         }
@@ -872,14 +880,14 @@ mod tests {
     #[test]
     fn constructor_family_arity_above_one_declares() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (One Two AS Wrapper)");
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("NEWTYPE (One Two AS Wrapper)");
         let kt = scope
             .resolve_type("Wrapper")
             .expect("Wrapper must bind a type");
-        let types = TypeRegistry::new();
         assert_eq!(
-            crate::machine::model::constructor_param_names(kt, &types),
+            crate::machine::model::constructor_param_names(kt, &test_run.types),
             Some(vec!["One".to_string(), "Two".to_string()]),
         );
     }
@@ -888,8 +896,8 @@ mod tests {
     #[test]
     fn constructor_family_missing_as_rejects() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("NEWTYPE (Type Wrapper)"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("NEWTYPE (Type Wrapper)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(_)),
             "expected a shape error for a missing AS, got {err}",
@@ -902,9 +910,9 @@ mod tests {
     #[test]
     fn apply_construct_wraps_and_stamps() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (Type AS Wrapper)");
-        let result = run_one(scope, parse_one("Wrapper (3.0)"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE (Type AS Wrapper)");
+        let result = test_run.run_one(parse_one("Wrapper (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -937,12 +945,9 @@ mod tests {
     #[test]
     fn apply_construct_collapses_wrapped_payload() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "NEWTYPE Distance = Number\nNEWTYPE (Type AS Wrapper)",
-        );
-        let result = run_one(scope, parse_one("Wrapper (Distance (3.0))"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Distance = Number\nNEWTYPE (Type AS Wrapper)");
+        let result = test_run.run_one(parse_one("Wrapper (Distance (3.0))"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 // Single-layer invariant: the collapsed inner is the bare Number, not a Wrapped.
@@ -974,9 +979,9 @@ mod tests {
     #[test]
     fn apply_construct_arity_zero_rejects() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (Type AS Wrapper)");
-        let err = run_one_err(scope, parse_one("Wrapper ()"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE (Type AS Wrapper)");
+        let err = test_run.run_one_err(parse_one("Wrapper ()"));
         assert!(
             matches!(
                 &err.kind,
@@ -995,34 +1000,35 @@ mod tests {
     #[test]
     fn applied_type_dispatches() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
             "NEWTYPE (Type AS Wrapper)\n\
              FN (UNPACK x :(Number AS Wrapper)) -> Str = (\"hit\")",
         );
         // A matching applied-type value dispatches.
-        let hit = run_one(scope, parse_one("UNPACK (Wrapper (3.0))"));
+        let hit = test_run.run_one(parse_one("UNPACK (Wrapper (3.0))"));
         assert!(
             matches!(hit, KObject::KString(s) if s == "hit"),
             "Wrapper (3.0) must dispatch, got {:?}",
             hit.ktype(),
         );
         // A bare Number is not a Wrapped value — dispatch fails.
-        expect_dispatch_failure(scope, "UNPACK 3.0");
+        expect_dispatch_failure(&mut test_run, "UNPACK 3.0");
         // A (Str AS Wrapper) value: the stamped arg is Str, not Number — dispatch fails.
-        expect_dispatch_failure(scope, "UNPACK (Wrapper (\"s\"))");
+        expect_dispatch_failure(&mut test_run, "UNPACK (Wrapper (\"s\"))");
     }
 
-    /// Run `probe` against `scope` and assert it fails dispatch (a slot-terminal
+    /// Run `probe` against the bundle's scope and assert it fails dispatch (a slot-terminal
     /// `DispatchFailed`, not a fatal execute error).
-    fn expect_dispatch_failure<'a>(scope: &'a Scope<'a>, probe: &str) {
-        let mut runtime = KoanRuntime::new();
-        let root = runtime.dispatch_in_scope(parse_one(probe), scope);
-        runtime
+    fn expect_dispatch_failure(test_run: &mut TestRun<'_>, probe: &str) {
+        let scope = test_run.scope;
+        let root = test_run.runtime.dispatch_in_scope(parse_one(probe), scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = runtime
+        let err = test_run
+            .runtime
             .result_error(root)
             .expect_err("probe should fail dispatch");
         assert!(
@@ -1036,13 +1042,13 @@ mod tests {
     #[test]
     fn applied_values_are_value_equal() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE (Type AS Wrapper)");
-        match run_one(scope, parse_one("(Wrapper (3.0)) == (Wrapper (3.0))")) {
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE (Type AS Wrapper)");
+        match test_run.run_one(parse_one("(Wrapper (3.0)) == (Wrapper (3.0))")) {
             KObject::Bool(b) => assert!(*b, "two Wrapper (3.0) must compare equal"),
             other => panic!("expected Bool, got {:?}", other.ktype()),
         }
-        match run_one(scope, parse_one("(Wrapper (3.0)) == (Wrapper (\"x\"))")) {
+        match test_run.run_one(parse_one("(Wrapper (3.0)) == (Wrapper (\"x\"))")) {
             KObject::Bool(b) => assert!(!*b, "Wrapper (3.0) and Wrapper (\"x\") must differ"),
             other => panic!("expected Bool, got {:?}", other.ktype()),
         }
@@ -1053,12 +1059,9 @@ mod tests {
     #[test]
     fn attr_projects_record_payload() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "NEWTYPE (Type AS Wrapper)\nLET w = (Wrapper ({x = 1.0}))",
-        );
-        let result = run_one(scope, parse_one("w.x"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE (Type AS Wrapper)\nLET w = (Wrapper ({x = 1.0}))");
+        let result = test_run.run_one(parse_one("w.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
@@ -1068,21 +1071,20 @@ mod tests {
     #[test]
     fn applied_any_slot_admits_all_instantiations() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
             "NEWTYPE (Type AS Wrapper)\n\
              FN (ANYUNPACK x :(Any AS Wrapper)) -> Str = (\"hit\")",
         );
         for probe in ["ANYUNPACK (Wrapper (3.0))", "ANYUNPACK (Wrapper (\"s\"))"] {
-            let hit = run_one(scope, parse_one(probe));
+            let hit = test_run.run_one(parse_one(probe));
             assert!(
                 matches!(hit, KObject::KString(s) if s == "hit"),
                 "`{probe}` must dispatch, got {:?}",
                 hit.ktype(),
             );
         }
-        expect_dispatch_failure(scope, "ANYUNPACK 3.0");
+        expect_dispatch_failure(&mut test_run, "ANYUNPACK 3.0");
     }
 
     /// A `TYPE`-declared abstract constructor slot names a kind but constructs nothing:
@@ -1091,7 +1093,8 @@ mod tests {
     fn abstract_constructor_slot_rejects_construction() {
         use crate::machine::BindingIndex;
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         let kt = KType::AbstractType {
             source: scope.id,
             name: "Abstract".into(),
@@ -1099,7 +1102,7 @@ mod tests {
             nonce: None,
         };
         scope.register_builtin_type("Abstract".into(), kt, BindingIndex::BUILTIN);
-        let err = run_one_err(scope, parse_one("Abstract (3.0)"));
+        let err = test_run.run_one_err(parse_one("Abstract (3.0)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("abstract constructor slot declared by TYPE")),

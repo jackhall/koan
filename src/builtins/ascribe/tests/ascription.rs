@@ -1,20 +1,17 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
-use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, run, run_one, run_one_err, run_root_silent,
-};
+use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 use crate::parse::parse;
 
 #[test]
 fn transparent_ascription_returns_module() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)\n\
          LET int_ord_view = (int_ord :! Ordered)",
@@ -26,13 +23,12 @@ fn transparent_ascription_returns_module() {
 #[test]
 fn ascription_missing_member_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE empty = (LET unrelated = 0)\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let err = run_one_err(scope, parse_one("empty :| Ordered"));
+    let err = test_run.run_one_err(parse_one("empty :| Ordered"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Ordered") && msg.contains("`compare`")),
@@ -43,25 +39,28 @@ fn ascription_missing_member_errors() {
 #[test]
 fn opaque_ascription_mints_distinct_module_type_per_application() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let src = "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET first_abstract = (int_ord :| Ordered)\n\
          LET second_abstract = (int_ord :| Ordered)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
     }
-    runtime.execute().expect("scheduler should succeed");
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = lookup_module(scope, "first_abstract");
-    let b = lookup_module(scope, "second_abstract");
+    let a = lookup_module(scope, "first_abstract", &test_run.types);
+    let b = lookup_module(scope, "second_abstract", &test_run.types);
     let a_t = a.type_members.borrow().get("Carrier").cloned();
     let b_t = b.type_members.borrow().get("Carrier").cloned();
     // An opaque-ascription abstract-type member mints as
@@ -83,14 +82,14 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
 #[test]
 fn transparent_ascription_does_not_mint_module_types() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = (LET compare = 0)\n\
          SIG Ordered = (VAL compare :Number)\n\
          LET view_mod = (int_ord :! Ordered)",
     );
-    let v = lookup_module(scope, "view_mod");
+    let v = lookup_module(scope, "view_mod", &test_run.types);
     assert!(v.type_members.borrow().is_empty());
 }
 
@@ -98,15 +97,15 @@ fn transparent_ascription_does_not_mint_module_types() {
 #[test]
 fn roadmap_example_int_ord_with_ordered_sig() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
          SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
          LET int_ord_abstract = (int_ord :| Ordered)",
     );
 
-    let abstract_mod = lookup_module(scope, "int_ord_abstract");
+    let abstract_mod = lookup_module(scope, "int_ord_abstract", &test_run.types);
     let minted = abstract_mod
         .type_members
         .borrow()
@@ -138,14 +137,14 @@ fn roadmap_example_int_ord_with_ordered_sig() {
 #[test]
 fn opaque_view_reads_manifest_type_member_concretely() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET item = 5))\n\
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          LET view = (implementation :| Tagged)",
     );
-    let view = lookup_module(scope, "view");
+    let view = lookup_module(scope, "view", &test_run.types);
     let tag = view.type_members.borrow().get("Tag").cloned();
     assert_eq!(
         tag,
@@ -161,19 +160,19 @@ fn opaque_view_reads_manifest_type_member_concretely() {
 #[test]
 fn opaque_view_manifest_typed_val_slot_reads_concrete() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET x = 3))\n\
          SIG Tagged = ((LET Tag = Number) (VAL x :Tag))\n\
          LET view = (implementation :| Tagged)",
     );
-    let view = lookup_module(scope, "view");
+    let view = lookup_module(scope, "view", &test_run.types);
     assert!(
         view.slot_type_tags.borrow().get("x").is_none(),
         "a manifest-typed VAL slot must not be re-tagged in slot_type_tags",
     );
-    let result = run_one(scope, parse_one("view.x"));
+    let result = test_run.run_one(parse_one("view.x"));
     assert!(
         matches!(result, KObject::Number(n) if *n == 3.0),
         "view.x on a manifest-typed slot reads the underlying Number(3), got {:?}",
@@ -186,13 +185,12 @@ fn opaque_view_manifest_typed_val_slot_reads_concrete() {
 #[test]
 fn opaque_missing_abstract_member_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = run_one_err(scope, parse_one("implementation :| Container"));
+    let err = test_run.run_one_err(parse_one("implementation :| Container"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Container") && msg.contains("missing type member `Elt`")),
@@ -204,13 +202,12 @@ fn opaque_missing_abstract_member_rejected() {
 #[test]
 fn transparent_missing_abstract_member_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE implementation = (LET item = 0)\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))",
     );
-    let err = run_one_err(scope, parse_one("implementation :! Container"));
+    let err = test_run.run_one_err(parse_one("implementation :! Container"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Container") && msg.contains("missing type member `Elt`")),
@@ -223,13 +220,12 @@ fn transparent_missing_abstract_member_rejected() {
 #[test]
 fn manifest_type_member_mismatch_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "MODULE implementation = ((LET Tag = Str) (LET item = 0))\n\
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))",
     );
-    let err = run_one_err(scope, parse_one("implementation :| Tagged"));
+    let err = test_run.run_one_err(parse_one("implementation :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Tagged")
@@ -244,9 +240,9 @@ fn manifest_type_member_mismatch_rejected() {
 #[test]
 fn manifest_type_member_match_accepted() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE implementation = ((LET Tag = Number) (LET item = 0))\n\
          SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          LET view = (implementation :| Tagged)",
@@ -262,9 +258,9 @@ fn manifest_type_member_match_accepted() {
 #[test]
 fn abstract_member_bound_to_any_type_accepted() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE implementation = ((LET Elt = Str) (LET item = 0))\n\
          SIG Container = ((TYPE Elt) (VAL item :Number))\n\
          LET view = (implementation :| Container)",

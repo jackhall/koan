@@ -3,12 +3,11 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
 use crate::machine::core::ReturnContract;
 use crate::machine::execute::nodes::{NodePayload, NodeScope};
 use crate::machine::execute::obligation::ReturnObligation;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KType;
 use crate::machine::LexicalFrame;
 
@@ -26,11 +25,11 @@ fn sample_obligation<'a>(scope: &'a crate::machine::Scope<'a>) -> ReturnObligati
 #[test]
 fn slot_step_bracket_restores_ambient_on_unwind() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
     let obligation = sample_obligation(root);
-    let mut runtime = KoanRuntime::new();
-    runtime.ensure_run_frame(root);
-    let frame = runtime.run_frame_ref().expect("just established").clone();
+    let runtime = &mut test_run.runtime;
+    let frame = runtime.run_frame_ref().expect("seeded run frame").clone();
     let payload = NodePayload {
         scope: NodeScope::Yoked,
         chain: LexicalFrame::detached(),
@@ -59,11 +58,11 @@ fn slot_step_bracket_restores_ambient_on_unwind() {
 #[test]
 fn slot_step_bracket_restores_ambient_on_normal_return() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
     let obligation = sample_obligation(root);
-    let mut runtime = KoanRuntime::new();
-    runtime.ensure_run_frame(root);
-    let frame = runtime.run_frame_ref().expect("just established").clone();
+    let runtime = &mut test_run.runtime;
+    let frame = runtime.run_frame_ref().expect("seeded run frame").clone();
     let payload = NodePayload {
         scope: NodeScope::Yoked,
         chain: LexicalFrame::detached(),

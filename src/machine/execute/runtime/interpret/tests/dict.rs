@@ -41,13 +41,14 @@ fn lookup_bool_key<'run, 'b>(
 fn let_binds_an_empty_record_literal() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {}", &region, captured);
+    let test_run = run("LET d = {}", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Record(fields, _)) => assert!(fields.is_empty(), "expected empty record"),
         other => panic!(
             "expected `d` bound to an empty Record, got {:?}",
-            other.map(|o| o.ktype().name(&crate::machine::model::TypeRegistry::new()))
+            other.map(|o| o.ktype().name(&test_run.types))
         ),
     }
 }
@@ -56,7 +57,8 @@ fn let_binds_an_empty_record_literal() {
 fn let_binds_a_dict_with_string_keys() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
+    let test_run = run(r#"LET d = {"a": 1, "b": 2}"#, &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -76,7 +78,8 @@ fn let_binds_a_dict_with_string_keys() {
 fn let_binds_a_dict_with_number_keys() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
+    let test_run = run(r#"LET d = {1: "a", 2: "b"}"#, &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -96,7 +99,8 @@ fn let_binds_a_dict_with_number_keys() {
 fn let_binds_a_dict_with_bool_keys() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {true: 1, false: 0}\n", &region, captured);
+    let test_run = run("LET d = {true: 1, false: 0}\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -116,11 +120,12 @@ fn let_binds_a_dict_with_bool_keys() {
 fn bare_identifier_key_is_looked_up() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
+    let test_run = run(
         "LET name = \"alice\"\nLET d = {name: 1}\n",
         &region,
         captured,
     );
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -138,7 +143,8 @@ fn bare_identifier_key_is_looked_up() {
 fn sub_expression_as_value_evaluates_eagerly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &region, captured);
+    let test_run = run(r#"LET d = {"a": (LET y = 7)}"#, &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -155,7 +161,8 @@ fn sub_expression_as_value_evaluates_eagerly() {
 fn sub_expression_as_key_evaluates() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET k = \"x\"\nLET d = {(k): 1}\n", &region, captured);
+    let test_run = run("LET k = \"x\"\nLET d = {(k): 1}\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -171,7 +178,8 @@ fn sub_expression_as_key_evaluates() {
 fn multiline_dict_binds_correctly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &region, captured);
+    let test_run = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
@@ -191,7 +199,8 @@ fn multiline_dict_binds_correctly() {
 fn nested_dict_in_list_binds_correctly() {
     let region = run_root_storage();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &region, captured);
+    let test_run = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &region, captured);
+    let scope = test_run.scope;
     let data = scope.bindings().data();
     match data.get("xs").map(|(o, _, _)| *o) {
         Some(KObject::List(outer, _)) => {

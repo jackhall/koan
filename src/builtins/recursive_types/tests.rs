@@ -2,7 +2,7 @@
 //! `RecursiveSet`, cross-references seal to `SetLocal` indices into that set, and the group
 //! name binds the set handle. Exiting the block guarantees every forward reference resolved.
 
-use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::model::{NominalSchema, RecursiveSet};
 use crate::machine::run_root_storage;
@@ -39,11 +39,9 @@ fn struct_set_and_fields<'a>(
 #[test]
 fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
     let (a_set, a_fields) = struct_set_and_fields(scope, "Aa");
     let (b_set, b_fields) = struct_set_and_fields(scope, "Bb");
     assert!(
@@ -62,11 +60,9 @@ fn block_mutual_pair_seals_one_set_with_set_local_cross_refs() {
 #[test]
 fn block_group_name_binds_the_set_handle() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
     let (a_set, _) = struct_set_and_fields(scope, "Aa");
     match scope.resolve_type("Pair") {
         Some(KType::RecursiveGroup(set)) => assert!(
@@ -81,9 +77,9 @@ fn block_group_name_binds_the_set_handle() {
 #[test]
 fn block_three_way_seals_one_set() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "RECURSIVE TYPES Trio = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{c :Cc}\n  NEWTYPE Cc = :{a :Aa}\n)",
     );
     let (set, _) = struct_set_and_fields(scope, "Aa");
@@ -103,11 +99,11 @@ fn block_three_way_seals_one_set() {
 #[test]
 fn block_body_rejects_non_declaration() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  LET y = 1\n)"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let err = test_run.run_one_err(parse_one(
+        "RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  LET y = 1\n)",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("UNION / NEWTYPE")),
         "expected a member-kind shape error, got {err}",
@@ -124,8 +120,9 @@ fn block_body_rejects_non_declaration() {
 #[test]
 fn block_member_referencing_non_member_does_not_bind() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "RECURSIVE TYPES Grp = (NEWTYPE Aa = :{b :Nope})");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("RECURSIVE TYPES Grp = (NEWTYPE Aa = :{b :Nope})");
     assert!(
         scope.resolve_type("Aa").is_none(),
         "Aa must not bind when its schema references an unresolved name",
@@ -140,13 +137,10 @@ fn block_member_referencing_non_member_does_not_bind() {
 #[test]
 fn block_rejects_duplicate_member() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one(
-            "RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  NEWTYPE Aa = :{y :Number}\n)",
-        ),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one(
+        "RECURSIVE TYPES Grp = (\n  NEWTYPE Aa = :{x :Number}\n  NEWTYPE Aa = :{y :Number}\n)",
+    ));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("duplicate member `Aa`")),
         "expected a duplicate-member shape error, got {err}",

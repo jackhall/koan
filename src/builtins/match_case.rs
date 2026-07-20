@@ -99,17 +99,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        parse_one, run, run_one, run_one_err, run_root_silent, run_root_with_buf,
-    };
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::KObject;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
 
     fn run_program(source: &str) -> Vec<u8> {
         let region = run_root_storage();
-        let (scope, captured) = run_root_with_buf(&region);
-        run(scope, source);
+        let (mut test_run, captured) = TestRun::with_buf(&region);
+        test_run.run(source);
         let bytes = captured.borrow().clone();
         bytes
     }
@@ -147,15 +145,11 @@ mod tests {
     #[test]
     fn match_inexhaustive_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))",
-        );
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (None null))");
+        let err = test_run.run_one_err(parse_one(
+            "MATCH (m) -> :Str WITH (Some -> (PRINT \"yes\"))",
+        ));
         // The no-arm error names the scrutinee's runtime type — a `None` value is a per-variant
         // newtype, so it reports the member name `None`.
         assert!(
@@ -167,16 +161,12 @@ mod tests {
     #[test]
     fn match_arm_violating_declared_return_type_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
-        );
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
         // Declared `:Number`, but the taken arm returns a Str (PRINT's rendered string).
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (m) -> :Number WITH (Some -> (PRINT \"x\") None -> (PRINT \"y\"))"),
-        );
+        let err = test_run.run_one_err(parse_one(
+            "MATCH (m) -> :Number WITH (Some -> (PRINT \"x\") None -> (PRINT \"y\"))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "<return>"),
             "expected <return> TypeMismatch from the arm result, got {err}",
@@ -240,11 +230,10 @@ mod tests {
     #[test]
     fn match_on_bool_inexhaustive_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH true -> :Str WITH (false -> (PRINT \"x\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(
+            "MATCH true -> :Str WITH (false -> (PRINT \"x\"))",
+        ));
         // No `true` arm admits the `true` scrutinee; the error names its runtime type `Bool`.
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("Bool")),
@@ -313,11 +302,10 @@ mod tests {
     fn match_f1_ambiguous_arms_error_naming_both() {
         // Two `Number` arms both admit a Number with no strict specificity winner → ambiguity.
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (42) -> :Str WITH (Number -> (PRINT \"a\") Number -> (PRINT \"b\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(
+            "MATCH (42) -> :Str WITH (Number -> (PRINT \"a\") Number -> (PRINT \"b\"))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ambiguous") && msg.contains("`Number`")),
@@ -328,17 +316,12 @@ mod tests {
     #[test]
     fn match_bogus_head_over_variant_scrutinee_lists_variants() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))",
-        );
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("UNION Maybe = (Some :Number None :Null)\nLET m = (Maybe (Some 1))");
         // `Bogus` is not a member name and resolves to no type; the error names the scrutinee's
         // union variants in declaration order.
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))"),
-        );
+        let err =
+            test_run.run_one_err(parse_one("MATCH (m) -> :Str WITH (Bogus -> (PRINT \"x\"))"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg == "match arm type `Bogus` is not a known type; the scrutinee's union variants are `Some`, `None`"),
@@ -352,11 +335,10 @@ mod tests {
     #[test]
     fn match_unresolved_return_type_name_reports_not_a_known_type() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (42) -> :Bogus WITH (Number -> (PRINT \"x\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(
+            "MATCH (42) -> :Bogus WITH (Number -> (PRINT \"x\"))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg == "MATCH return type `Bogus` is not a known type"),
@@ -369,12 +351,9 @@ mod tests {
     #[test]
     fn match_return_type_resolves_a_user_bound_name_through_the_carrier() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(scope, "NEWTYPE Tag = Number");
-        let result = run_one(
-            scope,
-            parse_one("MATCH (42) -> :Tag WITH (Number -> (Tag (7)))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("NEWTYPE Tag = Number");
+        let result = test_run.run_one(parse_one("MATCH (42) -> :Tag WITH (Number -> (Tag (7)))"));
         assert!(matches!(result, KObject::Wrapped { .. }));
     }
 
@@ -383,11 +362,10 @@ mod tests {
         // A non-variant scrutinee (a plain Number) resolves heads through the scope; a bogus head
         // keeps the short unresolved-type message with no variants hint.
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH (42) -> :Str WITH (Bogus -> (PRINT \"x\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(
+            "MATCH (42) -> :Str WITH (Bogus -> (PRINT \"x\"))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg == "match arm type `Bogus` is not a known type"),
@@ -410,11 +388,10 @@ mod tests {
         // Two `true ->` heads both admit the `true` scrutinee as exact matches with no strict
         // winner → ambiguity.
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(
-            scope,
-            parse_one("MATCH true -> :Str WITH (true -> (PRINT \"a\") true -> (PRINT \"b\"))"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one(
+            "MATCH true -> :Str WITH (true -> (PRINT \"a\") true -> (PRINT \"b\"))",
+        ));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("ambiguous") && msg.contains("`true`")),

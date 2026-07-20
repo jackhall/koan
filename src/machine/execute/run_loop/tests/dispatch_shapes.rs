@@ -8,38 +8,48 @@
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
-use crate::builtins::default_scope;
-use crate::builtins::test_support::parse_one;
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::core::run_root_storage;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{arg_object, Action, BodyCtx};
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::Held;
 use crate::machine::model::KExpression;
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::{BindingIndex, KFunction, Scope};
 
-fn dispatch_one<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> &'run KObject<'run> {
-    sched_read_carried(scope, expr).object()
+fn dispatch_one<'run>(
+    test_run: &mut TestRun<'run>,
+    expr: KExpression<'run>,
+) -> &'run KObject<'run> {
+    sched_read_carried(test_run, expr).object()
 }
 
 /// Like [`dispatch_one`] but yields the raw carrier, so a type-producing expression can be
 /// inspected on its [`Carried::Type`] arm instead of panicking through `.object()`.
-fn dispatch_one_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
-    sched_read_carried(scope, expr)
+fn dispatch_one_carried<'run>(
+    test_run: &mut TestRun<'run>,
+    expr: KExpression<'run>,
+) -> Carried<'run> {
+    sched_read_carried(test_run, expr)
 }
 
-fn sched_read_carried<'run>(scope: &'run Scope<'run>, expr: KExpression<'run>) -> Carried<'run> {
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(expr, scope);
-    runtime.execute().expect("scheduler should succeed");
-    // The frameless top-level terminal outlives the local `runtime`; widen the scheduler's `'node`
-    // read to the scope lifetime (see `test_support::extract_terminal`).
-    crate::builtins::test_support::extract_terminal(&runtime, scope, id)
+fn sched_read_carried<'run>(
+    test_run: &mut TestRun<'run>,
+    expr: KExpression<'run>,
+) -> Carried<'run> {
+    let scope = test_run.scope;
+    let id = test_run.runtime.dispatch_in_scope(expr, scope);
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
+    // The frameless top-level terminal is read out at the scope lifetime, widening the
+    // scheduler's `'node` read (see `test_support::extract_terminal`).
+    crate::builtins::test_support::extract_terminal(&test_run.runtime, scope, &test_run.types, id)
 }
 
 /// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
@@ -61,7 +71,7 @@ fn body_identity<'run>(ctx: &BodyCtx<'run, '_>) -> Action<'run> {
 
 /// Bind a function value `f` with signature `<n :Number>` on `scope`, giving an
 /// Identifier head that resolves to a function value without going through FN/LET.
-fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
+fn bind_identity_fn<'run>(scope: &'run Scope<'run>, types: &TypeRegistry) {
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![SignatureElement::Argument(Argument {
@@ -78,7 +88,7 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
     ));
     let obj = scope
         .brand()
-        .alloc_object_checked(KObject::KFunction(f), &TypeRegistry::new())
+        .alloc_object_checked(KObject::KFunction(f), types)
         .expect("f was just allocated into region\'s own region");
     scope
         .bind_value(
@@ -95,10 +105,10 @@ fn bind_identity_fn<'run>(scope: &'run Scope<'run>) {
 #[test]
 fn bare_type_leaf_short_circuits() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
     let expr = parse_one("(Number)");
     reset_resolve_dispatch_entry_count();
-    let result = dispatch_one_carried(scope, expr);
+    let result = dispatch_one_carried(&mut test_run, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -107,7 +117,7 @@ fn bare_type_leaf_short_circuits() {
     assert!(
         matches!(result, Carried::Type(KType::Number)),
         "(Number) must terminate to a Number type; got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -117,13 +127,12 @@ fn bare_type_leaf_short_circuits() {
 /// `picked = Some(f)` — no entry into `resolve_dispatch`.
 #[test]
 fn function_value_call_named_args_short_circuits() {
-    use crate::builtins::test_support::{run, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     let expr = parse_one("f {x = 7}");
     reset_resolve_dispatch_entry_count();
-    let result = dispatch_one(scope, expr);
+    let result = dispatch_one(&mut test_run, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -134,7 +143,7 @@ fn function_value_call_named_args_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(f {{x = 7}}) must evaluate to 7.0 (DOUBLE returns x); got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -143,16 +152,12 @@ fn function_value_call_named_args_short_circuits() {
 /// reconstruction weaves keywords back in at their signature positions.
 #[test]
 fn function_value_call_named_args_out_of_order_short_circuits() {
-    use crate::builtins::test_support::{run, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     let expr = parse_one("f {b = 2, a = 1}");
     reset_resolve_dispatch_entry_count();
-    let result = dispatch_one(scope, expr);
+    let result = dispatch_one(&mut test_run, expr);
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -162,7 +167,7 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     assert!(
         matches!(result, KObject::Number(n) if (*n - 1.0).abs() < 1e-9),
         "(f {{b = 2, a = 1}}) returning `a` must yield 1.0; got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -171,22 +176,23 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
 /// without falling through to the keyworded pipeline.
 #[test]
 fn function_value_call_named_args_missing_short_circuits() {
-    use crate::builtins::test_support::{run, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     let expr = parse_one("f {a = 1}");
     reset_resolve_dispatch_entry_count();
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(expr, scope);
-    runtime
+    let types = test_run.types.clone();
+    let id = test_run.runtime.dispatch_in_scope(expr, scope);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler should not surface errors directly");
-    let err = match runtime.read_result_with(id, |v| v.summarize(&TypeRegistry::new())) {
+    let err = match test_run
+        .runtime
+        .read_result_with(id, |v| v.summarize(&types))
+    {
         Err(e) => e.clone(),
         Ok(summary) => panic!("expected MissingArg error, got value {summary}"),
     };
@@ -213,12 +219,11 @@ fn function_value_call_named_args_missing_short_circuits() {
 /// named-arg admission, fast-lane bound directly.
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f {x = 7}"));
+    let result = test_run.run_one(parse_one("f {x = 7}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -233,15 +238,11 @@ fn fast_lane_fn_callable_via_named_args() {
 /// reordered args at reconstruction time.
 #[test]
 fn fast_lane_weaves_internal_keyword() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f {a = 1, b = 2}"));
+    let result = test_run.run_one(parse_one("f {a = 1, b = 2}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -250,15 +251,11 @@ fn fast_lane_weaves_internal_keyword() {
 /// `(a PICK b)` the same as `(a = 1, b = 2)`.
 #[test]
 fn fast_lane_named_args_order_independent() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f {b = 2, a = 1}"));
+    let result = test_run.run_one(parse_one("f {b = 2, a = 1}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -269,15 +266,11 @@ fn fast_lane_named_args_order_independent() {
 /// returns `Number(1)`.
 #[test]
 fn fast_lane_extra_named_arg_dropped() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("f {a = 1, b = 2, c = 3}"));
+    let result = test_run.run_one(parse_one("f {a = 1, b = 2, c = 3}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
@@ -287,13 +280,12 @@ fn fast_lane_extra_named_arg_dropped() {
 /// loudly (`DispatchFailed`) without entering `resolve_dispatch`.
 #[test]
 fn fast_lane_legacy_paren_args_rejected() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET f = (FN (DOUBLE x :Number) -> Number = (x))");
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("f (a 1)"));
+    let err = test_run.run_one_err(parse_one("f (a 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { reason, .. } if reason.contains("record literal")),
@@ -307,13 +299,12 @@ fn fast_lane_legacy_paren_args_rejected() {
 /// match arm.
 #[test]
 fn fast_lane_on_non_function_returns_error() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET x = 42");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("LET x = 42");
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("x {foo = 7}"));
+    let err = test_run.run_one_err(parse_one("x {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(
@@ -335,12 +326,11 @@ fn fast_lane_on_non_function_returns_error() {
 /// nothing enters `resolve_dispatch`.
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "UNION Maybe = (Some :Number None :Null)");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("UNION Maybe = (Some :Number None :Null)");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("Maybe (Some 42)"));
+    let result = test_run.run_one(parse_one("Maybe (Some 42)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -373,12 +363,11 @@ fn fast_lane_on_tagged_union_constructs() {
 /// `resolve_dispatch`.
 #[test]
 fn fast_lane_on_newtype_record_type_constructs() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Pt = :{x :Number, y :Number}");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("NEWTYPE Pt = :{x :Number, y :Number}");
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("Pt {x = 3, y = 4}"));
+    let result = test_run.run_one(parse_one("Pt {x = 3, y = 4}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -388,7 +377,7 @@ fn fast_lane_on_newtype_record_type_constructs() {
     );
     match result {
         KObject::Wrapped { inner, type_id } => {
-            assert_eq!(type_id.name(&TypeRegistry::new()), "Pt");
+            assert_eq!(type_id.name(&test_run.types), "Pt");
             match inner.get() {
                 KObject::Record(values, _) => {
                     assert!(
@@ -411,11 +400,10 @@ fn fast_lane_on_newtype_record_type_constructs() {
 /// because the fast lane surfaces the literal without consulting buckets.
 #[test]
 fn literal_pass_through_routes_via_fast_lane() {
-    use crate::builtins::test_support::{run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("(99)"));
+    let result = test_run.run_one(parse_one("(99)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -429,11 +417,10 @@ fn literal_pass_through_routes_via_fast_lane() {
 /// `Lift(Pending)` shape, never entering `resolve_dispatch`.
 #[test]
 fn literal_pass_through_routes_list_literal_via_fast_lane() {
-    use crate::builtins::test_support::{run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     reset_resolve_dispatch_entry_count();
-    let result = run_one(scope, parse_one("([1 2 3])"));
+    let result = test_run.run_one(parse_one("([1 2 3])"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     match result {
         KObject::List(items, _) => {
@@ -447,12 +434,11 @@ fn literal_pass_through_routes_list_literal_via_fast_lane() {
 /// no fall-through to the keyworded pipeline.
 #[test]
 fn fast_lane_unbound_returns_error() {
-    use crate::builtins::test_support::{run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("undefined {foo = 7}"));
+    let err = test_run.run_one_err(parse_one("undefined {foo = 7}"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
@@ -466,19 +452,17 @@ fn fast_lane_unbound_returns_error() {
 /// that region alive past frame drop, so the later invocation does not dangle.
 #[test]
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (MAKE) -> :(FN () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
          LET f = (MAKE)",
     );
-    let result = run_one(scope, parse_one("f {}"));
+    let result = test_run.run_one(parse_one("f {}"));
     assert!(
         matches!(result, KObject::KString(s) if s == "hi"),
         "expected KString(\"hi\"), got {}",
-        result.summarize(&TypeRegistry::new()),
+        result.summarize(&test_run.types),
     );
 }
 
@@ -486,15 +470,13 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
 /// after escape.
 #[test]
 fn fast_lane_escaped_closure_with_param_returns_body_value() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (MAKE) -> :(FN (x :Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
-    let result = run_one(scope, parse_one("f {x = 42}"));
+    let result = test_run.run_one(parse_one("f {x = 42}"));
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
@@ -505,19 +487,15 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
 /// Miri this is the load-bearing no-use-after-free check.)
 #[test]
 fn fast_lane_list_of_closures_escapes_outer_call() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])",
-    );
-    let result = run_one(scope, parse_one("(MAKE)"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])");
+    let result = test_run.run_one(parse_one("(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
         other => panic!(
             "expected MAKE to return a List, got {}",
-            other.summarize(&TypeRegistry::new())
+            other.summarize(&test_run.types)
         ),
     };
     assert_eq!(items.len(), 1, "list should hold the single inner closure");
@@ -537,8 +515,9 @@ fn fast_lane_list_of_closures_escapes_outer_call() {
 #[test]
 fn function_value_call_forward_ref_routes_via_placeholder() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
 
     // The producer is a `FunctionValueCall` on a non-function value: the fast lane
     // errors with `TypeMismatch` (a `Number` head isn't callable) without entering
@@ -584,10 +563,10 @@ fn function_value_call_forward_ref_routes_via_placeholder() {
 #[test]
 fn keyworded_unchanged() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
     let expr = parse_one("(PRINT 5)");
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(scope, expr);
+    let _ = dispatch_one(&mut test_run, expr);
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "Keyworded shape must enter resolve_dispatch at least once; \
@@ -663,14 +642,14 @@ fn classifier_legacy_positional_collapses_to_type_call() {
 #[test]
 fn keyworded_unchanged_with_keyword_in_body() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    bind_identity_fn(scope);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    bind_identity_fn(scope, &test_run.types);
 
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(expr_a, scope);
-    let _ = runtime.execute();
+    test_run.runtime.dispatch_in_scope(expr_a, scope);
+    let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "(List MAYBE Number) must route to Keyworded (keyword in body); count was {}",
@@ -679,9 +658,8 @@ fn keyworded_unchanged_with_keyword_in_body() {
 
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(expr_b, scope);
-    let _ = runtime.execute();
+    test_run.runtime.dispatch_in_scope(expr_b, scope);
+    let _ = test_run.runtime.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "(f IF x) must route to Keyworded (keyword in body); count was {}",
@@ -701,14 +679,15 @@ fn keyworded_unchanged_with_keyword_in_body() {
 #[test]
 fn stateful_keyworded_eager_subs_resumes_through_state() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    crate::builtins::test_support::run(scope, "FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("LET with eager-sub RHS runs cleanly on the stateful driver");
     assert!(
@@ -725,28 +704,23 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
 #[test]
 fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    crate::builtins::test_support::run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
-    );
-    crate::builtins::test_support::run(
-        scope,
-        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
-    );
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
+    test_run.run("FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
     let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
     match scope.lookup("out") {
         Some(KObject::KString(s)) => assert_eq!(s.as_str(), "numbers"),
         Some(other) => panic!(
             "expected KString(\"numbers\"), got {}",
-            other.summarize(&TypeRegistry::new())
+            other.summarize(&test_run.types)
         ),
         None => panic!("LET out = ... must bind `out` in scope"),
     }
@@ -788,19 +762,26 @@ fn classifier_single_operator_stays_keyworded() {
 
 /// An undeclared operator chain misses the registry and surfaces a structured
 /// `DispatchFailed` naming the undeclared operators. `%` is not a member of any builtin
-/// group (`default_scope` seeds only comparison/additive/multiplicative), so the probe
+/// group (a seeded run root carries only comparison/additive/multiplicative), so the probe
 /// misses cleanly before any operand is touched — the bare unbound identifiers never
 /// need to resolve.
 #[test]
 fn operator_chain_undeclared_errors_cleanly() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("a % b % c"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("a % b % c"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let msg = match runtime.read_result_with(id, |v| v.summarize(&TypeRegistry::new())) {
+    let msg = match test_run
+        .runtime
+        .read_result_with(id, |v| v.summarize(&types))
+    {
         Err(e) => e.to_string(),
         Ok(summary) => {
             panic!("an undeclared operator chain must terminate with an error; got {summary}")
@@ -828,7 +809,9 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
     use std::collections::HashSet;
 
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let inner = scope.brand().alloc_scope(scope.child_for_call());
 
     let members: HashSet<String> = ["-"].iter().map(|s| s.to_string()).collect();
@@ -839,27 +822,34 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
         .register_operator_group("-".to_string(), group, BindingIndex::value(0))
         .expect("an inner scope may register a builtin operator's probe");
 
-    // One runtime per scope: a run adopts one root scope in its run frame.
-    let mut inner_runtime = KoanRuntime::new();
-    let inner_id = inner_runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), inner);
-    inner_runtime
+    // Both dispatches ride the bundle's run frame: `inner` is a child of the run root, so the
+    // single frame covers it and the registry walk is what distinguishes the two sites.
+    let inner_id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("10 - 3 - 2"), inner);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let inner_result = inner_runtime
-        .read_result_with(inner_id, |v| v.summarize(&TypeRegistry::new()))
+    let inner_result = test_run
+        .runtime
+        .read_result_with(inner_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("a registered FoldRight group must evaluate; got error {e}"));
     assert_eq!(
         inner_result, "9",
         "inside the declaring scope, 10 - 3 - 2 folds right to 9 (10 - (3 - 2)); got {inner_result}"
     );
 
-    let mut root_runtime = KoanRuntime::new();
-    let root_id = root_runtime.dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
-    root_runtime
+    let root_id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("10 - 3 - 2"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let root_result = root_runtime
-        .read_result_with(root_id, |v| v.summarize(&TypeRegistry::new()))
+    let root_result = test_run
+        .runtime
+        .read_result_with(root_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("the builtin additive group must evaluate; got error {e}"));
     assert_eq!(
         root_result, "5",
@@ -875,12 +865,13 @@ fn inner_scope_operator_group_overrides_the_builtin_fold_direction() {
 /// proving the "unary prefix and infix coincide" direction end-to-end.
 #[test]
 fn operator_chain_registered_unary_group_hands_body_the_list() {
-    use crate::builtins::test_support::run;
     use crate::machine::model::{OperatorGroup, ReductionMode};
     use std::collections::HashSet;
 
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let members: HashSet<String> = ["~"].iter().map(|s| s.to_string()).collect();
     let group = scope
         .brand()
@@ -888,31 +879,34 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
     scope
         .register_operator_group("~".to_string(), group, BindingIndex::BUILTIN)
         .expect("register operator group");
-    run(
-        scope,
-        "FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",
-    );
+    test_run.run("FN (~ xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
 
-    let mut runtime = KoanRuntime::new();
-    let infix_id = runtime.dispatch_in_scope(parse_one("1 ~ 2 ~ 3 ~ 4"), scope);
-    runtime
+    let infix_id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("1 ~ 2 ~ 3 ~ 4"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let infix = runtime
-        .read_result_with(infix_id, |v| v.summarize(&TypeRegistry::new()))
+    let infix = test_run
+        .runtime
+        .read_result_with(infix_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| panic!("a registered Unary group must evaluate; got error {e}"));
     assert_eq!(
         infix, "[1, 2, 3, 4]",
         "the infix chain must hand the body the whole run as one list"
     );
 
-    let mut runtime = KoanRuntime::new();
-    let prefix_id = runtime.dispatch_in_scope(parse_one("~ [1 2 3 4]"), scope);
-    runtime
+    let prefix_id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("~ [1 2 3 4]"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("scheduler drains without deadlock");
-    let prefix = runtime
-        .read_result_with(prefix_id, |v| v.summarize(&TypeRegistry::new()))
+    let prefix = test_run
+        .runtime
+        .read_result_with(prefix_id, |v| v.summarize(&types))
         .unwrap_or_else(|e| {
             panic!(
                 "the prefix form must dispatch to the same body as the infix chain; got error {e}"
@@ -932,16 +926,15 @@ fn operator_chain_registered_unary_group_hands_body_the_list() {
 /// constructs a struct value directly off the resolved identity.
 #[test]
 fn type_call_constructs_struct() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
-    let out = run_one(scope, parse_one("Point {x = 1, y = 2}"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
+    let out = test_run.run_one(parse_one("Point {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&TypeRegistry::new()),
+        out.ktype().name(&test_run.types),
         "Point",
         "got {}",
-        out.summarize(&TypeRegistry::new())
+        out.summarize(&test_run.types)
     );
 }
 
@@ -949,19 +942,17 @@ fn type_call_constructs_struct() {
 /// (`(GET_F)` returning a `FN`) is applied with named args via the shared tail.
 #[test]
 fn head_deferred_calls_returned_function() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (GET_F) -> :(FN (n :Number) -> Number) = \
          (FN (INNER n :Number) -> Number = (n))",
     );
-    let out = run_one(scope, parse_one("(GET_F) {n = 7}"));
+    let out = test_run.run_one(parse_one("(GET_F) {n = 7}"));
     assert!(
         matches!(out, KObject::Number(n) if (*n - 7.0).abs() < 1e-9),
         "(GET_F) {{n = 7}} must call the returned FN and yield 7.0; got {}",
-        out.summarize(&TypeRegistry::new()),
+        out.summarize(&test_run.types),
     );
 }
 
@@ -970,19 +961,17 @@ fn head_deferred_calls_returned_function() {
 /// functor-application-as-function-call decision.
 #[test]
 fn head_deferred_applies_returned_functor_to_module() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "FN (GET_FUNCTOR) -> Any = \
          (FN (APPLYIT x :Number) -> Module = (MODULE inner = (LET inner = x)))",
     );
-    let out = run_one(scope, parse_one("(GET_FUNCTOR) {x = 5}"));
+    let out = test_run.run_one(parse_one("(GET_FUNCTOR) {x = 5}"));
     assert!(
         matches!(out, KObject::Module(_)),
         "applying a functor value must yield a module; got {}",
-        out.summarize(&TypeRegistry::new()),
+        out.summarize(&test_run.types),
     );
 }
 
@@ -990,18 +979,17 @@ fn head_deferred_applies_returned_functor_to_module() {
 /// (a nested head expression naming a type) routes through the `Constructor` arm.
 #[test]
 fn head_deferred_constructs_from_returned_type_value() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
     // type leaf to `KTypeValue(Point)`, then the body constructs.
-    let out = run_one(scope, parse_one("(Point) {x = 1, y = 2}"));
+    let out = test_run.run_one(parse_one("(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&TypeRegistry::new()),
+        out.ktype().name(&test_run.types),
         "Point",
         "got {}",
-        out.summarize(&TypeRegistry::new())
+        out.summarize(&test_run.types)
     );
 }
 
@@ -1009,12 +997,11 @@ fn head_deferred_constructs_from_returned_type_value() {
 /// surfaces a `DispatchFailed` (heads must be callable).
 #[test]
 fn head_deferred_non_callable_value_errors() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (GET_NUM) -> Number = (42)");
-    let err = run_one_err(scope, parse_one("(GET_NUM) {x = 1}"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (GET_NUM) -> Number = (42)");
+    let err = test_run.run_one_err(parse_one("(GET_NUM) {x = 1}"));
     match &err.kind {
         KErrorKind::DispatchFailed { reason, .. } => assert!(
             reason.contains("non-callable"),
@@ -1029,11 +1016,10 @@ fn head_deferred_non_callable_value_errors() {
 /// `TypeMismatch` — distinct from the `HeadDeferred` non-callable message.
 #[test]
 fn type_head_deferred_non_type_value_type_mismatches() {
-    use crate::builtins::test_support::{run_one_err, run_root_silent};
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one(":(Number) {x = 1}"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one(":(Number) {x = 1}"));
     match &err.kind {
         KErrorKind::TypeMismatch { expected, .. } => {
             assert_eq!(
@@ -1049,16 +1035,15 @@ fn type_head_deferred_non_type_value_type_mismatches() {
 /// identity; the body constructs the struct value.
 #[test]
 fn type_head_deferred_constructs_from_sigil_type() {
-    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
-    let out = run_one(scope, parse_one(":(Point) {x = 1, y = 2}"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
+    let out = test_run.run_one(parse_one(":(Point) {x = 1, y = 2}"));
     assert_eq!(
-        out.ktype().name(&TypeRegistry::new()),
+        out.ktype().name(&test_run.types),
         "Point",
         "got {}",
-        out.summarize(&TypeRegistry::new())
+        out.summarize(&test_run.types)
     );
 }
 
@@ -1068,11 +1053,11 @@ fn type_head_deferred_constructs_from_sigil_type() {
 /// summary.
 #[test]
 fn non_callable_list_head_errors() {
-    use crate::builtins::test_support::run_root_silent;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let root = runtime.dispatch_in_scope(parse_one("[1 2 3] x"), scope);
     runtime
         .execute()
@@ -1094,13 +1079,12 @@ fn non_callable_list_head_errors() {
 /// `resolve_dispatch` entry counter (mirrors the fast-lane routing claims).
 #[test]
 fn type_call_and_head_deferred_skip_resolve_dispatch() {
-    use crate::builtins::test_support::{run, run_root_silent};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
 
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(scope, parse_one("Point {x = 1, y = 2}"));
+    let _ = dispatch_one(&mut test_run, parse_one("Point {x = 1, y = 2}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
@@ -1109,7 +1093,7 @@ fn type_call_and_head_deferred_skip_resolve_dispatch() {
     );
 
     reset_resolve_dispatch_entry_count();
-    let _ = dispatch_one(scope, parse_one("(Point) {x = 1, y = 2}"));
+    let _ = dispatch_one(&mut test_run, parse_one("(Point) {x = 1, y = 2}"));
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,

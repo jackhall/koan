@@ -1,13 +1,13 @@
 use super::*;
-use crate::builtins::test_support::run_root_silent;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::model::TypeRegistry;
 
 #[test]
 fn resolve_type_expr_builtin_leaf_caches() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let types = TypeRegistry::new();
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let te = TypeIdentifier::leaf("Number".into());
     let first = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
@@ -27,8 +27,9 @@ fn resolve_type_expr_builtin_leaf_caches() {
 #[test]
 fn resolve_type_expr_unbound_returns_unbound() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let types = TypeRegistry::new();
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let te = TypeIdentifier::leaf("NotABuiltin".into());
     match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Unbound(_) => {}
@@ -40,11 +41,11 @@ fn resolve_type_expr_unbound_returns_unbound() {
 /// finalize lands in the cache.
 #[test]
 fn resolve_type_expr_user_struct_caches_after_finalize() {
-    use crate::builtins::test_support::run;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "NEWTYPE Point = :{x :Number, y :Number}");
-    let types = TypeRegistry::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
+    let types = test_run.types.clone();
     let te = TypeIdentifier::leaf("Point".into());
     let kt = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,

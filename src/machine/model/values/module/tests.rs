@@ -3,15 +3,15 @@
 //! borrow. Each shape is exercised in isolation so a regression attributes to a
 //! single site. See [`design/memory-model.md`](../../../../../design/memory-model.md).
 use super::*;
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::types::KType;
-use std::io::sink;
 use std::ptr;
 #[test]
 fn module_child_scope_transmute_does_not_dangle() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let module = region
         .brand()
         .alloc_module(Module::new("Test".into(), scope));
@@ -32,7 +32,8 @@ fn module_child_scope_transmute_does_not_dangle() {
 #[test]
 fn module_type_members_refcell_mutation_with_held_module_ref() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
@@ -62,7 +63,8 @@ fn module_type_members_refcell_mutation_with_held_module_ref() {
 #[test]
 fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let module = region.brand().alloc_module(Module::new("M".into(), scope));
     let scope_id = module.scope_id();
     {
@@ -91,7 +93,8 @@ fn module_slot_type_tags_refcell_mutation_with_held_module_ref() {
 #[test]
 fn bare_module_self_sig_falls_back_to_raw_derivation() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let module = region
         .brand()
         .alloc_module(Module::new("Bare".into(), scope));

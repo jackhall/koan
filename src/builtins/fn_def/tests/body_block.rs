@@ -1,7 +1,7 @@
 //! Multi-statement FN body behavior — see [design/execution/README.md
 //! § Multi-statement FN body split](../../../../design/execution/calls-and-values.md#multi-statement-fn-body-split).
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
 use crate::machine::run_root_storage;
 
@@ -10,9 +10,9 @@ use super::capture_program_output;
 #[test]
 fn multi_statement_fn_body_returns_last_value() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
-    let v = run_one(scope, parse_one("FOO"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
+    let v = test_run.run_one(parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 
@@ -45,11 +45,8 @@ fn multi_statement_fn_body_runs_each_statement() {
 #[test]
 fn backward_reference_across_statements_works() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))",
-    );
-    let v = run_one(scope, parse_one("FOO"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (FOO) -> Number = ((LET a = 10) (LET b = (a)) (b))");
+    let v = test_run.run_one(parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 10.0));
 }

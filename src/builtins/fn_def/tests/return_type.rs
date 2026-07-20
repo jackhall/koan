@@ -1,19 +1,17 @@
 //! Parsing the `-> Type` slot, and the runtime return-type check.
 
-use crate::builtins::test_support::{
-    fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
-};
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, TestRun};
 use crate::machine::model::{KObject, KType, ReturnType};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 use crate::parse::parse;
 
 #[test]
 fn fn_parses_declared_return_type_onto_signature() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (DOUBLE x :Number) -> Number = (x)");
 
     let f = lookup_fn(scope, "DOUBLE");
     let ReturnType::Resolved(kt) = &f.signature.return_type else {
@@ -28,13 +26,13 @@ fn fn_parses_declared_return_type_onto_signature() {
 #[test]
 fn fn_without_return_type_annotation_does_not_register() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     for expr in exprs {
-        runtime.dispatch_in_scope(expr, scope);
+        test_run.runtime.dispatch_in_scope(expr, scope);
     }
-    let _ = runtime.execute();
+    let _ = test_run.runtime.execute();
     assert!(
         !fn_is_registered(scope, "DOUBLE"),
         "DOUBLE should not be registered without -> Type"
@@ -47,14 +45,19 @@ fn fn_without_return_type_annotation_does_not_register() {
 #[test]
 fn return_type_only_difference_is_a_duplicate_overload() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
-    runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Number = (x)"), scope);
-    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Number = (x)"), scope);
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Str = (\"a\")"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-node errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("return-type-only overload should be rejected as a duplicate"),
     };
@@ -67,13 +70,16 @@ fn return_type_only_difference_is_a_duplicate_overload() {
 #[test]
 fn fn_with_unknown_return_type_name_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };
@@ -86,14 +92,15 @@ fn fn_with_unknown_return_type_name_errors() {
 #[test]
 fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (LIE) -> Number = (\"oops\")");
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("LIE"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (LIE) -> Number = (\"oops\")");
+    let id = test_run.runtime.dispatch_in_scope(parse_one("LIE"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("LIE should fail return-type check"),
     };
@@ -142,13 +149,16 @@ fn fn_with_forward_user_bound_return_type_works() {
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => panic!("unknown type name should error"),
     };
@@ -161,9 +171,9 @@ fn fn_return_type_surface_name_preserved_in_error() {
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (PURE) -> Any = (\"a string\")");
-    let result = run_one(scope, parse_one("PURE"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (PURE) -> Any = (\"a string\")");
+    let result = test_run.run_one(parse_one("PURE"));
     assert!(matches!(result, KObject::KString(s) if s == "a string"));
 }
 
@@ -178,16 +188,19 @@ fn user_fn_with_any_return_type_accepts_anything() {
 #[test]
 fn keep_first_across_tail_chain_errors_against_outer_contract() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "FN (INNER) -> Any = (\"nope\")");
-    run(scope, "FN (MIDDLE) -> Any = (INNER)");
-    run(scope, "FN (OUTER) -> Number = (MIDDLE)");
-    let mut runtime = KoanRuntime::new();
-    let id = runtime.dispatch_in_scope(parse_one("OUTER"), scope);
-    runtime
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("FN (INNER) -> Any = (\"nope\")");
+    test_run.run("FN (MIDDLE) -> Any = (INNER)");
+    test_run.run("FN (OUTER) -> Number = (MIDDLE)");
+    let id = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("OUTER"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(id) {
+    let err = match test_run.runtime.result_error(id) {
         Err(e) => e,
         Ok(()) => {
             panic!(
@@ -226,17 +239,18 @@ fn keep_first_across_tail_chain_errors_against_outer_contract() {
 fn spliced_bare_name_tail_checks_declared_return() {
     // Non-matching: the bare-name tail forwards a Str; the splice check rejects it against -> Number.
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let bad_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = \"nope\"")
         .expect("parse succeeds")
         .into_iter()
-        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let err = match runtime.result_error(bad_ids[1]) {
+    let err = match test_run.runtime.result_error(bad_ids[1]) {
         Err(e) => e,
         Ok(()) => panic!("the spliced Str tail must fail WRAP's -> Number check"),
     };
@@ -256,20 +270,21 @@ fn spliced_bare_name_tail_checks_declared_return() {
 
     // Matching: the bare-name tail forwards a Number; the splice check passes and the value arrives.
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let ok_ids: Vec<_> = parse("FN (WRAP) -> Number = (x)\nLET out = (WRAP)\nLET x = 7")
         .expect("parse succeeds")
         .into_iter()
-        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("execute does not surface per-slot errors");
     assert!(
-        runtime.result_error(ok_ids[1]).is_ok(),
+        test_run.runtime.result_error(ok_ids[1]).is_ok(),
         "the matching spliced value passes the splice check: {:?}",
-        runtime.result_error(ok_ids[1]).err(),
+        test_run.runtime.result_error(ok_ids[1]).err(),
     );
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),

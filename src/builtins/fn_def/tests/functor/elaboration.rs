@@ -1,7 +1,6 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
-use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_silent};
-use crate::machine::model::TypeRegistry;
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, TestRun};
 use crate::machine::run_root_storage;
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
@@ -11,8 +10,9 @@ use crate::machine::run_root_storage;
 fn list_of_let_binding_is_ktype_value() {
     use crate::machine::model::KType;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET MyList = :(LIST OF Number)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("LET MyList = :(LIST OF Number)");
     let kt = scope
         .resolve_type("MyList")
         .expect("MyList should be bound in bindings.types");
@@ -27,14 +27,12 @@ fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::TypeIdentifier;
     use crate::machine::model::{elaborate_type_identifier, Elaborator, TypeResolution};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "LET MyList = :(LIST OF Number)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("LET MyList = :(LIST OF Number)");
+    let types = test_run.types.clone();
     let mut el = Elaborator::new(scope);
-    match elaborate_type_identifier(
-        &mut el,
-        &TypeIdentifier::leaf("MyList".into()),
-        &TypeRegistry::new(),
-    ) {
+    match elaborate_type_identifier(&mut el, &TypeIdentifier::leaf("MyList".into()), &types) {
         TypeResolution::Done(kt) => assert_eq!(kt, KType::list(Box::new(KType::Number))),
         other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
@@ -48,9 +46,9 @@ fn elaborator_lowers_ktype_value_binding() {
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, KType, SignatureElement};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          FN (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
     );
@@ -89,21 +87,19 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
 /// placeholder and re-runs elaboration against the finalized scope.
 #[test]
 fn let_then_fn_in_same_batch_works() {
-    use crate::builtins::default_scope;
-    use crate::machine::KoanRuntime;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse(
         "LET MyList = :(LIST OF Number)\n\
          FN (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime.execute().unwrap();
+    test_run.runtime.execute().unwrap();
     assert!(
         scope.resolve_type("MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",

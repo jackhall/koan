@@ -3,29 +3,25 @@
 //! view records per-call abstract identities and re-expresses SIG-declared value slots against
 //! them; a transparent view records the source's concrete types.
 
-use crate::builtins::test_support::{
-    binds_module, lookup_module, parse_one, run, run_one_err, run_probe_returning_registry,
-    run_root_silent,
-};
+use crate::builtins::test_support::{binds_module, lookup_module, parse_one, TestRun};
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::Module;
+use crate::machine::model::TypeRegistry;
 use crate::machine::run_root_storage;
 use crate::machine::{KErrorKind, Scope};
 
-fn module_named<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {
-    lookup_module(scope, name)
+fn module_named<'a>(scope: &'a Scope<'a>, name: &str, types: &TypeRegistry) -> &'a Module<'a> {
+    lookup_module(scope, name, types)
 }
 
 #[test]
 fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "MODULE int_ord = ((LET Tag = Number) (LET compare = 5))",
-    );
-    let m = module_named(scope, "int_ord");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("MODULE int_ord = ((LET Tag = Number) (LET compare = 5))");
+    let m = module_named(scope, "int_ord", &test_run.types);
     let sig = m.self_sig();
     assert!(
         sig.abstract_members.is_empty(),
@@ -39,16 +35,16 @@ fn plain_module_self_sig_is_manifest_and_raw_value_slots() {
 #[test]
 fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
          LET view = (int_ord :| Ordered)",
     );
-    let view = module_named(scope, "view");
+    let view = module_named(scope, "view", &test_run.types);
     let sig = view.self_sig();
 
     // The view's manifest `Elem` is the per-call abstract identity it minted.
@@ -78,16 +74,16 @@ fn opaque_view_self_sig_carries_abstract_identity_in_slots() {
 #[test]
 fn transparent_view_self_sig_reads_source_concrete_types() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0) \
          (LET compare = (FN :{x :Number} -> Number = (x))))\n\
          SIG Ordered = ((TYPE Elem) (VAL zero :Elem) \
          (VAL compare :(FN (x :Elem) -> Number)))\n\
          LET view = (int_ord :! Ordered)",
     );
-    let view = module_named(scope, "view");
+    let view = module_named(scope, "view", &test_run.types);
     let sig = view.self_sig();
 
     // A transparent view reads the source's concrete `Elem = Number`.
@@ -106,16 +102,16 @@ fn transparent_view_self_sig_reads_source_concrete_types() {
 #[test]
 fn two_opaque_views_carry_distinct_abstract_identities() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "MODULE int_ord = ((LET Elem = Number) (LET zero = 0))\n\
          SIG Pointed = ((TYPE Elem) (VAL zero :Elem))\n\
          LET first = (int_ord :| Pointed)\n\
          LET second = (int_ord :| Pointed)",
     );
-    let first = module_named(scope, "first");
-    let second = module_named(scope, "second");
+    let first = module_named(scope, "first", &test_run.types);
+    let second = module_named(scope, "second", &test_run.types);
     // Generativity: each ascription mints its own abstract `Elem`, so the self-sigs differ.
     assert_ne!(
         first.self_sig().manifest_members.get("Elem"),
@@ -128,13 +124,12 @@ fn two_opaque_views_carry_distinct_abstract_identities() {
 #[test]
 fn value_slot_type_mismatch_is_rejected() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Numeric = ((VAL v :Number))\n\
          MODULE str_mod = ((LET v = (\"hi\")))",
     );
-    let err = run_one_err(scope, parse_one("str_mod :| Numeric"));
+    let err = test_run.run_one_err(parse_one("str_mod :| Numeric"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("Numeric") && msg.contains("`v`") && msg.contains("has type")),
@@ -145,14 +140,13 @@ fn value_slot_type_mismatch_is_rejected() {
 #[test]
 fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
     // A proper type cannot fill a `TYPE (Type AS Wrap)` constructor slot.
-    run(
-        scope,
+    test_run.run(
         "SIG Monad = ((TYPE (Type AS Wrap)))\n\
          MODULE int_list = ((LET Wrap = Number))",
     );
-    let err = run_one_err(scope, parse_one("int_list :| Monad"));
+    let err = test_run.run_one_err(parse_one("int_list :| Monad"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Wrap`") && msg.contains("type constructor") && msg.contains("parameters {Type}")),
@@ -163,14 +157,14 @@ fn higher_kinded_slot_rejects_proper_type_with_kind_message() {
 #[test]
 fn satisfying_module_ascribes_and_repeat_hits_verdict() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     // A module satisfying every rule ascribes; a second ascription of the same module+sig
     // succeeds too — the run's registry records the first verdict and the repeat check hits it.
     // The miss counter is the discriminating one: flat misses across the repeat mean every lookup
     // it made hit, so nothing re-walked `sig_subtype`; the hit delta guards against a vacuously
     // lookup-free probe.
-    let (registry, hits_before, misses_before) = run_probe_returning_registry(
-        scope,
+    let (registry, hits_before, misses_before) = test_run.run_probe_returning_registry(
         "NEWTYPE (Type AS Wrapper)\n\
          SIG Complete = ((TYPE (Type AS Wrap)) (LET Tag = Number) (VAL zero :Number))\n\
          MODULE implementation = ((LET Wrap = Wrapper) (LET Tag = Number) (LET zero = 0))\n\
@@ -199,13 +193,12 @@ fn satisfying_module_ascribes_and_repeat_hits_verdict() {
 #[test]
 fn manifest_member_mismatch_names_the_member() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Tagged = ((LET Tag = Number) (VAL item :Number))\n\
          MODULE bad = ((LET Tag = Str) (LET item = 5))",
     );
-    let err = run_one_err(scope, parse_one("bad :| Tagged"));
+    let err = test_run.run_one_err(parse_one("bad :| Tagged"));
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg)
             if msg.contains("`Tag`") && msg.contains("fixes it to")),
@@ -219,16 +212,16 @@ fn manifest_member_mismatch_names_the_member() {
 #[test]
 fn opaque_views_have_distinct_type_of() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = ((TYPE Elt) (VAL zero :Elt))\n\
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET v1 = (int_ord :| Ordered)\n\
          LET v2 = (int_ord :| Ordered)",
     );
-    let v1 = lookup_module(scope, "v1");
-    let v2 = lookup_module(scope, "v2");
+    let v1 = lookup_module(scope, "v1", &test_run.types);
+    let v2 = lookup_module(scope, "v2", &test_run.types);
     assert_ne!(
         KObject::Module(v1).ktype(),
         KObject::Module(v2).ktype(),
@@ -251,9 +244,8 @@ fn opaque_views_have_distinct_type_of() {
 #[test]
 fn identical_modules_share_satisfaction_verdict() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let (registry, hits_before, misses_before) = run_probe_returning_registry(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let (registry, hits_before, misses_before) = test_run.run_probe_returning_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1) (LET extra = 9))\n\
          MODULE b = ((LET x = 2) (LET extra = 9))\n\
@@ -284,9 +276,8 @@ fn identical_modules_share_satisfaction_verdict() {
 #[test]
 fn differing_module_interface_misses_the_shared_verdict() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let (registry, _, misses_before) = run_probe_returning_registry(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let (registry, _, misses_before) = test_run.run_probe_returning_registry(
         "SIG Ord = ((VAL x :Number))\n\
          MODULE a = ((LET x = 1))\n\
          MODULE c = ((LET x = 1) (LET extra = \"tag\"))\n\

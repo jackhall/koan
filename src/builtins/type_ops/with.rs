@@ -118,24 +118,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one_type, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::KType;
     use crate::machine::run_root_storage;
-    use crate::machine::KoanRuntime;
 
     #[test]
     fn with_one_slot_pins_the_named_slot() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
-        );
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let sig_id = match scope.resolve_type("Ordered") {
             Some(KType::Signature { content, .. }) => content.sig_id,
             _ => panic!("Ordered must bind a Signature KType"),
         };
-        let result = run_one_type(scope, parse_one("Ordered WITH {Carrier = Number}"));
+        let result = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
         match result {
             KType::Signature {
                 content,
@@ -156,15 +153,9 @@ mod tests {
     #[test]
     fn with_two_slots_preserve_order() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))",
-        );
-        let result = run_one_type(
-            scope,
-            parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"),
-        );
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
+        let result = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 2);
@@ -183,15 +174,14 @@ mod tests {
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
             "MODULE int_ord = ((LET Carrier = Number) (LET compare = 0))\n\
              SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
              SIG Set = ((TYPE Elt) (VAL insert :Number))\n\
              LET elem = (int_ord :| Ordered)",
         );
-        let result = run_one_type(scope, parse_one("Set WITH {Elt = elem.Carrier}"));
+        let result = test_run.run_one_type(parse_one("Set WITH {Elt = elem.Carrier}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);
@@ -211,12 +201,10 @@ mod tests {
     #[test]
     fn with_rejects_unknown_slot() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
-        );
-        let mut runtime = KoanRuntime::new();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
+        let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {Bogus = Number}"), scope);
         runtime
             .execute()
@@ -235,15 +223,13 @@ mod tests {
     #[test]
     fn with_equal_manifest_pin_normalizes_away() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Tagged = ((LET Tag = Number) (VAL value :Number))",
-        );
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
         let bare = scope
             .resolve_type("Tagged")
             .expect("Tagged must bind a Signature KType");
-        let result = run_one_type(scope, parse_one("Tagged WITH {Tag = Number}"));
+        let result = test_run.run_one_type(parse_one("Tagged WITH {Tag = Number}"));
         match &result {
             KType::Signature { pinned_slots, .. } => {
                 assert!(
@@ -263,12 +249,10 @@ mod tests {
     #[test]
     fn with_rejects_unequal_manifest_pin() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Tagged = ((LET Tag = Number) (VAL value :Number))",
-        );
-        let mut runtime = KoanRuntime::new();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
+        let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(parse_one("Tagged WITH {Tag = Str}"), scope);
         runtime
             .execute()
@@ -289,12 +273,9 @@ mod tests {
     #[test]
     fn with_mixed_record_records_only_abstract_pin() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))",
-        );
-        let result = run_one_type(scope, parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
+        let mut test_run = TestRun::silent(&region);
+        test_run.run("SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))");
+        let result = test_run.run_one_type(parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
         match result {
             KType::Signature { pinned_slots, .. } => {
                 assert_eq!(
@@ -312,12 +293,10 @@ mod tests {
     #[test]
     fn with_rejects_lowercase_slot_name() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
-            "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))",
-        );
-        let mut runtime = KoanRuntime::new();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
+        let runtime = &mut test_run.runtime;
         let id = runtime.dispatch_in_scope(parse_one("Ordered WITH {type = Number}"), scope);
         runtime
             .execute()

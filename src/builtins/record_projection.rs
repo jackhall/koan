@@ -152,15 +152,15 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::model::{KObject, KType};
     use crate::machine::run_root_storage;
 
     #[test]
     fn from_narrows_carried_type_keeping_all_fields_present() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one(scope, parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one(parse_one("(x y) FROM {x = 1, y = 2, z = 3}"));
         match result {
             KObject::Record(fields, types) => {
                 assert_eq!(fields.len(), 3);
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn from_single_field_projection() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one(scope, parse_one("(x) FROM {x = 1, y = 2}"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one(parse_one("(x) FROM {x = 1, y = 2}"));
         match result {
             KObject::Record(fields, types) => {
                 assert_eq!(fields.len(), 2);
@@ -196,8 +196,8 @@ mod tests {
     #[test]
     fn from_empty_field_list_yields_empty_record() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let result = run_one(scope, parse_one("() FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&region);
+        let result = test_run.run_one(parse_one("() FROM {x = 1}"));
         match result {
             KObject::Record(fields, types) => {
                 assert_eq!(fields.len(), 1);
@@ -210,8 +210,8 @@ mod tests {
     #[test]
     fn from_unknown_field_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("(x w) FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("(x w) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("no field `w`"),
@@ -222,8 +222,8 @@ mod tests {
     #[test]
     fn from_duplicate_field_errors() {
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let err = run_one_err(scope, parse_one("(x x) FROM {x = 1}"));
+        let mut test_run = TestRun::silent(&region);
+        let err = test_run.run_one_err(parse_one("(x x) FROM {x = 1}"));
         let msg = format!("{err}");
         assert!(
             msg.contains("duplicate field `x`"),
@@ -239,16 +239,19 @@ mod tests {
     #[test]
     fn from_non_record_operand_is_dispatch_non_match() {
         use crate::machine::KErrorKind;
-        use crate::machine::KoanRuntime;
 
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        let mut runtime = KoanRuntime::new();
-        let root = runtime.dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
-        runtime
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let root = test_run
+            .runtime
+            .dispatch_in_scope(parse_one("(x y) FROM 5"), scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let err = runtime
+        let err = test_run
+            .runtime
             .result_error(root)
             .expect_err("a non-record operand must fail dispatch");
         assert!(
@@ -263,24 +266,26 @@ mod tests {
     #[test]
     fn from_breaks_ambiguous_record_dispatch_tie() {
         use crate::machine::KErrorKind;
-        use crate::machine::KoanRuntime;
 
         let region = run_root_storage();
-        let scope = run_root_silent(&region);
-        run(
-            scope,
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run(
             "FN (PICK r :{x :Number, y :Str}) -> Str = (\"xy\")\n\
              FN (PICK r :{x :Number, z :Str}) -> Str = (\"xz\")\n\
              LET r = {x = 1, y = \"a\", z = \"b\"}",
         );
 
         // Bare call ties: the full `{x, y, z}` carrier fills both incomparable arms.
-        let mut runtime = KoanRuntime::new();
-        let root = runtime.dispatch_in_scope(parse_one("PICK r"), scope);
-        runtime
+        let root = test_run
+            .runtime
+            .dispatch_in_scope(parse_one("PICK r"), scope);
+        test_run
+            .runtime
             .execute()
             .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-        let error = runtime
+        let error = test_run
+            .runtime
             .result_error(root)
             .expect_err("the bare call must tie across both incomparable arms");
         assert!(
@@ -289,7 +294,7 @@ mod tests {
         );
 
         // `(x y) FROM r` re-tags the carrier to `{x, y}`; only `:{x,y}` admits.
-        let picked = run_one(scope, parse_one("PICK ((x y) FROM r)"));
+        let picked = test_run.run_one(parse_one("PICK ((x y) FROM r)"));
         match picked {
             KObject::KString(s) => assert_eq!(s, "xy"),
             other => panic!("expected \"xy\", got {:?}", other.ktype()),

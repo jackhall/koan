@@ -4,14 +4,12 @@
 
 use std::rc::Rc;
 
-use crate::builtins::default_scope;
-use crate::builtins::test_support::{lookup_module, parse_one};
+use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::core::run_root_storage;
 use crate::machine::model::{ExpressionPart, KExpression, KLiteral};
 use crate::source::Spanned;
 
 use super::let_expr;
-use crate::machine::execute::KoanRuntime;
 
 fn lit<'run>(name: &str) -> KExpression<'run> {
     KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(name.into()))])
@@ -20,8 +18,9 @@ fn lit<'run>(name: &str) -> KExpression<'run> {
 #[test]
 fn top_level_statements_get_root_frames_with_consecutive_indices() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(
         root.id,
         vec![let_expr("a", 1.0), let_expr("b", 2.0), let_expr("c", 3.0)],
@@ -47,8 +46,9 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
 #[test]
 fn sibling_statements_in_inner_block_share_parent_rc() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(root.id, vec![lit("ANY1"), lit("ANY2")], root);
     let chain_a = runtime.chain_of(ids[0]).unwrap();
     let chain_b = runtime.chain_of(ids[1]).unwrap();
@@ -69,20 +69,25 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 fn module_body_chain_parent_points_at_module_statement_frame() {
     use crate::machine::model::Module;
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
     let module_expr = parse_one("MODULE foo = (LET x = 1)");
-    let ids = runtime.enter_block(root.id, vec![module_expr], root);
+    let ids = test_run
+        .runtime
+        .enter_block(root.id, vec![module_expr], root);
     let top_id = ids[0];
-    let top_chain = runtime.chain_of(top_id).expect("module statement chain");
+    let top_chain = test_run
+        .runtime
+        .chain_of(top_id)
+        .expect("module statement chain");
     assert_eq!(top_chain.scope_id, root.id);
     assert_eq!(top_chain.index, 1);
     assert!(top_chain.parent.is_none());
-    runtime.execute().expect("module runs");
+    test_run.runtime.execute().expect("module runs");
     // Body slot has terminalized by now and dropped its chain; the body-chain
     // shape is exercised end-to-end by the recursive smoke tests below. A module is a value,
     // so the `&Module` rides the Object-arm value in `data`.
-    let module = lookup_module(root, "foo");
+    let module = lookup_module(root, "foo", &test_run.types);
     let _: &Module<'_> = module;
 }
 
@@ -91,9 +96,8 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
 #[test]
 fn tail_recursive_fn_does_not_balloon_chain() {
     let region = run_root_storage();
-    let (scope, captured) = crate::builtins::test_support::run_root_with_buf(&region);
-    crate::builtins::test_support::run(
-        scope,
+    let (mut test_run, captured) = TestRun::with_buf(&region);
+    test_run.run(
         "UNION Counter = (more :Null done :Null)\n\
          FN (LOOP n :Number c :Any) -> Number = (MATCH (c) -> :Number WITH (\
             more -> (LOOP (n) (Counter (more null)))\
@@ -110,9 +114,9 @@ fn tail_recursive_fn_does_not_balloon_chain() {
 #[test]
 fn fn_body_call_with_spacers_produces_value() {
     let region = run_root_storage();
-    let scope = crate::builtins::test_support::run_root_silent(&region);
-    crate::builtins::test_support::run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "FN (DBL x :Number) -> Number = (x)\n\
          LET a = 1\n\
          LET b = 2\n\
@@ -129,13 +133,10 @@ fn cons_head_subdispatch_inherits_parent_chain() {
     // CONS-head `dispatch_in_scope` inherits the active chain of the slot running
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
     let region = run_root_storage();
-    let scope = crate::builtins::test_support::run_root_silent(&region);
-    crate::builtins::test_support::run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
-    let v = crate::builtins::test_support::run_one(
-        scope,
-        crate::builtins::test_support::parse_one("FOO"),
-    );
+    let v = test_run.run_one(parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
 
@@ -146,9 +147,9 @@ fn cons_head_subdispatch_inherits_parent_chain() {
 #[should_panic(expected = "every dispatched node has a chain")]
 fn add_with_chain_without_chain_panics() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
-    runtime.add_with_chain(
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.runtime.add_with_chain(
         crate::machine::execute::dispatch::decide_tail(
             KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
                 KLiteral::Number(1.0),

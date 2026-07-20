@@ -1,30 +1,26 @@
 //! Functor integration: module-typed parameters, signature-bound dispatch,
 //! per-call generativity.
 
-use crate::builtins::test_support::{lookup_module, parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{lookup_module, parse_one, TestRun};
 use crate::machine::model::{KObject, KType};
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
-use crate::machine::KoanRuntime;
 use crate::parse::parse;
 
 #[test]
 fn functor_returns_a_module() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET int_ord_a = (int_ord :! Ordered)");
-    run(
-        scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
-    );
-    run(scope, "LET set_value = (MAKESET int_ord_a)");
+    test_run.run("LET int_ord_a = (int_ord :! Ordered)");
+    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value");
+    let m = lookup_module(scope, "set_value", &test_run.types);
     let inner = m
         .child_scope()
         .bindings()
@@ -37,20 +33,19 @@ fn functor_returns_a_module() {
 #[test]
 fn functor_body_reads_signature_typed_parameter() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET int_ord_a = (int_ord :! Ordered)");
-    run(
-        scope,
+    test_run.run("LET int_ord_a = (int_ord :! Ordered)");
+    test_run.run(
         "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
     );
-    run(scope, "LET set_value = (MAKESET int_ord_a)");
+    test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value");
+    let m = lookup_module(scope, "set_value", &test_run.types);
     let sample = m
         .child_scope()
         .bindings()
@@ -66,22 +61,19 @@ fn functor_body_reads_signature_typed_parameter() {
 #[test]
 fn functor_application_is_generative() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET int_ord_a = (int_ord :! Ordered)");
-    run(
-        scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
-    );
-    run(scope, "LET set_one = (MAKESET (int_ord_a))");
-    run(scope, "LET set_two = (MAKESET (int_ord_a))");
+    test_run.run("LET int_ord_a = (int_ord :! Ordered)");
+    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("LET set_one = (MAKESET (int_ord_a))");
+    test_run.run("LET set_two = (MAKESET (int_ord_a))");
 
-    let m1 = lookup_module(scope, "set_one");
-    let m2 = lookup_module(scope, "set_two");
+    let m1 = lookup_module(scope, "set_one", &test_run.types);
+    let m2 = lookup_module(scope, "set_two", &test_run.types);
     assert_ne!(
         m1.scope_id(),
         m2.scope_id(),
@@ -96,27 +88,30 @@ fn functor_application_is_generative() {
 #[test]
 fn functor_application_mints_distinct_abstract_types() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let src = "SIG Ordered = ((TYPE Carrier) (VAL compare :Number))\n\
                MODULE int_ord = ((LET Carrier = Number) (LET compare = 7))\n\
                FN (MAKESET er :Ordered) -> Module = (er :| Ordered)\n\
                LET set_one = (MAKESET int_ord)\n\
                LET set_two = (MAKESET int_ord)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
     }
-    runtime.execute().expect("scheduler should succeed");
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.result_error(*id) {
             panic!("expr {i} errored: {e}");
         }
     }
 
-    let one = lookup_module(scope, "set_one");
-    let two = lookup_module(scope, "set_two");
+    let one = lookup_module(scope, "set_one", &test_run.types);
+    let two = lookup_module(scope, "set_two", &test_run.types);
     let one_carrier = one.type_members.borrow().get("Carrier").cloned();
     let two_carrier = two.type_members.borrow().get("Carrier").cloned();
     assert!(
@@ -140,24 +135,21 @@ fn functor_application_mints_distinct_abstract_types() {
 #[test]
 fn functor_admits_unascribed_module_structurally() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(
-        scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
-    );
+    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
     // Type-classified binder so the auto-wrap pass triggers in the
     // `Signature { .. }` slot. The LET partition guard requires module carriers
     // to ride Type-classified names (design/typing/elaboration.md § Binding-map
     // partition).
-    run(scope, "LET unascribed = int_ord");
-    run(scope, "LET set_value = (MAKESET unascribed)");
+    test_run.run("LET unascribed = int_ord");
+    test_run.run("LET set_value = (MAKESET unascribed)");
 
-    let m = lookup_module(scope, "set_value");
+    let m = lookup_module(scope, "set_value", &test_run.types);
     let inner = m
         .child_scope()
         .bindings()
@@ -177,23 +169,23 @@ fn functor_admits_unascribed_module_structurally() {
 #[test]
 fn functor_rejects_structurally_unsatisfying_module() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE no_compare = (LET other = 1)",
     );
-    run(
-        scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))",
-    );
-    run(scope, "LET arg = no_compare");
-    let mut runtime = KoanRuntime::new();
-    let root = runtime.dispatch_in_scope(parse_one("MAKESET arg"), scope);
-    runtime
+    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET inner = 1))");
+    test_run.run("LET arg = no_compare");
+    let root = test_run
+        .runtime
+        .dispatch_in_scope(parse_one("MAKESET arg"), scope);
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
-    let err = runtime
+    let err = test_run
+        .runtime
         .result_error(root)
         .expect_err("expected a DispatchFailed in the dispatch slot");
     assert!(
@@ -207,32 +199,25 @@ fn functor_rejects_structurally_unsatisfying_module() {
 #[test]
 fn functor_overloads_dispatch_by_signature_bound_param() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          SIG Hashed = (VAL hash :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          MODULE int_hash = (LET hash = 11)",
     );
-    run(
-        scope,
+    test_run.run(
         "LET int_ord_a = (int_ord :! Ordered)\n\
          LET int_hash_a = (int_hash :! Hashed)",
     );
-    run(
-        scope,
-        "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET tag = 1))",
-    );
-    run(
-        scope,
-        "FN (MAKESET elem :Hashed) -> Module = (MODULE generated = (LET tag = 2))",
-    );
-    run(scope, "LET ord_set = (MAKESET (int_ord_a))");
-    run(scope, "LET hash_set = (MAKESET (int_hash_a))");
+    test_run.run("FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET tag = 1))");
+    test_run.run("FN (MAKESET elem :Hashed) -> Module = (MODULE generated = (LET tag = 2))");
+    test_run.run("LET ord_set = (MAKESET (int_ord_a))");
+    test_run.run("LET hash_set = (MAKESET (int_hash_a))");
 
-    let mo = lookup_module(scope, "ord_set");
-    let mh = lookup_module(scope, "hash_set");
+    let mo = lookup_module(scope, "ord_set", &test_run.types);
+    let mh = lookup_module(scope, "hash_set", &test_run.types);
     let to = mo
         .child_scope()
         .bindings()
@@ -262,20 +247,19 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
 #[test]
 fn transparent_ascription_satisfies_signature_bound_slot() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET int_view = (int_ord :! Ordered)");
-    run(
-        scope,
+    test_run.run("LET int_view = (int_ord :! Ordered)");
+    test_run.run(
         "FN (MAKESET elem :Ordered) -> Module = (MODULE generated = (LET sample = (elem.compare)))",
     );
-    run(scope, "LET set_value = (MAKESET int_view)");
+    test_run.run("LET set_value = (MAKESET int_view)");
 
-    let m = lookup_module(scope, "set_value");
+    let m = lookup_module(scope, "set_value", &test_run.types);
     let sample = m
         .child_scope()
         .bindings()
@@ -302,12 +286,13 @@ fn monad_program() -> &'static str {
 #[test]
 fn hk_value_slot_satisfies_after_substitution() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, monad_program());
-    run(scope, "LET view = (id_monad :| Monad)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(monad_program());
+    test_run.run("LET view = (id_monad :| Monad)");
     assert!(
         matches!(
-            lookup_module(scope, "view"),
+            lookup_module(scope, "view", &test_run.types),
             m if m.child_scope().bindings().data().get("pure").is_some()
         ),
         "id_monad must satisfy Monad and bind a view module carrying `pure`",
@@ -320,9 +305,9 @@ fn hk_value_slot_satisfies_after_substitution() {
 #[test]
 fn pure_call_passes_return_check() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, monad_program());
-    let result = run_one(scope, parse_one("id_monad.pure {x = 3.0}"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(monad_program());
+    let result = test_run.run_one(parse_one("id_monad.pure {x = 3.0}"));
     match result {
         KObject::Wrapped { inner, type_id } => {
             assert!(
@@ -341,21 +326,20 @@ fn pure_call_passes_return_check() {
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)",
     );
-    run(scope, "LET int_ord_a = (int_ord :! Ordered)");
-    run(
-        scope,
+    test_run.run("LET int_ord_a = (int_ord :! Ordered)");
+    test_run.run(
         "FN (MAKESET elem :Ordered) -> Module = \
          (MODULE generated = (LET sample = (elem.compare)))",
     );
-    run(scope, "LET set_value = (MAKESET int_ord_a)");
+    test_run.run("LET set_value = (MAKESET int_ord_a)");
 
-    let m = lookup_module(scope, "set_value");
+    let m = lookup_module(scope, "set_value", &test_run.types);
     let sample = m
         .child_scope()
         .bindings()
@@ -372,26 +356,29 @@ fn functor_argument_bare_type_token_auto_wraps() {
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::KKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let src = "NEWTYPE (Type AS Wrapper)\n\
                SIG Monad = ((TYPE (Type AS Wrap)))\n\
                MODULE int_list = ((LET Wrap = Wrapper))\n\
                LET first = (int_list :| Monad)\n\
                LET second = (int_list :| Monad)";
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for expr in exprs {
-        ids.push(runtime.dispatch_in_scope(expr, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(expr, scope));
     }
-    runtime.execute().expect("scheduler should succeed");
+    test_run
+        .runtime
+        .execute()
+        .expect("scheduler should succeed");
     for (i, id) in ids.iter().enumerate() {
-        if let Err(e) = runtime.result_error(*id) {
+        if let Err(e) = test_run.runtime.result_error(*id) {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let a = lookup_module(scope, "first");
-    let b = lookup_module(scope, "second");
+    let a = lookup_module(scope, "first", &test_run.types);
+    let b = lookup_module(scope, "second", &test_run.types);
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
     let is_type_constructor = |kt: &Option<KType>| {
@@ -426,24 +413,24 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 #[test]
 fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     // Plain `LET` plus `LET = FN` so the re-bind walk hits both the `data` write
     // and the `KFunction → functions` mirror.
-    run(
-        scope,
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\
          LET held = (int_ord :| Ordered)",
     );
-    let held = lookup_module(scope, "held");
+    let held = lookup_module(scope, "held", &test_run.types);
 
     // Churn the run-root region, then re-ascribe to allocate a second re-bind
     // scope. The original `held` must still walk through to its own pair.
-    run(scope, "FN (CHURNCALL) -> Number = (1)");
+    test_run.run("FN (CHURNCALL) -> Number = (1)");
     for _ in 0..20 {
-        run_one(scope, parse_one("CHURNCALL"));
+        test_run.run_one(parse_one("CHURNCALL"));
     }
-    run(scope, "LET held2 = (int_ord :| Ordered)");
+    test_run.run("LET held2 = (int_ord :| Ordered)");
 
     let child = held.child_scope();
     let inner = child.bindings().data();

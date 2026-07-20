@@ -322,7 +322,7 @@ mod erased_continuation_tests {
     //! reports UB, not on values.
 
     use super::*;
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::{run_root_storage, CallFrame, FrameStorageExt};
     use crate::machine::model::KObject;
     use crate::scheduler::{Erased, Scheduler};
@@ -337,7 +337,8 @@ mod erased_continuation_tests {
     #[test]
     fn erased_continuation_open_roundtrip() {
         let region = run_root_storage();
-        let scope = default_scope(&region, Box::new(std::io::sink()));
+        let test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
         // The captured value lives in the run region — the ancestor the cart's `outer` chain pins.
         let captured: &KObject = region.brand().alloc_object(KObject::Number(7.0));
         // The cart `Rc` held live to the end of the test witnesses the open below.

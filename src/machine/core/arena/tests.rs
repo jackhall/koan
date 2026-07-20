@@ -3,8 +3,7 @@
 //! — these tests fail when Miri reports UB, not on values.
 
 use super::*;
-use crate::builtins::default_scope;
-use crate::builtins::test_support::{delivered_with_host, run_root_bare};
+use crate::builtins::test_support::{delivered_with_host, run_root_bare, TestRun};
 use crate::machine::core::StoredReach;
 use crate::machine::model::KType;
 use crate::machine::model::Record;
@@ -101,7 +100,8 @@ fn single_owner_exposes_region_and_frameset_members() {
 #[test]
 fn with_scope_opens_child_scope_at_brand() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     // Scalar copy-out: matches `scope_id`.
     let id = frame.with_scope(|s| s.id);
@@ -134,9 +134,10 @@ fn with_scope_relocates_seed_value_into_brand() {
         .alloc_object(KObject::Number(99.0))
         .deep_clone();
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
     frame.with_scope(|child| {
         // `alloc_object_checked` erases the caller-`'a` input and re-homes it at the frame region,
         // so no pre-shortening is needed; a deep-cloned `Number` is always resident-in-self.
@@ -162,7 +163,8 @@ fn with_scope_relocates_seed_value_into_brand() {
 #[test]
 fn call_frame_scope_survives_subsequent_alloc() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let frame = CallFrame::new(scope);
     frame.with_scope(|s| {
         let _new = s.brand().alloc_object(KObject::Number(1.0));
@@ -176,7 +178,8 @@ fn call_frame_scope_survives_subsequent_alloc() {
 #[test]
 fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(scope);
     frame.with_scope(|child| {
         let region_ptr: *const KoanRegion = child.region();
@@ -204,7 +207,8 @@ fn call_frame_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
 #[test]
 fn call_frame_chained_outer_frame_walkable() {
     let region = run_root_storage();
-    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let run_test_run = TestRun::silent(&region);
+    let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     // The returned `Rc<CallFrame>` carries no brand lifetime, so it escapes the open.
     let inner = outer.with_scope(CallFrame::new);
@@ -227,7 +231,8 @@ fn call_frame_chained_outer_frame_walkable() {
 #[test]
 fn builtin_frame_at_top_level_chains_nothing() {
     let region = run_root_storage();
-    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let run_test_run = TestRun::silent(&region);
+    let run_scope = run_test_run.scope;
     assert!(run_scope.parent_frame_pin().is_none());
     let frame = CallFrame::new(run_scope);
     assert!(frame.storage_rc().outer().is_none());
@@ -239,7 +244,8 @@ fn builtin_frame_at_top_level_chains_nothing() {
 #[test]
 fn builtin_frame_under_per_call_parent_chains_region_owner() {
     let region = run_root_storage();
-    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let run_test_run = TestRun::silent(&region);
+    let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     let inner = outer.with_scope(|outer_child| {
         // `outer_child` lives in `outer`'s per-call region, so it derives `Some(outer.storage)`.
@@ -266,7 +272,8 @@ fn builtin_frame_under_per_call_parent_chains_region_owner() {
 #[test]
 fn new_tail_chains_nothing_under_per_call_parent() {
     let region = run_root_storage();
-    let run_scope = default_scope(&region, Box::new(std::io::sink()));
+    let run_test_run = TestRun::silent(&region);
+    let run_scope = run_test_run.scope;
     let outer = CallFrame::new(run_scope);
     let tail = outer.with_scope(CallFrame::new_tail);
     assert!(tail.storage_rc().outer().is_none());
@@ -308,7 +315,7 @@ fn per_call_frame_storage_holds_no_strong_ref_to_run_root() {
     // Build a per-call frame under the run root, then keep only its storage `Rc` — the shape an
     // escaped closure pins. The frame shell and the borrowing scope drop at the block boundary.
     let escapee = {
-        let scope = default_scope(&run_root, Box::new(std::io::sink()));
+        let scope = run_root_bare(&run_root);
         let frame = CallFrame::new(scope);
         frame.storage_rc()
     };
@@ -615,7 +622,8 @@ fn alloc_engine_brand_coexists_with_sibling_alloc() {
 #[test]
 fn reference_only_carrier_survives_producer_shell_drop_under_retention_hold() {
     let outer_region = run_root_storage();
-    let outer_scope = default_scope(&outer_region, Box::new(std::io::sink()));
+    let outer_test_run = TestRun::silent(&outer_region);
+    let outer_scope = outer_test_run.scope;
     let frame: Rc<CallFrame> = CallFrame::new(outer_scope);
 
     // Born reference-only: the active frame is excluded at the alloc site.
@@ -744,7 +752,8 @@ crate::witnessed::reattachable!(RecordCellFamily => (RegionHandle<'r, KoanStorag
 #[test]
 fn multi_region_list_of_closures_survives_frame_free() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     // Two closure homes and two reader frames — four distinct regions, no shared ancestry, each
     // dying on its own — plus the dest the list node lands in.
     let home_a = run_root_storage();
@@ -754,7 +763,7 @@ fn multi_region_list_of_closures_survives_frame_free() {
     let reader_b = run_root_storage();
     let reader_b_scope = run_root_bare(&reader_b);
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope); // the list node lands here.
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     let acc0 = KoanRegion::yoke_branded::<AggBuildFamily, _>(dest_frame.storage_rc(), |region| {
         (region.handle(), Vec::new())
@@ -828,12 +837,13 @@ fn multi_region_list_of_closures_survives_frame_free() {
 #[test]
 fn multi_region_closure_capturing_closures_survives_frame_free() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     // A capturing frame and two capture-target frames — three distinct regions forming a reach tree.
     let frame_outer: Rc<CallFrame> = CallFrame::new(scope);
     let frame_1: Rc<CallFrame> = CallFrame::new(scope);
     let frame_2: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     // Fold the two inner closures into a list carrier over frame_outer's region — its witness derives to
     // {frame_outer, frame_1, frame_2} through the fold, never a hand-assembled union.
@@ -921,12 +931,13 @@ fn multi_region_closure_capturing_closures_survives_frame_free() {
 #[test]
 fn multi_region_record_of_closures_survives_frame_free() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     // Two independent frames whose closures the record's fields reach, plus the dest it lands in.
     let frame_a: Rc<CallFrame> = CallFrame::new(scope);
     let frame_b: Rc<CallFrame> = CallFrame::new(scope);
     let dest_frame: Rc<CallFrame> = CallFrame::new(scope);
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
 
     // Fold each field's closure into a named-cell accumulator over the dest region; the record's witness
     // derives to {dest ∪ frame_a ∪ frame_b} through the fold, never a hand-assembled union.
@@ -997,8 +1008,9 @@ fn multi_region_record_of_closures_survives_frame_free() {
 #[test]
 fn object_field_reach_fold_survives_producer_frame_free() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
-    let types = TypeRegistry::new();
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
 
     // Producer: a closure resident in its own frame's region. A `KFunction` borrows its captured
     // scope, so the pointee is a genuine region borrow — the dangle the fold has to prevent.

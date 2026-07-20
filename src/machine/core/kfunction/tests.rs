@@ -1,6 +1,6 @@
 use super::*;
-use crate::builtins::test_support::{marker, run_root_bare};
-use crate::builtins::{default_scope, register_builtin};
+use crate::builtins::register_builtin;
+use crate::builtins::test_support::{marker, run_root_bare, TestRun};
 use crate::machine::core::{run_root_storage, FrameStorageExt, Scope};
 use crate::machine::model::{Argument, ExpressionSignature, KType, ReturnType};
 use crate::machine::model::{KKind, KObject};
@@ -15,8 +15,11 @@ fn body_any<'a>(ctx: &super::action::BodyCtx<'a, '_>) -> super::action::Action<'
 /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape
 /// match, falling back to any overload registered under the bucket so the
 /// classification check still runs against a real `KFunction` shape.
-fn find_match<'a>(scope: &'a Scope<'a>, expr: &KExpression<'a>) -> Option<&'a KFunction<'a>> {
-    let types = TypeRegistry::new();
+fn find_match<'a>(
+    scope: &'a Scope<'a>,
+    expr: &KExpression<'a>,
+    types: &TypeRegistry,
+) -> Option<&'a KFunction<'a>> {
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
@@ -24,7 +27,7 @@ fn find_match<'a>(scope: &'a Scope<'a>, expr: &KExpression<'a>) -> Option<&'a KF
         if let Some(bucket) = functions.get(&key) {
             if let Some((f, _)) = bucket
                 .iter()
-                .find(|(f, _)| f.signature.matches(expr, &types))
+                .find(|(f, _)| f.signature.matches(expr, types))
             {
                 return Some(*f);
             }
@@ -60,7 +63,7 @@ fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Identifier("someName".into())),
     ]);
-    let f = find_match(scope, &expr).expect("OP <Number> should match");
+    let f = find_match(scope, &expr, &types).expect("OP <Number> should match");
     let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.wrap_indices, vec![1]);
     assert!(pick.ref_name_indices.is_empty());
@@ -99,7 +102,7 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
         Spanned::bare(ExpressionPart::Identifier("myFn".into())),
         Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
     ]);
-    let f = find_match(scope, &expr)
+    let f = find_match(scope, &expr, &types)
         .expect("test overload should match an Identifier-leading expression");
     let pick = f.classify_for_pick(&expr, &types);
     assert!(pick.ref_name_indices.contains(&0));
@@ -110,16 +113,17 @@ fn classify_returns_ref_name_indices_for_non_binder_function() {
 /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
 #[test]
 fn classify_skips_ref_name_indices_for_binder_function() {
-    let types = TypeRegistry::new();
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let types = test_run.types.clone();
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LET".into())),
         Spanned::bare(ExpressionPart::Identifier("x".into())),
         Spanned::bare(ExpressionPart::Keyword("=".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
     ]);
-    let f = find_match(scope, &expr).expect("LET should match");
+    let f = find_match(scope, &expr, &types).expect("LET should match");
     let pick = f.classify_for_pick(&expr, &types);
     assert!(pick.picked_has_binder_name);
     assert!(
@@ -153,7 +157,7 @@ fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("IntOrd".into()))),
     ]);
-    let f = find_match(scope, &expr).expect("OP <ProperType> should match");
+    let f = find_match(scope, &expr, &types).expect("OP <ProperType> should match");
     let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.ref_name_indices, vec![1]);
     assert!(pick.wrap_indices.is_empty());
@@ -212,7 +216,7 @@ fn classify_type_token_in_any_slot_returns_wrap_indices() {
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
         Spanned::bare(ExpressionPart::Type(TypeIdentifier::leaf("Number".into()))),
     ]);
-    let f = find_match(scope, &expr).expect("OP <Any> should match");
+    let f = find_match(scope, &expr, &types).expect("OP <Any> should match");
     let pick = f.classify_for_pick(&expr, &types);
     assert_eq!(pick.wrap_indices, vec![1]);
     assert!(pick.ref_name_indices.is_empty());

@@ -7,63 +7,38 @@
 //! `UnboundName` surface for LET / FN forward references, and the nominal-binder
 //! continued-resolution path.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
+use koan::builtins::test_support::TestRun;
 use koan::machine::model::KObject;
-use koan::machine::model::TypeRegistry;
-use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
+use koan::machine::{run_root_storage, FrameStorage};
 use koan::parse::parse;
 
-/// Scaffolding: spin up a fresh region + default scope, run `source` end-to-end through
-/// the scheduler, and return both the captured PRINT output and the root scope so tests
-/// can assert on bindings post-run.
-fn run<'a>(
-    region: &'a Rc<FrameStorage>,
-    captured: Rc<RefCell<Vec<u8>>>,
-    source: &str,
-) -> &'a Scope<'a> {
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl std::io::Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let scope = default_scope(region, Box::new(SharedBuf(captured)));
+/// Scaffolding: spin up a fresh run inside `region`, run `source` end-to-end through the
+/// scheduler, and hand back the whole run so tests can assert on the root scope's bindings
+/// post-run and render type names against the run's own registry.
+fn run<'a>(region: &'a Rc<FrameStorage>, source: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(source).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
-    runtime.enter_block(scope.id, exprs, scope);
-    let _ = runtime.execute();
-    scope
+    test_run.runtime.enter_block(scope.id, exprs, scope);
+    let _ = test_run.runtime.execute();
+    test_run
 }
 
 /// Run `source`, returning the first errored top-level slot's error (or `None` if every
-/// slot succeeded). Pairs with the new `UnboundName`-surfacing tests below.
+/// slot succeeded). Pairs with the `UnboundName`-surfacing tests below.
 fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     let region = run_root_storage();
-    struct Sink;
-    impl std::io::Write for Sink {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let scope = default_scope(&region, Box::new(Sink));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse(source).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
-    let ids: Vec<_> = runtime.enter_block(scope.id, exprs, scope);
-    if let Err(e) = runtime.execute() {
+    let ids: Vec<_> = test_run.runtime.enter_block(scope.id, exprs, scope);
+    if let Err(e) = test_run.runtime.execute() {
         return Some(e);
     }
     for id in ids {
-        if let Err(e) = runtime.result_error(id) {
+        if let Err(e) = test_run.runtime.result_error(id) {
             return Some(e.clone());
         }
     }
@@ -92,8 +67,7 @@ fn forward_value_let_at_same_level_is_unbound() {
 #[test]
 fn backward_value_let_at_same_level_resolves() {
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&region, captured, "LET z = 1\nLET y = z");
+    let scope = run(&region, "LET z = 1\nLET y = z").scope;
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -116,12 +90,7 @@ fn module_body_forward_value_reference_is_unbound() {
 #[test]
 fn module_body_backward_value_reference_resolves() {
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        &region,
-        captured,
-        "MODULE some_module = ((LET x = 1) (LET y = x))",
-    );
+    let scope = run(&region, "MODULE some_module = ((LET x = 1) (LET y = x))").scope;
     // A module is a value — the `&Module` rides the Object-arm value in `data`.
     let m = match scope.lookup("some_module") {
         Some(KObject::Module(m)) => *m,
@@ -159,15 +128,14 @@ fn multi_name_forward_reference_is_unbound() {
 #[test]
 fn multi_name_backward_reference_resolves() {
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
-        captured,
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET aa = 1\n\
          LET bb = 2\n\
          LET out = (ADD aa BY bb)",
-    );
+    )
+    .scope;
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 2.0));
 }
 
@@ -222,14 +190,13 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
 #[test]
 fn backward_attr_lookup_resolves_after_struct_binding() {
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
-        captured,
         "NEWTYPE Pt = :{x :Number, y :Number}\n\
          LET p = (Pt {x = 7, y = 9})\n\
          LET v = p.x",
-    );
+    )
+    .scope;
     assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -257,8 +224,7 @@ fn forward_let_type_alias_is_unbound() {
 fn backward_let_type_alias_resolves_to_number() {
     use koan::machine::model::KType;
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(&region, captured, "LET Un = Number\nLET Ty = Un");
+    let scope = run(&region, "LET Un = Number\nLET Ty = Un").scope;
     assert!(
         matches!(scope.resolve_type("Ty"), Some(KType::Number)),
         "expected Ty to resolve to Number, got {:?}",
@@ -276,18 +242,12 @@ fn backward_let_type_alias_resolves_to_number() {
 fn let_alias_via_module_qualified_type_resolves() {
     use koan::machine::model::KType;
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        &region,
-        captured,
-        "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty",
-    );
+    let test_run = run(&region, "MODULE mo = ((LET Ty = Number))\nLET MyT = mo.Ty");
+    let scope = test_run.scope;
     assert!(
         matches!(scope.resolve_type("MyT"), Some(KType::Number)),
         "expected MyT to resolve to Number via mo.Ty, got {:?}",
-        scope
-            .resolve_type("MyT")
-            .map(|t| t.name(&TypeRegistry::new())),
+        scope.resolve_type("MyT").map(|t| t.name(&test_run.types)),
     );
 }
 
@@ -297,13 +257,12 @@ fn let_alias_via_module_qualified_type_resolves() {
 #[test]
 fn type_frame_with_module_qualified_element_resolves() {
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
-        captured,
         "MODULE mo = ((LET Ty = Number))\n\
          LET MyList = :(LIST OF mo.Ty)",
-    );
+    )
+    .scope;
     assert!(
         scope.resolve_type("MyList").is_some(),
         "expected MyList to bind via :(LIST OF mo.Ty)",
@@ -316,13 +275,12 @@ fn type_frame_with_module_qualified_element_resolves() {
 fn chained_module_qualified_type_resolves() {
     use koan::machine::model::KType;
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
         &region,
-        captured,
         "MODULE outer = ((MODULE inner = ((LET Ty = Number))))\n\
          LET MyT = outer.inner.Ty",
-    );
+    )
+    .scope;
     assert!(
         matches!(scope.resolve_type("MyT"), Some(KType::Number)),
         "expected MyT to resolve to Number via outer.inner.Ty, got {:?}",
@@ -339,32 +297,23 @@ fn chained_module_qualified_type_resolves() {
 fn producer_error_propagates_to_parked_consumer() {
     use koan::machine::KErrorKind;
     let region = run_root_storage();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl std::io::Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let scope = default_scope(&region, Box::new(SharedBuf(captured.clone())));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse(
         "LET x = (UNDEFINED_FN)\n\
          LET y = (x)",
     )
     .expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("a producer error routes into the slot, not a fatal execute abort");
-    let err = runtime
+    let err = test_run
+        .runtime
         .result_error(ids[0])
         .expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
@@ -372,7 +321,7 @@ fn producer_error_propagates_to_parked_consumer() {
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
     assert!(
-        runtime.result_error(ids[1]).is_err(),
+        test_run.runtime.result_error(ids[1]).is_err(),
         "y must inherit its dependency's error",
     );
 }

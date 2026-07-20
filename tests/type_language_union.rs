@@ -9,34 +9,22 @@
 //!
 //! Companion design: [design/typing/type-language-via-dispatch.md].
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
-use koan::machine::{run_root_storage, FrameStorage, KoanRuntime};
+use koan::builtins::test_support::TestRun;
+use koan::machine::{run_root_storage, FrameStorage};
 use koan::parse::parse;
-
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl std::io::Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 /// Run `src` to completion, returning everything it PRINTed.
 fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(Rc::clone(&captured))));
+    let (mut test_run, captured) = TestRun::with_buf(region);
+    let scope = test_run.scope;
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("scheduler should run to completion");
     let bytes = captured.borrow().clone();
@@ -45,19 +33,19 @@ fn run_capture(region: &Rc<FrameStorage>, src: &str) -> String {
 
 /// Run `src`, expecting the last top-level slot to be a slot-terminal error; returns its text.
 fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(captured)));
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let last = *ids.last().expect("at least one expression");
-    match runtime.result_error(last) {
+    match test_run.runtime.result_error(last) {
         Ok(()) => panic!("expected a slot error, got success"),
         Err(e) => e.to_string(),
     }

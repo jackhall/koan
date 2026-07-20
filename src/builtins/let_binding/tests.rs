@@ -1,6 +1,5 @@
-use crate::builtins::default_scope;
-use crate::machine::model::{KObject, KType, TypeRegistry};
-use crate::machine::KoanRuntime;
+use crate::builtins::test_support::TestRun;
+use crate::machine::model::{KObject, KType};
 
 #[test]
 fn binder_name_extracts_let_name() {
@@ -15,13 +14,13 @@ fn binder_name_extracts_let_name() {
 /// before the body runs; `bind_value` clears it on finalize.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::run_root_storage;
-    use crate::machine::KoanRuntime;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = parse("LET hello = 1").unwrap();
     for e in exprs {
         runtime.dispatch_in_scope(e, scope);
@@ -36,20 +35,20 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 /// consumer surfaces `UnboundName` rather than self-parking on a cycle.
 #[test]
 fn let_t_cycle_errors() {
-    use crate::builtins::default_scope;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
-    use crate::machine::KoanRuntime;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = parse("LET Ty = Ty").unwrap();
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
     let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         // The bare-leaf RHS resolves through the memoized type-expr bridge, whose miss
@@ -74,14 +73,15 @@ fn let_type_class_with_non_type_value_errors() {
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let region = run_root_storage();
-        let scope = default_scope(&region, Box::new(std::io::sink()));
-        let mut runtime = KoanRuntime::new();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let runtime = &mut test_run.runtime;
         let exprs = parse(src).unwrap();
         let id = runtime.dispatch_in_scope(exprs.into_iter().next().unwrap(), scope);
         runtime
             .execute()
             .expect("execute does not surface per-slot errors");
-        let types = TypeRegistry::new();
+        let types = test_run.types.clone();
         match runtime.read_result_with(id, |v| format!("{:?}", v.ktype(&types))) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
@@ -101,8 +101,9 @@ fn let_type_class_with_type_value_still_binds() {
     use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = parse("LET Foo = Number").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
@@ -126,8 +127,9 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::machine::run_root_storage;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = parse("LET foo = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
@@ -155,8 +157,9 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     use crate::machine::KErrorKind;
     use crate::parse::parse;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
@@ -165,7 +168,7 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     runtime
         .execute()
         .expect("execute does not surface per-slot errors");
-    let types = TypeRegistry::new();
+    let types = test_run.types.clone();
     let res = runtime.read_result_with(ids[0], |v| format!("{:?}", v.ktype(&types)));
     match res {
         Err(e) => assert!(
@@ -181,13 +184,13 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 /// fresh one from the alias name.
 #[test]
 fn let_aliases_struct_preserves_type_identity() {
-    use crate::builtins::test_support::run;
+    use crate::builtins::test_support::TestRun;
     use crate::machine::model::KType;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "NEWTYPE Point = :{x :Number, y :Number}\n\
          LET Pt = Point",
     );
@@ -208,12 +211,13 @@ fn let_aliases_struct_preserves_type_identity() {
 /// `LET Carrier = Number` and module-alias forms keep working inside SIG bodies.
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
-    use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::KErrorKind;
     use crate::machine::{run_root_storage, FrameStorageExt};
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let _err = test_run.run_one_err(parse_one("SIG Bad = (LET compare = 0)"));
     assert!(
         scope.bindings().data().get("Bad").is_none(),
         "SIG with lowercase-LET in body must not bind",
@@ -226,7 +230,7 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
         scope,
         "SyntheticForTest".to_string(),
     ));
-    let err = run_one_err(sig_scope, parse_one("LET compare = 0"));
+    let err = test_run.run_one_err_in(sig_scope, parse_one("LET compare = 0"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -243,15 +247,12 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
 /// holds a callable.
 #[test]
 fn let_type_class_with_plain_function_rejects() {
-    use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("LET Plain = (FN (PP x :Number) -> Number = (x))"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("LET Plain = (FN (PP x :Number) -> Number = (x))"));
     match &err.kind {
         KErrorKind::TypeClassBindingExpectsType { name, .. } => {
             assert_eq!(name, "Plain", "binder name should surface in diagnostic");
@@ -267,14 +268,12 @@ fn let_type_class_with_plain_function_rejects() {
 /// SIG body means manifest; abstract members use `TYPE` (which has no RHS).
 #[test]
 fn let_type_class_in_sig_body_binds_manifest() {
-    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG WithTag = ((LET Tag = Number) (VAL zero :Number))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG WithTag = ((LET Tag = Number) (VAL zero :Number))");
     let content = match scope.resolve_type("WithTag") {
         Some(KType::Signature { content, .. }) => content,
         other => panic!("WithTag should be a Signature KType, got {:?}", other),
@@ -297,14 +296,12 @@ fn let_type_class_in_sig_body_binds_manifest() {
 /// aliases, with no separate signature-only install branch.
 #[test]
 fn let_type_class_signature_alias_preserves_identity() {
-    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG Ordered = (VAL compare :Number)\nLET Po = Ordered",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG Ordered = (VAL compare :Number)\nLET Po = Ordered");
     let original = scope.resolve_type("Ordered").expect("Ordered type binding");
     let aliased = scope.resolve_type("Po").expect("Po type binding");
     assert!(
@@ -324,17 +321,16 @@ fn let_type_class_signature_alias_preserves_identity() {
 /// spelling for one — whatever RHS produced it. The diagnostic names the snake_case respelling.
 #[test]
 fn let_type_class_lhs_with_module_rhs_rejects() {
-    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = ((LET compare = 7))",
     );
-    let err = run_one_err(scope, parse_one("LET IntOrdView = (int_ord :! Ordered)"));
+    let err = test_run.run_one_err(parse_one("LET IntOrdView = (int_ord :! Ordered)"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -355,13 +351,13 @@ fn let_type_class_lhs_with_module_rhs_rejects() {
 /// `KType::Signature` on separate arms.
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
-    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, TestRun};
     use crate::machine::run_root_storage;
     use crate::machine::KErrorKind;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "SIG Ordered = (VAL compare :Number)");
-    let err = run_one_err(scope, parse_one("LET sig_alias = Ordered"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("SIG Ordered = (VAL compare :Number)");
+    let err = test_run.run_one_err(parse_one("LET sig_alias = Ordered"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -377,12 +373,12 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
 /// other object value. The cross-kind exclusion means exactly one map holds the name.
 #[test]
 fn let_value_class_with_module_rhs_binds_value_side() {
-    use crate::builtins::test_support::{binds_module, run, run_root_silent};
+    use crate::builtins::test_support::{binds_module, TestRun};
     use crate::machine::run_root_storage;
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord = (LET compare = 7)\n\
          LET view = (int_ord :! Ordered)",

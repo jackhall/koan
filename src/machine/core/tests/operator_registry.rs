@@ -8,8 +8,7 @@
 
 use std::collections::HashSet;
 
-use crate::builtins::default_scope;
-use crate::builtins::test_support::run_root_bare;
+use crate::builtins::test_support::{run_root_bare, TestRun};
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, Scope};
 use crate::machine::model::{probe_key, OperatorGroup, ReductionMode};
 
@@ -146,7 +145,8 @@ fn covers_gates_subset_membership() {
 #[test]
 fn inner_registration_of_a_builtin_probe_wins_inside_and_not_outside() {
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&region);
+    let root = test_run.scope;
     let inner = region.brand().alloc_scope(root.child_for_call());
 
     let group = region

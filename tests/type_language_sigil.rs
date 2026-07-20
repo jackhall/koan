@@ -13,53 +13,43 @@
 //!
 //! Companion design: [design/typing/type-language-via-dispatch.md].
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
-use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet, TypeRegistry};
-use koan::machine::{run_root_storage, FrameStorage, KoanRuntime, Scope};
+use koan::builtins::test_support::TestRun;
+use koan::machine::model::{KKind, KObject, KType, ProjectedSchema, RecursiveSet};
+use koan::machine::{run_root_storage, FrameStorage, Scope};
 use koan::parse::parse;
 
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl std::io::Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> &'a Scope<'a> {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(captured)));
+/// Run `src` to completion and hand back the whole run — the seeded scope tests assert
+/// bindings on, plus the run frame's registry that type names render against.
+fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("scheduler should run to completion");
-    scope
+    test_run
 }
 
 fn run_expect_err(region: &Rc<FrameStorage>, src: &str) -> String {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(captured)));
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let ids: Vec<_> = exprs
         .into_iter()
-        .map(|e| runtime.dispatch_in_scope(e, scope))
+        .map(|e| test_run.runtime.dispatch_in_scope(e, scope))
         .collect();
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("a dispatch failure is slot-terminal, not a fatal execute error");
     let last = *ids.last().expect("at least one expression");
-    match runtime.result_error(last) {
+    match test_run.runtime.result_error(last) {
         Ok(()) => panic!("expected scheduler error, got success"),
         Err(e) => e.to_string(),
     }
@@ -91,8 +81,8 @@ fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> 
 #[test]
 fn sigil_list_of_lowers_to_list_carrier() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Holder = ((VAL items :(LIST OF Number)))");
-    let items_kt = lookup_sig_value_kt(scope, "Holder", "items");
+    let test_run = run(&region, "SIG Holder = ((VAL items :(LIST OF Number)))");
+    let items_kt = lookup_sig_value_kt(test_run.scope, "Holder", "items");
     match items_kt {
         KType::List { element: elem, .. } => assert_eq!(*elem, KType::Number),
         other => panic!("items must be KType::List(Number), got {other:?}"),
@@ -118,8 +108,8 @@ fn sigil_list_of_missing_of_keyword_errors() {
 #[test]
 fn sigil_map_lowers_to_dict_carrier() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Holder = ((VAL table :(MAP Str -> Number)))");
-    let table_kt = lookup_sig_value_kt(scope, "Holder", "table");
+    let test_run = run(&region, "SIG Holder = ((VAL table :(MAP Str -> Number)))");
+    let table_kt = lookup_sig_value_kt(test_run.scope, "Holder", "table");
     match table_kt {
         KType::Dict {
             key: k, value: v, ..
@@ -138,11 +128,11 @@ fn sigil_map_lowers_to_dict_carrier() {
 #[test]
 fn sigil_fn_lowers_to_kfunction_named() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Holder = ((VAL compare :(FN (x :Number, y :Str) -> Bool)))",
     );
-    let cmp = lookup_sig_value_kt(scope, "Holder", "compare");
+    let cmp = lookup_sig_value_kt(test_run.scope, "Holder", "compare");
     match cmp {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 2);
@@ -158,8 +148,8 @@ fn sigil_fn_lowers_to_kfunction_named() {
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let region = run_root_storage();
-    let scope = run(&region, "SIG Holder = ((VAL gen :(FN () -> Number)))");
-    let gen = lookup_sig_value_kt(scope, "Holder", "gen");
+    let test_run = run(&region, "SIG Holder = ((VAL gen :(FN () -> Number)))");
+    let gen = lookup_sig_value_kt(test_run.scope, "Holder", "gen");
     match gen {
         KType::KFunction { params, ret, .. } => {
             assert!(params.is_empty());
@@ -175,11 +165,11 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
 #[test]
 fn sigil_fn_type_param_and_module_return_lowers_to_kfunction() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Holder = ((VAL mk :(FN (Ty :Signature) -> Module)))",
     );
-    let mk = lookup_sig_value_kt(scope, "Holder", "mk");
+    let mk = lookup_sig_value_kt(test_run.scope, "Holder", "mk");
     match mk {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 1);
@@ -220,11 +210,11 @@ fn sigil_functor_is_unbound() {
 #[test]
 fn newtype_record_field_accepts_keyworded_list_of_sigil() {
     let region = run_root_storage();
-    let scope = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
+    let test_run = run(&region, "NEWTYPE Foo = :{xs :(LIST OF Number)}");
     // NEWTYPE is type-only — its record repr rides the sealed `SetRef` member in `types`.
-    let fields = match scope.resolve_type("Foo") {
+    let fields = match test_run.scope.resolve_type("Foo") {
         Some(KType::SetRef { set, index }) => {
-            match RecursiveSet::projected_schema(set, *index, &TypeRegistry::new()) {
+            match RecursiveSet::projected_schema(set, *index, &test_run.types) {
                 ProjectedSchema::NewType(KType::Record { fields, .. }) => fields,
                 _ => panic!("Foo must project a record-repr NewType schema"),
             }
@@ -245,18 +235,18 @@ fn newtype_record_field_accepts_keyworded_list_of_sigil() {
 #[test]
 fn union_field_accepts_keyworded_map_sigil() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "UNION Maybe = (Some :(MAP Str -> Number), None :Null)",
     );
     // UNION is type-only — it binds an anonymous union of per-variant newtypes; the `Some`
     // variant's newtype repr is the keyworded `MAP` sigil that sub-Dispatched.
-    let some_repr = match scope.resolve_type("Maybe") {
+    let some_repr = match test_run.scope.resolve_type("Maybe") {
         Some(KType::Union { members, .. }) => members
             .iter()
             .find_map(|m| match m {
                 KType::SetRef { set, index } if set.member(*index).name == "Some" => {
-                    match RecursiveSet::projected_schema(set, *index, &TypeRegistry::new()) {
+                    match RecursiveSet::projected_schema(set, *index, &test_run.types) {
                         ProjectedSchema::NewType(repr) => Some(repr),
                         _ => None,
                     }
@@ -295,12 +285,12 @@ fn union_field_accepts_keyworded_map_sigil() {
 #[test]
 fn sigil_fn_forward_reference_defers_via_combine() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Outer = ((VAL mk :(FN (Ty :Ordered) -> Module)))\n\
          SIG Ordered = (VAL compare :Number)",
     );
-    let mk = lookup_sig_value_kt(scope, "Outer", "mk");
+    let mk = lookup_sig_value_kt(test_run.scope, "Outer", "mk");
     match mk {
         KType::KFunction { params, ret, .. } => {
             assert_eq!(params.len(), 1);
@@ -309,7 +299,7 @@ fn sigil_fn_forward_reference_defers_via_combine() {
             // forward reference resolved through the deferral path.
             let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                ty.name(&TypeRegistry::new()).contains("Ordered")
+                ty.name(&test_run.types).contains("Ordered")
                     || *ty == KType::OfKind(KKind::Signature),
                 "param `Ty` should carry Ordered identity, got {ty:?}",
             );
@@ -326,7 +316,7 @@ fn sigil_fn_forward_reference_defers_via_combine() {
 #[test]
 fn user_functor_application_through_dispatch() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
@@ -338,7 +328,7 @@ fn user_functor_application_through_dispatch() {
     // `my_set` is a module bound under a Type-classed name — a module is a value, so it binds
     // on the value channel.
     assert!(
-        matches!(scope.lookup("my_set"), Some(KObject::Module(_))),
+        matches!(test_run.scope.lookup("my_set"), Some(KObject::Module(_))),
         "my_set must bind the produced module value",
     );
 }

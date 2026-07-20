@@ -8,11 +8,9 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use super::NodeFinalize;
-use crate::builtins::default_scope;
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_bare, run_root_silent};
+use crate::builtins::test_support::{parse_one, run_root_bare, TestRun};
 use crate::machine::core::{run_root_storage, CarrierWitness, FrameStorage};
 use crate::machine::core::{Action, BodyCtx};
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::{Carried, KObject, TypeRegistry};
 use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::CallFrame;
@@ -47,7 +45,8 @@ fn resident_scalar(
 #[test]
 fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
@@ -60,8 +59,8 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
         "the carrier pins nothing — liveness is retention's"
     );
 
-    let runtime = KoanRuntime::new();
-    let sealed = runtime
+    let sealed = test_run
+        .runtime
         .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     // The retention seed: the producer's storage rides the envelope, exactly as the run loop hands
@@ -77,7 +76,7 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
         Carried::Object(KObject::Number(n)) => assert_eq!(*n, 7.0, "value rides the hold"),
         other => panic!(
             "expected the retained Number, got {:?}",
-            other.ktype(&TypeRegistry::new())
+            other.ktype(&test_run.types)
         ),
     });
     drop(envelope);
@@ -93,7 +92,8 @@ fn region_pure_scalar_rides_retention_and_releases_at_hold_drop() {
 #[test]
 fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, true);
@@ -102,8 +102,8 @@ fn home_borrowing_value_keeps_its_bit_and_rides_retention() {
         "the home-borrow bit rides the carrier"
     );
 
-    let runtime = KoanRuntime::new();
-    let sealed = runtime
+    let sealed = test_run
+        .runtime
         .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     assert!(
@@ -142,13 +142,14 @@ fn probe_body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     ))
 }
 
-/// Register `(PROBE)` — a nullary keyword builtin returning `Number` — into `scope`.
-fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>) {
+/// Register `(PROBE)` — a nullary keyword builtin returning `Number` — into `scope`, against the
+/// run's own registry.
+fn register_probe<'a>(scope: &'a crate::machine::Scope<'a>, types: &TypeRegistry) {
     let signature = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
         elements: vec![SignatureElement::Keyword("PROBE".into())],
     };
-    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, &TypeRegistry::new());
+    crate::builtins::register_builtin(scope, "PROBE", signature, probe_body, types);
 }
 
 /// The number of captured frames still live — the retention census read.
@@ -169,11 +170,15 @@ fn live_frames() -> usize {
 fn user_fn_call_releases_callee_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    register_probe(scope);
-    run(scope, "FN (GETONE) -> Number = (PROBE)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    register_probe(scope, &test_run.types);
+    test_run.run("FN (GETONE) -> Number = (PROBE)");
 
-    let result = run_one(scope, parse_one("GETONE"));
+    let result = test_run.run_one(parse_one("GETONE"));
+    // The census reads frame *retention*, so release the drained slots that still hold their
+    // terminals' producer frames; only a frame outliving the scheduler would survive this.
+    test_run.reset_slots();
     assert!(
         matches!(result, KObject::Number(n) if *n == 1.0),
         "GETONE returns the probe's scalar"
@@ -194,15 +199,16 @@ fn user_fn_call_releases_callee_frame() {
 fn aggregate_of_call_results_releases_every_producer_frame() {
     FRAME_CENSUS.with(|census| census.borrow_mut().clear());
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    register_probe(scope);
-    run(scope, "FN (GETONE) -> Number = (PROBE)");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    register_probe(scope, &test_run.types);
+    test_run.run("FN (GETONE) -> Number = (PROBE)");
 
     let calls = vec!["(GETONE)"; 100].join(" ");
-    run(scope, &format!("LET results = [{calls}]"));
+    test_run.run(&format!("LET results = [{calls}]"));
 
     // The aggregate is live and complete...
-    let results = run_one(scope, parse_one("results"));
+    let results = test_run.run_one(parse_one("results"));
     match results {
         KObject::List(items, _) => assert_eq!(items.len(), 100, "all 100 results retained"),
         other => panic!("expected a 100-element List, got {:?}", other.ktype()),
@@ -224,12 +230,13 @@ fn aggregate_of_call_results_releases_every_producer_frame() {
 #[test]
 fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
     let (carrier, weak) = resident_scalar(&producer, false);
-    let runtime = KoanRuntime::new();
-    let sealed = runtime
+    let sealed = test_run
+        .runtime
         .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     let cell = Delivered::seal(sealed, producer.storage_rc());
@@ -257,7 +264,7 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
         }
         other => panic!(
             "expected the adopted Number, got {:?}",
-            other.ktype(&TypeRegistry::new())
+            other.ktype(&test_run.types)
         ),
     }
 }
@@ -269,7 +276,8 @@ fn adopt_sealed_object_rides_retention_across_producer_shell_drop() {
 #[test]
 fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let root = run_root_storage();
-    let scope = default_scope(&root, Box::new(std::io::sink()));
+    let test_run = TestRun::silent(&root);
+    let scope = test_run.scope;
     let producer = CallFrame::new(scope);
 
     let (carrier, birth_addr) = producer.with_scope(|child| {
@@ -286,8 +294,8 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
     let storage = producer.storage_rc();
     let count_before = Rc::strong_count(&storage);
 
-    let runtime = KoanRuntime::new();
-    let sealed = runtime
+    let sealed = test_run
+        .runtime
         .finalize_terminal(Delivered::seal(carrier, producer.storage_rc()), None)
         .expect("no declared return, no error");
     assert_eq!(
@@ -318,7 +326,7 @@ fn done_passthrough_rides_by_reference_without_clone_or_refcount() {
         }
         Carried::Type(other) => panic!(
             "expected the passed-through Number, got {}",
-            other.name(&TypeRegistry::new())
+            other.name(&test_run.types)
         ),
         Carried::UnresolvedType(ti) => {
             panic!("expected the passed-through Number, got {}", ti.render())

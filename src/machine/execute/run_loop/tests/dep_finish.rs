@@ -1,12 +1,11 @@
 //! combine, defer_to, and tail-call slot reuse.
 
 use super::super::super::outcome::Outcome;
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::execute::KoanRuntime;
 use crate::machine::model::KExpression;
 use crate::machine::model::ReturnType;
-use crate::machine::model::{Carried, KObject, TypeRegistry};
+use crate::machine::model::{Carried, KObject};
 
 use super::let_expr;
 
@@ -16,8 +15,9 @@ fn dep_finish_waits_on_deps_then_runs_finish() {
     // finish-returned Outcome::Done(Value) lands in the slot's result.
     use crate::machine::execute::TerminalDepFinish;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let dep_a = runtime.dispatch_in_scope(let_expr("ca", 7.0), scope);
     let dep_b = runtime.dispatch_in_scope(let_expr("cb", 11.0), scope);
     let finish: TerminalDepFinish = Box::new(|_sched, terminals| {
@@ -65,8 +65,9 @@ fn dep_finish_short_circuits_on_dep_error() {
     use std::cell::Cell;
     use std::rc::Rc;
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let runtime = &mut test_run.runtime;
 
     // Allocate two placeholder Dispatch slots, drain the queue so execute()
     // doesn't revisit them, then overwrite their results directly.
@@ -118,7 +119,7 @@ fn dep_finish_short_circuits_on_dep_error() {
 fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     // Pins the binder-body wrap-up shape MODULE / SIG use: an `Action::AwaitDeps` body parks the
     // slot as a dep-finish and leaves it with the dep-finish's terminal.
-    use crate::builtins::{default_scope, register_builtin};
+    use crate::builtins::register_builtin;
     use crate::machine::core::{Action, AwaitContinue, BodyCtx};
     use crate::machine::model::Carried;
     use crate::machine::model::ExpressionPart;
@@ -139,7 +140,8 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
     }
 
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(std::io::sink()));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     register_builtin(
         scope,
         "DEFERTEST",
@@ -148,10 +150,10 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
             elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
         },
         body,
-        &TypeRegistry::new(),
+        &test_run.types,
     );
 
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
         KExpression::new(vec![crate::source::Spanned::bare(ExpressionPart::Keyword(
             "DEFERTEST".into(),
@@ -175,8 +177,9 @@ fn tail_call_reuses_node_slot_in_place() {
     // Pins that an `Outcome::Continue` tail rewrites the caller's slot in place rather
     // than spawning a fresh one (verified via runtime.len() == 1 below).
     let region = run_root_storage();
-    let root = default_scope(&region, Box::new(std::io::sink()));
-    let mut runtime = KoanRuntime::new();
+    let mut test_run = TestRun::silent(&region);
+    let root = test_run.scope;
+    let runtime = &mut test_run.runtime;
     let exprs = crate::parse::parse("MATCH true -> :Str WITH (true -> (\"hi\") false -> (\"no\"))")
         .expect("parse should succeed");
     assert_eq!(exprs.len(), 1);

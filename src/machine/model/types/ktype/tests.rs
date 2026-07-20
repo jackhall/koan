@@ -1,6 +1,6 @@
 use super::super::recursive_set::{NominalMember, NominalSchema};
 use super::*;
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::{Module, TypeRegistry};
 
@@ -373,14 +373,14 @@ fn set_ref_name_renders_member_name() {
 fn abstract_type_identity_keys_on_full_content() {
     let storage = run_root_storage();
     // Each `:|` allocates its own child scope, so the two views carry distinct `ScopeId`s.
-    let first = storage.brand().alloc_module(Module::new(
-        "View".into(),
-        default_scope(&storage, Box::new(std::io::sink())),
-    ));
-    let second = storage.brand().alloc_module(Module::new(
-        "View".into(),
-        default_scope(&storage, Box::new(std::io::sink())),
-    ));
+    let first_run = TestRun::silent(&storage);
+    let second_run = TestRun::silent(&storage);
+    let first = storage
+        .brand()
+        .alloc_module(Module::new("View".into(), first_run.scope));
+    let second = storage
+        .brand()
+        .alloc_module(Module::new("View".into(), second_run.scope));
     assert_ne!(first.scope_id(), second.scope_id());
 
     // The declaring SIG's binder is shared; the per-application nonce is what separates the views.

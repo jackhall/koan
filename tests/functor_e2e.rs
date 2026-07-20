@@ -17,41 +17,29 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType, SignatureElement, TypeRegistry};
-use koan::machine::{run_root_storage, FrameStorage, KFunction, KoanRuntime, Scope};
+use koan::builtins::test_support::{SharedBuf, TestRun};
+use koan::machine::model::{KObject, KType, SignatureElement};
+use koan::machine::{run_root_storage, FrameStorage, KFunction, Scope};
 use koan::parse::parse;
 
-/// Shared `Write` adapter — every test here drops PRINT output (the smoke
-/// asserts on bindings, not stdout). Local copy avoids depending on the
-/// `koan::builtins::test_support` module, which is `pub(crate)`.
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl std::io::Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> &'a Scope<'a> {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(region, Box::new(SharedBuf(captured)));
+/// Run `src` to completion and hand back the whole run — the seeded scope the assertions
+/// read bindings from, plus the run frame's registry type names render against.
+fn run<'a>(region: &'a Rc<FrameStorage>, src: &str) -> TestRun<'a> {
+    let mut test_run = TestRun::silent(region);
+    let scope = test_run.scope;
     let exprs = parse(src).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     for e in exprs {
-        runtime.dispatch_in_scope(e, scope);
+        test_run.runtime.dispatch_in_scope(e, scope);
     }
-    runtime
+    test_run
+        .runtime
         .execute()
         .expect("scheduler should run to completion");
-    scope
+    test_run
 }
 
 /// Walk the dispatch table for an FN overload whose first keyword matches `keyword`.
-/// Inline copy of `builtins::test_support::lookup_fn` (which is `pub(crate)`); the
+/// Inline copy of `builtins::test_support::lookup_fn` (which is `#[cfg(test)]`-gated); the
 /// integration crate sees neither the helper nor the raw `Bindings::functions` view
 /// (gated `#[cfg(test)]`), so we go through the public `Bindings::iter_functions`
 /// value-yielding iterator.
@@ -83,7 +71,7 @@ fn functor_e2e_makeset_produces_module() {
     // module/signature carrier never rides a value-classified alias; the dispatch admission
     // then consults `compatible_sigs` at the signature-typed slot, so no parens-wrap or
     // ascription-view workaround is required at the call site.
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
@@ -92,6 +80,7 @@ fn functor_e2e_makeset_produces_module() {
             (MODULE generated = ((LET tag = 0)))\n\
          LET int_set = (MAKESET int_ord)",
     );
+    let scope = test_run.scope;
     // `MAKESET` registered as a KFunction in the dispatch table (FN writes to `functions`,
     // not `data`), and its `ktype()` is an ordinary function type.
     let makeset = lookup_fn(scope, "MAKESET");
@@ -120,7 +109,7 @@ fn functor_e2e_makeset_produces_module() {
     // The module value's `ktype()` is its principal signature, whose name renders as the
     // module path — the type a `:Signature` slot matches it against.
     assert_eq!(
-        KObject::Module(m).ktype().name(&TypeRegistry::new()),
+        KObject::Module(m).ktype().name(&test_run.types),
         m.path,
         "a module value is typed by its self-sig",
     );
@@ -133,12 +122,13 @@ fn functor_e2e_makeset_produces_module() {
 #[test]
 fn let_bound_fn_applied_by_named_args_yields_module() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "LET apply_it = (FN (APPLYIT x :Number) -> Module = \
             (MODULE inner = ((LET tag = x))))\n\
          LET got = (apply_it {x = 5})",
     );
+    let scope = test_run.scope;
     assert!(
         matches!(scope.lookup("apply_it"), Some(KObject::KFunction(_))),
         "apply_it binds value-side as a KFunction",
@@ -188,7 +178,7 @@ fn run_expect_err(src: &str) -> String {
 #[test]
 fn signature_param_satisfied_via_named_args() {
     let region = run_root_storage();
-    let scope = run(
+    let test_run = run(
         &region,
         "SIG Ordered = (VAL compare :Number)\n\
          MODULE int_ord_base = ((LET compare = 7))\n\
@@ -197,6 +187,7 @@ fn signature_param_satisfied_via_named_args() {
             (MODULE inner = ((LET tag = 0))))\n\
          LET got = (make_set {base = int_ord})",
     );
+    let scope = test_run.scope;
     let m = match scope.lookup("got") {
         Some(KObject::Module(module)) => *module,
         _ => panic!("got should be the module value produced by applying make_set"),

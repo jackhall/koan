@@ -4,36 +4,10 @@
 //! nominal-binder placeholder (cache `Parked`, splice walk installs combined
 //! park, slot commits on wake).
 
-use std::cell::RefCell;
-use std::io::Write;
-use std::rc::Rc;
-
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::run_root_storage;
-use crate::machine::execute::KoanRuntime;
 use crate::machine::KErrorKind;
 use crate::parse::parse;
-
-struct Sink;
-impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
 /// Self-reference `LET Ty = Ty`: the consumer sees its own placeholder as
 /// hidden under index-gating (same idx, LET binders aren't nominal), so the
@@ -43,9 +17,10 @@ impl Write for SharedBuf {
 #[test]
 fn self_referential_let_surfaces_unbound_name() {
     let region = run_root_storage();
-    let scope = default_scope(&region, Box::new(Sink));
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
     let ids = runtime.enter_block(scope.id, exprs, scope);
     runtime
         .execute()
@@ -66,8 +41,8 @@ fn self_referential_let_surfaces_unbound_name() {
 #[test]
 fn forward_reference_parks_then_resolves_on_wake() {
     let region = run_root_storage();
-    let buf: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = default_scope(&region, Box::new(SharedBuf(Rc::clone(&buf))));
+    let (mut test_run, buf) = TestRun::with_buf(&region);
+    let scope = test_run.scope;
     // STRUCT (like MODULE) is a nominal binder, so the placeholder is visible
     // to the forward reference and parks rather than reading as Unbound.
     let exprs = parse(
@@ -76,7 +51,7 @@ fn forward_reference_parks_then_resolves_on_wake() {
          PRINT Fwd",
     )
     .expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
+    let runtime = &mut test_run.runtime;
     runtime.enter_block(scope.id, exprs, scope);
     runtime
         .execute()

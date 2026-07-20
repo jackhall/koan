@@ -86,8 +86,17 @@ use super::sig_subtype as relation;
 /// Run the relation and unbox the failure so `matches!` can name the variant directly.
 #[allow(clippy::result_large_err)] // test ergonomics: unbox so assertions name the variant
 fn check(sub: &SigSchema, sup: &SigSchema) -> Result<(), SigSubtypeFailure> {
-    let types = TypeRegistry::new();
-    relation(sub, sup, &types).map_err(|e| *e)
+    check_with(sub, sup, &TypeRegistry::new())
+}
+
+/// [`check`] against a caller-supplied registry — what a test holding a seeded run's registry
+/// uses, so the relation walk memoizes into the same store the run answers from.
+fn check_with(
+    sub: &SigSchema,
+    sup: &SigSchema,
+    types: &TypeRegistry,
+) -> Result<(), SigSubtypeFailure> {
+    relation(sub, sup, types).map_err(|e| *e)
 }
 
 // --- width ----------------------------------------------------------------------------
@@ -381,12 +390,13 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
 
 #[test]
 fn pin_converts_abstract_to_manifest_via_parsed_sig() {
-    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
 
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG Pinnable = ((TYPE Elt) (VAL v :Number))");
     let s = match scope.resolve_type("Pinnable") {
         Some(KType::Signature { content, .. }) => content,
         _ => panic!("Pinnable should resolve to a signature"),
@@ -403,7 +413,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
         vec![("v", KType::Number)],
     );
     assert!(matches!(
-        check(&elt_str, &pinned),
+        check_with(&elt_str, &pinned, &test_run.types),
         Err(SigSubtypeFailure::ManifestMismatch { .. })
     ));
     let elt_number = schema(
@@ -412,18 +422,18 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
         vec![("Elt", KType::Number)],
         vec![("v", KType::Number)],
     );
-    assert!(check(&elt_number, &pinned).is_ok());
+    assert!(check_with(&elt_number, &pinned, &test_run.types).is_ok());
 }
 
 #[test]
 fn sig_to_sig_entailment_over_shared_abstract() {
-    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::builtins::test_support::TestRun;
     use crate::machine::core::run_root_storage;
 
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG Alpha = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))\n\
          SIG Beta = ((TYPE Elem) (VAL compare :(FN (x :Elem) -> Number)))",
     );
@@ -437,8 +447,18 @@ fn sig_to_sig_entailment_over_shared_abstract() {
     };
     // Two SIGs declaring the same abstract member and slot entail each other: the
     // substitution maps each super `Type` ref onto the sub's own abstract identity.
-    assert!(check(&a.schema.with_pins(&[]), &b.schema.with_pins(&[])).is_ok());
-    assert!(check(&b.schema.with_pins(&[]), &a.schema.with_pins(&[])).is_ok());
+    assert!(check_with(
+        &a.schema.with_pins(&[]),
+        &b.schema.with_pins(&[]),
+        &test_run.types
+    )
+    .is_ok());
+    assert!(check_with(
+        &b.schema.with_pins(&[]),
+        &a.schema.with_pins(&[]),
+        &test_run.types
+    )
+    .is_ok());
 }
 
 // --- substitute_sig_members units -----------------------------------------------------

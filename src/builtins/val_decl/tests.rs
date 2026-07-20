@@ -1,4 +1,4 @@
-use crate::builtins::test_support::{binds_module, parse_one, run, run_one_err, run_root_silent};
+use crate::builtins::test_support::{binds_module, parse_one, TestRun};
 use crate::machine::model::KType;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
@@ -8,8 +8,9 @@ use crate::machine::KErrorKind;
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "SIG Ordered = ((VAL zero :Number))");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG Ordered = ((VAL zero :Number))");
     let content = match scope.resolve_type("Ordered") {
         Some(KType::Signature { content, .. }) => content,
         _ => panic!("Ordered must bind a Signature KType"),
@@ -29,8 +30,9 @@ fn val_inside_sig_binds_typeexpr_carrier() {
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let content = match scope.resolve_type("WithZero") {
         Some(KType::Signature { content, .. }) => content,
         _ => panic!("WithZero must bind a Signature KType"),
@@ -58,11 +60,9 @@ fn val_resolves_sig_local_type_shadow() {
 #[test]
 fn duplicate_val_slot_name_is_rebind() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(
-        scope,
-        parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    let err = test_run.run_one_err(parse_one("SIG SigDup = ((VAL x :Number) (VAL x :Str))"));
     assert!(
         matches!(&err.kind, KErrorKind::Rebind { name } if name == "x"),
         "expected Rebind naming `x`, got {err}",
@@ -77,8 +77,8 @@ fn duplicate_val_slot_name_is_rebind() {
 #[test]
 fn val_outside_sig_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("VAL x :Number"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("VAL x :Number"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -95,8 +95,8 @@ fn val_outside_sig_errors() {
 #[test]
 fn val_inside_module_errors() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    let err = run_one_err(scope, parse_one("MODULE foo = ((VAL x :Number))"));
+    let mut test_run = TestRun::silent(&region);
+    let err = test_run.run_one_err(parse_one("MODULE foo = ((VAL x :Number))"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -113,11 +113,9 @@ fn val_inside_module_errors() {
 #[test]
 fn val_function_typed_slot() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        "SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
-    );
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG Ordered = ((VAL compare :(FN (x :Number, y :Number) -> Number)))");
     let content = match scope.resolve_type("Ordered") {
         Some(KType::Signature { content, .. }) => content,
         _ => panic!("Ordered must bind a Signature KType"),
@@ -143,13 +141,12 @@ fn val_function_typed_slot() {
 #[test]
 fn val_slot_required_by_shape_check() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(
         "SIG WithCompare = ((VAL compare :Number))\n\
          MODULE empty = (LET unrelated = 0)",
     );
-    let err = run_one_err(scope, parse_one("empty :| WithCompare"));
+    let err = test_run.run_one_err(parse_one("empty :| WithCompare"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -167,9 +164,9 @@ fn val_slot_required_by_shape_check() {
 #[test]
 fn val_slot_satisfied_by_module_let_member() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run(
         "SIG WithCompare = ((VAL compare :Number))\n\
          MODULE int_ord = (LET compare = 0)\n\
          LET ord = (int_ord :| WithCompare)",
@@ -186,8 +183,9 @@ fn val_slot_satisfied_by_module_let_member() {
 #[test]
 fn val_with_abstract_type_member_declaration() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(scope, "SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
+    test_run.run("SIG WithZero = ((TYPE Carrier) (VAL zero :Carrier))");
     let content = match scope.resolve_type("WithZero") {
         Some(KType::Signature { content, .. }) => content,
         _ => panic!("WithZero must bind a Signature KType"),

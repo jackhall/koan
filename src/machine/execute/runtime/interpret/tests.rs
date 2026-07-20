@@ -15,9 +15,8 @@ use std::io::Write;
 use std::rc::Rc;
 
 use super::*;
-use crate::builtins::default_scope;
+use crate::builtins::test_support::TestRun;
 use crate::machine::core::{run_root_storage, FrameStorage};
-use crate::machine::Scope;
 
 pub(super) struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 
@@ -37,13 +36,13 @@ pub(super) fn run<'run>(
     source: &str,
     region: &'run Rc<FrameStorage>,
     captured: Rc<RefCell<Vec<u8>>>,
-) -> &'run Scope<'run> {
+) -> TestRun<'run> {
     let exprs = parse(source).expect("parse should succeed");
-    let root = default_scope(region, Box::new(SharedBuf(captured)));
-    let mut scheduler = KoanRuntime::new();
+    let mut test_run = TestRun::new(region, Box::new(SharedBuf(captured)));
+    let root = test_run.scope;
     for expr in exprs {
-        scheduler.dispatch_in_scope(expr, root);
+        test_run.runtime.dispatch_in_scope(expr, root);
     }
-    scheduler.execute().expect("program should run");
-    root
+    test_run.runtime.execute().expect("program should run");
+    test_run
 }

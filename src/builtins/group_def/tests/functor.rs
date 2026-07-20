@@ -6,7 +6,7 @@
 //! that module surfaces its operators. No group is chosen for a run by its operand type.
 
 use super::list_numbers;
-use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+use crate::builtins::test_support::{parse_one, TestRun};
 use crate::machine::model::KObject;
 use crate::machine::run_root_storage;
 use crate::machine::KErrorKind;
@@ -45,17 +45,15 @@ const WITNESS_MODULE_FUNCTOR: &str = "SIG Additive = (\
 #[test]
 fn functor_instantiated_at_a_concrete_type_yields_operators_over_that_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        &format!(
-            "{TYPE_PARAMETER_FUNCTOR}\
-             LET number_ops = (MAKEOPS Number)\n\
-             LET mixed = (USING number_ops SCOPE (xs + ys - zs))",
-        ),
-    );
+    let mut test_run = TestRun::silent(&region);
+    let types = test_run.types.clone();
+    test_run.run(&format!(
+        "{TYPE_PARAMETER_FUNCTOR}\
+         LET number_ops = (MAKEOPS Number)\n\
+         LET mixed = (USING number_ops SCOPE (xs + ys - zs))",
+    ));
     assert_eq!(
-        list_numbers(run_one(scope, parse_one("mixed"))),
+        list_numbers(test_run.run_one(parse_one("mixed")), &types),
         vec![3.0],
         "the instantiated group's members reduce `xs + ys - zs` fold-left to `zs`",
     );
@@ -67,12 +65,11 @@ fn functor_instantiated_at_a_concrete_type_yields_operators_over_that_type() {
 #[test]
 fn functor_instantiated_at_another_type_does_not_admit_the_number_lists() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        &format!("{TYPE_PARAMETER_FUNCTOR}LET string_ops = (MAKEOPS Str)"),
-    );
-    let error = run_one_err(scope, parse_one("USING string_ops SCOPE (xs + ys - zs)"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(&format!(
+        "{TYPE_PARAMETER_FUNCTOR}LET string_ops = (MAKEOPS Str)"
+    ));
+    let error = test_run.run_one_err(parse_one("USING string_ops SCOPE (xs + ys - zs)"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { .. }),
         "a `:(LIST OF Str)` member must not admit number lists, got {error}",
@@ -85,19 +82,18 @@ fn functor_instantiated_at_another_type_does_not_admit_the_number_lists() {
 #[test]
 fn an_instantiated_group_is_opened_explicitly_never_selected_by_operand_type() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        &format!("{TYPE_PARAMETER_FUNCTOR}LET number_ops = (MAKEOPS Number)"),
-    );
-    let error = run_one_err(scope, parse_one("xs + ys - zs"));
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(&format!(
+        "{TYPE_PARAMETER_FUNCTOR}LET number_ops = (MAKEOPS Number)"
+    ));
+    let error = test_run.run_one_err(parse_one("xs + ys - zs"));
     assert!(
         matches!(&error.kind, KErrorKind::DispatchFailed { .. }),
         "an instantiated-but-unopened group must not answer a run over its operand type, got {error}",
     );
     assert!(
         matches!(
-            run_one(scope, parse_one("USING number_ops SCOPE (xs + ys - zs)")),
+            test_run.run_one(parse_one("USING number_ops SCOPE (xs + ys - zs)")),
             KObject::List(..)
         ),
         "the same run inside a USING window over the instantiation reduces",
@@ -111,23 +107,20 @@ fn an_instantiated_group_is_opened_explicitly_never_selected_by_operand_type() {
 #[test]
 fn functor_instantiated_at_a_witness_module_yields_operators_over_that_witness() {
     let region = run_root_storage();
-    let scope = run_root_silent(&region);
-    run(
-        scope,
-        &format!(
-            "{WITNESS_MODULE_FUNCTOR}\
-             LET sum_ops = (MAKEOPS sum_additive)\n\
-             LET product_ops = (MAKEOPS product_additive)\n\
-             LET summed = (USING sum_ops SCOPE (2 ⊕ 3 ⊖ 1))\n\
-             LET multiplied = (USING product_ops SCOPE (2 ⊕ 3 ⊖ 1))",
-        ),
-    );
+    let mut test_run = TestRun::silent(&region);
+    test_run.run(&format!(
+        "{WITNESS_MODULE_FUNCTOR}\
+         LET sum_ops = (MAKEOPS sum_additive)\n\
+         LET product_ops = (MAKEOPS product_additive)\n\
+         LET summed = (USING sum_ops SCOPE (2 ⊕ 3 ⊖ 1))\n\
+         LET multiplied = (USING product_ops SCOPE (2 ⊕ 3 ⊖ 1))",
+    ));
     assert!(
-        matches!(run_one(scope, parse_one("summed")), KObject::Number(n) if *n == 4.0),
+        matches!(test_run.run_one(parse_one("summed")), KObject::Number(n) if *n == 4.0),
         "`⊕` must combine through `sum_additive`, folding `2 ⊕ 3 ⊖ 1` to `(2 + 3) - 1`",
     );
     assert!(
-        matches!(run_one(scope, parse_one("multiplied")), KObject::Number(n) if *n == 5.0),
+        matches!(test_run.run_one(parse_one("multiplied")), KObject::Number(n) if *n == 5.0),
         "the second instantiation's `⊕` combines through `product_additive`: `(2 * 3) - 1`",
     );
 }

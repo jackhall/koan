@@ -6,39 +6,23 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
+use koan::builtins::test_support::{SharedBuf, TestRun};
 use koan::machine::model::KObject;
-use koan::machine::{run_root_storage, FrameStorage, KError, KErrorKind, KoanRuntime, Scope};
+use koan::machine::{run_root_storage, KError, KErrorKind};
 use koan::parse::parse;
 
-struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-impl std::io::Write for SharedBuf {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(b);
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn build_scope<'a>(region: &'a Rc<FrameStorage>) -> &'a Scope<'a> {
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    default_scope(region, Box::new(SharedBuf(captured)))
-}
-
-fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(), KError>> {
+fn run_collecting_errors(test_run: &mut TestRun<'_>, source: &str) -> Vec<Result<(), KError>> {
+    let scope = test_run.scope;
     let exprs = parse(source).expect("parse should succeed");
-    let mut runtime = KoanRuntime::new();
     let mut ids = Vec::new();
     for e in exprs {
-        ids.push(runtime.dispatch_in_scope(e, scope));
+        ids.push(test_run.runtime.dispatch_in_scope(e, scope));
     }
-    let _ = runtime.execute();
+    let _ = test_run.runtime.execute();
     // These tests assert only on `Ok`/`Err`, never on the produced value, so discard the carrier —
     // the scheduler re-anchors a read to its own borrow and the value need not escape it.
     ids.into_iter()
-        .map(|id| runtime.result_error(id).map_err(|e| e.clone()))
+        .map(|id| test_run.runtime.result_error(id).map_err(|e| e.clone()))
         .collect()
 }
 
@@ -47,8 +31,8 @@ fn run_collecting_errors<'a>(scope: &'a Scope<'a>, source: &str) -> Vec<Result<(
 #[test]
 fn same_scope_let_rebind_errors() {
     let region = run_root_storage();
-    let scope = build_scope(&region);
-    let results = run_collecting_errors(scope, "LET x = 1\nLET x = 2");
+    let mut test_run = TestRun::silent(&region);
+    let results = run_collecting_errors(&mut test_run, "LET x = 1\nLET x = 2");
     assert!(results[0].is_ok(), "first LET should succeed");
     let err = match &results[1] {
         Err(e) => e,
@@ -66,9 +50,9 @@ fn same_scope_let_rebind_errors() {
 #[test]
 fn let_function_collides_with_let_value() {
     let region = run_root_storage();
-    let scope = build_scope(&region);
+    let mut test_run = TestRun::silent(&region);
     let results = run_collecting_errors(
-        scope,
+        &mut test_run,
         "LET x = 1\n\
          LET x = (FN (DOUBLE y :Number) -> Number = (y))",
     );
@@ -90,9 +74,9 @@ fn let_function_collides_with_let_value() {
 #[test]
 fn exact_signature_duplicate_errors() {
     let region = run_root_storage();
-    let scope = build_scope(&region);
+    let mut test_run = TestRun::silent(&region);
     let results = run_collecting_errors(
-        scope,
+        &mut test_run,
         "FN (DOUBLE x :Number) -> Number = (x)\n\
          FN (DOUBLE x :Number) -> Number = (x)",
     );
@@ -112,9 +96,10 @@ fn exact_signature_duplicate_errors() {
 #[test]
 fn cross_scope_shadowing_succeeds() {
     let region = run_root_storage();
-    let scope = build_scope(&region);
+    let mut test_run = TestRun::silent(&region);
+    let scope = test_run.scope;
     let results = run_collecting_errors(
-        scope,
+        &mut test_run,
         "LET x = 1\n\
          MODULE some_module = (LET x = 99)",
     );
