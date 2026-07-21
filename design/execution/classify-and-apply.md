@@ -278,8 +278,10 @@ The rails the dispatch driver feeds:
     `eager_indices` and the receiving builtin dispatches them itself.
 
   **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
-  staged into a `PendingSub` vec rather than submitted eagerly during the
-  walk. After the loop, if `producers_to_wait` is non-empty the decide
+  staged into a `DepRequest` vec (the dep currency the harness realizes)
+  rather than submitted eagerly during the walk — the single
+  `stage_eager_part` classifier owns the eager part-shape set and hands back
+  the staged `DepRequest` directly. After the loop, if `producers_to_wait` is non-empty the decide
   returns a `ParkThenContinue` whose continuation is a `Continuation::Resume`
   (carrying a `ResumeFn` closure over the partly-spliced `working_expr`) — the
   harness installs the park edges as `Notify` (via `add_park_edge`) and
@@ -290,11 +292,11 @@ The rails the dispatch driver feeds:
   references compose as one combined park rather than N independent
   sub-Dispatches.
 
-  If no producer parked, the driver applies each `PendingSub`: `Reuse(id)`
-  for slots already pre-submitted recursively at outermost-submission time
-  (see [Submission-time binder install and recursive
+  If no producer parked, the driver installs each staged `DepRequest`:
+  `Existing(id)` for slots already pre-submitted recursively at
+  outermost-submission time (see [Submission-time binder install and recursive
   sub-Dispatch](name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch)),
-  `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
+  `Dispatch { .. }` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
   function directly: the decide folds the resolved call into a dep-free
   `Outcome::Continue` (via `dispatch::exec::invoke_continue`) whose frame

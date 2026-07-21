@@ -224,8 +224,8 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
 }
 
 /// The empty-`Identifier` hole a staged slot leaves in `new_parts`. Names the
-/// existing placeholder convention; typing the sentinel as a real staged-slot
-/// representation is a follow-up (see the roadmap item).
+/// stringly placeholder convention; the sentinel is not yet a typed staged-slot
+/// representation.
 pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<ExpressionPart<'a>> {
     Spanned::bare(ExpressionPart::Identifier(String::new()))
 }

@@ -52,7 +52,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [One bare-name-to-carrier resolution ladder](simplify_dispatch/bare-name-resolution-ladder.md)
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
 - [Declaration identity is the installing node](simplify_dispatch/declaration-identity-installing-node.md)
-- [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
 - [One deferral bundle for field-list dispatch](simplify_dispatch/field-list-deferral-bundle.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)

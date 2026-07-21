@@ -387,7 +387,7 @@ fn part_walk<'step>(
         let span = part.span;
         if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
             staged_subs.push((i, DepRequest::Existing(sub_id)));
-            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            new_parts.push(staged_slot_placeholder());
             continue;
         }
         if wrap_set.contains(&i) {
