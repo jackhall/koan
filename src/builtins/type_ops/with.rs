@@ -1,8 +1,11 @@
 //! `<sig> WITH {<Slot> = <Type>, …}` — infix signature specialization. Pins a subset of
 //! `sig`'s abstract-type slots, each to the type bound in the record literal, interning a
-//! `Signature` node carrying the same schema plus the `pinned_slots`. A pin naming a manifest
-//! member (its type already fixed) is not an abstract slot: a pin equal to the fixed type
-//! normalizes away (leaving signature identity unchanged), and an unequal one is a type error.
+//! `Signature` node carrying the same schema plus the `pinned_slots`. Pins **accumulate**
+//! across chained WITH — `(S WITH {A = Number}) WITH {B = Str}` carries both pins — and the
+//! pin set is name-sorted at the registry, so chained and one-shot specialization in any
+//! order intern the same type. A pin naming a slot already fixed — a manifest member or an
+//! earlier WITH's pin — normalizes away when equal to the fixed type (leaving signature
+//! identity unchanged) and is a type error otherwise.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
 //! values are resolved `Held::Type`s — a dotted `er.Carrier` value sub-dispatches in value
@@ -37,8 +40,12 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
-    let schema = match ctx.types.node(sig_handle) {
-        TypeNode::Signature { schema, .. } => schema,
+    let (schema, existing_pins) = match ctx.types.node(sig_handle) {
+        TypeNode::Signature {
+            schema,
+            pinned_slots,
+            ..
+        } => (schema, pinned_slots),
         _ => return done_err(mismatch(sig_handle.name(ctx.types))),
     };
     let fields = match arg_object(ctx.args, "bindings") {
@@ -58,14 +65,19 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .iter()
         .map(|(n, t)| (n.clone(), *t))
         .collect();
-    // Validation only: every pin must name a known slot and hold a type. A pin equal to a
-    // manifest member's fixed type is normalized away (added to `dropped`, never recorded), so
-    // `S WITH {Tag = Number}` keeps `S`'s signature identity; an unequal manifest pin is a type
-    // error. `dropped` names the pins the composed `Signature` skips.
+    // Validation only: every pin must name a known slot and hold a type. A slot already fixed —
+    // by a manifest member or by an earlier WITH's pin — admits only an equal re-pin, which
+    // normalizes away (added to `dropped`, never recorded), so `S WITH {Tag = Number}` and
+    // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
+    // unequal re-pin is a type error. `dropped` names the pins the composed `Signature` skips.
     let mut dropped: HashSet<String> = HashSet::new();
     for (name, value) in fields.iter() {
         let is_abstract = abstract_slots.contains(name);
         let manifest = manifest_members.get(name);
+        let pinned = existing_pins
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| *t);
         if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
@@ -96,11 +108,21 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     pin_type.render(ctx.types),
                 ))));
             }
+        } else if let Some(prior) = pinned {
+            if *pin_type == prior {
+                dropped.insert(name.clone());
+            } else {
+                return done_err(KError::new(KErrorKind::ShapeError(format!(
+                    "`{}.{name}` is already pinned to `{}`; \
+                     WITH cannot re-pin it to `{}`",
+                    sig_handle.name(ctx.types),
+                    prior.render(ctx.types),
+                    pin_type.render(ctx.types),
+                ))));
+            }
         }
     }
 
-    // The pins and the signature content are owned data, so the specialized `Signature` composes
-    // directly and allocates into this step's own region through the single type door.
     let pinned: Vec<(String, KType)> = fields
         .iter()
         .filter(|(name, _)| !dropped.contains(name.as_str()))
@@ -113,7 +135,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .collect();
     Action::Done(Ok(ctx
         .ctx
-        .type_carried(ctx.types.signature(schema, pinned))))
+        .type_carried(ctx.types.signature_pinned(sig_handle, pinned))))
 }
 
 #[cfg(test)]
@@ -158,13 +180,14 @@ mod tests {
         }
     }
 
-    /// Pins land in record-literal order — `pinned_slots` is an ordered `Vec`.
+    /// Pins land name-sorted regardless of record-literal order — the canonical order the
+    /// registry establishes, so pin-set identity is order-independent.
     #[test]
-    fn with_two_slots_preserve_order() {
+    fn with_two_slots_canonicalize_to_name_order() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
-        let result = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
+        let result = test_run.run_one_type(parse_one("OrderedSet WITH {Ord = Str, Elt = Number}"));
         match test_run.types().node(result) {
             TypeNode::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 2);
@@ -175,6 +198,57 @@ mod tests {
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
+        let literal_order =
+            test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
+        assert_eq!(
+            result, literal_order,
+            "either literal order interns the same specialized type",
+        );
+    }
+
+    /// Pins accumulate across chained WITH: each chaining order carries both pins and interns
+    /// the same type as the one-shot form.
+    #[test]
+    fn with_pins_accumulate_across_chained_with() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
+            "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
+             LET ByElt = (OrderedSet WITH {Elt = Number})\n\
+             LET ByOrd = (OrderedSet WITH {Ord = Str})",
+        );
+        let both = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
+        let elt_then_ord = test_run.run_one_type(parse_one("ByElt WITH {Ord = Str}"));
+        let ord_then_elt = test_run.run_one_type(parse_one("ByOrd WITH {Elt = Number}"));
+        assert_eq!(elt_then_ord, both, "chained WITH accumulates the first pin");
+        assert_eq!(
+            ord_then_elt, both,
+            "accumulation is chaining-order-independent"
+        );
+    }
+
+    /// An equal re-pin of an already-pinned slot normalizes away, keeping the source's identity;
+    /// a conflicting re-pin is a type error, mirroring the manifest-member rule.
+    #[test]
+    fn with_repin_normalizes_when_equal_and_errors_when_conflicting() {
+        use crate::machine::KErrorKind;
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        test_run.run(
+            "SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))\n\
+             LET ByElt = (OrderedSet WITH {Elt = Number})",
+        );
+        let pinned = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number}"));
+        let repinned = test_run.run_one_type(parse_one("ByElt WITH {Elt = Number}"));
+        assert_eq!(
+            repinned, pinned,
+            "an equal re-pin keeps the source identity"
+        );
+        let err = test_run.run_one_err(parse_one("ByElt WITH {Elt = Str}"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("already pinned")),
+            "a conflicting re-pin must be the already-pinned ShapeError, got {err}",
+        );
     }
 
     /// A dotted `elem.Carrier` pin value sub-dispatches in value context to the abstract

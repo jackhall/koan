@@ -184,8 +184,12 @@ manifest member fixed equal
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)). Ascription is
 assertion plus view construction, never an admission gate: an unascribed module whose self-sig
 satisfies a signature is admitted by that signature's slot directly.
-`WITH` pins abstract slots; a pin naming a manifest member is normalized away when it equals the
-fixed type (leaving signature identity unchanged) and is a type error when it differs
+`WITH` pins abstract slots, and pins **accumulate** across chained `WITH` —
+`(S WITH {A = Number}) WITH {B = Str}` carries both pins. The pin set is canonicalized
+name-sorted at the registry's signature constructors, so one-shot and chained specialization in
+any order intern the same type. A pin naming a slot already fixed — a manifest member or an
+earlier `WITH` pin — is normalized away when it equals the fixed type (leaving signature
+identity unchanged) and is a type error when it differs
 ([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
 
 ATTR's `access_module_member`
@@ -316,7 +320,8 @@ Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
 structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
 The `Signature` node `{ schema: SigSchema, schema_digest, pinned_slots }` carries the owned
-schema, its content digest, and any `WITH` abstract-type pins — no binder and no label. There
+schema, its content digest, and any `WITH` abstract-type pins (name-sorted — the canonical
+order pin-set identity digests over) — no binder and no label. There
 is one kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the
 empty `:Module` interface differ only in the schema, not in node kind. A `KType` is a `Copy`
 registry handle, so it holds no region pointer.

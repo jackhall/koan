@@ -262,14 +262,16 @@ mod tests {
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let types = test_run.types();
         let handle = scope.resolve_type("Container").expect("Container binds");
-        let schema = match types.node(handle) {
-            TypeNode::Signature { schema, .. } => schema,
-            _ => panic!("Container should be a signature"),
-        };
-        let pin_num = types.signature(schema.clone(), vec![("Elem".into(), KType::NUMBER)]);
-        let pin_str = types.signature(schema.clone(), vec![("Elem".into(), KType::STR)]);
-        let bare = types.signature(schema, Vec::new());
+        assert!(
+            matches!(types.node(handle), TypeNode::Signature { .. }),
+            "Container should be a signature"
+        );
+        let pin_num = types.signature_pinned(handle, vec![("Elem".into(), KType::NUMBER)]);
+        let pin_str = types.signature_pinned(handle, vec![("Elem".into(), KType::STR)]);
         assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
-        assert_ne!(pin_num, bare, "a pin refines away from the bare signature");
+        assert_ne!(
+            pin_num, handle,
+            "a pin refines away from the bare signature"
+        );
     }
 }

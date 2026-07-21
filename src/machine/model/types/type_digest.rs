@@ -303,8 +303,8 @@ fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDiges
 
 /// A module-signature type's digest: its schema's content digest (identity by interface, not by
 /// mint — see [type-identity.md](../../../../design/typing/type-identity.md)) wrapped with the
-/// `WITH` pins that specialize it. Positional over `pinned_slots` — the vec is order-preserving,
-/// so do NOT sort.
+/// `WITH` pins that specialize it. Positional over `pinned_slots`, whose canonical name-sorted
+/// order the registry's signature constructors establish before interning.
 fn signature_digest(content_digest: TypeDigest, pinned_slots: &[(String, KType)]) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
     h.digest(content_digest);
