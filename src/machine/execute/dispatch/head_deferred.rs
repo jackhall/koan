@@ -5,17 +5,18 @@
 //! `parts[1..]` via the shared apply-a-callable tail. The `type_only` flag selects
 //! the admitted arm set (see [`classify_head`]):
 //!
-//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or a `SetMember`
-//!   constructor.
-//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits only a
-//!   constructible type — a `SetMember` constructor. A function value or any other type
-//!   surfaces a type-shaped `TypeMismatch`.
+//! - `HeadDeferred` (`type_only = false`): admits any `KFunction` value or any type identity
+//!   applied as a constructor.
+//! - `TypeHeadDeferred` (head is a `:(...)` sigil, `type_only = true`): admits any type identity
+//!   applied as a constructor; a value-channel callable surfaces a type-shaped `TypeMismatch`.
+//!
+//! What a type identity admits when applied is decided once, in `apply_callable`'s constructor
+//! arm — the classifier here does not pre-gate it.
 //!
 //! The park/resume pair mirrors `park_on_literal` + the `type_call`
 //! head-placeholder resume, no new scheduler primitive.
 
 use crate::machine::core::DepPlacement;
-use crate::machine::model::TypeNode;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression};
@@ -77,10 +78,11 @@ fn park_on_head<'step>(
     .finish_terminal(finish)
 }
 
-/// Branch a resumed head value into a [`ResolvedCallable`], honoring the
-/// `type_only` arm pruning. Returns the shape-appropriate `KError` for a
-/// non-admitted value (a type-shaped `TypeMismatch` under `type_only`, else a
-/// non-callable `DispatchFailed`).
+/// Branch a resumed head value into a [`ResolvedCallable`]. A type identity is always admitted
+/// as a constructor — `apply_callable`'s constructor arm is the single authority on what a type
+/// admits when applied. The `type_only` flag prunes only the value channel: a value callable is a
+/// non-`type_only` `KFunction`, and any other value surfaces a type-shaped `TypeMismatch` (under
+/// `type_only`) or a non-callable `DispatchFailed`.
 fn classify_head<'step>(
     head: Carried<'step>,
     type_only: bool,
@@ -103,19 +105,9 @@ fn classify_head<'step>(
         },
         // A head is resolved before it is classified, so an unlowered name names no callable.
         Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
-        // A sealed nominal member is a constructor — the only invocable type identity. Every other
-        // type is type-shaped but not invocable.
-        Carried::Type(kt) => match types.node(kt) {
-            TypeNode::SetMember { .. } => Ok(ResolvedCallable::Constructor { identity: kt }),
-            _ if type_only => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "Type".to_string(),
-                got: kt.name(types),
-            })),
-            _ => Err(KError::new(KErrorKind::DispatchFailed {
-                expr: kt.name(types),
-                reason: "head evaluates to a non-callable value".to_string(),
-            })),
-        },
+        // A type identity is applied as a constructor; `apply_callable`'s constructor arm is the
+        // single authority on what a type admits when applied — unions, named type application,
+        // every `SetMember` schema — surfacing a `TypeMismatch: "constructible Type"` for the rest.
+        Carried::Type(kt) => Ok(ResolvedCallable::Constructor { identity: kt }),
     }
 }

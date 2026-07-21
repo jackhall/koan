@@ -1017,9 +1017,10 @@ fn head_deferred_non_callable_value_errors() {
     }
 }
 
-/// `TypeHeadDeferred` → type error. A `:(...)` head whose value is not a
-/// constructible type (here `Number`) surfaces a type-shaped
-/// `TypeMismatch` — distinct from the `HeadDeferred` non-callable message.
+/// `TypeHeadDeferred` → type error. A `:(...)` head whose value is a type but
+/// not a constructible one (here `Number`) is admitted as a constructor and
+/// rejected by `apply_callable`'s constructor arm — the single authority — with
+/// a type-shaped `TypeMismatch: "constructible Type"`.
 #[test]
 fn type_head_deferred_non_type_value_type_mismatches() {
     use crate::machine::KErrorKind;
@@ -1029,7 +1030,7 @@ fn type_head_deferred_non_type_value_type_mismatches() {
     match &err.kind {
         KErrorKind::TypeMismatch { expected, .. } => {
             assert_eq!(
-                expected, "Type",
+                expected, "constructible Type",
                 "expected a type-shaped diagnostic, got {err}"
             )
         }
@@ -1051,6 +1052,27 @@ fn type_head_deferred_constructs_from_sigil_type() {
         "got {}",
         out.summarize(&test_run.types)
     );
+}
+
+/// `TypeHeadDeferred` → union constructor. A `:(Maybe)` head resolves to a
+/// `UNION` identity — a `TypeNode::Union`, not a `SetMember`. The head-deferred
+/// lane admits it as a constructor and `apply_callable`'s constructor arm routes
+/// it to union construction, so `(Some 42)` builds the tagged variant. This is
+/// the sanctioned admission the head-classification unification opens: the lane
+/// no longer pre-gates on `SetMember`.
+#[test]
+fn type_head_deferred_constructs_union_variant() {
+    let region = run_root_storage();
+    let mut test_run = TestRun::silent(&region);
+    test_run.run("UNION Maybe = (Some :Number None :Null)");
+    let result = test_run.run_one(parse_one(":(Maybe) (Some 42)"));
+    match result {
+        KObject::Tagged { tag, value, .. } => {
+            assert_eq!(tag, "Some");
+            assert!(matches!(value.as_ref(), KObject::Number(n) if *n == 42.0));
+        }
+        other => panic!("expected Tagged, got {:?}", other.ktype()),
+    }
 }
 
 /// `NonCallableHead`. A literal / list head in a multi-part expression is not
