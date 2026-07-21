@@ -114,7 +114,8 @@ a concept, not a final identifier.
   Vocabulary).
 - Terminal storage and delivery: sealing results into slots, handing dep
   terminals to finishes, and the first-errored-dep short-circuit.
-- The consumer API: `producer_disposition`, the `Deps` builder, the `Await`
+- The consumer API: the dependence primitives (`is_result_ready` /
+  `result_error` / `would_create_cycle`), the `Deps` builder, the `Await`
   envelope, and the step construction context (all below).
 
 **Koan keeps:**
@@ -189,18 +190,22 @@ internals.
 
 Working names throughout; shapes are the commitment, identifiers are not.
 
-**Disposition — one owner for "can I depend on this producer?"**
+**Dependence primitives — the generic building blocks.**
 
 ```rust
-enum ProducerDisposition<'a, E> { Errored(&'a E), Ready, Cycle, Park }
-fn producer_disposition(&self, producer: NodeId, consumer: Option<NodeId>)
-    -> ProducerDisposition<'_, E>
+fn is_result_ready(&self, producer: NodeId) -> bool
+fn result_error(&self, producer: NodeId) -> Result<(), &W::Error>
+fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool
 ```
 
-The single implementation of the ready / already-errored / would-cycle /
-must-park classification. Callers keep only their per-site `Ready` policy.
-`consumer` is `None` at a leaf-park site with no consumer id in scope, where a
-cycle can never be classified.
+The library owns only these workload-generic reads. The "can I depend on this
+producer?" classification — ready / already-errored / would-cycle / must-park —
+is embedder policy: every arm's meaning is a Koan dispatch decision, so the
+ladder lives Koan-side over `KoanWorkload` / `KError`
+([`producer_disposition`](../src/machine/execute/dispatch.rs), plus its
+consumer-less `producer_standing` twin for leaf-park sites with no consumer id
+in scope), built from these primitives. The library names no Koan type and
+stays smaller.
 
 **`Deps` — the dep-list builder.**
 

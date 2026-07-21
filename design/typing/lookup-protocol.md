@@ -101,9 +101,11 @@ clears an in-flight type producer's placeholder (nor the reverse).
   walking ancestors. The terminal unbound disposition is not a lookup variant:
   it is materialized one level up on the resolution path, where
   [`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) is the
-  merge point that adds `Unbound` plus the execute-only `ProducerErrored` / `Cycle`
-  states. A same-name `BindKind::Type` placeholder is invisible here — it belongs to
-  the type language.
+  merge point that adds the `Unbound` state. A producer error is absorbed at the
+  resolution surface as an `Err` rather than a `NameOutcome` variant, and a cycle
+  is classified only at a park site with a consumer id — neither is a state the
+  cache carries. A same-name `BindKind::Type` placeholder is invisible here — it
+  belongs to the type language.
 - [`Bindings::lookup_type`](../../src/machine/core/bindings.rs) is the
   type-side symmetry: consults `types` then the `BindKind::Type`
   `placeholders`, surfacing the result as the same

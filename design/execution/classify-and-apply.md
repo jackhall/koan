@@ -23,21 +23,22 @@ from the dispatch entry. The `Keyworded` variant — produced only when a real
 keyword is present — falls into the chain-walked resolution plus eager
 name-resolve plus dep-schedule pipeline below.
 
-The keyworded pipeline runs in four steps. Step 1 builds the bare-name
+The keyworded pipeline runs in three steps. Step 1 builds the bare-name
 outcome cache: one
-[`resolve_name_part`](../../src/machine/execute/dispatch.rs) call per
+[`resolve_name_part`](../../src/machine/execute/dispatch/bare_name.rs) call per
 bare-name part of `expr` (`Identifier` or leaf `Type`) into
 `bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
-parts. The cache is built with `consumer = None` so cycle detection is
-deferred to Step 4, where it runs only on slots the picked function
+parts. The cache carries no consumer id, so cycle detection is
+deferred to Step 3, where it runs only on slots the picked function
 classifies as references (a binder declaration slot like `x` in `LET x = …`
 has the dispatching slot as its own placeholder's producer, so an upfront
-cycle check would false-positive on declarations). Step 2 sweeps the cache
-for `NameOutcome::ProducerErrored`: a bare-name arg whose producer
-terminalized with an error can never resolve, so it propagates upfront with
-a `<wrap-resolve>` frame before any candidate work.
+cycle check would false-positive on declarations). A producer error is
+absorbed as the build's `Err` — a bare-name arg whose producer terminalized
+with an error can never resolve, so the build short-circuits and the error
+propagates with a `<wrap-resolve>` frame before any candidate work, rather
+than surviving as a cache entry a later sweep must screen.
 
-Step 3 calls
+Step 2 calls
 [`Scope::resolve_dispatch_with_chain`](../../src/machine/core/scope.rs) once,
 passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
 is strict-only: [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
@@ -48,10 +49,10 @@ holds for the carried type — a bare name whose value has the wrong carrier
 type strict-rejects the overload, and the call surfaces as `DispatchFailed`
 rather than a bind-time `TypeMismatch`. `Parked` / `Unbound` cache entries
 admit via shape-only `arg.matches(part)`: the post-pick splice/park walk in
-Step 4 is the only place that produces precise per-slot `ParkOnProducers` /
+Step 3 is the only place that produces precise per-slot `ParkOnProducers` /
 `UnboundName` diagnostics, so admission must not reject and lose them. The
 match on [`ResolveOutcome`](../../src/machine/core/scope.rs) is:
-`Resolved(r)` continues into Step 4 with the strict-picked function plus
+`Resolved(r)` continues into Step 3 with the strict-picked function plus
 the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
@@ -221,7 +222,7 @@ The rails the dispatch driver feeds:
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
-- **Placeholder install** (Step 3.5). If the picked function carries a
+- **Placeholder install** (Step 2.5). If the picked function carries a
   `binder_name` extractor, the driver installs `name → NodeId(idx)` into
   `placeholders` on the dispatching scope. If it carries a `binder_bucket`
   extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
@@ -237,7 +238,7 @@ The rails the dispatch driver feeds:
   different producer surfaces as a `Done(Err(_))` step so other slots
   keep draining; bucket-channel installs never Rebind (sibling appends
   are the intended shape).
-- **Fused splice / park / eager-sub walk** (Step 4). One iteration over
+- **Fused splice / park / eager-sub walk** (Step 3). One iteration over
   `expr.parts` co-handles the three per-slot rails the strict pick
   carries: wrap-slot splice (`resolved.slots.wrap_indices`), ref-name-slot
   park (`resolved.slots.ref_name_indices`), and eager sub-Dispatch
@@ -245,23 +246,29 @@ The rails the dispatch driver feeds:
   function is a lazy candidate, otherwise every eager-shaped part
   schedules). Per part, exactly one arm fires.
 
-  Wrap and ref-name arms read the same `bare_outcomes[i]` cache the
-  resolver consumed in Step 3 — so each bare name is resolved once per
-  dispatch poll, shared across admission and the walk.
+  The ref-name arm reads the same `bare_outcomes[i]` cache the resolver
+  consumed in Step 2. The wrap arm re-resolves through the shared bare-name
+  ladder ([`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)),
+  which seals the delivered carrier the splice needs — the cache's admission
+  currency never held a sealed carrier; within one synchronous decide the
+  fresh resolve agrees with the cache.
   Per-arm behavior:
 
-  - **Wrap slot.** `Resolved(obj)` rewrites the slot to
-    `ExpressionPart::Future(obj)` in place. `Parked(p)` cycle-checks
+  - **Wrap slot.** The arm matches the ladder's three-state
+    [`BareCarrier`](../../src/machine/execute/dispatch/bare_name.rs).
+    `Sealed(cell)` splices the sealed binding-scope carrier inline as
+    `ExpressionPart::Spliced { cell }` — value and reach as one unit.
+    `Parked(p)` cycle-checks
     via [`DepGraph::would_create_cycle`](../../workgraph/src/scheduler/dep_graph.rs)
     and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
     `<name>`" }` on a self-park or pushes `p` onto the shared
     `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
     `UnboundName` (the parent binder's dep-finish reads it through
     `read_result(dep)` and short-circuits with the right framing — an
-    `Err` from `execute` would break that catch).
-    `Cycle` / `ProducerErrored` are unreachable here: the cache is built
-    with `consumer = None`, and the Step 2 sweep already short-circuited
-    `ProducerErrored`.
+    `Err` from `execute` would break that catch). A producer error is not a
+    ladder state — the resolution surface absorbs it as an `Err` the walk
+    propagates, and a cycle never classifies against a cache built with no
+    consumer id.
   - **Ref-name slot.** Literal-name slots keep the bare token, so
     `Resolved` and `Unbound` are no-ops. `Parked(p)` runs the same
     cycle-check then push as the wrap arm. Only `Identifier` and leaf
@@ -302,7 +309,7 @@ The rails the dispatch driver feeds:
   `Outcome::Continue` (via `dispatch::exec::invoke_continue`) whose frame
   placement installs the per-call cart and whose `work` re-decides via
   `dispatch::exec::invoke` on the next pop
-  (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 4,
+  (a wrap-slot-only call like `MAKESET int_ord` resolves bare names in Step 3,
   leaves no eager parts, and binds in one step — no dep-finish detour). Otherwise
   the decide returns a `ParkThenContinue` with a `Continuation::Finish`
   declaring the fresh subs as deps with a splice finish; the harness parks the
@@ -315,9 +322,10 @@ The rails the dispatch driver feeds:
 
   List, dict, and record literals (`classify_aggregate_part` in
   [`dispatch/literal.rs`](../../src/machine/execute/dispatch/literal.rs))
-  ride the same name-resolve rail: bare-name entries call
-  `resolve_name_part` directly and materialize as `Slot::Static` (resolved)
-  or `Slot::Park(i)` (parked producer), with the dep-finish driving a
+  ride the same name-resolve rail: bare-name entries call the shared
+  [`resolve_bare_carrier`](../../src/machine/execute/dispatch/bare_name.rs)
+  ladder directly and materialize as `Slot::Static` (sealed) or
+  `Slot::Park(i)` (parked producer), with the dep-finish driving a
   single wake across all parked siblings.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /

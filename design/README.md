@@ -36,7 +36,7 @@ Root concerns:
   as one extractable, Koan-agnostic library whose public surface is
   memory-safe by construction; the library/Koan boundary, the five
   soundness guarantees, the two-currency step contract, and the consumer
-  API (`producer_disposition`, `Deps`, `Await`, the step construction
+  API (the dependence primitives, `Deps`, `Await`, the step construction
   context).
 - [workcell.md](workcell.md) — the computation-cell substrate beneath the
   DAG scheduler (working name `workcell`): cells with a continuation, a

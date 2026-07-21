@@ -356,9 +356,12 @@ admission rule per cache entry on a bare-name part:
 |--------------------------|----------------------------------------------------------------------------------|
 | `Resolved(obj)`          | Admit iff [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) accepts `Future(obj)`. A wrong carried type strict-rejects rather than tentative-admitting into a bind-time `TypeMismatch`. |
 | `Parked` / `Unbound`     | Admit via shape-only `arg.matches(part)`. The post-pick splice/park walk is the only place that produces precise per-slot `ParkOnProducers` / `UnboundName` diagnostics, so admission must not reject and lose them. |
-| `ProducerErrored`        | Defensive reject. The upfront sweep short-circuits this case before resolution; reaching admission means a producer error slipped past, so refuse. |
-| `Cycle`                  | Unreachable. The cache is built with `consumer = None`, so cycle detection never fires during admission. |
 | `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
+
+A producer error never reaches this table: it is absorbed as an `Err` when the
+cache is built, short-circuiting before admission runs. Cycle detection is
+likewise deferred — the cache carries no consumer id — so neither state is a
+`NameOutcome` variant admission must screen.
 
 **Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
 or `KType::OfKind(KKind::ProperType)` owns the name (`x` in `LET x = …`, `Ty` in
