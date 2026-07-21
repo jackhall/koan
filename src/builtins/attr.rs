@@ -138,7 +138,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
         }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
-    route(access_type_member(ctx.scope, *s_kt, &field_name, ctx.types))
+    route(access_type_member(ctx.scope, s_kt, &field_name, ctx.types))
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
@@ -219,7 +219,7 @@ fn access_type_member<'a>(
                 .or_else(|| schema.abstract_members.get(field))
                 .or_else(|| schema.value_slots.get(field));
             match member {
-                Some(member) => Ok(StepCarried::born(scope.seal_fresh_ktype(*member))),
+                Some(member) => Ok(StepCarried::born(scope.resident_type_carrier(*member))),
                 None => Err(KError::new(KErrorKind::ShapeError(format!(
                     "signature `{}` has no member `{}`",
                     kt.name(types),
@@ -336,23 +336,20 @@ fn access_field<'a>(
 /// `AbstractType` for `Type`, not the underlying `Number`). Transparent `:!` leaves `slot_type_tags` empty,
 /// so transparent reads stay concrete.
 ///
-/// The re-tag carrier (and its `type_id`) is alloc'd in the *module*'s region, not the
-/// read-site `scope`'s: `Wrapped::deep_clone` is shallow (the NEWTYPE invariant that
-/// `type_id` is a declaration-stable `&'a KType`), so the `type_id` must outlive any
-/// lift/deep-clone of the read value — e.g. a functor body's `(er.zero)` whose read-site
-/// scope is a per-call region. The module and its `slot_type_tags` are declaration-stable,
-/// so the module region is the right home; both `inner` (the slot value) and `type_id`
-/// (the abstract tag, which references the module) then live there together.
+/// The re-tag carrier is alloc'd in the *module*'s region, not the read-site `scope`'s:
+/// `inner` is a pre-existing reference into the module region, so the wrapper is built
+/// beside it under the module's home frame, which transitively pins the module's
+/// reach-set for the read value. (`type_id` is a Copy handle and imposes no placement
+/// constraint.)
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarried<'a>, KError> {
     let module_scope = m.child_scope();
     if let Some(minted) = m.type_members.borrow().get(field).cloned() {
-        // Prefer the child scope's own binding — witness its `&KType` in place. A member present
-        // only in the mirror is an `:|`-minted abstract type, allocated fresh into the module's
-        // own region.
+        // Prefer the child scope's own binding; a member present only in the mirror is an
+        // `:|`-minted abstract type.
         return Ok(StepCarried::born(
             match module_scope.bindings().lookup_type(field, None) {
                 Some(NameLookup::Bound(kt)) => module_scope.resident_type_carrier(kt),
-                _ => module_scope.seal_fresh_ktype(minted),
+                _ => module_scope.resident_type_carrier(minted),
             },
         ));
     }
@@ -368,15 +365,13 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                 // The re-tag allocates in the module region (not the read site's): both the value
                 // member `obj` and the re-tag identity `tag` cross as declared fold operands. `obj`
                 // is a pre-existing reference into the module region, sealed resident with the
-                // member's own `reach`; `tag` is owned data allocated once into the module region
-                // via `seal_fresh_ktype` and sealed resident — the same region as the built
-                // `Wrapped`'s placement (the `StepContext` targets the module's frame), so the
-                // built value is unchanged. Both carriers union into the wrapped result's witness
+                // member's own `reach`; `tag` is a Copy handle sealed resident via
+                // `resident_type_carrier`. Both carriers union into the wrapped result's witness
                 // via `alloc_carried_with`.
                 let obj_carrier = module_scope
                     .seal_resident_delivered(module_scope.resident_value_carrier(obj, stored));
                 let tag_carrier =
-                    module_scope.seal_resident_delivered(module_scope.seal_fresh_ktype(tag));
+                    module_scope.seal_resident_delivered(module_scope.resident_type_carrier(tag));
                 let ctx = StepAllocator::for_scope(module_scope);
                 return Ok(ctx.alloc_carried_with(
                     &[&obj_carrier, &tag_carrier],

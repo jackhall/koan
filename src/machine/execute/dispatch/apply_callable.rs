@@ -9,7 +9,7 @@
 //!
 //! A [`ResolvedCallable`] has exactly two execution arms:
 //!
-//! - `Constructor(&KType)` — build a value from a type schema (struct / tagged /
+//! - `Constructor(KType)` — build a value from a type schema (struct / tagged /
 //!   newtype / `TypeConstructor` identity), reusing the `constructors` module
 //!   (`CtorKind` + `launch`); or, when the head is a type constructor and the body is a
 //!   record literal, apply that constructor to named type arguments

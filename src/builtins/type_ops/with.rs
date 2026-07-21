@@ -29,7 +29,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         })
     };
     let sig_handle = match arg_type(ctx.args, "sig") {
-        Some(kt) => *kt,
+        Some(kt) => kt,
         None => match arg_held(ctx.args, "sig") {
             Some(Held::Object(object)) => {
                 return done_err(mismatch(object.ktype().name(ctx.types)))

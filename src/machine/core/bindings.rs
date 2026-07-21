@@ -249,7 +249,7 @@ pub struct Bindings<'a> {
     /// earlier still-finalizing type parks on its producer node; this set marks which names
     /// are in flight. See [`pending`] for the surface methods.
     pending: PendingTypes,
-    /// Scope-bound `TypeIdentifier` → `&KType` resolution cache. Monotonic — entries are written
+    /// Scope-bound `TypeIdentifier` → `KType` resolution cache. Monotonic — entries are written
     /// only when the elaborated `KType` and every user-type it references are fully
     /// finalized; the finalize gate prevents caching a not-yet-sealed type.
     /// Keyed by `(TypeIdentifier, chain cutoff)`: a forward consumer (smaller cutoff) and a
@@ -697,7 +697,7 @@ impl<'a> Bindings<'a> {
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
-    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType` (and
+    /// on a `PartialEq`-equal existing entry **overwrite** the stored `KType` (and
     /// `index`) so the `SetMember` an SCC seal pre-installed (same set + index) is rewritten
     /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`, as is a
     /// committed value at `data[name]` (the value/type partition is mutually exclusive).

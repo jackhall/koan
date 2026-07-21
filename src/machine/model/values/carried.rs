@@ -121,9 +121,9 @@ impl<'a> Held<'a> {
     }
 
     /// The `Type` arm, if this is one.
-    pub fn as_type(&self) -> Option<&KType> {
+    pub fn as_type(&self) -> Option<KType> {
         match self {
-            Held::Type(t) => Some(t),
+            Held::Type(t) => Some(*t),
             Held::Object(_) | Held::UnresolvedType(_) => None,
         }
     }

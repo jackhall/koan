@@ -386,7 +386,7 @@ impl<'a> Scope<'a> {
         self.bindings.get()
     }
 
-    /// Scope-bound `TypeIdentifier → &KType` memo read. A transparent `USING` window returns
+    /// Scope-bound `TypeIdentifier → KType` memo read. A transparent `USING` window returns
     /// `None`: its resolutions depend on the call-site chain, so caching them into the
     /// module's shared memo would poison the module's own def-site resolution.
     pub(crate) fn type_identifier_memo_get(

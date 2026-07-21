@@ -33,7 +33,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         None => match arg_type(ctx.args, "name") {
             Some(name_kt)
                 if matches!(
-                    ctx.types.node(*name_kt),
+                    ctx.types.node(name_kt),
                     TypeNode::List { .. }
                         | TypeNode::Dict { .. }
                         | TypeNode::KFunction { .. }
@@ -117,15 +117,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ))));
     }
     if let Some(kt) = type_for_types_map {
-        // Fused alloc + register: the RHS type crosses into this scope as owned data, is allocated
-        // into this scope's own region through the single storage door, and is registered — one call
-        // returns the resident `&KType`.
-        let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
-            Ok(kt_ref) => kt_ref,
+        // Register the RHS type handle under `name` in this scope's bindings.
+        let registered = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
+            Ok(registered) => registered,
             Err(e) => return done_err(e),
         };
-        // The terminal witnesses the aliased type in place — the wrapper a later read uses.
-        let carrier = ctx.scope.resident_type_carrier(kt_ref);
+        // The terminal witnesses the registered handle — the wrapper a later read uses.
+        let carrier = ctx.scope.resident_type_carrier(registered);
         Action::Done(Ok(StepCarried::born(carrier)))
     } else {
         let value = rhs

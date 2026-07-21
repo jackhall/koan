@@ -121,7 +121,7 @@ pub fn body_record_schema<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::m
     use return_type::extract_return_type_raw;
 
     let schema = match arg_type(ctx.args, "signature") {
-        Some(kt) => match ctx.types.node(*kt) {
+        Some(kt) => match ctx.types.node(kt) {
             TypeNode::Record { fields } => fields,
             _ => {
                 return Action::Done(Err(KError::new(KErrorKind::ShapeError(format!(

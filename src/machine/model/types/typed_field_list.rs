@@ -286,7 +286,7 @@ fn rewrite_threaded_self_refs<'e, 'a>(
                     // producer frame.
                     let sibling =
                         window.sibling(&t.render(), crate::machine::model::KKind::NewType, types);
-                    let carrier = scope.seal_fresh_ktype(sibling);
+                    let carrier = scope.resident_type_carrier(sibling);
                     ExpressionPart::Spliced {
                         cell: scope.seal_resident_delivered(carrier),
                     }

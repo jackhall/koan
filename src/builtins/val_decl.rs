@@ -23,14 +23,14 @@ use crate::source::Spanned;
 
 use super::{arg, kw, sig};
 
-fn typeexpr_from_carrier(kt: &KType, types: &TypeRegistry) -> CarrierForm {
+fn typeexpr_from_carrier(kt: KType, types: &TypeRegistry) -> CarrierForm {
     // The builtin leaf type names re-resolve against decl_scope through the same name path so a
     // SIG-local shadow wins over the builtin table. `:Module` lowers to the empty signature —
     // its `name()` is "Module" — and joins that leaf path. A user-declared signature (a non-empty
     // interface) stays `Direct`: re-resolution is by name, and an aliased user SIG reached
     // through a `LET` could miss or hit a shadow.
     let is_leaf_builtin = matches!(
-        types.node(*kt),
+        types.node(kt),
         TypeNode::Number
             | TypeNode::Str
             | TypeNode::Bool
@@ -40,10 +40,10 @@ fn typeexpr_from_carrier(kt: &KType, types: &TypeRegistry) -> CarrierForm {
             | TypeNode::KExpression
             | TypeNode::OfKind(KKind::AnyType | KKind::Signature | KKind::ProperType)
     );
-    if is_leaf_builtin || *kt == KType::EMPTY_SIGNATURE {
+    if is_leaf_builtin || kt == KType::EMPTY_SIGNATURE {
         CarrierForm::Leaf(TypeIdentifier::leaf(kt.name(types)))
     } else {
-        CarrierForm::Direct(*kt)
+        CarrierForm::Direct(kt)
     }
 }
 
@@ -135,11 +135,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 /// constructor (`VAL boxed :Wrapper` where `Wrapper` has kind `* -> *`) is a kind error here,
 /// while a first-order abstract member (`TYPE Elem` → `VAL zero :Elem`) is proper and admits.
 ///
-/// `declared_kt` arrives as owned data — a bind-time `ty` argument or a leaf re-dispatch's dep
-/// terminal. [`Scope::register_sig_slot_delivered`] allocates it into the SIG decl scope's own
-/// region through the single storage door and installs it in the collector, handing back that
-/// resident `&KType` — which [`Scope::resident_type_carrier`] seals into the terminal, born
-/// co-located with the stored slot rather than rebuilt from a second allocation.
+/// `declared_kt` arrives from a bind-time `ty` argument or a leaf re-dispatch's dep terminal.
+/// [`Scope::register_sig_slot_delivered`] installs it in the SIG decl scope's slot collector;
+/// [`Scope::resident_type_carrier`] seals the same handle into the terminal.
 fn finalize_val<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,

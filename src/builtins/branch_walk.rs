@@ -44,7 +44,7 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     } else {
         match arg_type(ctx.args, "return_type") {
-            Some(other) => *other,
+            Some(other) => other,
             None => {
                 return Err(KError::new(KErrorKind::MissingArg(
                     "return_type".to_string(),

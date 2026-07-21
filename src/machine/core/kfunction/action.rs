@@ -62,7 +62,7 @@ pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObje
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
-pub fn arg_type<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KType> {
+pub fn arg_type(args: &KObject<'_>, name: &str) -> Option<KType> {
     match args {
         KObject::Record(fields, _) => fields.get(name).and_then(Held::as_type),
         _ => None,
@@ -157,7 +157,7 @@ pub fn require_bare_type_name<'a>(
         // A binder name is exactly the shape the bind seam leaves unlowered: a bare user type
         // name with nothing bound to it yet.
         Some(Held::UnresolvedType(ti)) => Ok(ti.render()),
-        Some(Held::Type(t)) => bare_type_name(t, slot, surface, types),
+        Some(Held::Type(t)) => bare_type_name(*t, slot, surface, types),
         Some(Held::Object(_)) | None => Err(KError::new(KErrorKind::MissingArg(slot.to_string()))),
     }
 }
@@ -167,12 +167,12 @@ pub fn require_bare_type_name<'a>(
 /// (List, Record, FN, …) is a `ShapeError`. `surface` is the keyword (`"NEWTYPE"`, `"UNION"`, …)
 /// embedded in the message.
 fn bare_type_name(
-    t: &KType,
+    t: KType,
     name: &str,
     surface: &str,
     types: &TypeRegistry,
 ) -> Result<String, KError> {
-    match types.node(*t) {
+    match types.node(t) {
         TypeNode::Number
         | TypeNode::Str
         | TypeNode::Bool

@@ -155,7 +155,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         Action::Done(finalize_newtype(
             &ctx.finish_ctx(),
             name,
-            *repr_kt,
+            repr_kt,
             bind_index,
         ))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {

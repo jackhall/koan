@@ -262,7 +262,7 @@ fn resolve_module_and_signature<'a>(
         _ => return Err(type_mismatch_or_missing(args, "m", "Module", types)),
     };
     let s = match arg_type(args, "s") {
-        Some(kt) if matches!(types.node(*kt), TypeNode::Signature { .. }) => *kt,
+        Some(kt) if matches!(types.node(kt), TypeNode::Signature { .. }) => kt,
         _ => return Err(type_mismatch_or_missing(args, "s", "Signature", types)),
     };
     Ok((m, s))

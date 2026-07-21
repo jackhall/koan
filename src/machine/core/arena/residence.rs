@@ -9,7 +9,7 @@ use std::cell::Cell;
 
 use super::{FrameSet, KoanRegion, KoanRegionExt, KoanStorageProfile};
 use crate::machine::core::{KError, KErrorKind, KFunction, Scope, StoredReach};
-use crate::machine::model::{CarriedFamily, KObject, KType, Module, TypeRegistry};
+use crate::machine::model::{CarriedFamily, KObject, Module, TypeRegistry};
 use crate::machine::CarrierWitness;
 use crate::witnessed::{AuditedStored, Witnessed};
 
@@ -166,12 +166,6 @@ impl<'a> Scope<'a> {
     ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
         let (obj, stored) = self.alloc_object_checked_stored(value, types)?;
         Ok(self.resident_value_carrier(obj, stored))
-    }
-
-    /// The [`KType`] twin of [`Self::seal_fresh_object`]: seal the `Copy` type handle as its
-    /// terminal carrier. Infallible — a handle has no residence to audit.
-    pub(crate) fn seal_fresh_ktype(&self, t: KType) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.resident_type_carrier(t)
     }
 }
 
@@ -338,8 +332,8 @@ impl<'ctx> ResidenceEvidence<'ctx> {
 // SAFETY: `audit` returns true only when every region borrow the stored `KObject`
 // carries is resident in `region`, covered by `context`'s reach evidence, or (when the ambient
 // predicate is present) covered by the destination scope's own ambient coverage — the residence the
-// `KObject` walk verifies. A `Wrapped { type_id }` tag needs no walk: its `&KType` points at owned
-// data allocated region-locally, so it reaches nothing outside `region`.
+// `KObject` walk verifies. A `Wrapped { type_id }` tag needs no walk: `KType` is a Copy digest
+// handle carrying no region borrow, so it reaches nothing outside `region`.
 unsafe impl AuditedStored<KoanStorageProfile> for KObject<'static> {
     type AuditContext<'ctx> = ResidenceEvidence<'ctx>;
     fn audit(region: &KoanRegion, value: &KObject<'_>, context: ResidenceEvidence<'_>) -> bool {
