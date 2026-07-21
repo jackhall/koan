@@ -318,9 +318,8 @@ fn fast_lane_on_non_function_returns_error() {
 }
 
 /// Tagged-union construction through the type name. The TypeCall fast lane
-/// resolves `Maybe` to its `KTypeValue(UserType { Tagged { schema } })` identity
-/// and constructs from the schema payload via
-/// `constructors::dispatch_construct_tagged`.
+/// resolves `Maybe` to its interned union identity and constructs the named
+/// member as a `Tagged` via `constructors::construct_tagged`.
 ///
 /// Counter contract: every step in the chain (TypeCall head resolution +
 /// construct-from-identity + LiteralPassThrough on the value-cell) is fast-lane;
@@ -360,10 +359,9 @@ fn fast_lane_on_tagged_union_constructs() {
     }
 }
 
-/// Struct construction through the type name. `STRUCT Pt = ...` registers the
-/// `KTypeValue(UserType { Struct { fields } })` identity type-side; the TypeCall
-/// fast lane constructs from the fields payload via
-/// `constructors::dispatch_construct_struct`.
+/// Record-repr newtype construction through the type name. `NEWTYPE Pt = :{...}`
+/// installs the record identity type-side; the TypeCall fast lane constructs
+/// from the record schema.
 ///
 /// Counter contract: every step is fast-lane (TypeCall head resolution +
 /// construct-from-identity + LiteralPassThrough per value-cell); no entry into
@@ -982,15 +980,16 @@ fn head_deferred_applies_returned_functor_to_module() {
     );
 }
 
-/// `HeadDeferred` → constructor. A head that evaluates to a `KTypeValue(UserType)`
-/// (a nested head expression naming a type) routes through the `Constructor` arm.
+/// `HeadDeferred` → constructor. A head that evaluates to a first-class type
+/// value (a nested head expression naming a type) routes through the
+/// `Constructor` arm.
 #[test]
 fn head_deferred_constructs_from_returned_type_value() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     test_run.run("NEWTYPE Point = :{x :Number, y :Number}");
     // `(Point) {x = 1, y = 2}`: the nested-`Expression` head `(Point)` resolves the
-    // type leaf to `KTypeValue(Point)`, then the body constructs.
+    // type leaf to the type-carried `Point` identity, then the body constructs.
     let out = test_run.run_one(parse_one("(Point) {x = 1, y = 2}"));
     assert_eq!(
         out.ktype().name(&test_run.types),

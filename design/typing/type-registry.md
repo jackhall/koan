@@ -202,5 +202,5 @@ as a handle copy — there is no storage door and no residence audit to run.
 - The cross-thread transfer mechanics (whether a value's type nodes are copied by
   subgraph walk or merged as persistent maps, and whether verdict edges transfer as
   warm cache) are recorded as unplanned work in the
-  [type memos project README](../../roadmap/type_memos/README.md) — exercisable only
+  [type language project README](../../roadmap/type_language/README.md) — exercisable only
   once concurrency ships, and undecided even within this design.

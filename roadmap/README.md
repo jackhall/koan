@@ -17,9 +17,8 @@ buys the language and listing its ready-to-start items:
 [metaprogramming/](metaprogramming/README.md), [type_language/](type_language/README.md),
 [editor_tooling/](editor_tooling/README.md), [refactor/](refactor/README.md),
 [simplify_dispatch/](simplify_dispatch/README.md),
-[compile_safety/](compile_safety/README.md),
-[scheduler_library/](scheduler_library/README.md), and
-[type_memos/](type_memos/README.md).
+[compile_safety/](compile_safety/README.md), and
+[scheduler_library/](scheduler_library/README.md).
 
 Design rationale for what's already in the language lives in [design/](../design/) — five
 topical docs covering the execution model, memory model, functional programming,
@@ -54,10 +53,11 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Move binder discovery into the parser](simplify_dispatch/binder-discovery-to-parse.md)
 - [Declaration identity is the installing node](simplify_dispatch/declaration-identity-installing-node.md)
 - [One owner for eager-part staging](simplify_dispatch/eager-part-staging.md)
+- [One deferral bundle for field-list dispatch](simplify_dispatch/field-list-deferral-bundle.md)
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
+- [Module element-type join](type_language/module-element-type-join.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Module element-type join](type_memos/module-element-type-join.md)
 

@@ -74,8 +74,8 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
 
 /// A sigil-form return type that sub-dispatches at FN-def (no parameter reference)
 /// and a parameter slot that parks on a forward-LET binding both join the same
-/// dep-finish; the return-type sub-dispatch's `results_pos` says where the closure picks
-/// the lifted `KTypeValue` out of `&[&KObject]`.
+/// dep-finish; the finish picks each sub-dispatch's `Carried::Type` terminal out
+/// of the owned dep results by its recorded position.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let region = run_root_storage();
@@ -110,7 +110,7 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     assert_eq!(*kt, KType::NUMBER);
 }
 
-/// A parens-form parameter type that sub-dispatches to a non-`KTypeValue` must
+/// A parens-form parameter type that sub-dispatches to a non-type value must
 /// surface a `ShapeError` naming the offending slot's part-index, attributing the
 /// rejection to the right signature slot rather than an opaque elaborator failure.
 #[test]
@@ -134,7 +134,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     assert!(!fn_is_registered(scope, "USE"), "USE should not register");
 }
 
-/// A sigil-form return type that sub-dispatches to a non-`KTypeValue` must surface
+/// A sigil-form return type that sub-dispatches to a non-type value must surface
 /// a `ShapeError` naming the return-type slot (the
 /// `ReturnTypeCapture::ReturnTypeExpr` arm of the dep-finish).
 #[test]

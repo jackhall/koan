@@ -1,17 +1,15 @@
 //! Fast-lane dispatch shapes — bare identifier, bare leaf type,
 //! bare-`Type`-head call, sigiled type expression, literal pass-through.
-//! Most terminate (or single-producer-park) in one poll. Two carry a resume:
-//! `TypeCall` parks on per-value-cell eager-subs (its value subs as a
-//! `AwaitDeps`) or on a still-finalizing head binding, re-running
-//! [`type_call`] on wake; `BareTypeLeaf` parks on a still-finalizing referent
-//! and re-resolves [`bare_type_leaf`]. Both park through a [`park_resume`] closure.
-
-use std::collections::HashMap;
-use std::rc::Rc;
+//! Most terminate (or single-producer-park) in one poll. `TypeCall` parks here on a
+//! still-finalizing head binding, re-running [`type_call`] on wake — the per-value-cell eager
+//! subs that follow a resolved head are the constructor dispatch's own `AwaitDeps` and resume
+//! `finish_witnessed` there, not `type_call`. `BareTypeLeaf` parks on a still-finalizing referent
+//! and re-resolves [`bare_type_leaf`]. Both single_poll parks route through a [`park_resume`]
+//! closure.
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
 use crate::machine::model::TypeResolution;
-use crate::machine::model::{Carried, KObject, KType};
+use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
 use crate::source::Spanned;
@@ -26,38 +24,6 @@ use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::{Deps, ProducerDisposition};
 use crate::witnessed::Residence;
-
-/// Schema-keyed payload the resume needs to materialize the constructed value once every
-/// slot is resolved. `identity` / `constructor` is the sealed member's handle, stamped onto the
-/// produced `KObject`; `schema` is the member's variant schema, used for per-value type-checking.
-pub(in crate::machine::execute) enum CtorKind {
-    /// NewType construction (record-repr or scalar) from a single positional value. One value
-    /// cell carrying the whole value expression; the finish type-checks it against the
-    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    NewType { identity: KType },
-    /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
-    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
-    /// instead of deferring the whole record literal; the
-    /// finish builds the `KObject::Record` and wraps it with `identity`.
-    RecordNewType {
-        identity: KType,
-        field_names: Vec<String>,
-    },
-    Tagged {
-        schema: Rc<HashMap<String, KType>>,
-        /// The sealed union member's own handle — what the built `Tagged` carries as its
-        /// `identity`, and what its `ktype()` reports.
-        member: KType,
-        tag: String,
-    },
-    /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
-    /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
-    /// expression; the finish stamps the value's full type as the sole applied arg, peels any
-    /// `Wrapped` layer, and wraps the payload with a fresh
-    /// `ConstructorApply(Wrapper, {<param> = <arg>})`
-    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
-    ApplyConstructor { constructor: KType },
-}
 
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
@@ -156,7 +122,7 @@ pub(super) fn record_type<'step>(
         }) => *boxed,
         _ => unreachable!("RecordType shape implies a single RecordType part"),
     };
-    let chain = ctx.current_lexical_chain();
+    let chain = ctx.active_chain();
     // The field-list elaborator is a pure decide: fold the structural record type now, or declare
     // its forward-ref/sub-dispatch deferral as a `ParkThenContinue`.
     super::field_list::elaborate_record_value(ctx, fields, chain)

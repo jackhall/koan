@@ -231,7 +231,7 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 pub struct BodyCtx<'a, 'c> {
     pub scope: &'a Scope<'a>,
     pub frame: Option<&'c Rc<CallFrame>>,
-    /// The ambient lexical chain (an `Rc`, as `current_lexical_chain` hands it out — binders read
+    /// The ambient lexical chain (an `Rc`, as `active_chain` hands it out — binders read
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
     pub args: &'c KObject<'a>,

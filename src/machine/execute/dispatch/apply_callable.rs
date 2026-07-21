@@ -9,7 +9,7 @@
 //!
 //! A [`ResolvedCallable`] has exactly two execution arms:
 //!
-//! - `Constructor(KType)` — build a value from a type schema (struct / tagged /
+//! - `Constructor { identity: KType }` — build a value from a type schema (struct / tagged /
 //!   newtype / `TypeConstructor` identity), reusing the `constructors` module
 //!   (`CtorKind` + `launch`); or, when the head is a type constructor and the body is a
 //!   record literal, apply that constructor to named type arguments
@@ -292,9 +292,10 @@ fn quoted_list(names: &[&str]) -> String {
 
 /// Construct from an anonymous union of per-variant newtype members (a user `UNION`). `Maybe Some`
 /// (a bare `Type` token body) yields the variant member's type value, reached through its union;
-/// `Maybe (Some v)` (a paren-group body) newtype-constructs the named member — an ordinary
-/// `KObject::Wrapped` over the member, never a `KObject::Tagged`. An unknown variant name in
-/// either form is a schema error listing the union's members.
+/// `Maybe (Some v)` (a paren-group body) constructs the named member as a `KObject::Tagged` —
+/// the same value shape builtin `Result` produces — so `MATCH` dispatches user unions by tag
+/// string through the shared `TaggedByTag` path. An unknown variant name in either form is a
+/// schema error listing the union's members.
 fn apply_union_construct<'step>(
     ctx: &SchedulerView<'step, '_>,
     members: Vec<KType>,

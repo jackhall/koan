@@ -125,14 +125,9 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         self.ambient.active_payload().map(|p| &*p.chain)
     }
 
-    /// Cloned `Rc` to the active chain — for the type-leaf and field-list reads that take it by value.
+    /// Cloned `Rc` to the active chain — for the type-leaf and field-list reads that take it by
+    /// value, and the `record_type` elaborator deferral.
     pub(super) fn active_chain(&self) -> Option<Rc<LexicalFrame>> {
-        self.ambient.active_payload().map(|p| p.chain.clone())
-    }
-
-    /// Cloned `Rc` to the active lexical chain — the `record_type` elaborator deferral needs it by
-    /// value.
-    pub(super) fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
         self.ambient.active_payload().map(|p| p.chain.clone())
     }
 

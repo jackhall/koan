@@ -26,9 +26,41 @@ use super::super::outcome::DepTerminal;
 use super::super::run_loop::{dest_brand, DestHandleFamily};
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::SchedulerView;
-use super::single_poll::CtorKind;
 use super::{Await, DepRequest, Outcome};
 use crate::scheduler::{DepResults, Deps};
+
+/// Schema-keyed selector for [`finish_witnessed`]'s match: which construction shape `launch`'s
+/// value subs feed once every slot resolves. `identity` / `constructor` is the sealed member's
+/// handle, stamped onto the produced `KObject`; `schema` is the member's variant schema, used for
+/// per-value type-checking.
+pub(in crate::machine::execute) enum CtorKind {
+    /// NewType construction (record-repr or scalar) from a single positional value. One value
+    /// cell carrying the whole value expression; the finish type-checks it against the
+    /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
+    NewType { identity: KType },
+    /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
+    /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
+    /// instead of deferring the whole record literal; the
+    /// finish builds the `KObject::Record` and wraps it with `identity`.
+    RecordNewType {
+        identity: KType,
+        field_names: Vec<String>,
+    },
+    Tagged {
+        schema: Rc<HashMap<String, KType>>,
+        /// The sealed union member's own handle — what the built `Tagged` carries as its
+        /// `identity`, and what its `ktype()` reports.
+        member: KType,
+        tag: String,
+    },
+    /// Identity-wrapper construction over a `NEWTYPE (Type AS Wrapper)`-declared constructor
+    /// family (empty-schema `TypeConstructor` member). One value cell carrying the whole value
+    /// expression; the finish stamps the value's full type as the sole applied arg, peels any
+    /// `Wrapped` layer, and wraps the payload with a fresh
+    /// `ConstructorApply(Wrapper, {<param> = <arg>})`
+    /// type id — so the built value inhabits `:(<v's type> AS Wrapper)`.
+    ApplyConstructor { constructor: KType },
+}
 
 /// Fold accumulator for a record-repr newtype: the destination region plus the field values
 /// gathered from the value deps, each `transfer_into`-folded so the accumulator's witness composes
@@ -71,15 +103,15 @@ pub(in crate::machine::execute) fn prepare_args<'step>(
 #[cfg(test)]
 mod tests;
 
-/// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value
-/// expression (`expr.parts[1..]`); a single redundant `(...)` paren group unwraps so
-/// `(Distance 3.0)` / `Distance (3.0)` construct identically and `Distance ()` is arity-zero.
-/// The parts are launched as one value cell whose finish type-checks against the member's
-/// `repr` and wraps with `identity`.
-pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
-    identity: KType,
+/// Paren-unwrap a construction's value parts to a single value cell: a redundant `(...)`
+/// wrapper group unwraps first, so `(Distance 3.0)` / `Distance (3.0)` construct identically
+/// and `Distance ()` is arity-zero (rejected here). A single remaining part dispatches
+/// directly (a bare `(p)` reference resolves in place when ready, the way tagged construction
+/// dispatches its lone value); a multi-part value (`Bar (Foo 3.0)`) wraps into one `Expression`
+/// so `launch` dispatches it as one unit.
+fn single_value_cell<'step>(
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
-) -> Outcome<'step> {
+) -> Result<ExpressionPart<'step>, KError> {
     if let [Spanned {
         value: ExpressionPart::Expression(inner),
         ..
@@ -88,26 +120,36 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
         value_parts = inner.parts.clone();
     }
     if value_parts.is_empty() {
-        return Outcome::Done(Err(KError::new(KErrorKind::ArityMismatch {
+        return Err(KError::new(KErrorKind::ArityMismatch {
             expected: 1,
             got: 0,
-        })));
+        }));
     }
-    // One value cell. A single part dispatches directly (a bare `(p)` reference resolves
-    // in place when ready, the way tagged construction dispatches its lone value); a
-    // multi-part value (`Bar (Foo 3.0)`) is wrapped so `launch` dispatches it as one unit.
-    let value_cell = if value_parts.len() == 1 {
+    Ok(if value_parts.len() == 1 {
         value_parts.into_iter().next().expect("len == 1").value
     } else {
         ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
+    })
+}
+
+/// Construct a newtype value (record-repr or scalar). `value_parts` is the whole value
+/// expression (`expr.parts[1..]`), collapsed to one value cell by [`single_value_cell`]; the
+/// finish type-checks it against the member's `repr` and wraps with `identity`.
+pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
+    identity: KType,
+    value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+) -> Outcome<'step> {
+    let value_cell = match single_value_cell(value_parts) {
+        Ok(cell) => cell,
+        Err(e) => return Outcome::Done(Err(e)),
     };
     launch(vec![value_cell], CtorKind::NewType { identity })
 }
 
 /// Direct-construct a record-repr newtype from a named record-literal body. Launches one
 /// value cell per field — a literal field stages in place, so a record over literal fields
-/// binds synchronously (the property the retired struct path relied on, and which a chained
-/// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
+/// binds synchronously; a chained construction like `(Boxed (p))` depends on that. The finish
+/// builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
     identity: KType,
     record_fields: Vec<(String, ExpressionPart<'step>)>,
@@ -157,32 +199,17 @@ fn check_newtype_repr<'a>(
 }
 
 /// Construct an identity-wrapper value over a `NEWTYPE (Type AS Wrapper)`-declared constructor
-/// family. Mirrors [`dispatch_construct_newtype`]'s body shape: a single redundant `(...)` paren
-/// group unwraps so `(Wrapper 3.0)` / `Wrapper (3.0)` construct identically and `Wrapper ()` is
-/// arity-zero; a single part dispatches directly, a multi-part value wraps as one value cell. The
-/// finish ([`finish_witnessed`]'s `ApplyConstructor` arm) stamps the value's type as the applied
-/// arg and wraps it with a `ConstructorApply(<ctor SetMember>, {<param> = arg})` identity.
+/// family. `value_parts` collapses to one value cell via [`single_value_cell`], the same shape
+/// [`dispatch_construct_newtype`] uses. The finish ([`finish_witnessed`]'s `ApplyConstructor`
+/// arm) stamps the value's type as the applied arg and wraps it with a
+/// `ConstructorApply(<ctor SetMember>, {<param> = arg})` identity.
 pub(in crate::machine::execute) fn dispatch_construct_apply<'step>(
     constructor: KType,
-    mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
+    value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
-    if let [Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    }] = value_parts.as_slice()
-    {
-        value_parts = inner.parts.clone();
-    }
-    if value_parts.is_empty() {
-        return Outcome::Done(Err(KError::new(KErrorKind::ArityMismatch {
-            expected: 1,
-            got: 0,
-        })));
-    }
-    let value_cell = if value_parts.len() == 1 {
-        value_parts.into_iter().next().expect("len == 1").value
-    } else {
-        ExpressionPart::Expression(Box::new(KExpression::new(value_parts)))
+    let value_cell = match single_value_cell(value_parts) {
+        Ok(cell) => cell,
+        Err(e) => return Outcome::Done(Err(e)),
     };
     launch(vec![value_cell], CtorKind::ApplyConstructor { constructor })
 }

@@ -432,8 +432,8 @@ fn dispatch_list_any_overload_catches_heterogeneous_literal() {
 }
 
 /// Parens-wrapped FN parameter type schedules the inner expression as a
-/// sub-Dispatch from `parse_fn_param_list`, splices the resulting `KTypeValue` back
-/// into the signature, and finalizes the FN with the elaborated type.
+/// sub-Dispatch from `parse_fn_param_list`, splices the resulting `Carried::Type`
+/// terminal back into the signature, and finalizes the FN with the elaborated type.
 #[test]
 fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
     let bytes = capture_program_output(

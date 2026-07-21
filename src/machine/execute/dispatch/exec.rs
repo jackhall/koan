@@ -265,7 +265,7 @@ fn run_action_builtin<'step>(
         Err(e) => return Outcome::Done(Err(e)),
     };
     let frame = view.current_frame();
-    let chain = view.current_lexical_chain();
+    let chain = view.active_chain();
     let action = {
         let body_ctx = BodyCtx {
             scope: view.current_scope(),

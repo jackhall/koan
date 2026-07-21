@@ -568,7 +568,6 @@ digraph {
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::ctx" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::dispatch::single_poll" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::execute::run_loop" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine::model" [label="uses", style="dashed"];

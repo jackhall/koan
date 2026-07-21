@@ -121,7 +121,7 @@ fn let_type_class_with_type_value_still_binds() {
 }
 
 /// `LET foo = 1` (lowercase, Identifier overload) doesn't go through the
-/// `KTypeValue(_)` arm and so isn't subject to the type-class allowlist.
+/// `Held::Type` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::machine::run_root_storage;
@@ -296,7 +296,7 @@ fn let_type_class_in_sig_body_binds_manifest() {
 /// A Type-classified SIG alias `LET Po = Ordered` writes the *same* unified
 /// `KType::Signature` identity into `bindings.types[Po]` as `Ordered` carries,
 /// so `:Po` and `:Ordered` are dispatch-identical. Pins the merged-variant
-/// LET path: the generic `KTypeValue(kt)` arm shared with struct/union/module
+/// LET path: the generic `Held::Type(kt)` arm shared with struct/union/module
 /// aliases, with no separate signature-only install branch.
 #[test]
 fn let_type_class_signature_alias_preserves_identity() {

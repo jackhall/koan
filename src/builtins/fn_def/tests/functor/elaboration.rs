@@ -4,7 +4,7 @@ use crate::builtins::test_support::{fn_is_registered, lookup_fn, TestRun};
 use crate::machine::run_root_storage;
 
 /// `LET MyList = :(LIST OF Number)` writes the elaborated `KType::list(Number)`
-/// to `bindings.types` (reachable via `Scope::resolve_type`); the `KTypeValue`
+/// to `bindings.types` (reachable via `Scope::resolve_type`); the `Held::Type`
 /// carrier is only a dispatch transport, not the storage shape.
 #[test]
 fn list_of_let_binding_is_ktype_value() {

@@ -581,10 +581,9 @@ mod tests {
     }
 
     /// A `:(LIST OF Self)` field threads the self-reference through the deferred sigil-field path:
-    /// `children` seals to `List` of the declaring member's own handle. (Construction is the same
-    /// seal-shape concern the retired struct path pinned — a bare recursive record has no nullable
-    /// base, and an empty list literal types as `List(Str)`, both orthogonal to the recursion
-    /// threading proven here.)
+    /// `children` seals to `List` of the declaring member's own handle. (Construction is a
+    /// separate concern — a bare recursive record has no nullable base, and an empty list
+    /// literal types as `List(Str)` — both orthogonal to the recursion threading proven here.)
     #[test]
     fn record_repr_list_of_self_field_seals_self_handle() {
         let region = run_root_storage();
