@@ -26,7 +26,7 @@ the function it applies.
 **Directions.**
 
 - *Reification trigger — open.* When a type carrier becomes a constructor function rather than
-  a Type value. Options: (a) implicit by position — a `SetRef`-identity carrier bound into an
+  a Type value. Options: (a) implicit by position — a `SetMember`-identity carrier bound into an
   `:(FN …)`-typed slot (or otherwise used where a function is expected) reifies; (b) an explicit
   surface form (`(<Type> CONSTRUCTOR)` or similar) that names the constructor. Recommended:
   prototype (a) at the function-value bind seam, since it needs no new surface keyword.

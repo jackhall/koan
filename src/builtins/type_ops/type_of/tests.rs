@@ -11,7 +11,7 @@ fn type_of_number_literal_is_number() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one("TYPE OF 5"));
-    assert_eq!(*result, KType::NUMBER);
+    assert_eq!(result, KType::NUMBER);
 }
 
 /// A bound container reports its memoized carried element type, not a walk of its contents.
@@ -22,7 +22,7 @@ fn type_of_bound_list_is_list_of_element_type() {
     test_run.run("LET xs = [1, 2, 3]");
     let result = test_run.run_one_type(parse_one("TYPE OF xs"));
     let types = test_run.types();
-    assert_eq!(*result, types.list(KType::NUMBER));
+    assert_eq!(result, types.list(KType::NUMBER));
 }
 
 /// A module's reported type is its principal signature, sourced from the module itself — the
@@ -34,7 +34,7 @@ fn type_of_module_is_its_self_sig() {
     let scope = test_run.scope;
     test_run.run("MODULE int_ord = ((LET Elt = Number) (LET zero = 7))");
     let module = lookup_module(scope, "int_ord", &test_run.types);
-    let result = *test_run.run_one_type(parse_one("TYPE OF int_ord"));
+    let result = test_run.run_one_type(parse_one("TYPE OF int_ord"));
     assert!(
         matches!(test_run.types().node(result), TypeNode::Signature { .. }),
         "TYPE OF a module is a signature",
@@ -60,7 +60,7 @@ fn type_of_opaque_view_reports_the_view_not_its_source() {
     );
     let view = lookup_module(scope, "view", &test_run.types);
     let source = lookup_module(scope, "int_ord", &test_run.types);
-    let result = *test_run.run_one_type(parse_one("TYPE OF view"));
+    let result = test_run.run_one_type(parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {
@@ -96,7 +96,7 @@ fn type_of_transparent_view_reports_concrete_slots() {
          MODULE int_ord = ((LET Elt = Number) (LET zero = 7))\n\
          LET view = (int_ord :! Ordered)",
     );
-    let result = *test_run.run_one_type(parse_one("TYPE OF view"));
+    let result = test_run.run_one_type(parse_one("TYPE OF view"));
     let types = test_run.types();
     match types.node(result) {
         TypeNode::Signature { schema, .. } => {

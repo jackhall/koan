@@ -133,7 +133,7 @@ The rails the dispatch driver feeds:
   - `TypeCall` (`MyStruct {x = 1}`) —
     [`type_call`](../../src/machine/execute/dispatch/single_poll.rs)
     resolves the head Type token to its `bindings.types` identity. A
-    `SetRef` identity is a `ResolvedCallable::Constructor` — the only invocable
+    `SetMember` identity is a `ResolvedCallable::Constructor` — the only invocable
     type identity, since `bindings.types` holds no callable value — and flows
     through the shared
     apply-a-callable tail (below). No value-side carrier is fetched — the
@@ -159,7 +159,7 @@ The rails the dispatch driver feeds:
     nested-parens part (the *only* call shape — koan has no `f 1 2`
     positional call syntax for function values, so the named-arg shape
     is the whole user-facing surface). A `KFunction(f, _)` head resolves to a
-    `ResolvedCallable::Function` and a `KType::SetRef { .. }` head in the value channel's
+    `ResolvedCallable::Function` and a `SetMember` handle head in the value channel's
     `Type` arm — the identity a value-classified alias of a constructible type
     surfaces (`LET outcome = Outcome` then `(outcome (Err "x"))`) — to a
     `ResolvedCallable::Constructor`, both flowing through the shared

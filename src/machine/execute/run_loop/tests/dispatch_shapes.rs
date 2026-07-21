@@ -116,7 +116,7 @@ fn bare_type_leaf_short_circuits() {
         "BareTypeLeaf must not enter resolve_dispatch",
     );
     assert!(
-        matches!(result, Carried::Type(&KType::NUMBER)),
+        matches!(result, Carried::Type(KType::NUMBER)),
         "(Number) must terminate to a Number type; got {}",
         result.summarize(&test_run.types),
     );

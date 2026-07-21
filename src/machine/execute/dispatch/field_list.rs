@@ -136,8 +136,8 @@ impl<'step> FieldListRewalk<'step> {
 }
 
 /// The ONE construction site both deferral currencies call: re-walk the field list against the
-/// resolved sub-Dispatch results, compose the result `KType` from the owned pairs, and allocate it
-/// into the consumer's own region through [`StepAllocator::alloc_type`].
+/// resolved sub-Dispatch results, compose the result `KType` from the interned pairs, and carry the
+/// handle through [`StepAllocator::type_carried`].
 ///
 /// `feed` is the owned suffix of the dep terminals in DFS order — the parks are notify-only waits
 /// on a forward reference, so they never reach the walk. Every field type the walk produces is
@@ -151,7 +151,7 @@ fn compose_field_list<'step>(
     types: &TypeRegistry,
 ) -> Result<StepCarried<'step>, KError> {
     let fields = rewalk.run(scope, feed, types)?;
-    Ok(step_ctx.alloc_type(compose(fields, types)?))
+    Ok(step_ctx.type_carried(compose(fields, types)?))
 }
 
 /// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
@@ -334,7 +334,7 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
     ) {
         FieldListOutcome::Done(pairs) => {
             let kt = view.types().record(Record::from_pairs(pairs));
-            Outcome::Done(Ok(view.step_ctx().alloc_type(kt)))
+            Outcome::Done(Ok(view.step_ctx().type_carried(kt)))
         }
         FieldListOutcome::Err(msg) => Outcome::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {

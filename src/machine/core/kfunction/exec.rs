@@ -5,18 +5,16 @@
 //! `execute::dispatch::exec::invoke`; keeping it out of here is what lets `exec` stay
 //! scheduler-agnostic and `'run`-free.
 //!
-//! ## Two lifetimes
+//! ## One lifetime
 //!
-//! [`ExecOutcome`] carries two because the AST and the produced value genuinely differ: dispatchable
-//! expressions are borrowed from the long-lived AST (`'ast`), while a deferred-`Type` return's
-//! resolved type is re-homed into the captured-scope region but capped at the call's `'step` — the
-//! contract lifetime the lift boundary consumes it within. `KExpression`'s invariance blocks
-//! collapsing the two.
+//! [`ExecOutcome`] carries a single lifetime `'ast`: dispatchable expressions are borrowed from the
+//! long-lived AST. A deferred-`Type` return's resolved type is a `Copy` `KType` handle, lifetime-free,
+//! so it rides the outcome by value with no second lifetime to thread.
 
 use crate::machine::{DeliveredCarried, KErrorKind};
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError, RegionBrand, Scope};
+use crate::machine::core::{BindingIndex, CallFrame, KError};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{
@@ -35,9 +33,10 @@ pub struct ExecFrame {
     pub region: Rc<CallFrame>,
 }
 
-/// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. See the
-/// module docs for the two lifetimes.
-pub enum ExecOutcome<'ast, 'step> {
+/// **exec → scheduler.** What running a body describes next, in `exec`'s native currency. The
+/// `'ast` lifetime is the borrowed body statements; the resolved return handle is `Copy` and
+/// lifetime-free.
+pub enum ExecOutcome<'ast> {
     /// The body failed; propagate the error.
     Errored(KError),
     /// Run the body flat: dispatch each `leading` (non-tail) statement — results flow into the
@@ -47,7 +46,7 @@ pub enum ExecOutcome<'ast, 'step> {
     Tail {
         leading: Vec<&'ast KExpression<'ast>>,
         tail: &'ast KExpression<'ast>,
-        ret: PerCallReturn<'step>,
+        ret: PerCallReturn,
     },
     /// A deferred-`Expression` return on its **first** call: resolve `type_expr` (`er.Carrier`,
     /// `sig WITH {…}`) as a single dep-finish dependency, run `leading` as sibling statements, then
@@ -62,33 +61,12 @@ pub enum ExecOutcome<'ast, 'step> {
 
 /// The return contract a [`ExecOutcome::Tail`] carries. A resolved-return FN reads its type off the
 /// signature (`FromSignature` → `ReturnContract::Function`); a deferred-`Type` return whose type
-/// resolved synchronously carries it already re-homed into the captured-scope region (`Resolved` →
-/// `ReturnContract::PerCall`), so the lift boundary checks + stamps against it — no dep-finish, TCO
-/// preserved. The re-home (via [`home_return_type`]) lets the elaboration read the param-bound child
-/// scope at the frame brand yet hand back a `ret` reference at the call's `'step`.
-pub enum PerCallReturn<'step> {
+/// resolved synchronously carries the resolved handle (`Resolved` → `ReturnContract::PerCall`), so
+/// the lift boundary checks + stamps against it — no dep-finish, TCO preserved. The handle is
+/// `Copy` and lifetime-free, so it rides the tail-replace with no re-home.
+pub enum PerCallReturn {
     FromSignature,
-    Resolved(&'step KType),
-}
-
-/// Home a deferred FN's resolved return *type* into `captured`'s region (a live ancestor of the
-/// call), capped at the caller-supplied `'a`. The elaboration reads the param-bound child scope at
-/// the frame brand, so `kt`'s borrow is the short brand; the clone lands owned in the captured
-/// region and comes back at `'a`.
-///
-/// The cap is load-bearing: callers pass the **contract** lifetime (`'step`), not the captured
-/// region's full lifetime. That is return-contract discipline — a `ret` reference must not outlive
-/// the window the lift boundary consumes it in — and it holds independently of residence, which a
-/// `KType` has none of: the clone is owned data stored through the single door, so it borrows only
-/// the destination region.
-pub(crate) fn home_return_type<'captured: 'a, 'a>(
-    kt: &KType,
-    captured: &Scope<'captured>,
-) -> &'a KType {
-    // Shorten the brand (covariant) before the store, so the resident reference comes back at the
-    // contract lifetime rather than the captured region's own.
-    let brand: RegionBrand<'a> = captured.brand();
-    brand.alloc_ktype(*kt)
+    Resolved(KType),
 }
 
 /// `invoke` for a user-defined function: bind `args` into `ctx`'s scope, then describe the body as an
@@ -107,7 +85,7 @@ pub fn run_user_fn<'ast, 'step>(
     ctx: &ExecFrame,
     in_contract_chain: bool,
     types: &TypeRegistry,
-) -> ExecOutcome<'ast, 'step>
+) -> ExecOutcome<'ast>
 where
     'ast: 'step,
 {
@@ -147,7 +125,7 @@ where
                 // value binding. The arg is already a resolved type; the door clones it into the
                 // frame region. A *module* argument is a value and takes the Object arm above.
                 Carried::Type(kt) => {
-                    child.register_type_delivered(name.clone(), *kt, BindingIndex::value(0))?;
+                    child.register_type_delivered(name.clone(), kt, BindingIndex::value(0))?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.
@@ -193,42 +171,36 @@ where
             }
             match deferred {
                 // `Type` form (`-> er`): elaborate inline against the per-call child scope at the
-                // frame brand, then re-home the resolved type into the captured-scope region so it is
-                // freed from the brand and rides the tail-replace as a `'step` reference.
+                // frame brand. The resolved type is a `Copy` handle, so it rides the tail-replace
+                // directly with no re-home.
                 DeferredReturn::Type(type_expr) => {
-                    // Resolve against the param-bound child scope, then clone the resolved type
-                    // into the captured region. The home is capped at `'step` so the contract `ret`
-                    // can't out-claim the window the lift boundary consumes it in — see
-                    // `home_return_type`.
-                    let homed = ctx.region.with_scope(|child| {
-                        let captured = func.captured_scope();
-                        let homed: Result<&'step KType, KError> = match child
-                            .resolve_type_identifier(type_expr, None, types)
-                        {
-                            TypeResolution::Done(kt) => Ok(home_return_type(kt, captured)),
-                            // A park at this point cannot be honored — the body is about to
-                            // run — so fall back to Any and let the body's own dispatch surface
-                            // any real error.
-                            TypeResolution::Park(_) => Ok(home_return_type(&KType::ANY, captured)),
-                            // A miss is a real error: the return names no type. Surfacing it
-                            // here rather than widening to Any is what makes `-> some_value` (a
-                            // return slot naming a value — a module included) a diagnostic
-                            // instead of a silently unconstrained return.
-                            TypeResolution::Unbound(message) => {
-                                Err(KError::new(KErrorKind::ShapeError(message)))
-                            }
-                        };
-                        homed
+                    let resolved = ctx.region.with_scope(|child| {
+                        let resolved: Result<KType, KError> =
+                            match child.resolve_type_identifier(type_expr, None, types) {
+                                TypeResolution::Done(kt) => Ok(kt),
+                                // A park at this point cannot be honored — the body is about to
+                                // run — so fall back to Any and let the body's own dispatch surface
+                                // any real error.
+                                TypeResolution::Park(_) => Ok(KType::ANY),
+                                // A miss is a real error: the return names no type. Surfacing it
+                                // here rather than widening to Any is what makes `-> some_value` (a
+                                // return slot naming a value — a module included) a diagnostic
+                                // instead of a silently unconstrained return.
+                                TypeResolution::Unbound(message) => {
+                                    Err(KError::new(KErrorKind::ShapeError(message)))
+                                }
+                            };
+                        resolved
                     });
-                    let ret_ref = match homed {
-                        Ok(ret_ref) => ret_ref,
+                    let ret = match resolved {
+                        Ok(ret) => ret,
                         Err(e) => return ExecOutcome::Errored(e),
                     };
                     let (leading, tail) = split_leading_tail(body_expr);
                     ExecOutcome::Tail {
                         leading,
                         tail,
-                        ret: PerCallReturn::Resolved(ret_ref),
+                        ret: PerCallReturn::Resolved(ret),
                     }
                 }
                 // `Expression` form (`-> er.Carrier`, `sig WITH {…}`): the type needs a sub-dispatch,

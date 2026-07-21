@@ -44,10 +44,11 @@ Per variant:
 - **Records** gate on record subtyping (either direction), then compare
   order-blind: the same field-name set, each field's value equal. Field
   declaration order does not matter.
-- **Tagged** values compare nominal identity first (`same_nominal` — set digest
-  plus variant index); type arguments are a comparability gate (empty on either
-  side is erased and therefore comparable, both populated must name the same type
-  parameters and be related per name); then the payloads walk.
+- **Tagged** values compare nominal identity first by their `identity` handle (the
+  member's `(SCC digest, index)`, or a `ConstructorApply` over it when stamped — a
+  bare member and a stamped one are a comparability gate: an erased identity is
+  comparable, two stamped ones must name the same type parameters and be related per
+  name); then the payloads walk.
 - **Wrapped** (newtype) values compare their nominal `type_id` via digest-based
   `KType` equality, then the inner payloads. A `Wrapped` value is never equal to
   its bare representation, and two distinct newtypes over the same representation

@@ -1,8 +1,8 @@
 //! `Carried` — the scheduler's value currency: what a node produces and the node store
 //! holds. A produced result is either a runtime [`KObject`] (the `Object` arm), a type
-//! flowing raw in the type channel (the `Type` arm), so a type-operator returns a `&KType`
-//! without boxing it into a `KObject`, or a surface type name the bind seam could not lower
-//! to a type (the `UnresolvedType` arm).
+//! flowing raw in the type channel (the `Type` arm), so a type-operator returns a `KType`
+//! handle without boxing it into a `KObject`, or a surface type name the bind seam could not
+//! lower to a type (the `UnresolvedType` arm).
 //!
 //! `UnresolvedType` carries a [`TypeIdentifier`] verbatim: no type handle ever denotes an
 //! unresolved name. [`ExpressionPart::resolve_for`](crate::machine::model::ast::ExpressionPart::resolve_for)
@@ -18,12 +18,12 @@ use crate::witnessed::reattachable;
 
 use super::KObject;
 
-/// Three-arm value currency. `Copy` like the `&'a` references it wraps, so it threads through node
-/// results and the lift path without clones.
+/// Three-arm value currency. `Copy` — the object arms wrap `&'a` references and the `Type` arm a
+/// `Copy` [`KType`] handle, so it threads through node results and the lift path without clones.
 #[derive(Clone, Copy)]
 pub enum Carried<'a> {
     Object(&'a KObject<'a>),
-    Type(&'a KType),
+    Type(KType),
     /// A surface type name the bind seam left unlowered; resolved by scope walk at the consumer.
     UnresolvedType(&'a TypeIdentifier),
 }
@@ -32,8 +32,8 @@ pub enum Carried<'a> {
 /// scheduler's `Workload::Value`, stored in a `Witnessed<CarriedFamily, _>` slot and re-anchored on read.
 pub struct CarriedFamily;
 
-// A `Carried<'r>` is a tag plus `&'r` references, layout identical for every `'r`; the shared
-// `reattachable!` macro discharges that obligation once.
+// A `Carried<'r>` is a tag plus `&'r` references and a lifetime-free `KType` handle, layout
+// identical for every `'r`; the shared `reattachable!` macro discharges that obligation once.
 reattachable! {
     CarriedFamily => Carried<'r>,
 }
@@ -107,7 +107,7 @@ impl<'a> Held<'a> {
     pub fn from_carried(c: Carried<'a>) -> Held<'a> {
         match c {
             Carried::Object(o) => Held::Object(o.deep_clone()),
-            Carried::Type(t) => Held::Type(*t),
+            Carried::Type(t) => Held::Type(t),
             Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
         }
     }

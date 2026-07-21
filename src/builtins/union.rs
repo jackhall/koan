@@ -47,9 +47,9 @@ fn recover_union(
     }
     // `union_of` collapses a one-variant union to that member, so a single variant binds the
     // member handle directly rather than a `Union` node.
-    let members: Vec<KType> = match types.node(*bound) {
+    let members: Vec<KType> = match types.node(bound) {
         TypeNode::Union { members } => members,
-        TypeNode::SetMember { .. } => vec![*bound],
+        TypeNode::SetMember { .. } => vec![bound],
         _ => return UnionRecovery::Fresh,
     };
     // A persistent-scope re-run whose source changed arity at the same statement position routes
@@ -61,7 +61,7 @@ fn recover_union(
     {
         return UnionRecovery::Fresh;
     }
-    UnionRecovery::Sealed(*bound)
+    UnionRecovery::Sealed(bound)
 }
 
 /// Fill the elaborated variant schema into the declaration window and bind the union name to the
@@ -86,11 +86,10 @@ fn finalize_union<'a>(
     let n = fields.len();
 
     if let UnionRecovery::Sealed(kt) = recover_union(scope, &name, bind_index, n, fctx.types) {
-        // Idempotent re-finalize: the union is already bound. Allocate the recovered union into
-        // this scope's own region and cross it as a declared operand, folding the carriers' reach
-        // onto the placement — the same coverage the register-success path produces.
-        let kt_ref = scope.brand().alloc_ktype(kt);
-        return Ok(seal_type_identity(scope, kt_ref));
+        // Idempotent re-finalize: the union is already bound. Cross the recovered union handle as
+        // a declared operand, folding the carriers' reach onto the placement — the same coverage
+        // the register-success path produces.
+        return Ok(seal_type_identity(scope, kt));
     }
 
     let mut sealed = None;
@@ -119,9 +118,9 @@ fn finalize_union<'a>(
 
     let union_ty = fctx.types.union_of(sealed.members);
     match scope.register_nominal_upsert(name.clone(), union_ty, bind_index) {
-        // `register_nominal_upsert` hands back the region-allocated `&KType`. Cross it as a
-        // declared operand and fold the variant carriers' reach onto the placement's witness,
-        // rather than capturing the union type into a fold closure.
+        // `register_nominal_upsert` hands back the `Copy` `KType` handle. Cross it as a declared
+        // operand and fold the variant carriers' reach onto the placement's witness, rather than
+        // capturing the union type into a fold closure.
         Ok(kt_ref) => Ok(seal_type_identity(scope, kt_ref)),
         Err(e) => Err(e),
     }
@@ -203,7 +202,6 @@ mod tests {
     fn variant_repr(scope: &Scope<'_>, name: &str, variant: &str, types: &TypeRegistry) -> KType {
         let handle = scope
             .resolve_type(name)
-            .copied()
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
         let members = match types.node(handle) {
             TypeNode::Union { members } => members,
@@ -243,7 +241,7 @@ mod tests {
         // per-variant newtype `SetMember` each, registered into `types`.
         let result = test_run.run_one_type(parse_one("UNION Maybe = (Some :Number None :Null)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::Union { members } => {
                 assert_eq!(members.len(), 2, "one member per variant");
                 for member in members {
@@ -392,7 +390,7 @@ mod tests {
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(&crate::machine::FrameSet::empty(), |c| {
                 matches!(c, Carried::Type(kt)
-                    if matches!(types.node(**kt), TypeNode::Union { members } if members.len() == 2))
+                    if matches!(types.node(*kt), TypeNode::Union { members } if members.len() == 2))
             })
         });
         assert_eq!(

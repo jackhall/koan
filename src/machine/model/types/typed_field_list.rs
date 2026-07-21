@@ -176,7 +176,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
                 match results.as_mut().and_then(|feed| feed.pop()) {
                     // Re-walk: the `Type`-arm is the single guard rejecting a sub that
                     // resolved to a value-by-expression.
-                    Some(Carried::Type(kt)) => checked(*kt),
+                    Some(Carried::Type(kt)) => checked(kt),
                     Some(other @ (Carried::Object(_) | Carried::UnresolvedType(_))) => {
                         Err(format!(
                             "{context_list} type for `{}` resolved to non-type value `{}`",
@@ -229,7 +229,7 @@ pub fn parse_typed_field_list_via_elaborator<'e, 'a>(
             // A spliced cell is adopted into the elaborating scope (folding its reach),
             // then routed through type/non-type handling.
             ExpressionPart::Spliced { cell, .. } => match elaborator.scope.adopt_sealed(cell) {
-                Carried::Type(kt) => checked(*kt),
+                Carried::Type(kt) => checked(kt),
                 other @ (Carried::Object(_) | Carried::UnresolvedType(_)) => Err(format!(
                     "{context_list} type for `{}` resolved to non-type value `{}`",
                     name,

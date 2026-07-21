@@ -152,7 +152,7 @@ value.
 
 A `Result` value's type arguments are erased at construction — both `CATCH`
 and a `Result (Ok v)` / `Result (Error e)` constructor leave the carrier's
-`type_args` empty. A `:(Result {Ok = …, Error = …})` slot is nonetheless
+`identity` a bare `SetMember` handle. A `:(Result {Ok = …, Error = …})` slot is nonetheless
 runtime-checkable: the
 `matches_value(ConstructorApply, Tagged)` arm (see
 [ktype/parameterization-and-variance.md § Runtime type-parameter carriers](typing/ktype/parameterization-and-variance.md#runtime-type-parameter-carriers))
@@ -161,7 +161,8 @@ against the same-named type argument — a direct lookup, since tag name and
 parameter name coincide. So a caught
 `Result` at `Error = KError` is rejected where `Error = MyErr` is declared, because
 the `Error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
-annotated boundary stamps the carrier's `type_args` to the declared instantiation;
+annotated boundary stamps the carrier's `identity` to a `ConstructorApply` over the
+declared instantiation;
 the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
 [modular implicits](../roadmap/predicate_typing/modular-implicits.md).

@@ -45,7 +45,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Fold the USING-window write forwarding](refactor/fold-using-window-write-forwarding.md)
 - [Collapse the machine model/core straddle](refactor/machine-straddle-colocation.md)
 - [Codebase-wide naming and responsibility audit](refactor/naming-and-responsibility-audit.md)
-- [Own singleton nominal-set construction](refactor/own-singleton-nominal-set-construction.md)
 - [Region-store record values](refactor/region-store-records.md)
 - [Rebuild the scope-handles verification list](refactor/scope-handles-verification-audit.md)
 - [Unify the three deferred-write channels](refactor/unify-deferred-write-channels.md)
@@ -59,7 +58,6 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
 - [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
-- [RECURSIVE TYPES group finalize ordering](type_language/recursive-group-finalize-ordering.md)
 - [USING surfaces module type members](type_language/using-type-members.md)
-- [Interned type content behind Copy handles](type_memos/interned-type-content.md)
+- [Module element-type join](type_memos/module-element-type-join.md)
 

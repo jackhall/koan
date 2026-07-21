@@ -22,8 +22,8 @@ parser does not fold the inner expression's args into `TypeParams::List`
 or any positional collapse. Dispatch sees the raw multi-part expression
 through the AST wrapper described below, runs the normal candidate walk
 against a registered overload, and the picked overload's body returns a
-`&KType` in the value channel's `Type` arm — a structural type, or a nominal
-`SetRef` / `Module` / `Signature` identity.
+`KType` handle in the value channel's `Type` arm — a structural type, or a nominal
+`SetMember` / `Module` / `Signature` identity.
 
 ## AST representation
 
@@ -120,7 +120,7 @@ through an exact pre-pass ranked above every typed arm — and the winner runs (
 
 A single `UNION` variant is named through its union: `:(Maybe Some)` — a
 union head followed by a bare variant `Type` token, resolving to the variant's member
-`SetRef` ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
+handle ([apply_callable.rs](../../src/machine/execute/dispatch/apply_callable.rs)).
 The same `(Union Tag …)` head-call shape constructs (`Maybe (Some 42)`); the two
 are disambiguated by body shape — a bare `Type`-token body with no payload is the
 variant *reference*, a paren-group payload (`(Some 42)`) newtype-constructs that
@@ -128,7 +128,7 @@ member. An unknown variant name at either surface is a schema error listing the
 union's members. There is no global `:Some` name and no `.` path operator; the variant
 is reachable only through its union. The same sigil names a *sibling* variant of a union
 still under seal when it types one of that union's own schema fields (`Node :(Tree Leaf)`):
-the elaborator folds the `(Binder Tag)` pair straight to the member's `RecursiveRef`
+the elaborator folds the `(Binder Tag)` pair straight to a relative `Sibling` reference
 instead of sub-dispatching, since the producer it would otherwise park on is the seal
 awaiting this field; a bare sibling tag (`Node :Leaf`) stays an unknown-type error. See
 [user-types.md § Unions dissolve into per-variant newtypes](user-types.md#unions-dissolve-into-per-variant-newtypes).
@@ -136,13 +136,13 @@ awaiting this field; a bare sibling tag (`Node :Leaf`) stays an unknown-type err
 ## Record-type sigil
 
 `:{x :Number, y :Str}` is the structural record type — an identifier-keyed field
-schema lowering to [`KType::Record(Record<KType>)`](ktype/records-and-limits.md#record-fields-and-ktype-hashing),
+schema lowering to a [`TypeNode::Record`](ktype/records-and-limits.md#record-fields-and-ktype-hashing) node,
 distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
 and the parser emits a first-class `ExpressionPart::RecordType(<field list>)` part
 ([frame.rs](../../src/parse/frame.rs)) whose boxed `KExpression` is the bare
 `(x :Number, …)` field list. Unlike `:(...)` (which wraps a `SigiledTypeExpr` for the
 dispatcher to route), `:{...}` is matched *structurally*: the `DispatchShape::RecordType`
-handler folds the field list straight to `KType::Record` via the shared field-list parser
+handler folds the field list straight to a `Record` node via the shared field-list parser
 (`elaborate_record_value` in
 [dispatch/field_list.rs](../../src/machine/execute/dispatch/field_list.rs),
 `FieldNameKind::Identifier`, like NEWTYPE), with no internal type-constructor builtin
@@ -151,7 +151,7 @@ path NEWTYPE / FN use, so nested parameterized field types sub-Dispatch
 (`:{xs :(LIST OF Number)}`), while a nested record type `:{inner :{…}}` elaborates
 *inline* through the same walker — sharing the elaborator so the outer binder name
 threads into the inner record (`NEWTYPE Outer = :{inner :{owner :Outer}}` seals the
-inner `owner` to a `SetLocal` back-edge into `Outer`).
+inner `owner` to `Outer`'s own absolute member handle).
 
 A `:{...}` repr is also a distinct `NEWTYPE` overload (`arg("repr", KType::RecordType)`):
 the `:RecordType` slot captures the field list raw — the sibling of the `:SigiledTypeExpr`
@@ -215,7 +215,7 @@ inner expression's parts decide its shape:
 - `TypeCall` for a leaf-Type head with non-empty rest — routes a
   newtype, union, or `Result` head through its construction primitive
   (`:(MyStruct {x = 1})`, `:(Maybe (Some 42))`) via the shared
-  apply-a-callable tail. A constructible `SetRef` identity is the only invocable
+  apply-a-callable tail. A constructible `SetMember` identity is the only invocable
   type; `bindings.types` holds no callable, so there is no function-application arm
   here.
 
@@ -241,12 +241,12 @@ The classifier also carries a `RecordType` variant for a single-part `:{…}`,
 separate from the `SigiledTypeExpr` lane. Its handler (`record_type` in
 [single_poll.rs](../../src/machine/execute/dispatch/single_poll.rs)) does not
 tail-replace with a sub-Dispatch — it folds the field list straight to
-`KType::Record`, deferring through a dep-finish only when a field type forward-references
+a `Record` node, deferring through a dep-finish only when a field type forward-references
 or sub-dispatches. A `:{…}` head in a multi-part expression classifies as
 `NonCallableHead` (a record type is a value, not a callable).
 
 The sigil boundary — "the result must ride the value channel's `Type` arm
-(a `Signature`, `SetRef`, or any other `&KType`)" — is
+(a `Signature`, a `SetMember` handle, or any other `KType`)" — is
 enforced implicitly by the consuming slot's KType machinery rather
 than by a dedicated tail at the sigil. An `Object`-arm value (number,
 instance struct, plain function value, or a **module** — a module is a value)
@@ -266,12 +266,13 @@ named-application arm above. The field-walker inside `typed_field_list`
 handles the sigil embedded in `NEWTYPE` / `UNION` field schemas through a
 single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
 sub-Dispatch through the standalone dispatcher, which carries no threaded
-binder set, so `rewrite_threaded_self_refs` first rewrites every threaded
-self / group-sibling reference to a `Future(Carried::Type(RecursiveRef(name)))`
-carrier — the same `Type`-arm transport `:(LIST OF Number)` rides — before the
+binder set, so `rewrite_threaded_self_refs` first mints each threaded
+self / group-sibling reference as a relative `Sibling` handle against the group window
+and splices it as a `Carried::Type` cell — the same `Type`-arm transport
+`:(LIST OF Number)` rides — before the
 sub-Dispatch. This lowers `NEWTYPE Tree = :{children :(LIST OF Tree)}`'s
-field to `List(RecursiveRef("Tree"))`, which seals to `List(SetLocal(_))` at
-the member's finalize, rather than parking on `Tree`'s own placeholder and
+field to `List` over that `Sibling`, which seals to `List` over `Tree`'s own absolute
+member handle, rather than parking on `Tree`'s own placeholder and
 deadlocking the scheduler.
 
 ## Binder install: name-keyed vs bucket-keyed

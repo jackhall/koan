@@ -39,9 +39,7 @@ pub(crate) use kfunction::action::{
 pub(crate) use kfunction::body::{
     body_statement_refs, split_body_statements, ReturnContract, SealedContract,
 };
-pub(crate) use kfunction::exec::{
-    home_return_type, run_user_fn, ExecFrame, ExecOutcome, PerCallReturn,
-};
+pub(crate) use kfunction::exec::{run_user_fn, ExecFrame, ExecOutcome, PerCallReturn};
 pub(crate) use kfunction::{
     ActionFn, BinderBucketFn, BinderNameFn, Body, ClassifiedSlots, KFunction, NodeId,
 };

@@ -1,14 +1,14 @@
 # Slot kinds and function signatures
 
-Type-position slot kinds, the `KType::Unresolved` surface-survives-bind
-transient, and function signature types. Part of the [`KType` reference](README.md).
+Type-position slot kinds, the `UnresolvedType` surface-survives-bind
+carrier, and function signature types. Part of the [`KType` reference](README.md).
 
 ## Type-position slot kinds
 
 `OfKind(Proper)` is the meta-type for argument slots that capture a parsed type-name
-token (`ExpressionPart::Type(_)`). The slot resolves to a `&KType` flowing raw in the value
+token (`ExpressionPart::Type(_)`). The slot resolves to a `KType` handle flowing raw in the value
 channel's `Type` arm, carrying the elaborated type — name, nested
-parameters, and (for recursive types) the `SetRef` into a sealed `RecursiveSet` —
+parameters, and (for recursive types) the member handle of a sealed nominal —
 so parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
 FN's return-type slot, by NEWTYPE and UNION's name slots, and by `type_call`'s
@@ -16,17 +16,19 @@ verb slot. Slots that want only a bare name (NEWTYPE/UNION) check the elaborated
 shape on the inner type; the validation lives at the consuming builtin rather
 than at the slot kind.
 
-### `KType::Unresolved` — surface form survives bind
+### `UnresolvedType` — surface form survives bind
 
 A type-position value whose surface `TypeName` doesn't resolve at
 `ExpressionPart::resolve_for` time — a bare-leaf name outside
 [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)'s
 builtin table (`Point`, `Ordered`, `MyList`, or an unknown name like
-`SomeWeirdName`) — rides through bind as the
-[`KType::Unresolved(TypeName)`](../../../src/machine/model/types/ktype.rs)
-transient in the `Type` arm rather than a resolved `&KType`. See
+`SomeWeirdName`) — rides through bind on a dedicated
+[`Carried::UnresolvedType` / `Held::UnresolvedType`](../../../src/machine/model/values/carried.rs)
+arm carrying the surface `TypeIdentifier` verbatim, rather than as a resolved
+`KType` handle in the `Type` arm — so no type handle ever denotes an unresolved
+name. See
 [elaboration.md § Layers](../elaboration.md#layers) § Layer 5 for where this
-transient sits in the pipeline and the eventual scope-aware elaboration
+carrier sits in the pipeline and the eventual scope-aware elaboration
 hop.
 
 The guarantee this gives consumers: diagnostics can quote the user's

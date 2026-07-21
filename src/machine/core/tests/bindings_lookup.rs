@@ -96,7 +96,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
     scope.register_type("Tee".into(), KType::NUMBER, BindingIndex::value(99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
-        Some(NameLookup::Bound(kt)) if *kt == KType::NUMBER,
+        Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
     ));
 }
 

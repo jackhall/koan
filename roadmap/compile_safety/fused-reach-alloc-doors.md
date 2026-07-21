@@ -17,9 +17,9 @@ in a caller's hands is one *some* door derived for *some* value. What remains un
 pairing: the doors' two-parameter shape lets a caller mis-associate two legitimately-derived
 reaches.
 
-Only the value channel is in scope. A `KType` owns all its content, so the type channel carries no
-reach at all and stores through a single unchecked door
-([`RegionBrand::alloc_ktype`](../../src/machine/core/arena.rs)).
+Only the value channel is in scope. A `KType` is a `Copy` registry handle
+([`ktype.rs`](../../src/machine/model/types/ktype.rs)), so the type channel carries no reach at all
+and needs no store door.
 
 **Acceptance criteria.**
 

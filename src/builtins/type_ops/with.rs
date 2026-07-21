@@ -111,7 +111,9 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
         })
         .collect();
-    Action::Done(Ok(ctx.ctx.alloc_type(ctx.types.signature(schema, pinned))))
+    Action::Done(Ok(ctx
+        .ctx
+        .type_carried(ctx.types.signature(schema, pinned))))
 }
 
 #[cfg(test)]
@@ -131,17 +133,14 @@ mod tests {
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
         let bare_schema_digest = {
             let types = test_run.types();
-            let bare = scope
-                .resolve_type("Ordered")
-                .copied()
-                .expect("Ordered binds");
+            let bare = scope.resolve_type("Ordered").expect("Ordered binds");
             match types.node(bare) {
                 TypeNode::Signature { schema_digest, .. } => schema_digest,
                 _ => panic!("Ordered must bind a Signature KType"),
             }
         };
         let result = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
-        match test_run.types().node(*result) {
+        match test_run.types().node(result) {
             TypeNode::Signature {
                 schema_digest,
                 pinned_slots,
@@ -166,7 +165,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
         let result = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Str}"));
-        match test_run.types().node(*result) {
+        match test_run.types().node(result) {
             TypeNode::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 2);
                 assert_eq!(pinned_slots[0].0, "Elt");
@@ -193,7 +192,7 @@ mod tests {
         );
         let result = test_run.run_one_type(parse_one("Set WITH {Elt = elem.Carrier}"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::Signature { pinned_slots, .. } => {
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
@@ -239,10 +238,9 @@ mod tests {
         test_run.run("SIG Tagged = ((LET Tag = Number) (VAL value :Number))");
         let bare = scope
             .resolve_type("Tagged")
-            .copied()
             .expect("Tagged must bind a Signature KType");
         let result = test_run.run_one_type(parse_one("Tagged WITH {Tag = Number}"));
-        match test_run.types().node(*result) {
+        match test_run.types().node(result) {
             TypeNode::Signature { pinned_slots, .. } => {
                 assert!(
                     pinned_slots.is_empty(),
@@ -252,7 +250,7 @@ mod tests {
             _ => panic!("expected Signature type, got {result:?}"),
         }
         assert_eq!(
-            *result, bare,
+            result, bare,
             "an equal manifest pin must preserve signature identity"
         );
     }
@@ -288,7 +286,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))");
         let result = test_run.run_one_type(parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
-        match test_run.types().node(*result) {
+        match test_run.types().node(result) {
             TypeNode::Signature { pinned_slots, .. } => {
                 assert_eq!(
                     pinned_slots.len(),

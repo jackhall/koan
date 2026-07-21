@@ -110,17 +110,8 @@ impl<'a> RegionBrand<'a> {
         self.0.alloc_resident::<KObject<'static>>(o)
     }
 
-    /// The single storage door for a [`KType`]. A `KType` is fully owned data — no variant borrows
-    /// region content — so the store is safe and unchecked: an owned value cannot dangle, and the
-    /// `&'a` resident it hands back points into this brand's own region. A type that crosses a
-    /// region boundary crosses by clone, allocated locally through this same door
-    /// ([`Scope::adopt_sealed`](super::scope::Scope::adopt_sealed)'s type channel).
-    pub fn alloc_ktype(self, t: KType) -> &'a KType {
-        self.0.alloc_resident::<KType>(t)
-    }
-
-    /// The storage door for a [`TypeIdentifier`] the bind seam left unlowered. Owned surface data
-    /// like a `KType` — no variant borrows region content — so the store is safe and unchecked.
+    /// The storage door for a [`TypeIdentifier`] the bind seam left unlowered. Owned surface data —
+    /// no variant borrows region content — so the store is safe and unchecked.
     pub fn alloc_type_identifier(self, ti: TypeIdentifier) -> &'a TypeIdentifier {
         self.0.alloc_resident::<TypeIdentifier>(ti)
     }
@@ -128,9 +119,8 @@ impl<'a> RegionBrand<'a> {
     /// Runtime-checked twin of [`Self::alloc_object`] for an `o` that cannot rebuild owned at
     /// `'static` (`KObject` has no general `'static` rebuild):
     /// [`KObject::resident_in`] audits every region borrow `o` carries against this brand's own
-    /// region. A `Wrapped { type_id }` tag needs no walk: the `&KType` points at owned data
-    /// allocated region-locally through [`Self::alloc_ktype`], so it reaches nothing the audit
-    /// could reject.
+    /// region. A `Wrapped { type_id }` tag needs no walk: the `type_id` is a `Copy` `KType` handle
+    /// that reaches nothing the audit could reject.
     pub fn alloc_object_checked(
         self,
         o: KObject<'_>,
@@ -346,9 +336,10 @@ reattachable! {
 /// wrapped value lands — allocated through the handle — tagged by the identity, both re-anchored to
 /// the build brand under the same witness; the dest frame's `outer` chain pins the identity's
 /// (ancestor) region. Used by the newtype / tagged-union constructors and the `CATCH` `Result`
-/// build. Layout-invariant: two thin pointers, representation independent of `'r`.
+/// build. Layout-invariant: a thin pointer and a `Copy` `KType` handle, representation independent
+/// of `'r`.
 pub struct RegionTypeFamily;
-reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType));
+reattachable!(RegionTypeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 
 // Per-family `Stored` policy: which sub-arena each family lands in, plus `KObject`'s allocation
 // address side-table hook. No stored family carries a self-targeting `Rc<FrameStorage>` — a stored
@@ -424,8 +415,8 @@ pub(crate) trait KoanRegionExt {
     /// asserted witness. The closure receives a per-construction [`RegionBrand`] confined to the
     /// `for<'b>` brand (it cannot escape the closure), so it allocates through the same handle as every
     /// other site. One primitive for both value families — the closure returns a `Carried::Object` (an
-    /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (an
-    /// [`alloc_ktype`](RegionBrand::alloc_ktype)). A value that *references* another region's resident
+    /// [`alloc_object`](RegionBrand::alloc_object)) or a `Carried::Type` (a `Copy` `KType` handle,
+    /// needing no storage door). A value that *references* another region's resident
     /// value folds that in with [`Witnessed::merge_pinned`] instead, unioning its reach; this primitive covers
     /// the case whose references are all region-derived or owned, so the `for<'b>` brand admits them.
     ///

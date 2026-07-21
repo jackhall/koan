@@ -192,7 +192,7 @@ fn accepts_carried_matches_spliced_delegation() {
     assert!(!KType::STR.accepts_carried(Carried::Object(n), &types));
     // A type-channel value reaches the `OfKind` arm; a proper-type slot admits it.
     let kt_number = KType::NUMBER;
-    assert!(KType::of_kind(KKind::ProperType).accepts_carried(Carried::Type(&kt_number), &types));
+    assert!(KType::of_kind(KKind::ProperType).accepts_carried(Carried::Type(kt_number), &types));
     // An object value reports a non-type `kind_of` and is refused by a type-channel slot.
     assert!(!KType::of_kind(KKind::ProperType).accepts_carried(Carried::Object(n), &types));
 }
@@ -294,23 +294,18 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     let scope = test_run.scope;
     let types = test_run.types.clone();
     let t = KType::of_kind(KKind::AnyType);
-    let kt_number: &KType = region.brand().alloc_ktype(KType::NUMBER);
-    let kt_str: &KType = region.brand().alloc_ktype(KType::STR);
-    let kt_bool: &KType = region.brand().alloc_ktype(KType::BOOL);
-    let kt_null: &KType = region.brand().alloc_ktype(KType::NULL);
+    let kt_number: KType = KType::NUMBER;
+    let kt_str: KType = KType::STR;
+    let kt_bool: KType = KType::BOOL;
+    let kt_null: KType = KType::NULL;
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_number)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_str)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_bool)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_null)), &types));
     // NewType / union-variant type tokens flow as sealed member handles in the type channel — a
     // `:Type` slot admits them when the spliced cell opens to a `Carried::Type`.
-    let newtype_token: &KType =
-        region
-            .brand()
-            .alloc_ktype(newtype_member("Some", KType::NUMBER, &types));
-    let struct_token: &KType = region
-        .brand()
-        .alloc_ktype(record_newtype_member("Point", &types));
+    let newtype_token: KType = newtype_member("Some", KType::NUMBER, &types);
+    let struct_token: KType = record_newtype_member("Point", &types);
     assert!(t.accepts_part(&spliced_part(Carried::Type(newtype_token)), &types));
     assert!(t.accepts_part(&spliced_part(Carried::Type(struct_token)), &types));
     let child = region
@@ -337,9 +332,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
             scope,
             "Ordered".into(),
         ));
-    let kt_sig: &KType = region
-        .brand()
-        .alloc_ktype(types.signature(SigSchema::project_decl(sig_scope, &types), Vec::new()));
+    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types), Vec::new());
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     assert!(!KType::of_kind(KKind::ProperType)
@@ -375,9 +368,9 @@ fn of_kind_nominal_is_type_channel_only() {
 
     // The NewType *type value* — admitted in the type channel.
     let newtype_tv = newtype_member("Distance", KType::NUMBER, &types);
-    assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
+    assert!(newtype_ty.accepts_part(&spliced_part(Carried::Type(newtype_tv)), &types));
     assert!(KType::of_kind(KKind::ProperType)
-        .accepts_part(&spliced_part(Carried::Type(&newtype_tv)), &types));
+        .accepts_part(&spliced_part(Carried::Type(newtype_tv)), &types));
 
     // A `TypeConstructor` type value is the wrong family — declined.
     let ctor_tv = RecursiveGroupWindow::seal_singleton(
@@ -389,7 +382,7 @@ fn of_kind_nominal_is_type_channel_only() {
         None,
         &types,
     );
-    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(&ctor_tv)), &types));
+    assert!(!newtype_ty.accepts_part(&spliced_part(Carried::Type(ctor_tv)), &types));
 
     // The runtime `Wrapped` *instance* is never matched by a kind slot.
     let inner: &KObject<'_> = region.alloc_object(KObject::Number(3.0));
@@ -919,7 +912,7 @@ fn specificity_self_sig_refines_declared_and_empty() {
         "SIG Ordered = ((VAL compare :Number))\n\
          MODULE int_ord = ((LET compare = 7) (LET extra = 1))",
     );
-    let declared = *scope
+    let declared = scope
         .resolve_type("Ordered")
         .expect("Ordered must bind a Signature KType");
     let m = lookup_module(scope, "int_ord", &types);
@@ -959,7 +952,7 @@ fn self_sig_type_equals_member_free_declared_sig() {
         .expect("HasLabel must bind a type");
     let m = lookup_module(scope, "widget", &types);
     assert_eq!(
-        &KObject::Module(m).ktype(),
+        KObject::Module(m).ktype(),
         declared,
         "a module's self-sig type must digest-equal the member-free declared sig of its shape",
     );
@@ -989,7 +982,7 @@ fn self_sig_type_equals_fully_manifest_declared_sig() {
         .expect("Pinned must bind a type");
     let m = lookup_module(scope, "pinned_mod", &types);
     assert_eq!(
-        &KObject::Module(m).ktype(),
+        KObject::Module(m).ktype(),
         declared,
         "a module's self-sig type must digest-equal the fully-manifest declared sig of its shape",
     );
@@ -1021,11 +1014,11 @@ fn self_sig_stays_distinct_from_and_refines_abstract_sig() {
     let self_of = KObject::Module(m).ktype();
 
     assert_ne!(
-        &self_of, declared,
+        self_of, declared,
         "an abstract declared sig is a distinct type from any self-sig",
     );
     assert!(
-        self_of.is_more_specific_than(*declared, &types),
+        self_of.is_more_specific_than(declared, &types),
         "the manifest self-sig strictly refines the abstract sig it satisfies",
     );
     assert!(

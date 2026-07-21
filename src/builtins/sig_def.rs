@@ -46,7 +46,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
             {
-                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.alloc_type(*kt_ref))),
+                Ok(kt_ref) => Action::Done(Ok(fctx.ctx.type_carried(kt_ref))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(
                     "<signature>",
                     format!("SIG {} body", name_for_finish),
@@ -101,10 +101,7 @@ mod tests {
         test_run.run("SIG Ordered = (VAL x :Number)");
         // SIG installs a single type-side identity; nothing lands in `bindings.data`.
         assert!(scope.bindings().data().get("Ordered").is_none());
-        let handle = scope
-            .resolve_type("Ordered")
-            .copied()
-            .expect("Ordered binds");
+        let handle = scope.resolve_type("Ordered").expect("Ordered binds");
         assert!(matches!(
             test_run.types().node(handle),
             TypeNode::Signature { .. }
@@ -120,10 +117,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = (VAL x :Number)");
-        let handle = scope
-            .resolve_type("Ordered")
-            .copied()
-            .expect("Ordered binds");
+        let handle = scope.resolve_type("Ordered").expect("Ordered binds");
         let types = test_run.types();
         assert!(matches!(types.node(handle), TypeNode::Signature { .. }));
         assert_eq!(
@@ -142,7 +136,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         use crate::machine::model::{KType, TypeNode};
-        let handle = scope.resolve_type("Foo").copied().expect("Foo should bind");
+        let handle = scope.resolve_type("Foo").expect("Foo should bind");
         let schema = match test_run.types().node(handle) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Foo should be a signature"),
@@ -210,10 +204,10 @@ mod tests {
              SIG Gamma = ((VAL x :Number) (VAL y :Bool))\n\
              SIG Delta = ((VAL x :Number) (VAL z :Str))",
         );
-        let alpha = scope.resolve_type("Alpha").copied().expect("Alpha binds");
-        let beta = scope.resolve_type("Beta").copied().expect("Beta binds");
-        let gamma = scope.resolve_type("Gamma").copied().expect("Gamma binds");
-        let delta = scope.resolve_type("Delta").copied().expect("Delta binds");
+        let alpha = scope.resolve_type("Alpha").expect("Alpha binds");
+        let beta = scope.resolve_type("Beta").expect("Beta binds");
+        let gamma = scope.resolve_type("Gamma").expect("Gamma binds");
+        let delta = scope.resolve_type("Delta").expect("Delta binds");
         assert!(matches!(
             test_run.types().node(alpha),
             TypeNode::Signature { .. }
@@ -237,11 +231,10 @@ mod tests {
              SIG OrdB = ((TYPE Elem) (VAL compare :(FN (a :Elem b :Elem) -> Bool)))\n\
              SIG OrdManifest = ((TYPE Elem) (VAL compare :(FN (a :Number b :Number) -> Bool)))",
         );
-        let a = scope.resolve_type("OrdA").copied().expect("OrdA binds");
-        let b = scope.resolve_type("OrdB").copied().expect("OrdB binds");
+        let a = scope.resolve_type("OrdA").expect("OrdA binds");
+        let b = scope.resolve_type("OrdB").expect("OrdB binds");
         let manifest = scope
             .resolve_type("OrdManifest")
-            .copied()
             .expect("OrdManifest binds");
         assert!(matches!(
             test_run.types().node(a),
@@ -268,10 +261,7 @@ mod tests {
         let scope = test_run.scope;
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let types = test_run.types();
-        let handle = scope
-            .resolve_type("Container")
-            .copied()
-            .expect("Container binds");
+        let handle = scope.resolve_type("Container").expect("Container binds");
         let schema = match types.node(handle) {
             TypeNode::Signature { schema, .. } => schema,
             _ => panic!("Container should be a signature"),

@@ -37,7 +37,7 @@ pub(super) fn body<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
     }
     // The type a value reports for itself is owned data — a module's self-sig included — so it
     // seals with an empty reach and allocates into this step's own region.
-    Action::Done(Ok(ctx.ctx.alloc_type(value.ktype())))
+    Action::Done(Ok(ctx.ctx.type_carried(value.ktype())))
 }
 
 #[cfg(test)]

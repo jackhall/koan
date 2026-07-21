@@ -92,12 +92,13 @@ pub enum KObject<'a> {
     /// `(name, scope_id)` identity, only its structure. Each field value is a [`Held`] (an
     /// object or a first-class type).
     Record(Rc<Record<Held<'a>>>, KType),
-    /// NEWTYPE / union-variant carrier (and the ATTR abstract-type re-tag carrier): tags a
-    /// representation value with a type identity. A re-tag collapses one wrapper layer
+    /// NEWTYPE identity-wrapper carrier (and the ATTR abstract-type re-tag carrier): tags a
+    /// representation value with a type identity. (A user-`UNION` variant value is a
+    /// [`Self::Tagged`], not a `Wrapped` — ruling 13.) A re-tag collapses one wrapper layer
     /// ([`WrappedPayload::peel`]); a genuine construction preserves the payload verbatim
-    /// ([`WrappedPayload::hold`]), so a union variant nesting another variant keeps every
-    /// layer. `type_id` is the declaration-stable identity handle — for a NEWTYPE / union
-    /// variant the sealed member's `SetMember` handle, for an identity-wrapper construction a
+    /// ([`WrappedPayload::hold`]), so a newtype nesting another keeps every layer. `type_id` is
+    /// the declaration-stable identity handle — for a standalone newtype the sealed member's
+    /// `SetMember` handle, for an identity-wrapper (`NEWTYPE (T AS W)`) construction a
     /// `ConstructorApply` over it, and for an opaque-ascription abstract-type re-tag the
     /// per-call `AbstractType` identity.
     ///

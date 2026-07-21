@@ -41,8 +41,5 @@ values with different self-sigs therefore memoizes `List<Any>`, and never satisf
 
 **Requires:**
 
-- [Interned type content behind Copy handles](interned-type-content.md) — the join
-  synthesizes a schema backed by no declaration; the registry's owned-schema
-  signature nodes are its representation.
 
 **Unblocks:** none tracked yet.

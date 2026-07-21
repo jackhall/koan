@@ -118,9 +118,9 @@ pub(crate) fn extract_terminal<'a>(
                     .alloc_object_delivered(obj.deep_clone(), std::slice::from_ref(&reach), types)
                     .expect("terminal object must be covered by its own stored reach"),
             ),
-            // A type is owned data: it crosses into `scope`'s region by clone through the single
-            // storage door, naming no reach. An unlowered type name crosses the same way.
-            Carried::Type(kt) => Carried::Type(scope.brand().alloc_ktype(*kt)),
+            // A type is a `Copy` handle: it rides across into `scope`'s region by value, naming no
+            // reach. An unlowered type name crosses by clone through the single storage door.
+            Carried::Type(kt) => Carried::Type(kt),
             Carried::UnresolvedType(ti) => {
                 Carried::UnresolvedType(scope.brand().alloc_type_identifier(ti.clone()))
             }
@@ -206,11 +206,7 @@ impl<'a> TestRun<'a> {
     /// Like [`TestRun::run_one_in`] but for a type-producing expression: narrows the result's
     /// carrier to its [`Carried::Type`] arm. Panics if the expression produced a runtime value.
     #[cfg(test)]
-    pub(crate) fn run_one_type_in(
-        &mut self,
-        scope: &'a Scope<'a>,
-        expr: KExpression<'a>,
-    ) -> &'a KType {
+    pub(crate) fn run_one_type_in(&mut self, scope: &'a Scope<'a>, expr: KExpression<'a>) -> KType {
         let id = self.runtime.dispatch_in_scope(expr, scope);
         self.runtime.execute().expect("scheduler should succeed");
         match extract_terminal(&self.runtime, scope, &self.types, id) {
@@ -228,7 +224,7 @@ impl<'a> TestRun<'a> {
 
     /// [`TestRun::run_one_type_in`] against the bundle's own scope.
     #[cfg(test)]
-    pub(crate) fn run_one_type(&mut self, expr: KExpression<'a>) -> &'a KType {
+    pub(crate) fn run_one_type(&mut self, expr: KExpression<'a>) -> KType {
         self.run_one_type_in(self.scope, expr)
     }
 

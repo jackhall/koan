@@ -50,7 +50,7 @@ fn resolve_name_part_type_resolved() {
         None,
         &test_run.types,
     ) {
-        NameOutcome::Resolved(Carried::Type(&KType::NUMBER)) => {}
+        NameOutcome::Resolved(Carried::Type(KType::NUMBER)) => {}
         other => {
             let kind = match other {
                 NameOutcome::Resolved(_) => "Resolved(other)",

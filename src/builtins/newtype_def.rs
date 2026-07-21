@@ -109,7 +109,7 @@ fn finalize_record_newtype<'a>(
 fn seal_outcome_into_carrier<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: &str,
-    outcome: SealOutcome<'a>,
+    outcome: SealOutcome,
 ) -> Result<StepCarried<'a>, KError> {
     match outcome {
         SealOutcome::Sealed(kt_ref) => Ok(seal_type_identity(fctx.scope, kt_ref)),
@@ -379,7 +379,6 @@ mod tests {
     ) -> (usize, KType, Vec<(String, KType)>) {
         let handle = scope
             .resolve_type(name)
-            .copied()
             .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
         match types.node(handle) {
             TypeNode::SetMember {
@@ -419,7 +418,7 @@ mod tests {
             let (kt, _) = bindings
                 .get("Distance")
                 .expect("Distance should be in bindings.types");
-            **kt
+            *kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {
@@ -813,7 +812,7 @@ mod tests {
             let (kt, _) = bindings
                 .get("Wrapper")
                 .expect("Wrapper should be in bindings.types");
-            **kt
+            *kt
         };
         match test_run.types().node(handle) {
             TypeNode::SetMember {
@@ -853,7 +852,7 @@ mod tests {
         test_run.run("NEWTYPE (Type AS Wrapper)");
         let result = test_run.run_one_type(parse_one(":(Number AS Wrapper)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
@@ -908,7 +907,6 @@ mod tests {
         test_run.run("NEWTYPE (One Two AS Wrapper)");
         let kt = scope
             .resolve_type("Wrapper")
-            .copied()
             .expect("Wrapper must bind a type");
         assert_eq!(
             crate::machine::model::constructor_param_names(kt, &test_run.types),

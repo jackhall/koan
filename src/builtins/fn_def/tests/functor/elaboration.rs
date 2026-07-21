@@ -16,7 +16,7 @@ fn list_of_let_binding_is_ktype_value() {
     let kt = scope
         .resolve_type("MyList")
         .expect("MyList should be bound in bindings.types");
-    assert_eq!(*kt, test_run.types.list(KType::NUMBER));
+    assert_eq!(kt, test_run.types.list(KType::NUMBER));
 }
 
 /// `elaborate_type_identifier` lowers a leaf naming a type-side LET binding back to its
@@ -53,7 +53,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
          FN (USE_ORD er :Ordered) -> Null = (PRINT \"ok\")",
     );
     // SIG installs a single type-side identity; read it from `bindings.types`.
-    let ordered = scope.resolve_type("Ordered").copied();
+    let ordered = scope.resolve_type("Ordered");
     let sig_id = match ordered.map(|h| test_run.types.node(h)) {
         Some(TypeNode::Signature { schema, .. }) => schema.sig_id,
         _ => panic!("Ordered should be a Signature KType, got {ordered:?}"),

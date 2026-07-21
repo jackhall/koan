@@ -12,8 +12,8 @@ use crate::machine::KErrorKind;
 
 /// The `(name, arg)` pairs of a `ConstructorApply`, in the order the args record carries them —
 /// the constructor's declared parameter order.
-fn applied_args(kt: &KType, types: &TypeRegistry) -> Vec<(String, KType)> {
-    match types.node(*kt) {
+fn applied_args(kt: KType, types: &TypeRegistry) -> Vec<(String, KType)> {
+    match types.node(kt) {
         TypeNode::ConstructorApply { arguments, .. } => arguments
             .iter()
             .map(|(name, arg)| (name.clone(), *arg))
@@ -72,10 +72,10 @@ fn as_sugar_equals_named_application() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     test_run.run("NEWTYPE (Elem AS Wrap)");
-    let sugared = *test_run.run_one_type(parse_one(":(Number AS Wrap)"));
+    let sugared = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
     let named = test_run.run_one_type(parse_one(":(Wrap {Elem = Number})"));
     assert_eq!(sugared.digest(), named.digest());
-    assert_eq!(&sugared, named);
+    assert_eq!(sugared, named);
 }
 
 /// The args record's identity is its name-to-type map, so writing the parameters in either order
@@ -84,10 +84,10 @@ fn as_sugar_equals_named_application() {
 fn named_application_is_order_blind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let declared = *test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Str})"));
+    let declared = test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Str})"));
     let reversed = test_run.run_one_type(parse_one(":(Result {Error = Str, Ok = Number})"));
     assert_eq!(declared.digest(), reversed.digest());
-    assert_eq!(&declared, reversed);
+    assert_eq!(declared, reversed);
 }
 
 /// `KType::name()` renders the application in the constructor's declared order, and that
@@ -105,7 +105,7 @@ fn constructor_apply_name_round_trips() {
         ":(Wrap {Elem = :(LIST OF Number)})",
         ":(Result {Ok = (LIST OF Number), Error = Str})",
     ] {
-        let applied = *test_run.run_one_type(parse_one(source));
+        let applied = test_run.run_one_type(parse_one(source));
         let rendered = applied.name(&test_run.types);
         let reparsed = test_run.run_one_type(parse_one(&rendered));
         assert_eq!(
@@ -232,7 +232,7 @@ fn erased_result_carrier_admits_named_application() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     test_run.run("LET wrapped = (Result (Ok 3.0))");
-    let admitting = *test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Any})"));
+    let admitting = test_run.run_one_type(parse_one(":(Result {Ok = Number, Error = Any})"));
     let refusing = test_run.run_one_type(parse_one(":(Result {Ok = Str, Error = Any})"));
     let value = scope.bindings().expect_value("wrapped");
     let types = test_run.types.clone();

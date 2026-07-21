@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeIdentifier`] into a region-allocated `&KType`.
+//! Scope-bound resolution of a surface [`TypeIdentifier`] into an interned `KType` handle.
 //!
 //! Read-only consumer of the bindings façade: never touches `data`, `functions`,
 //! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
@@ -36,7 +36,7 @@ impl<'step> Scope<'step> {
         te: &TypeIdentifier,
         chain: Option<std::rc::Rc<LexicalFrame>>,
         types: &TypeRegistry,
-    ) -> TypeResolution<&'step KType> {
+    ) -> TypeResolution<KType> {
         use crate::machine::model::{elaborate_type_identifier, Elaborator};
         // The cutoff this scope's bindings are gated against — also the memo key, so a
         // forward and a backward consumer never share a cached verdict.
@@ -50,11 +50,8 @@ impl<'step> Scope<'step> {
         elaborate_type_identifier(&mut elaborator, te, types).and_then_done(|kt| {
             let pending = FinalizeGate { scope: self, types }.pending_producers(kt);
             if pending.is_empty() {
-                // The handle is `Copy`, but the memo hands out `&'step KType`, so it stores into
-                // this scope's own region through the single door and is cached there.
-                let kt_ref: &'step KType = self.brand().alloc_ktype(kt);
-                self.type_identifier_memo_insert(te.clone(), cutoff, kt_ref);
-                TypeResolution::Done(kt_ref)
+                self.type_identifier_memo_insert(te.clone(), cutoff, kt);
+                TypeResolution::Done(kt)
             } else {
                 TypeResolution::Park(pending)
             }

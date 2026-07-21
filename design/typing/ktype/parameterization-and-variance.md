@@ -164,21 +164,21 @@ unaffected — it carries information and is legal where `:(LIST OF Any)` is dec
 `List`, `Dict`, and `Tagged` carry their runtime type arguments on the variant so
 dispatch and slot admission see the full instantiation, not just the outer shape:
 
-- `KObject::List(items, elem)` / `KObject::Dict(map, key, value)` memoize the
-  element / key+value type at construction (`KObject::list` / `KObject::dict`).
-- `KObject::Tagged { type_args, .. }` carries the applied type arguments of a
-  parameterized union as a `Record<KType>` keyed by the carrier's *parameter names*
-  (`Result` binds `Ok` and `Error`). Empty `type_args` means erased — `ktype()`
-  reports the bare `SetRef`; a populated carrier makes `ktype()`
-  synthesize `ConstructorApply { ctor, args: type_args }`. Construction
-  (`tagged_union::construct`, `CATCH`) erases by default; the carrier is populated
-  only by ascription stamping.
+- `KObject::List(items, list_type)` / `KObject::Dict(map, dict_type)` memoize the
+  full interned container type handle at construction (`KObject::list` / `KObject::dict`),
+  so `ktype()` is a handle copy.
+- `KObject::Tagged { identity, .. }` carries the value's own type handle. When the
+  applied type arguments of a parameterized union are erased (the default from
+  `tagged_union::construct` / `CATCH`), `identity` is the bare `SetMember` handle; an
+  ascription stamp populates it with a `ConstructorApply` over that member, folding the
+  applied arguments into the one handle `ktype()` copies.
 
 A `ConstructorApply` slot (`:(Result {Ok = Number, Error = MyError})`) admits a
 `Tagged` value via the `matches_value` arm in
 [ktype_predicates.rs](../../../src/machine/model/types/ktype_predicates.rs): the
-declaring schema must be the same constructor, and then either the populated
-`type_args` are checked per parameter name against the declared args, or — for an
+declaring schema must be the same constructor, and then either a stamped
+`ConstructorApply` identity's arguments are checked per parameter name against the
+declared args, or — for an
 erased carrier — the *inhabited* tag's payload is checked against the same-named
 argument. `Result`'s tag names and its parameter names coincide by construction
 (`Ok`, `Error`), so the field→parameter linkage is a direct `args.get(tag)` lookup

@@ -30,17 +30,17 @@ use crate::witnessed::Residence;
 /// Schema-keyed payload the resume needs to materialize the constructed value once every
 /// slot is resolved. `identity` / `constructor` is the sealed member's handle, stamped onto the
 /// produced `KObject`; `schema` is the member's variant schema, used for per-value type-checking.
-pub(in crate::machine::execute) enum CtorKind<'step> {
+pub(in crate::machine::execute) enum CtorKind {
     /// NewType construction (record-repr or scalar) from a single positional value. One value
     /// cell carrying the whole value expression; the finish type-checks it against the
     /// member's `repr`, peels any `Wrapped` layer, and tags it with `identity`.
-    NewType { identity: &'step KType },
+    NewType { identity: KType },
     /// Record-repr newtype construction from a named record-literal body (`Point {x = 1, y =
     /// 2}`). One value cell per field, so a literal field stages in place (synchronous bind)
     /// instead of deferring the whole record literal; the
     /// finish builds the `KObject::Record` and wraps it with `identity`.
     RecordNewType {
-        identity: &'step KType,
+        identity: KType,
         field_names: Vec<String>,
     },
     Tagged {
@@ -82,9 +82,9 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
     match s.resolve_type_identifier(t, ctx.active_chain(), ctx.types()) {
-        // A resolved type leaf is witnessed in place under `s` (the scope it was resolved
-        // against): a `KType` is owned data, so the read travels under `s`'s home-frame pin
-        // alone — no reach to name, no `alloc_ktype` re-home, no `child_scope()` walk.
+        // A resolved type leaf is carried in place under `s` (the scope it was resolved
+        // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
+        // — no reach to name, no re-home, no `child_scope()` walk.
         TypeResolution::Done(kt) => {
             Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt))))
         }

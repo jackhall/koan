@@ -134,14 +134,11 @@ Because the key is a digest pair, verdict storage granularity is observationally
 identical: [`registry.rs`](../../src/machine/model/types/registry.rs) holds the
 verdicts of a run in one flat `(subject, candidate, relation) → bool` map behind a
 `RefCell`, reached as `&TypeRegistry` through the execution context and threaded as
-the final parameter of every memoized predicate. One key shape is not content-derived
-and so is never recorded: a `KType` reaching an *unsealed* recursive set digests by
-`Rc` pointer address, an address the allocator may reuse. The `MoreSpecific` sites and
-the cross-`SIG` specificity site take arbitrary types as keys, so they call
-`digest_is_content` to exclude such a position before recording; the module-satisfaction
-sites key on self-sig digests, which are minted from a *sealed* self-sig and are
-content-derived by construction. Either way no pointer-transient key ever enters the
-map, so a lookup needs no guard of its own.
+the final parameter of every memoized predicate. Every key is a true content digest:
+a recursive-set member's handle is `(SCC digest, index)`, minted only at seal from
+finished content, and a pre-seal sibling is a `Sibling` relative node that never
+reaches the predicates. Nothing pointer-transient can be a key, so the recording sites
+need no content guard and a lookup needs no guard of its own.
 
 The asymmetry between the two edge kinds is a design invariant:
 
@@ -193,23 +190,17 @@ registries.
 
 ## Open work
 
-The registry home and its verdict edges are shipped
-([`registry.rs`](../../src/machine/model/types/registry.rs)), and `KType` carries no
-lifetime parameter — every variant owns its content, so a type crosses a region
-boundary by clone through the single storage door
-([`RegionBrand::alloc_ktype`](../../src/machine/core/arena.rs)) with no residence
-audit to run. The access model above is shipped: the registry is threaded to every
-type-layer reader as an explicit parameter, and reachable at wake time as a borrow
-on the finish context. The storage model — everything this doc says about nodes,
-handles, and composition edges — lands through one further roadmap item. Until it
-ships, type content is owned by each `KType` value (`Box`/`Vec` children,
-`Rc<RecursiveSet>` transport, `Rc<SigContent>` for a signature's schema), `KType` is
-`Clone` not `Copy`, and the threaded registry is inert on the reader side — no
-consumer dereferences a handle through it yet.
+The storage model is shipped: `KType` is the `Copy` digest handle
+([`ktype.rs`](../../src/machine/model/types/ktype.rs)), every type's content is an
+interned [`TypeNode`](../../src/machine/model/types/node.rs) owned by the run frame's
+registry ([`registry.rs`](../../src/machine/model/types/registry.rs)), composition edges
+are the content, and the recursive-group window/SCC seal
+([`recursive_group_window.rs`](../../src/machine/model/types/recursive_group_window.rs))
+turns a co-declared group into interned member nodes. A type crosses a region boundary
+as a handle copy — there is no storage door and no residence audit to run.
 
-- [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
-  — content nodes, the `Copy` digest handle, and the recursive-set builder. The
-  cross-thread transfer mechanics (including whether verdict edges transfer as
+- The cross-thread transfer mechanics (whether a value's type nodes are copied by
+  subgraph walk or merged as persistent maps, and whether verdict edges transfer as
   warm cache) are recorded as unplanned work in the
-  [type memos project README](../../roadmap/type_memos/README.md) — undecided even
-  within this design.
+  [type memos project README](../../roadmap/type_memos/README.md) — exercisable only
+  once concurrency ships, and undecided even within this design.

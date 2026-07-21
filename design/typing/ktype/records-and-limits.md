@@ -8,11 +8,11 @@ open work. Part of the [`KType` reference](README.md).
 A record schema's fields are a [`Record<V>`](../../../src/machine/model/types/record.rs) —
 an ordered identifier-keyed map, generic over its value, so the type level stores
 `Record<KType>` and a value level can later store `Record<KObject>`.
-A record-repr member's [`NominalSchema::NewType`](../../../src/machine/model/types/recursive_set.rs)
-wraps a `KType::Record(Record<KType>)`, carrying the field record by value; the `NEWTYPE`
-elaborator wraps the parser's declaration-ordered `(name, KType)` pairs into a `Record` once,
-at the [`finalize_nominal_member`](../../../src/machine/model/types/recursive_set.rs)
-boundary, and fills the member's schema cell.
+A record-repr member's [`NodeSchema::NewType`](../../../src/machine/model/types/node.rs)
+holds the handle of an interned `Record` node (`TypeNode::Record { fields: Record<KType> }`);
+the `NEWTYPE` elaborator wraps the parser's declaration-ordered `(name, KType)` pairs into a
+`Record`, interns the record node, and seals the member's schema against the group window
+([`recursive_group_window.rs`](../../../src/machine/model/types/recursive_group_window.rs)).
 
 The same `Record<KType>` substrate backs `KFunction` parameter
 identity: the variant stores its parameters as `params: Record<KType>`
@@ -41,15 +41,12 @@ The shape has two defining properties:
   symmetric accumulator makes the result independent of field order. Wrapping-add
   rather than XOR, which would cancel on a duplicate.
 
-`Record<V>: Hash` needs `V: Hash`, so `KType` implements `Hash`, kept consistent with
-its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
-never alias and the unit variants need no further mixing), then each compound arm
-hashes exactly the fields its `PartialEq` arm compares. The pointer-identity
-variants hash their stable identity key — `Module` hashes `scope_id()`,
-`AbstractType` hashes its `source.scope_id()`, `Signature` hashes `sig_id()`,
-`SetRef` hashes `(Rc::as_ptr(set), index)` and `RecursiveGroup` hashes
-`Rc::as_ptr(set)` — never descending the (possibly cyclic) member schema, so
-hashing terminates and agrees arm-for-arm with the pointer-keyed `PartialEq`.
+`Record<V>: Hash` needs `V: Hash`, and `KType` is a `Copy` wrapper around its content
+digest, so `Hash`, `Eq`, and `Ord` all derive on that one digest — a record node's
+field record is hashed by the order-blind fold above only when the node's *digest* is
+computed at intern time, never on every `KType` compare. Because a handle is `Copy` and
+opaque, hashing a `KType` never descends the (possibly cyclic) member schema; it copies
+sixteen bytes. Equality and hashing agree unconditionally, since both read the same digest.
 
 `KType::DeferredReturn(DeferredReturnSurface)` is a confined hashable leaf: it
 holds the type-language shadow of a per-call-elaborated function return —
@@ -57,13 +54,13 @@ holds the type-language shadow of a per-call-elaborated function return —
 the canonical `summarize()` render of a parens-form return (the live
 `KExpression` impls neither `Eq` nor `Hash`). It hashes and compares by that
 shadow, so two functions differing only in their deferred returns are distinct
-structural types. The variant is valid *only* inside a synthesized
-`KFunction` `ret` box that `function_value_ktype` builds; no runtime
+structural types. The node is valid *only* as the `ret` handle of a synthesized
+`KFunction` node that `function_value_ktype` interns; no runtime
 value's `ktype()` returns it free-standing, and it admits nothing on its own
 (`accepts_part` is `false`).
 
 The same `Record<V>` substrate also backs the first-class structural record type
-`KType::Record(Record<KType>)` and its value `KObject::Record(Record<KObject>, …)`
+node `TypeNode::Record { fields: Record<KType> }` and its value `KObject::Record(Record<KObject>, …)`
 (surface `{x = 1, y = "a"}`). The dict carrier (`KType::Dict`, `KObject::Dict`) stays
 a sibling: records restrict keys to identifiers and admit heterogeneous per-field
 types, while dicts admit arbitrary value keys and one homogeneous value type. The two

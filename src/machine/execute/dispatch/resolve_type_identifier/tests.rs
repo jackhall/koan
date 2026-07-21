@@ -13,15 +13,12 @@ fn resolve_type_expr_builtin_leaf_caches() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done"),
     };
-    assert_eq!(*first, KType::NUMBER);
+    assert_eq!(first, KType::NUMBER);
     let second = match scope.resolve_type_identifier(&te, None, &types) {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on second call"),
     };
-    assert!(
-        std::ptr::eq(first, second),
-        "second call should hit the memo"
-    );
+    assert_eq!(first, second, "second call should hit the memo");
 }
 
 #[test]
@@ -51,7 +48,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done after the declaration"),
     };
-    match types.node(*kt) {
+    match types.node(kt) {
         TypeNode::SetMember { name, .. } => assert_eq!(name, "Point"),
         _ => panic!("expected a sealed member node for Point"),
     }
@@ -59,7 +56,7 @@ fn resolve_type_expr_user_struct_caches_after_finalize() {
         TypeResolution::Done(resolved) => resolved,
         _ => panic!("expected Done on memo hit"),
     };
-    assert!(std::ptr::eq(kt, kt2));
+    assert_eq!(kt, kt2);
 }
 
 /// Pins the walk shape against a regression that skips nested structurals: a relative sibling at
@@ -123,7 +120,7 @@ mod bare_leaf_resolution {
         let types = TypeRegistry::new();
         let leaf = TypeIdentifier::leaf("Number".to_string());
         match scope.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(resolved) if *resolved == KType::NUMBER => {}
+            TypeResolution::Done(resolved) if resolved == KType::NUMBER => {}
             other => panic!("expected Done(Number), got {:?}", outcome_tag(&other)),
         }
     }
@@ -201,7 +198,7 @@ mod bare_leaf_resolution {
             .expect("install the sealed identity");
 
         match scope.resolve_type_identifier(&leaf, None, &types) {
-            TypeResolution::Done(resolved) => assert_eq!(*resolved, sealed.members[0]),
+            TypeResolution::Done(resolved) => assert_eq!(resolved, sealed.members[0]),
             other => panic!(
                 "expected Done(member) after seal, got {:?}",
                 outcome_tag(&other)
@@ -258,7 +255,7 @@ mod bare_leaf_resolution {
         }
     }
 
-    fn outcome_tag(c: &TypeResolution<&KType>) -> &'static str {
+    fn outcome_tag(c: &TypeResolution<KType>) -> &'static str {
         match c {
             TypeResolution::Done(_) => "Done",
             TypeResolution::Park(_) => "Park",

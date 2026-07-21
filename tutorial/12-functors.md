@@ -72,7 +72,7 @@ LET MakeSet = (FN (MAKESET elem :Ordered) -> Module = (MODULE built = (LET sampl
 ```
 
 ```text
-error: type-class binding `MakeSet` expects a type value, got `:(FN (elem :Ordered) -> Module)`
+error: type-class binding `MakeSet` expects a type value, got `:(FN (elem :SIG (compare: Number)) -> Module)`
 ```
 
 ## Modules in type position: `TYPE OF`

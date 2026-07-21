@@ -206,10 +206,10 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as a
-    /// region-allocated `&KType`; reads go through [`Self::resolve_type`]. Same
-    /// conditional-defer shape as [`Self::bind_value`]. Infallible: a name collision
-    /// at builtin registration is a programming error, so the [`KError`] is dropped.
+    /// Register `name` as a type-valued binding. Lives in [`Bindings::types`] as a `Copy` `KType`
+    /// handle; reads go through [`Self::resolve_type`]. Same conditional-defer shape as
+    /// [`Self::bind_value`]. Infallible: a name collision at builtin registration is a
+    /// programming error, so the [`KError`] is dropped.
     pub(crate) fn register_type(
         &self,
         name: String,
@@ -221,10 +221,9 @@ impl<'a> Scope<'a> {
             return;
         }
         self.assert_open(&name);
-        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref, index) {
+        match self.bindings.get().try_register_type(&name, ktype, index) {
             Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, ktype, index),
             Err(_) => {}
         }
     }
@@ -232,7 +231,7 @@ impl<'a> Scope<'a> {
     /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
     /// MODULE). Writes the sealed `SetMember` identity into [`Bindings::types`], overwriting
     /// a `PartialEq`-equal `SetMember` a `RECURSIVE TYPES` block pre-installed (same set + index).
-    /// Returns the region-allocated `&KType` so the caller can yield it as a
+    /// Returns the `Copy` `KType` handle so the caller can yield it as a
     /// `Carried::Type`. Same conditional-defer shape as [`Self::register_type`];
     /// `Err(Rebind)` on a genuine non-equal collision.
     ///
@@ -241,26 +240,25 @@ impl<'a> Scope<'a> {
     /// a window where the type resolves with the pre-install's empty payload).
     ///
     /// The nominal finalizes (STRUCT / named UNION / Result / recursive-types / SIG) call this
-    /// directly and consume the returned `&KType`.
+    /// directly and consume the returned handle.
     pub(crate) fn register_type_upsert(
         &self,
         name: String,
         ktype: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::KType, KError> {
+    ) -> Result<crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
             return self.write_target().register_type_upsert(name, ktype, index);
         }
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        let kt_ref: &'a crate::machine::model::KType = self.brand().alloc_ktype(ktype);
         match self
             .bindings
             .get()
-            .try_register_type_upsert(&name, kt_ref, index)?
+            .try_register_type_upsert(&name, ktype, index)?
         {
-            ApplyOutcome::Applied => Ok(kt_ref),
+            ApplyOutcome::Applied => Ok(ktype),
             ApplyOutcome::Conflict => panic!(
                 "register_type_upsert borrow conflict on `{name}` — nominal finalize sites \
                  run post-dep-finish outside the re-entrant bind hot path",
@@ -276,50 +274,44 @@ impl<'a> Scope<'a> {
         name: String,
         identity: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::KType, KError> {
+    ) -> Result<crate::machine::model::KType, KError> {
         self.register_type_upsert(name, identity, index)
     }
 
-    /// Delivered type registration: allocate the RHS type into this scope's own region through the
-    /// single storage door and register it (strict insert-if-absent, conditional-defer), returning
-    /// the resident `&KType` so the caller seals its terminal from it. The type crosses the region
-    /// boundary as owned data — `ktype` is already the caller's clone out of the RHS envelope — so
-    /// no reach is derived and the RHS carrier pins nothing here.
+    /// Delivered type registration: register the RHS type handle (strict insert-if-absent,
+    /// conditional-defer), returning the handle so the caller seals its terminal from it. The
+    /// handle names the same interned type in every region — `ktype` is already the caller's copy
+    /// out of the RHS envelope — so no reach is derived and the RHS carrier pins nothing here.
     pub(crate) fn register_type_delivered(
         &self,
         name: String,
         ktype: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::KType, KError> {
+    ) -> Result<crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
                 .register_type_delivered(name, ktype, index);
         }
         self.assert_open(&name);
-        let kt_ref = self.brand().alloc_ktype(ktype);
-        match self
-            .bindings
-            .get()
-            .try_register_type(&name, kt_ref, index)?
-        {
-            ApplyOutcome::Applied => Ok(kt_ref),
+        match self.bindings.get().try_register_type(&name, ktype, index)? {
+            ApplyOutcome::Applied => Ok(ktype),
             ApplyOutcome::Conflict => {
-                self.pending.defer_type(name, kt_ref, index);
-                Ok(kt_ref)
+                self.pending.defer_type(name, ktype, index);
+                Ok(ktype)
             }
         }
     }
 
-    /// Record a SIG value slot: allocate the declared type into this region through the single
-    /// storage door and insert it into the nearest enclosing SIG decl scope's slot collector.
-    /// Duplicate slot name is a `Rebind`. The slot is a schema entry, not a binding — it takes
-    /// no `BindingIndex` (no lexical read can see it) and touches no binding map.
+    /// Record a SIG value slot: insert the declared type handle into the nearest enclosing SIG
+    /// decl scope's slot collector. Duplicate slot name is a `Rebind`. The slot is a schema
+    /// entry, not a binding — it takes no `BindingIndex` (no lexical read can see it) and touches
+    /// no binding map.
     pub(crate) fn register_sig_slot_delivered(
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-    ) -> Result<&'a crate::machine::model::KType, KError> {
+    ) -> Result<crate::machine::model::KType, KError> {
         // Mirrors `is_in_sig_body`'s walk exactly: a scope with `sig_slots: Some` wins; a
         // `Module` scope short-circuits (no SIG body encloses); `Root`/`Anonymous`/`Sig`
         // (a `Sig` scope always carries `sig_slots: Some` by construction, so it never
@@ -338,7 +330,6 @@ impl<'a> Scope<'a> {
                 ))
             })?;
         target.assert_open(&name);
-        let kt_ref = self.brand().alloc_ktype(ktype);
         let slots = target
             .sig_slots
             .as_ref()
@@ -346,8 +337,8 @@ impl<'a> Scope<'a> {
         if slots.borrow().contains_key(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        slots.borrow_mut().insert(name, kt_ref);
-        Ok(kt_ref)
+        slots.borrow_mut().insert(name, ktype);
+        Ok(ktype)
     }
 
     /// User-facing twin of [`Self::register_type_delivered`] for `LET <TypeIdentifier> = …` / `VAL`:
@@ -360,7 +351,7 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::KType,
         index: BindingIndex,
-    ) -> Result<&'a crate::machine::model::KType, KError> {
+    ) -> Result<crate::machine::model::KType, KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }

@@ -12,8 +12,8 @@ duplicates module-shaped machinery for that one feature — module bodies alread
 type declarations (mirrored into `Module::type_members`) and already park-resolve
 *non-cyclic* forward references on the outer scheduler, but a cycle declared in a
 `MODULE` body deadlocks. The block's body is restricted to `UNION`/`NEWTYPE`
-statements, and its group name binds `KType::RecursiveGroup` — a type-position binding
-that admits no values, with inert predicate arms
+statements, and its group name binds a `TypeNode::Group` handle — a type-position
+binding that admits no values, with inert predicate arms
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)).
 
 **Acceptance criteria.**
@@ -25,8 +25,7 @@ that admits no values, with inert predicate arms
 - An announced member still unfilled when the module body completes surfaces a typed
   `KError`, never a hang or panic.
 - `RECURSIVE TYPES` is removed: the builtin is gone, and the group-binding type
-  machinery (`KType::RecursiveGroup`, the registry's `Group` node,
-  `TAG_RECURSIVE_GROUP`) is deleted.
+  machinery (the registry's `Group` node and `TAG_RECURSIVE_GROUP`) is deleted.
 - Announcement does not perturb identity: two unrelated types co-declared in one
   module body keep decoupled digests and unify with their standalone twins (a test
   pins this against the computed-SCC identity rule).
@@ -45,26 +44,23 @@ that admits no values, with inert predicate arms
   `discover_members` scan hoists to module-body entry unchanged in spirit: leading
   `NEWTYPE`/`UNION` keywords at the body's top level announce; nothing else does. The
   boundary is the same one the block draws today.
-- *Lands after the interned-type-content flip — decided.* Announcing a whole module
-  body under today's `RecursiveSet` machinery would put unrelated co-declared types in
-  one shared set and temporarily couple their identities; computed-SCC identity (which
-  the flip lands) makes announced-set membership identity-neutral, so the relocation
-  waits for it.
+- *Depends on computed-SCC identity — decided.* Announcing a whole module body would
+  co-declare unrelated types together, and only computed-SCC identity keeps that
+  identity-neutral (a co-declared member that references no sibling digests
+  independently). That identity model shipped with interned-type-content, so announced
+  membership no longer couples identities and the relocation is unblocked.
 - *Top-level cycles take the wrapper — decided.* Announcement stays a module property
   rather than a global scan rule; the program body is not special-cased.
 
 ## Dependencies
 
-Retiring `KType::RecursiveGroup` resolves the "reserved for value-language cycle
+Retiring the `Group` node resolves the "reserved for value-language cycle
 construction" question recorded in
 [Constructing circular values](circular-value-construction.md) — resolved as retired,
 not consumed.
 
 **Requires:**
 
-- [Interned type content behind Copy handles](../type_memos/interned-type-content.md)
-  — computed-SCC identity must land first, or module-wide announcement couples
-  co-declared types' identities.
 - [USING surfaces module type members](using-type-members.md) — the migration path for
   members that today mirror flat into the enclosing scope.
 

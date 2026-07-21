@@ -292,15 +292,15 @@ fn region_alloc_while_prior_ref_live() {
     assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
 }
 
-/// `alloc_ktype` returns a region-lifetime `&KType` and bumps `alloc_count` by one.
+/// `KType` is a `Copy` content-digest handle — constructing one is not a region allocation.
 #[test]
-fn alloc_ktype_returns_region_lifetime_ref_and_counts() {
+fn ktype_construction_is_not_a_region_allocation() {
     let storage = run_root_storage();
     let a = storage.brand();
     let baseline = a.region().alloc_count();
-    let t: &KType = a.alloc_ktype(KType::NUMBER);
-    assert!(*t == KType::NUMBER);
-    assert_eq!(a.region().alloc_count(), baseline + 1);
+    let t: KType = KType::NUMBER;
+    assert!(t == KType::NUMBER);
+    assert_eq!(a.region().alloc_count(), baseline);
 }
 
 /// A per-call frame whose parent is the run root holds **no** strong ref back to the run-root

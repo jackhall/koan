@@ -82,7 +82,7 @@ pub(super) fn await_module_body<'a>(
             {
                 let mut tm = module.type_members.borrow_mut();
                 for (member, kt) in child_scope.bindings().iter_types() {
-                    tm.insert(member, *kt);
+                    tm.insert(member, kt);
                 }
             }
             // Seal the module's self-sig now that `type_members` reflects the body — a plain

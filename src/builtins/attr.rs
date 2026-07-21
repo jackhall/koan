@@ -89,7 +89,7 @@ pub fn body_identifier<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::mach
         return route(access_field(&ctx.ctx, target, &field_name, &lhs, ctx.types));
     }
     if let Some(kt) = ctx.scope.resolve_type(&s_name) {
-        if let TypeNode::AbstractType { name, .. } = ctx.types.node(*kt) {
+        if let TypeNode::AbstractType { name, .. } = ctx.types.node(kt) {
             return Action::Done(Err(abstract_type_has_no_members(&name)));
         }
     }
@@ -138,7 +138,7 @@ pub fn body_type_lhs<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machin
         }
     };
     let field_name = crate::try_action!(read_field_name(ctx.args, ctx.types));
-    route(access_type_member(ctx.scope, s_kt, &field_name, ctx.types))
+    route(access_type_member(ctx.scope, *s_kt, &field_name, ctx.types))
 }
 
 /// Reads the `Wrapped` runtime lhs and projects the field through [`access_field`].
@@ -204,11 +204,11 @@ pub fn body_module<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine:
 /// static struct field access produces.
 fn access_type_member<'a>(
     scope: &Scope<'a>,
-    kt: &KType,
+    kt: KType,
     field: &str,
     types: &TypeRegistry,
 ) -> Result<StepCarried<'a>, KError> {
-    match types.node(*kt) {
+    match types.node(kt) {
         // ATTR over a first-class signature value — answered from the owned schema. The
         // projected member is a clone out of that schema, allocated fresh into the read-site
         // scope's own region.
@@ -317,7 +317,7 @@ fn access_field<'a>(
         }
         // A type member is owned data: it clones out of the lhs and allocates into the read
         // site's own region, so the read carries no dependence on the lhs carrier.
-        Held::Type(kt) => Ok(step.alloc_type(*kt)),
+        Held::Type(kt) => Ok(step.type_carried(*kt)),
         // A record field cell is a value or a resolved type; the bind seam's unlowered carrier
         // never lands in one.
         Held::UnresolvedType(_) => unreachable!("a record field is never an unlowered type name"),
@@ -384,7 +384,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> Result<StepCarrie
                         (Carried::Object(o), Carried::Type(tag)) => {
                             Carried::Object(b.alloc_object_folded(KObject::Wrapped {
                                 inner: WrappedPayload::peel(o),
-                                type_id: *tag,
+                                type_id: tag,
                             }))
                         }
                         _ => unreachable!("operand order: [value member, re-tag identity]"),
@@ -677,7 +677,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG Ordered = (VAL compare :Number)");
         let kt = test_run.run_one_type(parse_one("Ordered.compare"));
-        assert_eq!(*kt, KType::NUMBER);
+        assert_eq!(kt, KType::NUMBER);
     }
 
     /// A missing field on the wrapped record names the carrier's nominal type in the

@@ -32,7 +32,7 @@ enum PendingWrite<'a> {
     },
     Type {
         name: String,
-        kt: &'a crate::machine::model::KType,
+        kt: crate::machine::model::KType,
         index: BindingIndex,
     },
 }
@@ -78,12 +78,7 @@ impl<'a> PendingQueue<'a> {
         });
     }
 
-    pub fn defer_type(
-        &self,
-        name: String,
-        kt: &'a crate::machine::model::KType,
-        index: BindingIndex,
-    ) {
+    pub fn defer_type(&self, name: String, kt: crate::machine::model::KType, index: BindingIndex) {
         self.pending
             .borrow_mut()
             .push(PendingWrite::Type { name, kt, index });
@@ -183,16 +178,13 @@ impl<'a> Default for PendingQueue<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::core::arena::{run_root_storage, FrameStorageExt};
     use crate::machine::model::KType;
 
     #[test]
     fn defer_type_queues_and_drain_replays_into_types() {
-        let storage = run_root_storage();
-        let region = storage.brand();
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
-        let kt = region.alloc_ktype(KType::NUMBER);
+        let kt = KType::NUMBER;
         queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);
@@ -201,7 +193,7 @@ mod tests {
             .get("Foo")
             .expect("Foo should be in types after drain")
             .0;
-        assert!(std::ptr::eq(stored, kt));
+        assert_eq!(stored, kt);
     }
 
     #[test]

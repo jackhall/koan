@@ -1,21 +1,27 @@
 # `KType` — the runtime type system
 
-[`KType`](../../../src/machine/model/types/ktype.rs) has a variant for every concrete `KObject`:
+[`KType`](../../../src/machine/model/types/ktype.rs) is a `Copy` content-digest handle
+— a bare `u128`, carrying no owned substructure. All type content lives in an interned
+[`TypeNode`](../../../src/machine/model/types/node.rs) owned by the run frame's registry
+([type-registry.md](../type-registry.md)); a handle names one node, and a node's child
+positions are themselves `KType` handles (the composition edges *are* the content). Every
+concrete `KObject` has a `TypeNode` variant:
 
 - Scalars: `Number`, `Str`, `Bool`, `Null`.
-- Containers: `List(Box<KType>)`, `Dict(Box<KType>, Box<KType>)`,
-  `KFunction { params: Record<KType>, ret: Box<KType> }`. Always parameterized; see
+- Containers: `List { element }`, `Dict { key, value }`,
+  `KFunction { params: Record<KType>, ret }`. Each child position is a `KType` handle.
+  Always parameterized; see
   [Container type parameterization](parameterization-and-variance.md#container-type-parameterization) below.
   `params` is a name-keyed [parameter `Record<KType>`](records-and-limits.md#record-fields-and-ktype-hashing),
   so a function-typed slot's identity is its parameters by name and type
-  (order-blind). `KFunction` is the *only* function-type variant: a functor — a
+  (order-blind). `KFunction` is the *only* function-type node: a functor — a
   module-returning function — reports it too, so it is admissible wherever a
   same-shape `:(FN …)` slot matches (see [functors.md](../functors.md)). When a
   function's source return is
-  per-call-elaborated, its `ret` box holds a `DeferredReturn(DeferredReturnSurface)`
-  carrier — see [Record fields and `KType` hashing](records-and-limits.md#record-fields-and-ktype-hashing).
-- Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
-  (`:{x :Number, y :Str}`), distinct from a nominal `NewType`-kind `SetRef`
+  per-call-elaborated, its `ret` handle names a `DeferredReturn(DeferredReturnSurface)`
+  node — see [Record fields and `KType` hashing](records-and-limits.md#record-fields-and-ktype-hashing).
+- Structural record: `Record { fields: Record<KType> }` — an identifier-keyed field schema
+  (`:{x :Number, y :Str}`), distinct from a nominal `NewType`-kind `SetMember`
   (a structural record is anonymous; a record-repr newtype is nominal). A record *value* (`KObject::Record`,
   surface `{x = 1, y = "a"}`) memoizes its per-field type record as its carried type.
   Width/depth subtyping orders record *values* in the dispatch lattice — see
@@ -49,33 +55,32 @@
   [`KType::accepts_part`](../../../src/machine/model/types/ktype_predicates.rs)
   and the pin test
   [`type_slot_admits_bare_builtin_tokens_and_user_type_carriers`](../../../src/machine/model/types/ktype_predicates/tests.rs).
-- User-declared nominal types — three variants reference members of an
-  `Rc`-owned [`RecursiveSet`](../../../src/machine/model/types/recursive_set.rs),
-  the atomic unit of nominal allocation, identity, and lift (one strongly-connected
-  component of mutually-recursive types; a non-recursive type is a singleton set).
+- User-declared nominal types — three node kinds carry the recursive-group model,
+  in which a member's identity unit is its strongly-connected component, not its
+  declaration group (a non-recursive type is a singleton component).
   See [user-types.md](../user-types.md) for the full model.
-  - `SetRef { set: Rc<RecursiveSet>, index }` — the **external** handle, the
-    nominal identity synthesized by `KObject::ktype()` for `Wrapped` and
-    `Tagged` carriers and held by `bindings.types`. Identity is
-    `(set digest, index)` — the set's sealed content digest plus the member index,
-    via [`same_nominal`](../../../src/machine/model/types/recursive_set.rs), never
-    the schema (which may be cyclic); the `Rc` is content transport only, with a
-    set-pointer fast path for the shared and pre-seal cases. Structurally identical
-    declarations therefore unify — the same `NEWTYPE` elaborated twice denotes one
-    type — rather than staying per-declaration distinct. The member's `kind` (read via
-    `set.member(index).kind`) is one of the nominal families `KKind::{Newtype,
-    TypeConstructor}` — `kind_of` reads it off the `SetRef` to classify the nominal type
-    value. A user `UNION` seals one `NewType` member per variant, so each variant is a
-    `SetRef`; the union name binds the anonymous `Union` of those `SetRef`s. Lift
-    `Rc::clone`s the whole set, so the recursive group travels as one cycle-aware unit.
-  - `SetLocal(index)` — the **intra-set sibling** reference inside a member's
-    schema, a bare index resolved against the ambient set during deep traversal.
-    It carries no `Rc` (so the set holds no internal refcount cycle) and never
-    reaches the predicates — matching is shallow `SetRef` identity that does not
-    descend a member's schema.
-  - `RecursiveGroup(Rc<RecursiveSet>)` — the first-class handle to a whole set,
-    bound by a `RECURSIVE TYPES` group name. Identity is the set's content digest
-    (via `same_nominal`, index-free); inert in value dispatch.
+  - `SetMember { scc_digest, index, scc_size, name, kind, schema }` — one sealed
+    member. Its handle is the `Copy` `(scc_digest, index)` folded into one digest —
+    the nominal identity `KObject::ktype()` reports for `Wrapped` and `Tagged`
+    carriers and held by `bindings.types`. Identity is the SCC digest plus the
+    member index, never the (possibly cyclic) schema; `scc_size`, `name`, `kind`,
+    and `schema` are digest-excluded because they are exactly the inputs the digest
+    was computed over. Structurally identical declarations therefore unify — the
+    same `NEWTYPE` elaborated twice denotes one type. The member's `kind` is one of
+    the nominal families `KKind::{Newtype, TypeConstructor}` — `kind_of` reads it to
+    classify the nominal type value. A user `UNION` seals one `NewType` member per
+    variant; the union name binds the anonymous `Union` of those member handles. A
+    sibling reference inside a sealed schema is the sibling's own absolute member
+    handle — a cyclic composition edge the registry holds without refcounting.
+  - `Sibling(index)` — a **relative** sibling reference inside a pre-seal group
+    window, a bare index meaningful only against the ambient window. Ordinary
+    interned content, but it never appears in a sealed schema, never reaches the
+    predicates, and never rides a value; the seal rewrites each one to an absolute
+    member handle.
+  - `Group { members }` — the first-class handle to a whole declared group, bound by
+    a `RECURSIVE TYPES` group name. Members are the declared members in declaration
+    order (a group may span several components, so it is a declaration boundary, not
+    an identity unit); inert in value dispatch.
   A slot that wants "any user-declared type of family X" is an `OfKind(KKind)`
   carrying the nominal family (`OfKind(Newtype)` / `OfKind(TypeConstructor)`).
   Because `OfKind` is type-channel-only, such a slot
@@ -86,21 +91,17 @@
   keywords (`Newtype` / `TypeConstructor`) are pinned for diagnostic
   rendering only — none is registered as a writable surface name (no entry in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs)).
-- `Union(Vec<KType>)` — an **untagged structural disjunction**, the type `:(A | B)`.
-  Not a set-member reference: it composes any member types, canonicalized by
-  [`KType::union_of`](../../../src/machine/model/types/ktype_resolution.rs) —
+- `Union { members: Vec<KType> }` — an **untagged structural disjunction**, the type `:(A | B)`.
+  Not a member reference: it composes any member types, canonicalized by
+  [`TypeRegistry::union_of`](../../../src/machine/model/types/registry.rs) —
   flattened, deduplicated, and collapsed to the lone member when only one survives
-  (`:(A | A)` is `:A`). Identity is order-blind: the stored digest sorts its member
-  digests, so `:(A | B)` equals `:(B | A)` under `PartialEq` / `Hash`. A union admits any value one of its members admits, and
+  (`:(A | A)` is `:A`). Identity is order-blind: the digest sorts its member
+  handles, so `:(A | B)` equals `:(B | A)`. A union admits any value one of its members admits, and
   each member is strictly more specific than the union
   ([`is_more_specific_than`](../../../src/machine/model/types/ktype_predicates.rs)), so a
   union-typed slot dispatches by the value's own runtime type. `kind_of` reports
   `Proper`. A user `UNION` binds the anonymous union of its per-variant `NewType`
-  `SetRef`s. See [user-types.md § Unions dissolve into per-variant newtypes](../user-types.md#unions-dissolve-into-per-variant-newtypes).
-- `RecursiveRef(String)` — a **definition-time transient only**: a self or
-  forward-sibling reference lowers to it during elaboration and the member's
-  finalize seals it to `SetLocal(index)`. It never appears in a sealed type and
-  never reaches the predicates. Equality is by name only.
+  member handles. See [user-types.md § Unions dissolve into per-variant newtypes](../user-types.md#unions-dissolve-into-per-variant-newtypes).
 - Module / signature carriers (the [module system](../modules.md) rests on
   these): **there is no module variant.** A module is a value — it rides the value
   channel's Object arm as `KObject::Module`, and its `ktype()` is its principal
@@ -109,61 +110,53 @@
   nothing on its own; `TYPE OF` is the door that surfaces that self-sig as a type
   value (`m :(TYPE OF int_ord)`, `-> :(TYPE OF er)`) — see
   [modules.md § Modules in type position](../modules.md#modules-in-type-position-type-of).
-  `Signature { content: Rc<SigContent>, pinned_slots: Vec<(String, KType)> }`
-  serves both signature roles in one variant. Its
-  [`SigContent`](../../../src/machine/model/types/sig_schema.rs) is **owned data** —
-  `{ path, sig_id, schema, schema_digest }` — so a `SIG`-declared interface, a module's
-  self-sig, and the empty `:Module` top are one shape differing only in schema, and the
-  variant is both the introspectable value *and* the dispatch constraint ("any module
-  satisfying this signature"). No `KType` variant borrows region data.
-  `AbstractType { source: ScopeId, name: String, param_names: Vec<String> }` is the
-  per-abstract-type-member
-  tag — **owned data**, id-keyed, with no `&Module` inside it. `param_names` carries the
+  `Signature { schema: SigSchema, schema_digest, pinned_slots: Vec<(String, KType)> }`
+  serves both signature roles in one node. The node carries **no binder and no label**:
+  a `SIG`-declared interface, a module's self-sig, and the empty `:Module` top are one
+  shape differing only in schema, so two textually identical `SIG` declarations are one
+  type. `schema_digest` is the content digest of the schema, computed once at
+  construction; the node is both the introspectable value *and* the dispatch constraint
+  ("any module satisfying this signature"). `name()` is content-derived — `"Module"`
+  when the schema is empty, else the structural `SIG (member: Type, …)` in member-name
+  order — so no per-declaration path is stored to go stale.
+  `AbstractType { source: ScopeId, name: String, param_names: Vec<String>, nonce: Option<ScopeId> }`
+  is the per-abstract-type-member node — owned data, id-keyed. `param_names` carries the
   member's order: empty is a first-order proper type (`TYPE Elt`), non-empty a type
   constructor over those named parameters (`TYPE (Elem AS Wrap)`), and `kind_of` reads
-  the list to classify the member `ProperType` or `TypeConstructor`. The single variant has
-  two **minting sites**, and the distinction between them is load-bearing for
-  generativity even though the representation is one shape: `source` is the SIG decl
-  scope's id for a member named at SIG-declaration time (a SIG-local `TYPE Carrier`
-  binds this name-bearing tag rather than collapsing to an underlying type),
-  or the freshly-allocated ascription module's scope id for the per-call
-  mint `:|` opaque ascription produces (`view.Carrier`). Because each `:|` application
-  allocates a fresh child scope, the two never collide.
-  Manual `PartialEq` keys `KType::AbstractType` on `(source, name)` — `param_names` is
-  excluded from equality, hashing and the digest, since one source-and-name binds exactly
-  one member, so the names are derivable payload rather than identity — while
-  `KType::Signature` compares by its stored content
-  digest (which folds the content's `schema_digest` and `pinned_slots`; its `path` and
-  `sig_id` are diagnostic and specificity-refinement data, never identity) — so two
-  opaque ascriptions of the same source module mint distinct abstract identities
-  (the abstraction barrier) while two `AbstractType` carriers minted from the *same*
-  ascription for the same slot name compare equal, and a per-call mint stays distinct
-  from the SIG-declared member it was threaded from.
+  the list to classify the member `ProperType` or `TypeConstructor`. `source` is the
+  binder the member is named against; `nonce` is the generativity mechanism — `None` for
+  a SIG-body declaration, `Some(<per-application module scope id>)` for the mint `:|`
+  opaque ascription produces (`view.Carrier`), so two opaque ascriptions of one SIG never
+  unify. **All four fields are identity; nothing on the node is digest-excluded** —
+  `param_names` feeds kind classification and `source` feeds member substitution, so both
+  are functional reads and interning must not collapse across them. A SIG-own member's
+  `source` is canonicalized to `ScopeId::SENTINEL` in the stored schema, so two textually
+  identical SIG declarations project to one schema; the substitution walks test against
+  that constant binder.
   Projecting a member off a bare type-channel `AbstractType` is an error: the
   identity names no receiver, and further members project off the module value
   ([`attr.rs`](../../../src/builtins/attr.rs)).
   The companion wildcard `OfKind(Signature)` admits any signature value; the
   surface keyword `Signature` lowers to it in
   [`KType::from_name`](../../../src/machine/model/types/ktype_resolution.rs),
-  while `Module` lowers to the empty signature (a `Signature` over `SigContent::empty()`),
-  the module-lattice top every module value satisfies.
-  The single `Signature` variant is **disambiguated by position**: a
+  while `Module` lowers to the empty signature, the module-lattice top every module value
+  satisfies.
+  The single `Signature` node is **disambiguated by position**: a
   `Signature { .. }` *slot* matches a *module value* (on the value channel's Object
   arm) whose self-sig structurally
   satisfies the slot's schema (the constraint role — what `er :Ordered`
   lowers to in an FN parameter slot, so `:Ordered` means "module
   satisfying Ordered," never "the signature value itself"), while a
-  signature *value* (a `KType::Signature { .. }` flowing in the `Type` arm) is matched only
+  signature *value* (a `Signature` handle flowing in the `Type` arm) is matched only
   by the `OfKind(Signature)` wildcard. `pinned_slots` (empty for a bare
-  signature) carries `WITH` abstract-type specializations; because the
-  same variant rides a live `&Signature`, a `WITH` result is
+  signature) carries `WITH` abstract-type specializations, so a `WITH` result is
   introspectable too.
-- Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
-  Record<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
-  / `Dict(_, _)`, with `Record`'s order-blind identity. `args` maps each of the
-  constructor's parameter names to the elaborated argument type, stored in the
-  constructor's declared order. `ctor` is a `TypeConstructor`-kind identity — a
-  `SetRef` to a declared family, or an `AbstractType` naming a SIG's abstract
+- Higher-kinded application: `ConstructorApply { constructor, arguments: Record<KType> }`
+  — structural identity by `(constructor, arguments)`, mirror of `List` / `Dict`,
+  with `Record`'s order-blind identity. `arguments` maps each of the
+  constructor's parameter names to the elaborated argument type. `constructor` is a
+  `TypeConstructor`-kind handle — a `SetMember` of a declared family, or an
+  `AbstractType` naming a SIG's abstract
   constructor slot. Emitted when a constructor identity is applied to a record of
   named type arguments (`:(Wrap {Elem = Number})`) or through the arity-1 `AS`
   sugar; renders as `:(ctor {Name = Type, …})` in diagnostics, which re-parses. See

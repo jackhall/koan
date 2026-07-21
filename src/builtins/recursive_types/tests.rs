@@ -20,7 +20,6 @@ fn member_scc_and_fields(
 ) -> (TypeDigest, usize, Vec<(String, KType)>) {
     let handle = scope
         .resolve_type(name)
-        .copied()
         .unwrap_or_else(|| panic!("expected {name} to be a type in scope"));
     match types.node(handle) {
         TypeNode::SetMember {
@@ -57,8 +56,8 @@ fn block_mutual_pair_seals_one_component_with_member_handle_cross_refs() {
     assert_eq!(a_scc, b_scc, "Aa and Bb seal into one component");
     assert_eq!(a_size, 2, "the block seals into a component of 2 members");
     assert_eq!(b_size, 2);
-    let aa_handle = scope.resolve_type("Aa").copied().unwrap();
-    let bb_handle = scope.resolve_type("Bb").copied().unwrap();
+    let aa_handle = scope.resolve_type("Aa").unwrap();
+    let bb_handle = scope.resolve_type("Bb").unwrap();
     assert_eq!(a_fields[0], ("b".to_string(), bb_handle));
     assert_eq!(b_fields[0], ("a".to_string(), aa_handle));
     assert!(scope.bindings().pending_types().is_empty());
@@ -72,9 +71,9 @@ fn block_group_name_binds_the_group_handle() {
     let scope = test_run.scope;
     test_run.run("RECURSIVE TYPES Pair = (\n  NEWTYPE Aa = :{b :Bb}\n  NEWTYPE Bb = :{a :Aa}\n)");
     let types = test_run.types();
-    let aa = scope.resolve_type("Aa").copied().unwrap();
-    let bb = scope.resolve_type("Bb").copied().unwrap();
-    match scope.resolve_type("Pair").copied() {
+    let aa = scope.resolve_type("Aa").unwrap();
+    let bb = scope.resolve_type("Bb").unwrap();
+    match scope.resolve_type("Pair") {
         Some(handle) => match types.node(handle) {
             TypeNode::Group { members } => assert_eq!(
                 members,
@@ -103,7 +102,7 @@ fn block_three_way_seals_one_component() {
     for (from, field, target) in [("Aa", "b", "Bb"), ("Bb", "c", "Cc"), ("Cc", "a", "Aa")] {
         let (from_scc, _, fields) = member_scc_and_fields(scope, types, from);
         assert_eq!(from_scc, scc, "{from} shares the component");
-        let target_handle = scope.resolve_type(target).copied().unwrap();
+        let target_handle = scope.resolve_type(target).unwrap();
         assert_eq!(fields[0], (field.to_string(), target_handle));
     }
 }

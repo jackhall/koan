@@ -30,9 +30,10 @@ refcount rather than by region reference.
 An engine-internal memory item near
 [design/memory-model.md](../../design/memory-model.md) — update it if the
 region-storage families it names change. The type-side clone families adjacent to this
-substrate (the field-type memo, the `alloc_ktype` re-allocation sites, the lift-path
-type clones) are owned by
-[Interned type content behind Copy handles](../type_memos/interned-type-content.md).
+substrate (the field-type memo, the type re-allocation sites, the lift-path type
+clones) already reduced to `Copy`-handle copies against the run-frame registry
+([design/typing/type-registry.md](../../design/typing/type-registry.md)); this item
+owns only the value-side record substrate.
 
 **Requires:** none — engine-internal.
 

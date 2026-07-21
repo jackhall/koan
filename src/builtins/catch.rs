@@ -21,7 +21,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // produces an `Outcome::Done(Value)` (never a `ReturnContract`), so the declared return is not
     // validated against the runtime value, and the throwaway `kerror_ktype()` identity is fine.
     let result_ctor = match scope.resolve_type("Result") {
-        Some(member) => *member,
+        Some(member) => member,
         None => panic!("Result must be registered before CATCH"),
     };
     let return_type = types.constructor_apply(
@@ -52,7 +52,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     // Capture the prelude `Result` member identity at body time so the CATCH value shares the
     // nominal identity of a `Result (...)`-constructed one.
     let result_member: KType = match ctx.scope.resolve_type("Result") {
-        Some(member) => *member,
+        Some(member) => member,
         None => panic!("Result must be registered before CATCH"),
     };
     let finish: CatchContinue<'a> = Box::new(move |fctx, result| {
@@ -69,10 +69,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         // wrapped value reaches. The `Result` member handle crosses the build brand as a
         // [`RegionTypeFamily`] operand, `merge`d in under the scope's yoke rather than paired with
         // an asserted singleton; the handle itself borrows no region.
-        let region = fctx.scope.brand();
         let frame = fctx.ctx.frame();
-        let identity: &KType = region.alloc_ktype(result_member);
-        let home = build_type_operand(fctx.scope, Rc::clone(&frame), identity);
+        let home = build_type_operand(fctx.scope, Rc::clone(&frame), result_member);
         let witnessed = match result {
             // The watched carrier folds onto the result: `transfer_into` relocates the value into the
             // consumer region and unions its reach onto the `Ok` carrier.
@@ -83,7 +81,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     let region = FoldingBrand::in_fold_closure(placement);
                     Carried::Object(region.alloc_object_folded(build_result(
                         "Ok",
-                        *identity,
+                        identity,
                         value.object().deep_clone(),
                     )))
                 },
@@ -108,7 +106,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                             let region = FoldingBrand::in_fold_closure(placement);
                             Carried::Object(region.alloc_object_folded(build_result(
                                 "Error",
-                                *identity,
+                                identity,
                                 payload.object().deep_clone(),
                             )))
                         },

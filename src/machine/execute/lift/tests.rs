@@ -298,18 +298,18 @@ fn type_recursive_member_relocates_and_navigates() {
     let type_value = tree;
 
     let relocated = copy_carried(
-        Carried::Type(&type_value),
+        Carried::Type(type_value),
         FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(dest.brand().handle())),
     );
     match relocated {
         Carried::Type(out) => {
             assert_eq!(
-                *out, tree,
+                out, tree,
                 "relocation copies the member's digest handle unchanged"
             );
             // Navigable: reading the relocated handle back finds the member's `children` field
             // self-referencing the sealed `Tree` member.
-            match types.node(*out) {
+            match types.node(out) {
                 TypeNode::SetMember {
                     schema: NodeSchema::NewType(repr),
                     ..

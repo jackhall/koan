@@ -247,7 +247,7 @@ impl<'a> ExpressionPart<'a> {
         use crate::machine::model::types::KType;
         if let ExpressionPart::Spliced { cell, .. } = self {
             return match scope.adopt_sealed(cell) {
-                Carried::Type(kt) => Held::Type(*kt),
+                Carried::Type(kt) => Held::Type(kt),
                 Carried::UnresolvedType(ti) => Held::UnresolvedType(ti.clone()),
                 Carried::Object(obj) => Held::Object(obj.deep_clone()),
             };

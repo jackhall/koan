@@ -31,12 +31,12 @@ Type-system mechanics:
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
   recognition, module-qualified names, the binding-map partition that
   separates type-name lookups from value-name lookups, the
-  `KType::Unresolved` bare-leaf transient, and the two-layer
+  `UnresolvedType` surface-`TypeIdentifier` carrier, and the two-layer
   resolution memo that amortizes elaboration cost.
-- [user-types.md](user-types.md) — the `RecursiveSet` nominal model: a
-  member's `KType::SetRef` is the per-declaration identity for NEWTYPE, named
-  UNION, MODULE, opaque ascription, and NEWTYPE, with `SetLocal` siblings and
-  the `RecursiveGroup` handle. Covers specificity stratification with the
+- [user-types.md](user-types.md) — the registry-interned nominal model: a
+  member's `SetMember` handle is the per-declaration identity for NEWTYPE, named
+  UNION, MODULE, opaque ascription, and NEWTYPE, with relative `Sibling` references
+  and the `Group` handle. Covers specificity stratification with the
   `OfKind(KKind)` family-kind slot, finalize-time type-only install through
   `Scope::register_type_upsert`, the `RECURSIVE TYPES` block for mutually
   recursive nominals, and the `NEWTYPE` keyword's `Wrapped` carrier with its

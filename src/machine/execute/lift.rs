@@ -20,7 +20,7 @@ pub(in crate::machine::execute) fn copy_carried<'b>(
 ) -> Carried<'b> {
     match value {
         Carried::Object(v) => Carried::Object(dest.alloc_object_folded(v.deep_clone())),
-        Carried::Type(t) => Carried::Type(dest.alloc_ktype(*t)),
+        Carried::Type(t) => Carried::Type(t),
         Carried::UnresolvedType(ti) => {
             Carried::UnresolvedType(dest.alloc_type_identifier(ti.clone()))
         }

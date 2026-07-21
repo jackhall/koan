@@ -144,15 +144,12 @@ pub(super) fn invoke<'step>(
     ) {
         ExecOutcome::Tail { leading, tail, ret } => {
             // A resolved return reads its type off the signature; a deferred `Type` return carries
-            // the per-call type (already re-homed into the captured-scope region by `run_user_fn`)
-            // as a `PerCall` contract, checked + stamped at the lift boundary like any FN return, so
-            // a recursive deferred body stays TCO-flat.
+            // the per-call type (a `Copy` handle from `run_user_fn`) as a `PerCall` contract,
+            // checked + stamped at the lift boundary like any FN return, so a recursive deferred
+            // body stays TCO-flat.
             let contract = match ret {
                 PerCallReturn::FromSignature => ReturnContract::Function(picked),
-                PerCallReturn::Resolved(ret_ref) => ReturnContract::PerCall {
-                    func: picked,
-                    ret: ret_ref,
-                },
+                PerCallReturn::Resolved(ret) => ReturnContract::PerCall { func: picked, ret },
             };
             // The frame is already the slot's installed cart, so the tail re-enters it with
             // `Inherit` — a `FreshTail` here would mint a second cart, discarding the one already

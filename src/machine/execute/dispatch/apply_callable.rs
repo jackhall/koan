@@ -46,7 +46,7 @@ mod tests;
 pub(in crate::machine::execute) enum ResolvedCallable<'step> {
     /// Build from a sealed nominal member (a `SetMember` node — struct / tagged / newtype /
     /// `TypeConstructor`).
-    Constructor { identity: &'step KType },
+    Constructor { identity: KType },
     /// Call a `KFunction` by name.
     Function(&'step KFunction<'step>),
 }
@@ -85,19 +85,19 @@ pub(in crate::machine::execute) fn apply_callable<'step>(
 /// and rejects construction by name; any other non-constructible identity is a `TypeMismatch`.
 fn apply_constructor<'step>(
     ctx: &SchedulerView<'step, '_>,
-    identity: &'step KType,
+    identity: KType,
     expr: &KExpression<'step>,
 ) -> Outcome<'step> {
     // A user `UNION` binds an anonymous union of per-variant newtype members. `Maybe Some`
     // names the variant type; `Maybe (Some v)` newtype-constructs the named member.
-    if let TypeNode::Union { members } = ctx.types().node(*identity) {
+    if let TypeNode::Union { members } = ctx.types().node(identity) {
         return apply_union_construct(ctx, members, expr);
     }
     // Named type application: a type-constructor head — a declared family (`SetMember`, empty or
     // non-empty schema) or a SIG's abstract constructor slot — with a record-literal body binds
     // each of the family's parameters to a type. It precedes every construction arm: the two
     // surfaces are disjoint, and the record body is a type-argument list here, not a value.
-    if let Some(param_names) = constructor_param_names(*identity, ctx.types()) {
+    if let Some(param_names) = constructor_param_names(identity, ctx.types()) {
         if let Some(
             [Spanned {
                 value: ExpressionPart::RecordLiteral(fields),
@@ -112,7 +112,7 @@ fn apply_constructor<'step>(
     // over. Its first-order sibling carries no parameters and falls to the generic mismatch.
     if let TypeNode::AbstractType {
         name, param_names, ..
-    } = ctx.types().node(*identity)
+    } = ctx.types().node(identity)
     {
         if !param_names.is_empty() {
             return Outcome::Done(Err(KError::new(KErrorKind::ShapeError(format!(
@@ -121,7 +121,7 @@ fn apply_constructor<'step>(
             )))));
         }
     }
-    let TypeNode::SetMember { schema, name, .. } = ctx.types().node(*identity) else {
+    let TypeNode::SetMember { schema, name, .. } = ctx.types().node(identity) else {
         return Outcome::Done(Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
@@ -148,7 +148,7 @@ fn apply_constructor<'step>(
             ..
         } if !variant_schema.is_empty() => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_tagged(*identity, Rc::new(variant_schema), parts)
+                constructors::dispatch_construct_tagged(identity, Rc::new(variant_schema), parts)
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -165,7 +165,7 @@ fn apply_constructor<'step>(
         }
         NodeSchema::TypeConstructor { .. } => match extract_call_body(expr) {
             Ok(CallBody::Positional(parts)) => {
-                constructors::dispatch_construct_apply(*identity, parts)
+                constructors::dispatch_construct_apply(identity, parts)
             }
             Ok(CallBody::Named(_)) => body_shape_err(expr, POSITIONAL_ONLY),
             Err(e) => Outcome::Done(Err(e)),
@@ -181,7 +181,7 @@ fn apply_constructor<'step>(
 /// order.
 fn apply_named_type_args<'step>(
     ctx: &SchedulerView<'step, '_>,
-    identity: &'step KType,
+    identity: KType,
     param_names: Vec<String>,
     fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
@@ -191,7 +191,7 @@ fn apply_named_type_args<'step>(
         return Outcome::Done(
             build_apply_args(identity, &param_names, Vec::new(), ctx.types()).map(|args| {
                 ctx.step_ctx()
-                    .alloc_type(ctx.types().constructor_apply(*identity, args))
+                    .type_carried(ctx.types().constructor_apply(identity, args))
             }),
         );
     }
@@ -212,7 +212,7 @@ fn apply_named_type_args<'step>(
             .iter()
             .zip(&names)
             .map(|(terminal, name)| match terminal.value {
-                Carried::Type(kt) => Ok((name.clone(), *kt)),
+                Carried::Type(kt) => Ok((name.clone(), kt)),
                 Carried::Object(object) => Err(KError::new(KErrorKind::TypeMismatch {
                     arg: name.clone(),
                     expected: "Type".to_string(),
@@ -227,7 +227,7 @@ fn apply_named_type_args<'step>(
             let args = build_apply_args(identity, &param_names, supplied, view.types())?;
             Ok(view
                 .step_ctx()
-                .alloc_type(view.types().constructor_apply(*identity, args)))
+                .type_carried(view.types().constructor_apply(identity, args)))
         }))
     });
     Await::on(Deps::from_owned(deps))
@@ -240,7 +240,7 @@ fn apply_named_type_args<'step>(
 /// a mismatch names the missing and the unknown keys. (`Record` identity is order-blind, so the
 /// declared order is presentation — it is what `KType::name()` renders and re-parses.)
 fn build_apply_args(
-    identity: &KType,
+    identity: KType,
     param_names: &[String],
     supplied: Vec<(String, KType)>,
     types: &TypeRegistry,
@@ -309,7 +309,7 @@ fn apply_union_construct<'step>(
     {
         let name = t.render();
         return match union_member(&members, &name, ctx.types()) {
-            Some(member) => Outcome::Done(Ok(ctx.step_ctx().alloc_type(member))),
+            Some(member) => Outcome::Done(Ok(ctx.step_ctx().type_carried(member))),
             None => Outcome::Done(Err(unknown_variant_error(&members, &name, ctx.types()))),
         };
     }

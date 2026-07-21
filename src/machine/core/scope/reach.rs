@@ -163,20 +163,20 @@ impl<'a> Scope<'a> {
     /// Where [`resident_value_carrier`](Self::resident_value_carrier) seals a value already living
     /// **in** this region, adoption is the consumption verb for a carrier produced **elsewhere**.
     pub(crate) fn adopt_sealed(&self, cell: &DeliveredCarried) -> Carried<'a> {
-        /// The owned content cloned out of a type-channel envelope, before it is re-allocated
-        /// into this scope's region.
+        /// The content copied out of a type-channel envelope: a `Copy` `KType` handle, or an
+        /// unlowered surface name re-allocated into this scope's region.
         enum AdoptedType {
             Lowered(KType),
             Unlowered(TypeIdentifier),
         }
 
         let cloned_type = cell.open(|live| match live {
-            Carried::Type(kt) => Some(AdoptedType::Lowered(*kt)),
+            Carried::Type(kt) => Some(AdoptedType::Lowered(kt)),
             Carried::UnresolvedType(ti) => Some(AdoptedType::Unlowered(ti.clone())),
             Carried::Object(_) => None,
         });
         match cloned_type {
-            Some(AdoptedType::Lowered(owned)) => Carried::Type(self.brand().alloc_ktype(owned)),
+            Some(AdoptedType::Lowered(handle)) => Carried::Type(handle),
             Some(AdoptedType::Unlowered(ti)) => {
                 Carried::UnresolvedType(self.brand().alloc_type_identifier(ti))
             }
@@ -233,11 +233,11 @@ impl<'a> Scope<'a> {
     /// twin of [`Self::resident_value_carrier`]. The witness is empty: a `KType` is owned data, so
     /// the read pins no foreign region and travels under the home-frame pin alone (the envelope host
     /// [`Self::seal_resident_delivered`] pairs). The bundle runs on the confined arena surface
-    /// ([`RegionBrand::seal_resident`]), so a type read witnesses the existing `&'a KType` in place —
-    /// no re-clone into the region.
+    /// ([`RegionBrand::seal_resident`]), so a type read carries the `Copy` handle in place — no
+    /// re-clone into the region.
     pub(crate) fn resident_type_carrier(
         &self,
-        kt: &'a crate::machine::model::KType,
+        kt: crate::machine::model::KType,
     ) -> Witnessed<CarriedFamily, CarrierWitness> {
         self.brand()
             .seal_resident(Carried::Type(kt), CarrierWitness::new(false, None))

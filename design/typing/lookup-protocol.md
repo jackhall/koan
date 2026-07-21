@@ -120,14 +120,13 @@ clears an in-flight type producer's placeholder (nor the reverse).
   bypassing the `types`-first preference. It pairs that with
   [`Bindings::committed_type_binding`](../../src/machine/core/bindings.rs) — the
   raw, visibility-unfiltered `types[name]` entry plus its `BindingIndex` — which
-  is the declaration-identity read, not a consumer lookup: a nominal member is
-  in flight iff some scope on the chain holds the name in `pending_types` *and*
-  its committed identity is a `SetRef` into the same set allocation the
-  reference resolved through
+  is the declaration-identity read, not a consumer lookup: a nominal member named
+  by a relative `Sibling` reference is in flight iff the scope carrying the very
+  group window that reference resolves against holds the name in `pending_types`
   ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
-  The set-allocation match is what stops a same-named in-flight declaration of a
+  The window match is what stops a same-named in-flight declaration of a
   different type from capturing the reference; a SIG-declared or abstract slot,
-  whose `KType` records its declaring scope id, is matched by that id instead.
+  whose type records its declaring scope id, is matched by that id instead.
 - [`Bindings::lookup_member`](../../src/machine/core/bindings.rs) is the ATTR
   module/signature read: one classified pass over the scope's *own* `data` then
   `types`, returning a `MemberResolution::Value(&KObject)` or
@@ -306,10 +305,10 @@ What each topic doc adds beyond this protocol:
 - [ktype/README.md](ktype/README.md) — `KType` variants, variance under the three
   predicates, container parameterization, and the overload-bucket
   visibility filter as it interacts with slot-specificity.
-- [user-types.md](user-types.md) — the `RecursiveSet` nominal model
-  (`SetRef` / `SetLocal` / `RecursiveGroup`), nominal-identity install
-  through `Scope::register_type_upsert`, the specificity stratification
-  for a concrete `SetRef` vs `OfKind(KKind)` vs `Any`, and the
+- [user-types.md](user-types.md) — the registry-interned nominal model
+  (`SetMember` / `Sibling` / `Group`), computed-SCC member identity,
+  nominal-identity install through `Scope::register_type_upsert`, the specificity
+  stratification for a concrete member handle vs `OfKind(KKind)` vs `Any`, and the
   `RECURSIVE TYPES` block for mutually recursive nominals.
 - [execution/name-placeholders.md § Dispatch-time name placeholders](../execution/name-placeholders.md#dispatch-time-name-placeholders)
   — how forward references park through the `placeholders` /

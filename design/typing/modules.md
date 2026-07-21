@@ -315,30 +315,28 @@ and [`type_of/tests.rs`](../../src/builtins/type_ops/type_of/tests.rs).
 Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
 structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
-`KType::Signature { content, pinned_slots }` carries an `Rc`-shared
-[`SigContent`](../../src/machine/model/types/sig_schema.rs) — the owned bundle
-`{ path, sig_id, schema, schema_digest }` — plus any `WITH` abstract-type pins. There is one
-kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the empty
-`:Module` interface differ only in the schema their content holds, not in variant. The content
-borrows nothing from a region, so `KType` holds no region pointer in any variant.
-`KType::AbstractType { source, name, param_names }` carries an abstract-type member, its
-`source` naming either the SIG decl scope (a declared member) or the per-call
-ascription module (an opaque mint), and its `param_names` empty for a proper type or
-naming the parameters of a constructor slot. Module identity is by `module.scope_id()` — the
-key both a self-sig's `sig_id` and an `AbstractType` minted off that module digest on; signature
-identity is by schema *content* (`schema_digest`) + `pinned_slots`, so two textually identical
-declarations name one type and `sig_id` never enters identity; abstract-type identity by
-`(source, name)` — `param_names` is excluded, one source-and-name binding exactly one
-member, so the names are derivable payload. They are still *interface*: a schema's
-content digest feeds each abstract member's parameter names (sorted, so order is
-presentation), and satisfaction requires name agreement, so two otherwise identical SIG
-declarations whose constructor slot names its parameter differently are distinct types. The value channel carries a module as `KObject::Module`; the type
+The `Signature` node `{ schema: SigSchema, schema_digest, pinned_slots }` carries the owned
+schema, its content digest, and any `WITH` abstract-type pins — no binder and no label. There
+is one kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the
+empty `:Module` interface differ only in the schema, not in node kind. A `KType` is a `Copy`
+registry handle, so it holds no region pointer.
+The `AbstractType { source, name, param_names, nonce }` node carries an abstract-type member: its
+`source` names the binder (canonicalized to `ScopeId::SENTINEL` for a SIG-own member so two
+textually identical SIG declarations project to one schema), its `param_names` empty for a proper
+type or naming the parameters of a constructor slot, and its `nonce` the generativity mint
+(`None` for a SIG-body declaration, the per-call ascription module for an opaque mint). Module
+identity is by `module.scope_id()`; signature identity is by schema *content* (`schema_digest`) +
+`pinned_slots`, so two textually identical declarations name one type. Abstract-type identity is
+by all four node fields — `param_names` feeds kind classification and `source` feeds member
+substitution, so both are functional reads, not derivable payload. Satisfaction requires name
+agreement, so two otherwise identical SIG declarations whose constructor slot names its parameter
+differently are distinct types. The value channel carries a module as `KObject::Module`; the type
 channel never names one directly, only through the self-sig that types it.
 The type-position wildcard `KType::OfKind(KKind::Signature)` admits any
 first-class signature value; the surface keyword `Signature` lowers to it in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs). The
 `Module` surface keyword lowers to the **empty signature**
-(`KType::empty_signature()`, a `Signature` over `SigContent::empty()`) — the lattice top
+(`KType::EMPTY_SIGNATURE`, a `Signature` over the empty schema) — the lattice top
 every module value satisfies — so an "any module" slot is signature-typed like
 every other module slot rather than a kind wildcard.
 

@@ -304,7 +304,7 @@ invariants make the ownership unit coherent:
 
 ### Move-in residence audits
 
-A bare move-in surface — `RegionBrand::alloc_object` / `alloc_ktype` / `StepAllocator::alloc_type`,
+A bare move-in surface — `RegionBrand::alloc_object`,
 and the library's own [`RegionHandle::alloc_resident`](../workgraph/src/witnessed/region.rs) it
 routes through — takes `K::At<'static>`: region-purity is compile-enforced there, so a value carrying
 any region borrow is rejected before it ever reaches the pins-nothing empty witness. That empty
@@ -313,17 +313,13 @@ it wrapped as a [`StepCarried`](../src/machine/execute/step_carried.rs) branded 
 lifetime, so the borrow checker rejects any attempt to stash it past its construction step and the
 sole exit to node storage is finalize's fold.
 
-`KType` never reaches those tiers at all. No `KType` variant borrows region data — every variant
-owns its content, a signature's schema included ([`ktype.rs`](../src/machine/model/types/ktype.rs)) —
-so a type has no residence to audit and no `unsafe` family declaration to write. Its store is
-compile-safe by ownership through a **single unchecked door**,
-[`RegionBrand::alloc_ktype`](../src/machine/core/arena.rs): an owned value cannot dangle, and the
-`&'a` resident it hands back points into the storing brand's own region. A type crossing a region
-boundary crosses **by clone** through that same door — `Clone` shares the `Rc` sets (`SetRef` /
-`RecursiveGroup` transport, a signature's `Rc<SigContent>`), so the copy is shallow and content-digest
-identity is preserved. The binding tables therefore store a bare `&KType` with no reach evidence
-beside it ([`bindings.rs`](../src/machine/core/bindings.rs)), and a type read witnesses that
-reference in place under the home-frame pin alone.
+`KType` never reaches those tiers at all. A `KType` is a `Copy` content-digest handle
+([`ktype.rs`](../src/machine/model/types/ktype.rs)) — a bare `u128` naming a node the run-frame
+registry owns ([type-registry.md](typing/type-registry.md)) — so it holds no region pointer, needs
+no store door, and has no residence to audit. A type crosses a region boundary as a plain handle
+copy, and content-digest identity is preserved because the handle *is* the identity. The binding
+tables therefore store `KType` by value ([`bindings.rs`](../src/machine/core/bindings.rs)), with no
+reach evidence and no borrow to witness.
 
 A *value* that cannot rebuild at `'static` (`KObject` has no general `'static` rebuild; a module-family
 pointer or an embedded `&Scope` is a live region borrow) takes one of three tiers
@@ -339,9 +335,9 @@ compile-only capability with no runtime audit at all:
 - **checked** (`alloc_object_checked`) —
   [`KObject::resident_in`](../src/machine/model/values/kobject.rs) walks the value's own structure and
   confirms every region pointer it carries points into the destination region, checking an `Rc`-shared
-  set's members by address rather than rebuilding them. A `Wrapped { type_id }` tag needs no walk: the
-  `&KType` it names points at owned data allocated region-locally through `alloc_ktype`, so it reaches
-  nothing the audit could reject. Confined to identity-preserving stores: a
+  payload's members by address rather than rebuilding them. A `Wrapped { type_id }` tag needs no walk: the
+  `type_id` is a `Copy` `KType` handle naming a registry-owned node, so it holds no region pointer the
+  audit could reject. Confined to identity-preserving stores: a
   caller reaches here only to store a value whose identity a `'static` rebuild would break (a
   module-family pointer, an `Rc`-shared payload).
 - **reaching / delivered** (`Scope::alloc_object_reaching` / `alloc_module_reaching` /

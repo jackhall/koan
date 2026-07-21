@@ -1,9 +1,7 @@
 //! FN return-type pipeline: extraction → classification → carriage across the
 //! dep-finish boundary → resolution at finish time.
 
-use crate::builtins::resolve_or_await::{
-    classify_resolved_type, expect_type_terminal, resolve_at_wake, unbound_error,
-};
+use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, unbound_error};
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
@@ -102,7 +100,7 @@ pub(crate) fn classify_return_type<'a>(
             }
             // Gated to the FN's lexical position — a return type naming a later type is a
             // position error, like any other forward reference.
-            match classify_resolved_type(scope.resolve_type_identifier(&te, chain, types)) {
+            match scope.resolve_type_identifier(&te, chain, types) {
                 TypeResolution::Done(kt) => Ok(ReturnTypeState::Done(kt)),
                 TypeResolution::Park(producers) => Ok(ReturnTypeState::Pending { te, producers }),
                 // `resolve_type_identifier` already tries the builtin fallback internally, so an
@@ -138,7 +136,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
         ReturnTypeCapture::Unresolved(name) => {
             let te = TypeIdentifier::leaf(name);
             resolve_at_wake(scope, "FN return-type slot", |s| {
-                classify_resolved_type(s.resolve_type_identifier(&te, None, types))
+                s.resolve_type_identifier(&te, None, types)
             })
             .map(ReturnType::Resolved)
         }

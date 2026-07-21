@@ -4,14 +4,13 @@ The value-language counterpart to `RECURSIVE TYPES`: build a value that refers t
 itself or participates in a reference cycle.
 
 **Problem.** A *type* can be cyclic, but a *value* cannot. `RECURSIVE TYPES` co-declares
-a group of mutually-recursive nominals as an `Rc`-owned
-[`RecursiveSet`](../../src/machine/model/types/recursive_set.rs); an external handle is
-[`KType::SetRef`](../../src/machine/model/types/ktype.rs) and an intra-set back-edge is
-`SetLocal(usize)` — a bare index that carries no `Rc`, so the set holds no internal
-refcount cycle and frees once its last external handle drops. The whole-group handle
-[`KType::RecursiveGroup`](../../src/machine/model/types/ktype.rs) exists and is
-documented as "reserved for value-language cycle construction," but it is inert in
-value dispatch.
+a group of mutually-recursive nominals as interned
+[`TypeNode::SetMember`](../../src/machine/model/types/node.rs) nodes in the run-frame
+registry, each member's handle a `Copy` `(SCC digest, index)` and its sibling references
+ordinary cyclic composition edges — the registry does not reclaim by refcount, so a
+cycle in the type graph is not a leak hazard. The whole-group handle
+[`TypeNode::Group`](../../src/machine/model/types/node.rs) exists and is documented as
+"reserved for value-language cycle construction," but it is inert in value dispatch.
 
 Values are acyclic by construction. A constructor's arguments are already-finished
 values (the constructor path in
@@ -35,16 +34,17 @@ other.
   group.
 - Structural operations over a cyclic value terminate: rendering (`summarize`) and
   equality do not recur unboundedly.
-- `KType::RecursiveGroup`'s "reserved" status is resolved — either consumed by the
+- `TypeNode::Group`'s "reserved" status is resolved — either consumed by the
   value-construction surface or retired.
 
 **Directions.**
 
-- *Cycle representation — open.* Mirror the type side: an `Rc`-owned value group whose
-  internal back-edges are indices (a value `SetLocal` carrying no `Rc`, so no refcount
-  cycle), versus `Weak` back-references, versus a tracing cycle collector. Recommended:
-  index-into-group, symmetric with `RecursiveSet`/`SetLocal`, since that machinery and
-  its leak-safety argument already exist.
+- *Cycle representation — open.* Options: a value group whose internal back-edges are
+  indices into the group (no `Rc` on the edge, so no refcount cycle), versus `Weak`
+  back-references, versus a tracing cycle collector. The type side sidesteps the
+  question by owning nodes centrally in an insert-only registry that never reclaims by
+  refcount — a value group has no such central owner, so a value-side back-edge cannot
+  simply borrow that argument.
 - *Construction surface — open.* How a cyclic value is declared and knotted (a
   self-naming recursive `LET`; an explicit knot-tying form). Surface syntax/semantics —
   enumerate options and decide with the user.

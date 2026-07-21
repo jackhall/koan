@@ -77,7 +77,7 @@ mod tests;
 /// The parts are launched as one value cell whose finish type-checks against the member's
 /// `repr` and wraps with `identity`.
 pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
-    identity: &'step KType,
+    identity: KType,
     mut value_parts: Vec<Spanned<ExpressionPart<'step>>>,
 ) -> Outcome<'step> {
     if let [Spanned {
@@ -109,7 +109,7 @@ pub(in crate::machine::execute) fn dispatch_construct_newtype<'step>(
 /// binds synchronously (the property the retired struct path relied on, and which a chained
 /// `(Boxed (p))` depends on). The finish builds the `KObject::Record` and wraps it.
 pub(in crate::machine::execute) fn dispatch_construct_record_newtype<'step>(
-    identity: &'step KType,
+    identity: KType,
     record_fields: Vec<(String, ExpressionPart<'step>)>,
 ) -> Outcome<'step> {
     let field_names: Vec<String> = record_fields.iter().map(|(n, _)| n.clone()).collect();
@@ -228,7 +228,7 @@ pub(in crate::machine::execute) fn construct_tagged<'step>(
 /// the slot always parks as a [`Outcome::ParkThenContinue`]. The finish folds the resolved value
 /// carriers into the wrapped value **inside the witness closure** ([`finish_witnessed`]) so it names
 /// every region it reaches; dep errors propagate frameless.
-fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>) -> Outcome<'step> {
+fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind) -> Outcome<'step> {
     debug_assert!(
         !value_parts.is_empty(),
         "launch requires at least one value part (arity-zero is rejected upstream)"
@@ -256,7 +256,7 @@ fn launch<'step>(value_parts: Vec<ExpressionPart<'step>>, kind: CtorKind<'step>)
 pub(crate) fn build_type_operand<'step>(
     scope: &'step Scope<'step>,
     dest_frame: Rc<FrameStorage>,
-    identity: &'step KType,
+    identity: KType,
 ) -> Witnessed<RegionTypeFamily, CarrierWitness> {
     let dest_brand = dest_brand(Rc::clone(&dest_frame));
     let identity_carrier = scope.resident_type_carrier(identity);
@@ -282,12 +282,12 @@ pub(crate) fn build_type_operand<'step>(
     )
 }
 
-/// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is owned data
-/// allocated into the declaring scope's own region, so the identity reaches no region beyond its
-/// home and the carrier seals under the empty witness — the read travels under the home-frame pin
-/// alone. The type channel mints no reach; [`finish_witnessed`]'s construction fold is the
-/// value-side counterpart, where the wrapped object genuinely reaches its deps' regions.
-pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: &'a KType) -> StepCarried<'a> {
+/// Seal a declaration's nominal identity as a `Carried::Type` terminal. A `KType` is a `Copy`
+/// handle, so the identity reaches no region and the carrier seals under the empty witness — the
+/// read travels under the home-frame pin alone. The type channel mints no reach;
+/// [`finish_witnessed`]'s construction fold is the value-side counterpart, where the wrapped object
+/// genuinely reaches its deps' regions.
+pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: KType) -> StepCarried<'a> {
     StepCarried::born(scope.resident_type_carrier(identity))
 }
 
@@ -299,20 +299,19 @@ pub(crate) fn seal_type_identity<'a>(scope: &'a Scope<'a>, identity: &'a KType) 
 /// the carrier), so the closure is infallible.
 fn finish_witnessed<'step>(
     view: &SchedulerView<'step, '_>,
-    kind: &CtorKind<'step>,
+    kind: &CtorKind,
     terminals: DepResults<'_, &DepTerminal<'step>>,
 ) -> Result<Witnessed<CarriedFamily, CarrierWitness>, KError> {
     // A constructor parks on its value subs only (all owned, no park producers), so its results are
     // exactly the owned suffix — read them as one slice.
     let terminals = terminals.owned_slice();
     let scope = view.current_scope();
-    let region = scope.brand();
     match kind {
         CtorKind::NewType { identity } => {
             debug_assert_eq!(terminals.len(), 1);
             let collapse =
-                check_newtype_repr(**identity, terminals[0].value.object(), view.types())?;
-            let home = build_type_operand(scope, view.dest_frame(), identity);
+                check_newtype_repr(*identity, terminals[0].value.object(), view.types())?;
+            let home = build_type_operand(scope, view.dest_frame(), *identity);
             Ok(terminals[0]
                 .delivered
                 .transfer_into_placing::<RegionTypeFamily, CarriedFamily, _>(
@@ -327,7 +326,7 @@ fn finish_witnessed<'step>(
                         };
                         Carried::Object(region.alloc_object_folded(KObject::Wrapped {
                             inner,
-                            type_id: *identity_ty,
+                            type_id: identity_ty,
                         }))
                     },
                 ))
@@ -346,7 +345,7 @@ fn finish_witnessed<'step>(
             );
             // A record probe is never a `Wrapped`, so the repr check never asks to collapse.
             check_newtype_repr(
-                **identity,
+                *identity,
                 &KObject::record(probe, view.types()),
                 view.types(),
             )?;
@@ -372,7 +371,7 @@ fn finish_witnessed<'step>(
                             },
                         )
                 });
-            let home = build_type_operand(scope, view.dest_frame(), identity);
+            let home = build_type_operand(scope, view.dest_frame(), *identity);
             // The pin: the destination frame, whose arena holds the sets the field folds minted.
             let dest_frame = view.dest_frame();
             let types = view.types();
@@ -385,7 +384,7 @@ fn finish_witnessed<'step>(
                         let record = Record::from_pairs(fields);
                         Carried::Object(region.alloc_object_folded(KObject::Wrapped {
                             inner: WrappedPayload::hold(&KObject::record(record, types)),
-                            type_id: *identity_ty,
+                            type_id: identity_ty,
                         }))
                     },
                 ))
@@ -415,11 +414,10 @@ fn finish_witnessed<'step>(
                         .to_string(),
                 }));
             }
-            // The member handle crosses the brand as a `&KType` operand so the built `Tagged`
-            // names its identity at the brand. The handle itself borrows no region — it is one
-            // `u128` naming registry-owned content — so the operand's reach stays empty.
-            let identity: &KType = region.alloc_ktype(*member);
-            let home = build_type_operand(scope, view.dest_frame(), identity);
+            // The member handle crosses the brand as a `Copy` operand so the built `Tagged`
+            // names its identity at the brand. The handle borrows no region — it is one `u128`
+            // naming registry-owned content — so the operand's reach stays empty.
+            let home = build_type_operand(scope, view.dest_frame(), *member);
             let tag = tag.clone();
             Ok(terminals[0]
                 .delivered
@@ -431,17 +429,17 @@ fn finish_witnessed<'step>(
                         Carried::Object(region.alloc_object_folded(KObject::Tagged {
                             tag,
                             value: Rc::new(value.object().deep_clone()),
-                            identity: *identity_ty,
+                            identity: identity_ty,
                         }))
                     },
                 ))
         }
         CtorKind::ApplyConstructor { constructor } => {
             debug_assert_eq!(terminals.len(), 1);
-            // The constructor handle crosses the brand as a `&KType` operand so the built value's
+            // The constructor handle crosses the brand as a `Copy` operand so the built value's
             // `ConstructorApply` type id names its constructor at the brand. The handle borrows no
             // region, so the operand's reach stays empty.
-            let identity: &KType = region.alloc_ktype(*constructor);
+            let identity: KType = *constructor;
             // An identity wrapper takes exactly one type parameter; its name keys the applied
             // arg in the built `ConstructorApply`.
             let param_name = match view.types().node(*constructor) {
@@ -477,7 +475,7 @@ fn finish_witnessed<'step>(
                         // The type id is the interned `ConstructorApply(<constructor>,
                         // {<param> = arg})` — one handle, built where the registry is in scope.
                         let type_id = types.constructor_apply(
-                            *identity_ty,
+                            identity_ty,
                             Record::from_pairs([(param_name, arg)]),
                         );
                         Carried::Object(

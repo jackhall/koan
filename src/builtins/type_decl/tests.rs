@@ -20,7 +20,6 @@ fn member_type(
 ) -> KType {
     let handle = scope
         .resolve_type(sig_name)
-        .copied()
         .unwrap_or_else(|| panic!("{sig_name} must bind a type"));
     let schema = match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
@@ -155,7 +154,6 @@ fn val_slot_after_type_records_abstract_member() {
     test_run.run("SIG Container = ((TYPE Elt) (VAL item :Elt))");
     let handle = scope
         .resolve_type("Container")
-        .copied()
         .expect("Container must bind a type");
     let item = match test_run.types().node(handle) {
         TypeNode::Signature { schema, .. } => schema
@@ -346,10 +344,7 @@ fn monad_signature_smoke() {
         }
     }
     let types = test_run.types();
-    let handle = scope
-        .resolve_type("Monad")
-        .copied()
-        .expect("Monad must bind a type");
+    let handle = scope.resolve_type("Monad").expect("Monad must bind a type");
     let schema = match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Monad must bind a Signature KType, got {:?}", handle),

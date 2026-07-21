@@ -145,7 +145,7 @@ fn block_member_defers_until_the_window_seals() {
         ),
     }
     let sealed = match fill("Leaf", KType::STR, BindingIndex::value(3)) {
-        SealOutcome::Sealed(kt) => *kt,
+        SealOutcome::Sealed(kt) => kt,
         other => panic!("the last fill must seal, got {}", outcome_tag(&other)),
     };
     assert_eq!(
@@ -176,7 +176,7 @@ fn block_member_defers_until_the_window_seals() {
     }
 }
 
-fn outcome_tag(outcome: &SealOutcome<'_>) -> &'static str {
+fn outcome_tag(outcome: &SealOutcome) -> &'static str {
     match outcome {
         SealOutcome::Sealed(_) => "Sealed",
         SealOutcome::Deferred => "Deferred",

@@ -105,7 +105,7 @@ fn classify_head<'step>(
         Carried::UnresolvedType(ti) => Err(KError::new(KErrorKind::UnboundName(ti.render()))),
         // A sealed nominal member is a constructor — the only invocable type identity. Every other
         // type is type-shaped but not invocable.
-        Carried::Type(kt) => match types.node(*kt) {
+        Carried::Type(kt) => match types.node(kt) {
             TypeNode::SetMember { .. } => Ok(ResolvedCallable::Constructor { identity: kt }),
             _ if type_only => Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),

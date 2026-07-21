@@ -75,7 +75,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::{ReturnType, TypeNode};
     // The Signature node carries no declaration label (ruling 12); the captured base signature is
     // identified by its schema content, which must match the declared `OrderedSet`.
-    let ordered_set = scope.resolve_type("OrderedSet").copied();
+    let ordered_set = scope.resolve_type("OrderedSet");
     let base_digest = match ordered_set.map(|h| test_run.types.node(h)) {
         Some(TypeNode::Signature { schema_digest, .. }) => schema_digest,
         _ => panic!("OrderedSet must bind a Signature KType, got {ordered_set:?}"),
@@ -128,7 +128,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     use crate::machine::model::{ReturnType, TypeNode};
     // The Signature node carries no declaration label (ruling 12); the captured base signature is
     // identified by its schema content, which must match the declared `Set`.
-    let set = scope.resolve_type("Set").copied();
+    let set = scope.resolve_type("Set");
     let base_digest = match set.map(|h| test_run.types.node(h)) {
         Some(TypeNode::Signature { schema_digest, .. }) => schema_digest,
         _ => panic!("Set must bind a Signature KType, got {set:?}"),
@@ -251,7 +251,6 @@ fn transparent_view_pin_agreement_reads_source_types() {
     );
     let ordered = scope
         .resolve_type("Ordered")
-        .copied()
         .expect("Ordered must bind a Signature KType");
     let schema = match types.node(ordered) {
         TypeNode::Signature { schema, .. } => schema,
@@ -288,7 +287,6 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
     );
     let ordered = scope
         .resolve_type("Ordered")
-        .copied()
         .expect("Ordered must bind a Signature KType");
     let schema = match types.node(ordered) {
         TypeNode::Signature { schema, .. } => schema,

@@ -77,7 +77,7 @@ pub struct Scope<'a> {
     /// names in it; no visibility index). `Some` only for scopes minted by
     /// [`Self::child_under_sig`]; the SIG finish projects it into the signature's stored
     /// [`SigSchema`], and ATTR over the signature reads a slot's declared type back out of it.
-    sig_slots: Option<SigSlots<'a>>,
+    sig_slots: Option<SigSlots>,
     /// Set once the scope's defining block / frame finishes: no further bind is legal (rebinds are
     /// already rejected; this also rejects *new* binds). The seal point for its reach-set. `Cell`
     /// because it flips once, late, outside the bind hot path.
@@ -120,9 +120,9 @@ impl<'a> ScopeBindings<'a> {
     }
 }
 
-/// name → region-resident declared type. Plain `borrow_mut` inside the single write door is fine:
+/// name → declared type handle. Plain `borrow_mut` inside the single write door is fine:
 /// the cell is never held across calls.
-type SigSlots<'a> = RefCell<HashMap<String, &'a KType>>;
+type SigSlots = RefCell<HashMap<String, KType>>;
 
 /// Lexical classification for a [`Scope`]. The SIG-body gate walks outward and
 /// pivots on the first non-`Anonymous` variant: `Sig` admits VAL declarators and
@@ -393,7 +393,7 @@ impl<'a> Scope<'a> {
         &self,
         te: &crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-    ) -> Option<&'a crate::machine::model::KType> {
+    ) -> Option<crate::machine::model::KType> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -406,7 +406,7 @@ impl<'a> Scope<'a> {
         &self,
         te: crate::machine::model::TypeIdentifier,
         cutoff: Option<usize>,
-        kt: &'a crate::machine::model::KType,
+        kt: crate::machine::model::KType,
     ) {
         if self.bindings.is_borrowed() {
             return;
@@ -469,7 +469,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Snapshot of every `(name, declared type)` slot pair — the schema projection's read.
-    pub(crate) fn sig_value_slots(&self) -> Vec<(String, &'a KType)> {
+    pub(crate) fn sig_value_slots(&self) -> Vec<(String, KType)> {
         match &self.sig_slots {
             Some(slots) => slots
                 .borrow()

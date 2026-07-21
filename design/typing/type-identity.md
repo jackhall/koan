@@ -118,13 +118,3 @@ The verdict edges are a cache, never a soundness mechanism:
   memoization is lock-free under every sketched concurrency primitive — a cold
   registry simply re-walks and warms itself.
 
-## Open work
-
-- [Interned type content behind Copy handles](../../roadmap/type_memos/interned-type-content.md)
-  — ships the rest of the registry storage model
-  ([type-registry.md](type-registry.md)): "Content lives in the registry"
-  (today content is owned by each `KType` value, and the recording guard
-  `digest_is_content` stands in for the builder's pre-seal exclusion). The
-  identity sections — eager digests, one-compare equality, generative opaque
-  ascription — and "The memo registry" above are shipped and do not depend on
-  this item.

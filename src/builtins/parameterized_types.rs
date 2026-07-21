@@ -71,7 +71,7 @@ mod action_bodies {
             ctx.types
         ));
         let list = ctx.types.list(elem);
-        Action::Done(Ok(ctx.ctx.alloc_type(list)))
+        Action::Done(Ok(ctx.ctx.type_carried(list)))
     }
 
     pub(super) fn body_map<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -80,7 +80,7 @@ mod action_bodies {
         crate::try_action!(require_proper_type(k, "the key type of `MAP`", ctx.types));
         crate::try_action!(require_proper_type(v, "the value type of `MAP`", ctx.types));
         let dict = ctx.types.dict(k, v);
-        Action::Done(Ok(ctx.ctx.alloc_type(dict)))
+        Action::Done(Ok(ctx.ctx.type_carried(dict)))
     }
 
     pub(super) fn body_apply_as<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -105,7 +105,7 @@ mod action_bodies {
         // `:(Number AS Wrap)` elaborates exactly as `:(Wrap {Elem = Number})` does.
         let args = Record::from_pairs([(param_name.clone(), applied)]);
         let apply = ctx.types.constructor_apply(ctor, args);
-        Action::Done(Ok(ctx.ctx.alloc_type(apply)))
+        Action::Done(Ok(ctx.ctx.type_carried(apply)))
     }
 
     pub(super) fn body_fn<'a>(ctx: &BodyCtx<'a, '_>) -> Action<'a> {
@@ -148,7 +148,7 @@ fn build_carrier<'a>(
     ) {
         FieldListOutcome::Done(fields) => {
             let carrier = finalize_carrier(fields, ret, ctx.types);
-            Action::Done(Ok(ctx.ctx.alloc_type(carrier)))
+            Action::Done(Ok(ctx.ctx.type_carried(carrier)))
         }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
@@ -247,7 +247,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one_type(parse_one(":(LIST OF Number)"));
         let types = test_run.types();
-        assert_eq!(*result, types.list(KType::NUMBER));
+        assert_eq!(result, types.list(KType::NUMBER));
     }
 
     // A root-scope-bound `Wrap` TypeConstructor applied with `:(Number AS Wrap)`
@@ -275,7 +275,7 @@ mod tests {
         scope.register_builtin_type("Wrap".into(), sealed.members[0], BindingIndex::BUILTIN);
         let result = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::ConstructorApply {
                 constructor,
                 arguments,
@@ -301,7 +301,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one_type(parse_one(":(MAP Str -> Number)"));
         let types = test_run.types();
-        assert_eq!(*result, types.dict(KType::STR, KType::NUMBER));
+        assert_eq!(result, types.dict(KType::STR, KType::NUMBER));
     }
 
     #[test]
@@ -311,7 +311,7 @@ mod tests {
         let result = test_run.run_one_type(parse_one(":(FN (x :Number, y :Str) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
-            *result,
+            result,
             types.function_type(
                 Record::from_pairs(vec![("x".into(), KType::NUMBER), ("y".into(), KType::STR)]),
                 KType::BOOL,
@@ -325,7 +325,7 @@ mod tests {
         let mut test_run = TestRun::silent(&region);
         let result = test_run.run_one_type(parse_one(":(FN () -> Number)"));
         let types = test_run.types();
-        assert_eq!(*result, types.function_type(Record::new(), KType::NUMBER));
+        assert_eq!(result, types.function_type(Record::new(), KType::NUMBER));
     }
 
     /// A functor — a module-returning function — types as an ordinary `KFunction`.
@@ -337,7 +337,7 @@ mod tests {
         let result = test_run.run_one_type(parse_one(":(FN (Ty :Signature) -> Module)"));
         let types = test_run.types();
         assert_eq!(
-            *result,
+            result,
             types.function_type(
                 Record::from_pairs(vec![("Ty".into(), KType::of_kind(KKind::Signature))]),
                 KType::EMPTY_SIGNATURE,
@@ -354,7 +354,7 @@ mod tests {
         let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Bool)"));
         let types = test_run.types();
         assert_eq!(
-            *result,
+            result,
             types.function_type(
                 Record::from_pairs(vec![("xs".into(), types.list(KType::NUMBER))]),
                 KType::BOOL,
@@ -376,7 +376,7 @@ mod tests {
         let types = test_run.types();
         let inner = types.record(Record::from_pairs(vec![("a".into(), KType::NUMBER)]));
         assert_eq!(
-            *result,
+            result,
             types.record(Record::from_pairs(vec![
                 ("x".into(), inner),
                 ("y".into(), types.list(KType::NUMBER)),
@@ -397,7 +397,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(FN (xs :(LIST OF Number)) -> Wrapped)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
                     params.get("xs").copied(),
@@ -435,7 +435,7 @@ mod tests {
         let rendered = expected.name(test_run.types());
         let result = test_run.run_one_type(parse_one(&rendered));
         assert_eq!(
-            *result, expected,
+            result, expected,
             "round-trip of `{rendered}` did not reproduce the original KType",
         );
     }
@@ -497,7 +497,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(MAP Str -> Wrapped)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::Dict { key, value } => {
                 assert_eq!(key, KType::STR, "scalar key must lower to Str");
                 assert_eq!(
@@ -519,7 +519,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(MAP Wrapped -> Str)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::Dict { key, value } => {
                 assert_eq!(
                     key.name(types),
@@ -542,7 +542,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":{x :Wrapped}"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::Record { fields: record } => {
                 let field = record.get("x").expect("record must have field x");
                 assert_eq!(
@@ -565,7 +565,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(FN (x :Wrapped) -> Bool)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
                     params.get("x").map(|kt| kt.name(types)),
@@ -588,7 +588,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(FN (x :Number) -> Wrapped)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::KFunction { params, ret } => {
                 assert_eq!(
                     params.get("x").copied(),
@@ -614,7 +614,7 @@ mod tests {
         test_run.run("NEWTYPE Wrapped = :{a :Number}");
         let result = test_run.run_one_type(parse_one(":(LIST OF Wrapped)"));
         let types = test_run.types();
-        match types.node(*result) {
+        match types.node(result) {
             TypeNode::List { element } => {
                 assert_eq!(
                     element.name(types),

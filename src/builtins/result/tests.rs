@@ -22,7 +22,6 @@ fn result_registers_type_constructor_with_schema() {
     // variant `schema`; no value-side carrier in `data`.
     let handle = scope
         .resolve_type("Result")
-        .copied()
         .expect("Result type registered");
     match test_run.types().node(handle) {
         TypeNode::SetMember {

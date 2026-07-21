@@ -27,8 +27,8 @@ use super::registry::TypeRegistry;
 #[cfg(test)]
 mod tests;
 
-/// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: model uses
-/// `TypeResolution<KType>`, execute uses `TypeResolution<&KType>`. `Park` carries the producer
+/// Outcome of resolving a `TypeIdentifier` to a `T`, shared across layers: both model and execute
+/// use `TypeResolution<KType>` now that `KType` is a `Copy` handle. `Park` carries the producer
 /// `NodeId`s a still-finalizing referent waits on; `Unbound` the miss diagnostic. The payload-free
 /// arms let a layer lift `Done` through [`Self::and_then_done`] and forward the rest unchanged.
 #[derive(Debug)]
@@ -155,7 +155,7 @@ pub fn elaborate_type_identifier(
         }
     }
     match el.scope.resolve_type_with_chain(name, el.chain.as_deref()) {
-        Some(NameLookup::Bound(kt)) => return TypeResolution::Done(*kt),
+        Some(NameLookup::Bound(kt)) => return TypeResolution::Done(kt),
         // A visible placeholder is an earlier-declared type still finalizing: park on its
         // producer and re-elaborate when it terminalizes. A forward reference is filtered by the
         // chain before reaching here — a position error, not a park. Mutual recursion across the
@@ -175,10 +175,10 @@ pub fn elaborate_type_identifier(
 }
 
 /// Outcome of [`finalize_nominal_member`].
-pub enum SealOutcome<'a> {
-    /// The member sealed (or was already sealed); the region reference is its interned member
+pub enum SealOutcome {
+    /// The member sealed (or was already sealed); the `Copy` handle is its interned member
     /// handle, ready to wrap in a `Carried::Type`.
-    Sealed(&'a KType),
+    Sealed(KType),
     /// The member's schema filled, but its window still holds unfilled members, so no member has
     /// an identity yet. Only a `RECURSIVE TYPES` block reaches this: the block's own finish is the
     /// seal barrier, and it binds every member once the last one fills.
@@ -211,7 +211,7 @@ pub fn finalize_nominal_member<'a>(
     build_schema: impl FnOnce(&Rc<RecursiveGroupWindow>) -> RelativeSchema,
     bind_index: crate::machine::core::BindingIndex,
     types: &TypeRegistry,
-) -> SealOutcome<'a> {
+) -> SealOutcome {
     let index = match window.index_of(name) {
         Some(index) => index,
         // The declarator handed a window that does not announce its own binder — a wiring bug, not

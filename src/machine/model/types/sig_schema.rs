@@ -74,7 +74,7 @@ impl SigSchema {
         let mut abstract_members = HashMap::new();
         let mut manifest_members = HashMap::new();
         for (name, kt) in decl_scope.bindings().iter_types() {
-            let canonical = canonicalize_binder(*kt, declared, types);
+            let canonical = canonicalize_binder(kt, declared, types);
             if is_abstract_sig_member(canonical, types) {
                 abstract_members.insert(name, canonical);
             } else {
@@ -83,7 +83,7 @@ impl SigSchema {
         }
         let mut value_slots = HashMap::new();
         for (name, kt) in decl_scope.sig_value_slots() {
-            value_slots.insert(name, canonicalize_binder(*kt, declared, types));
+            value_slots.insert(name, canonicalize_binder(kt, declared, types));
         }
         SigSchema {
             sig_id: Some(ScopeId::SENTINEL),
@@ -122,7 +122,7 @@ impl SigSchema {
         let child = module.child_scope();
         let mut manifest_members: HashMap<String, KType> = HashMap::new();
         for (name, kt) in child.bindings().iter_types() {
-            manifest_members.insert(name, *kt);
+            manifest_members.insert(name, kt);
         }
         for (name, kt) in module.type_members.borrow().iter() {
             manifest_members.insert(name.clone(), *kt);

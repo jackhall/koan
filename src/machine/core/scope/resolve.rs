@@ -157,11 +157,11 @@ impl<'a> Scope<'a> {
         .and_then(NameLookup::bound)
     }
 
-    /// Resolve a *finalized* type, unfiltered. The `Option<&KType>` adapter over
+    /// Resolve a *finalized* type, unfiltered. The `Option<KType>` adapter over
     /// [`Self::resolve_type_with_chain`]: an in-flight [`NameLookup::Parked`]
     /// collapses to `None` here, so callers that must park on the producer use
     /// `resolve_type_with_chain` and match its `Parked` arm.
-    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::KType> {
+    pub fn resolve_type(&self, name: &str) -> Option<crate::machine::model::KType> {
         self.resolve_type_with_chain(name, None)
             .and_then(NameLookup::bound)
     }
@@ -176,7 +176,7 @@ impl<'a> Scope<'a> {
         &self,
         name: &str,
         chain: Option<&LexicalFrame>,
-    ) -> Option<NameLookup<&'a KType>> {
+    ) -> Option<NameLookup<KType>> {
         self.resolve_builtin_first(
             |root| root.has_builtin_type(name),
             |root| root.lookup_type(name, None),

@@ -168,11 +168,10 @@ impl<'a> Scope<'a> {
         Ok(self.resident_value_carrier(obj, stored))
     }
 
-    /// The [`KType`] twin of [`Self::seal_fresh_object`]: store the owned type through the single
-    /// door ([`super::RegionBrand::alloc_ktype`]) and seal the resident as its terminal carrier.
-    /// Infallible — an owned value has no residence to audit.
+    /// The [`KType`] twin of [`Self::seal_fresh_object`]: seal the `Copy` type handle as its
+    /// terminal carrier. Infallible — a handle has no residence to audit.
     pub(crate) fn seal_fresh_ktype(&self, t: KType) -> Witnessed<CarriedFamily, CarrierWitness> {
-        self.resident_type_carrier(self.brand().alloc_ktype(t))
+        self.resident_type_carrier(t)
     }
 }
 

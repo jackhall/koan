@@ -117,7 +117,7 @@ fn let_type_class_with_type_value_still_binds() {
     let kt = scope
         .resolve_type("Foo")
         .expect("expected type binding 'Foo' in bindings.types");
-    assert_eq!(*kt, KType::NUMBER, "expected Number, got {:?}", kt);
+    assert_eq!(kt, KType::NUMBER, "expected Number, got {:?}", kt);
 }
 
 /// `LET foo = 1` (lowercase, Identifier overload) doesn't go through the
@@ -195,15 +195,15 @@ fn let_aliases_struct_preserves_type_identity() {
          LET Pt = Point",
     );
     let types = scope.bindings().types();
-    let pt: &KType = types
+    let pt: KType = types
         .get("Pt")
         .map(|(kt, _)| *kt)
         .expect("Pt should be in bindings.types after alias");
-    let point: &KType = types
+    let point: KType = types
         .get("Point")
         .map(|(kt, _)| *kt)
         .expect("Point should be in bindings.types");
-    assert_eq!(*pt, *point, "alias must preserve type identity field-wise");
+    assert_eq!(pt, point, "alias must preserve type identity field-wise");
 }
 
 /// A lowercase-name `LET` inside a SIG body surfaces a `ShapeError` directing
@@ -277,7 +277,6 @@ fn let_type_class_in_sig_body_binds_manifest() {
     use crate::machine::model::TypeNode;
     let handle = scope
         .resolve_type("WithTag")
-        .copied()
         .expect("WithTag should bind a type");
     let schema = match test_run.types().node(handle) {
         TypeNode::Signature { schema, .. } => schema,
@@ -311,12 +310,12 @@ fn let_type_class_signature_alias_preserves_identity() {
     let original = scope.resolve_type("Ordered").expect("Ordered type binding");
     let aliased = scope.resolve_type("Po").expect("Po type binding");
     assert!(
-        matches!(test_run.types().node(*aliased), TypeNode::Signature { .. }),
+        matches!(test_run.types().node(aliased), TypeNode::Signature { .. }),
         "Po must alias to a Signature KType, got {:?}",
         aliased,
     );
     assert_eq!(
-        *original, *aliased,
+        original, aliased,
         "alias `Po` must carry the same signature identity as `Ordered`",
     );
 }

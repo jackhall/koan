@@ -19,7 +19,6 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::machine::core::home_return_type;
 use crate::machine::core::{split_body_statements, ReturnContract};
 use crate::machine::core::{
     Action, BlockEntry, DepPlacement, FinishCtx, FramePlacement, TailContract,
@@ -326,11 +325,9 @@ pub(in crate::machine::execute) fn run_action<'step>(
                                 ))))
                             }
                         };
-                        // The resolved type is owned data: it clones into the captured scope's own
-                        // region at the contract lifetime, so the contract outlives the
-                        // sub-dispatch's terminal without naming its region.
-                        let ret = home_return_type(kt, func.captured_scope());
-                        Some(ReturnContract::PerCall { func, ret })
+                        // The resolved type is a `Copy` handle, so the contract carries it directly
+                        // and outlives the sub-dispatch's terminal without naming any region.
+                        Some(ReturnContract::PerCall { func, ret: kt })
                     }
                 };
                 // Decide the chain reshape and keep-first the obligation as on the leading-free

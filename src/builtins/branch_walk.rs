@@ -32,7 +32,7 @@ pub(crate) fn resolve_arm_contract<'a>(
             .scope
             .resolve_type_identifier(te, ctx.chain.clone(), ctx.types)
         {
-            TypeResolution::Done(kt) => *kt,
+            TypeResolution::Done(kt) => kt,
             // The builtin fallback is already tried inside `resolve_type_identifier`; a
             // non-`Done` arm here (parked or unbound) is not a synchronously-known type.
             _ => {
@@ -53,7 +53,7 @@ pub(crate) fn resolve_arm_contract<'a>(
         }
     };
     Ok(ReturnContract::Arm {
-        ret: ctx.scope.brand().alloc_ktype(ret_kt),
+        ret: ret_kt,
         kind,
         scope: ctx.scope,
     })
@@ -244,7 +244,7 @@ fn resolve_head_type<'a>(
     types: &TypeRegistry,
 ) -> Result<KType, String> {
     match scope.resolve_type_identifier(token, chain, types) {
-        TypeResolution::Done(kt) => Ok(*kt),
+        TypeResolution::Done(kt) => Ok(kt),
         _ => Err(format!(
             "match arm type `{}` is not a known type",
             token.render()
@@ -257,10 +257,9 @@ fn resolve_head_type<'a>(
 ///
 /// Head classification depends on the scrutinee ([`HeadMode`]):
 /// - `true` / `false` literal heads admit a `Bool` scrutinee of that value.
-/// - `Type(token)` heads over a union-variant value (`KObject::Wrapped` over a member handle)
-///   naming one of the scrutinee's own set members admit by member identity (only the
-///   value's own variant matches) and bind the payload; a non-member head resolves through `scope`.
-/// - `Type(token)` heads over a `TypeConstructor` value (`Result`) admit by tag-name equality.
+/// - `Type(token)` heads over a tagged value (a user-`UNION` variant or a builtin `Result`, both
+///   `KObject::Tagged`) admit by tag-name equality against the value's own tag and bind the payload;
+///   a non-matching head is a silent non-match (the value carries its own tag).
 /// - `Type(token)` heads over any other value resolve through `scope` and admit via
 ///   [`KType::matches_value`].
 ///

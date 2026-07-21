@@ -114,12 +114,15 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [resolve_dispatch.rs](src/machine/execute/dispatch/resolve_dispatch.rs) (the
 overload-resolution walk returning a `ResolveOutcome`),
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity),
-[recursive_set.rs](src/machine/model/types/recursive_set.rs) (`RecursiveSet`, the
-`Rc`-owned unit of nominal identity, allocation, and lift),
+[node.rs](src/machine/model/types/node.rs) (`TypeNode`, one interned type's content —
+the thing a `KType` handle names),
+[recursive_group_window.rs](src/machine/model/types/recursive_group_window.rs) (the
+pre-seal window a co-declared nominal group elaborates against, and the SCC seal that
+interns its members),
 [type_digest.rs](src/machine/model/types/type_digest.rs) (`TypeDigest`, the eager
 content-hash every `KType` compares by),
 [sig_schema.rs](src/machine/model/types/sig_schema.rs) (`SigSchema`, the owned
-`SigContent` a signature type carries, and the canonical signature-subtyping relation),
+schema a signature node carries, and the canonical signature-subtyping relation),
 [registry.rs](src/machine/model/types/registry.rs) (`TypeRegistry`, the
 run-frame-owned store that memoizes subtype verdicts by digest pair),
 [builtins.rs](src/builtins.rs) (registry),
@@ -184,14 +187,16 @@ src/
     │   ├── operators.rs           OperatorGroup registry record — chainable-operator precedence/associativity
     │   ├── types.rs
     │   ├── types/
-    │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+    │   │   ├── ktype.rs           KType — the Copy content-digest handle for slots, return types, and runtime values
     │   │   ├── kkind.rs           KKind — the shallow dispatch *kind* of a type (the OfKind expectation)
+    │   │   ├── node.rs            TypeNode — one interned type's content, the thing a KType handle names
+    │   │   ├── registry.rs        TypeRegistry — the run-frame-owned interning graph and verdict cache
     │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing record-type schemas and FN parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
-    │   │   ├── recursive_set.rs   RecursiveSet — Rc-owned unit of nominal identity, allocation, and lift
-    │   │   ├── sig_schema.rs      SigSchema + SigContent + sig_subtype — a signature type's owned content and the subtyping relation
+    │   │   ├── recursive_group_window.rs   RecursiveGroupWindow — the pre-seal group window and the SCC seal that interns its members
+    │   │   ├── sig_schema.rs      SigSchema + sig_subtype — a signature type's owned schema and the subtyping relation
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Serializable
     │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas

@@ -15,11 +15,12 @@ use super::runtime::KoanRuntime;
 /// [`finalize_terminal`](NodeFinalize::finalize_terminal) re-homes the checked value through the
 /// delivery envelope's [`transfer_into`](crate::witnessed::Delivered::transfer_into) — minting the value's reach (and,
 /// for a home-borrowing value, its producer frame) into that region's arena so the re-homed value's
-/// carrier names everything it reaches. Layout-invariant: `(RegionHandle<'r, _>, &'r KType)` is
-/// two thin pointers whose representation never depends on `'r`.
+/// carrier names everything it reaches. The declared type rides as a `Copy` `KType` handle.
+/// Layout-invariant: `(RegionHandle<'r, _>, KType)` is a thin pointer plus a handle whose
+/// representation never depends on `'r`.
 struct ContractHomeFamily;
 
-reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, &'r KType));
+reattachable!(ContractHomeFamily => (RegionHandle<'r, KoanStorageProfile>, KType));
 
 /// Seal a finished node's **value** terminal against its declared return contract, returning the
 /// slot's final terminal. This hook receives the value already sealed into a delivery envelope
@@ -118,13 +119,13 @@ impl NodeFinalize for KoanRuntime<'_> {
                             // A declared union return checks (above) but never re-tags: the value keeps
                             // its own runtime type, which is what union elimination dispatches on. Every
                             // other declared return re-stamps the value into the declared type.
-                            if matches!(types.node(*declared_type), TypeNode::Union { .. }) {
+                            if matches!(types.node(declared_type), TypeNode::Union { .. }) {
                                 return Carried::Object(
                                     home_region.alloc_object_folded(object.deep_clone()),
                                 );
                             }
                             Carried::Object(home_region.alloc_object_folded(
-                                object.deep_clone().stamp_type(*declared_type, types),
+                                object.deep_clone().stamp_type(declared_type, types),
                             ))
                         },
                     );
@@ -189,10 +190,10 @@ pub(in crate::machine::execute) fn finalize_error(
 /// nothing is declared — a `Function` whose signature return is non-`Resolved` (a `Deferred` carrier
 /// still in its FN-def signature). The diagnostic label rides the [`ReturnObligation`] instead, read
 /// via [`ReturnObligation::label`].
-fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType, bool)> {
+fn pull_declared_return(contract: ReturnContract<'_>) -> Option<(KType, bool)> {
     match contract {
         ReturnContract::Function(f) => match &f.signature.return_type {
-            crate::machine::model::ReturnType::Resolved(d) => Some((d, false)),
+            crate::machine::model::ReturnType::Resolved(d) => Some((*d, false)),
             _ => None,
         },
         ReturnContract::Arm { ret, .. } => Some((ret, false)),
@@ -211,7 +212,7 @@ fn pull_declared_return<'o>(contract: ReturnContract<'o>) -> Option<(&'o KType, 
 fn match_declared_return<'c>(
     value_cell: SealedExtern<CarriedFamily>,
     home_handle: RegionHandle<'c, KoanStorageProfile>,
-    declared: &'c KType,
+    declared: KType,
     pin: &FrameSet,
     per_call: bool,
     label: &str,
@@ -224,7 +225,7 @@ fn match_declared_return<'c>(
         .open(pin, |(value, (_home_region, declared_type))| {
             let matched = match value {
                 Carried::Object(object) => declared_type.matches_value(object, types),
-                Carried::Type(t) => declared_type.matches_type(*t, types),
+                Carried::Type(t) => declared_type.matches_type(t, types),
                 // Every delivered result is resolved; an unlowered name satisfies no contract.
                 Carried::UnresolvedType(_) => false,
             };
@@ -297,7 +298,7 @@ mod tests;
 /// The labelled `TypeMismatch` a failed declared-return check raises. `expected` names the declared
 /// type (tagged "per-call return type" for a `PerCall`); `got` names the produced carrier.
 fn return_type_mismatch(
-    declared: &KType,
+    declared: KType,
     per_call: bool,
     label: &str,
     got: String,

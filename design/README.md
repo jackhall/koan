@@ -109,13 +109,13 @@ Type and module system ([typing/](typing/README.md)):
 - [typing/elaboration.md](typing/elaboration.md) — how a type name
   resolves to a `KType` through the scheduler-driven elaborator: strict
   source-order resolution (a forward type reference is a position error),
-  the binding-map partition, the `KType::Unresolved` bare-leaf transient,
+  the binding-map partition, the `UnresolvedType` surface-`TypeIdentifier` carrier,
   the resolution memo, and the `RECURSIVE TYPES` block for mutual
   recursion.
-- [typing/user-types.md](typing/user-types.md) — the `RecursiveSet`
-  nominal model: a `KType::SetRef` member is the per-declaration identity
+- [typing/user-types.md](typing/user-types.md) — the registry-interned
+  nominal model: a `SetMember` handle is the per-declaration identity
   for named UNION, MODULE, opaque ascription, and NEWTYPE; the
-  schema filled in the set member; the `OfKind(KKind)` family-kind slot; the
+  schema held in the member node; the `OfKind(KKind)` family-kind slot; the
   type-only finalize install through `Scope::register_type_upsert`; the
   `RECURSIVE TYPES` block for mutually recursive nominals.
 - [typing/lookup-protocol.md](typing/lookup-protocol.md) — the

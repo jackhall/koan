@@ -7,7 +7,6 @@ use crate::machine::{KErrorKind, ScopeId};
 fn sig_schema(scope: &crate::machine::Scope<'_>, types: &TypeRegistry, name: &str) -> SigSchema {
     let handle = scope
         .resolve_type(name)
-        .copied()
         .unwrap_or_else(|| panic!("{name} must bind a type"));
     match types.node(handle) {
         TypeNode::Signature { schema, .. } => schema,

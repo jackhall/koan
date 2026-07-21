@@ -450,7 +450,7 @@ impl KType {
                 arguments: slot_arguments,
             } => match c {
                 Carried::UnresolvedType(_) => false,
-                Carried::Type(kt) => *kt == self,
+                Carried::Type(kt) => kt == self,
                 Carried::Object(obj) => match types.node(obj.ktype()) {
                     TypeNode::ConstructorApply {
                         constructor: value_constructor,

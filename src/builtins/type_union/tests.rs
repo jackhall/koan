@@ -28,7 +28,7 @@ fn two_member_union_lowers_to_union() {
     let result = test_run.run_one_type(parse_one(":(Number | Str)"));
     let types = test_run.types();
     assert_eq!(
-        *result,
+        result,
         types.union_of(vec![KType::NUMBER, KType::STR]),
         "two-member `|` builds the union of its members",
     );
@@ -43,7 +43,7 @@ fn three_member_run_builds_flat_union() {
     let result = test_run.run_one_type(parse_one(":(Number | Str | Bool)"));
     let types = test_run.types();
     assert_eq!(
-        *result,
+        result,
         types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
@@ -54,7 +54,7 @@ fn duplicate_member_collapses() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let result = test_run.run_one_type(parse_one(":(Number | Number)"));
-    assert_eq!(*result, KType::NUMBER);
+    assert_eq!(result, KType::NUMBER);
 }
 
 /// Member order does not matter (AC2): `:(Number | Str)` equals `:(Str | Number)`.
@@ -62,8 +62,8 @@ fn duplicate_member_collapses() {
 fn member_order_blind() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
-    let forward = *test_run.run_one_type(parse_one(":(Number | Str)"));
-    let backward = *test_run.run_one_type(parse_one(":(Str | Number)"));
+    let forward = test_run.run_one_type(parse_one(":(Number | Str)"));
+    let backward = test_run.run_one_type(parse_one(":(Str | Number)"));
     assert_eq!(forward, backward);
 }
 
@@ -76,7 +76,7 @@ fn prefix_form_builds_union() {
     let result = test_run.run_one_type(parse_one(":(| [Number Str Bool])"));
     let types = test_run.types();
     assert_eq!(
-        *result,
+        result,
         types.union_of(vec![KType::NUMBER, KType::STR, KType::BOOL]),
     );
 }
@@ -90,7 +90,7 @@ fn parenthesized_compound_member() {
     let result = test_run.run_one_type(parse_one(":((LIST OF Number) | Str)"));
     let types = test_run.types();
     assert_eq!(
-        *result,
+        result,
         types.union_of(vec![types.list(KType::NUMBER), KType::STR]),
     );
 }
@@ -105,7 +105,7 @@ fn binary_union_with_reaching_member_correlates() {
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
     let result = test_run.run_one_type(parse_one(":(Wrapped | Number)"));
     let types = test_run.types();
-    match types.node(*result) {
+    match types.node(result) {
         TypeNode::Union { members } => {
             assert_eq!(members.len(), 2, "expected a flat two-member union");
             assert!(
@@ -131,7 +131,7 @@ fn nary_union_with_reaching_member_correlates() {
     test_run.run("NEWTYPE Wrapped = :{a :Number}");
     let result = test_run.run_one_type(parse_one(":(Wrapped | Number | Str)"));
     let types = test_run.types();
-    match types.node(*result) {
+    match types.node(result) {
         TypeNode::Union { members } => {
             assert_eq!(members.len(), 3, "expected a flat three-member union");
             assert!(

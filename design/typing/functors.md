@@ -157,9 +157,9 @@ model koan does not adopt.
 The same no-stratum reasoning extends symmetrically to bare type tokens. A
 `:Type`-typed parameter slot admits any type value in the `Type` arm — bare
 builtin tokens (`Number`, `Str`, `Bool`, `Null`) and the
-`KType::SetRef { .. }` a struct / union nominal token
+`SetMember` handle a struct / union nominal token
 resolves to — so `(MAKETREE Number)` against
-`FN (MAKETREE Elt :Type) -> …` binds `Elt = KType::Number` per call
+`FN (MAKETREE Elt :Type) -> …` binds `Elt = KType::NUMBER` per call
 with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred

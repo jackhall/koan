@@ -44,7 +44,7 @@ use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
 use super::fn_def::return_type::{classify_return_type, extract_type_slot_raw, ReturnTypeState};
-use super::resolve_or_await::{classify_resolved_type, expect_type_terminal, resolve_at_wake};
+use super::resolve_or_await::{expect_type_terminal, resolve_at_wake};
 use super::{arg, kw, sig};
 
 /// The two operand names a binary operator body binds. A pairwise group's combiner is itself an
@@ -227,7 +227,7 @@ fn resolve_capture<'a>(
     let kt = match capture {
         TypeCapture::Done(kt) => kt,
         TypeCapture::Park(te) => resolve_at_wake(fctx.scope, label, |s| {
-            classify_resolved_type(s.resolve_type_identifier(&te, None, fctx.types))
+            s.resolve_type_identifier(&te, None, fctx.types)
         })?,
         TypeCapture::Sub { owned_pos } => {
             expect_type_terminal(results, owned_pos, label, fctx.types)?

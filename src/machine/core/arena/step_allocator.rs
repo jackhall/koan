@@ -100,12 +100,10 @@ impl<'step> StepAllocator<'step> {
         )
     }
 
-    /// [`Self::alloc_carried`] specialized to the one-`KType`-carrier shape: reach = own region
-    /// only. A `KType` is owned data, so every type takes this veneer over the single storage door
-    /// ([`RegionBrand::alloc_ktype`]) — a type reaching across a region boundary is cloned by its
-    /// receiving side and allocated locally, never stored by reference.
-    pub(crate) fn alloc_type(&self, kt: KType) -> StepCarried<'step> {
-        self.alloc_carried(|b| Carried::Type(b.alloc_ktype(kt)))
+    /// Wrap a `Copy` [`KType`] handle in a step terminal: reach = own region only. A handle carries
+    /// no region content, so it rides `Carried::Type` by value with no storage door.
+    pub(crate) fn type_carried(&self, kt: KType) -> StepCarried<'step> {
+        self.alloc_carried(|_| Carried::Type(kt))
     }
 
     /// The no-fold arm for a shallow scalar (Number / KString / Bool / Null): such a value embeds

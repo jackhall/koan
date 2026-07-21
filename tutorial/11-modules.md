@@ -120,7 +120,7 @@ plain :! HasLabel
 ```
 
 ```text
-error: shape error: module does not satisfy signature `HasLabel`: missing member `label`
+error: shape error: module does not satisfy signature `SIG (label: Str)`: missing member `label`
 ```
 
 The result of an ascription is itself a module, so it binds under a lowercase

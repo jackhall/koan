@@ -418,7 +418,7 @@ fn lookup_member_classifies_value_and_type_unambiguously() {
     ));
     assert!(matches!(
         bindings.lookup_member("Ty", None),
-        Some(MemberResolution::Type { kt, .. }) if *kt == KType::NUMBER
+        Some(MemberResolution::Type { kt, .. }) if kt == KType::NUMBER
     ));
     assert!(bindings.lookup_member("absent", None).is_none());
 }
@@ -646,7 +646,7 @@ fn sig_scope_bindings_reject_value_token_type_write() {
     let sig_scope = region
         .brand()
         .alloc_scope(Scope::child_under_sig(outer, "S".to_string()));
-    let kt: &KType = region.brand().alloc_ktype(KType::NUMBER);
+    let kt: KType = KType::NUMBER;
     let error = match sig_scope
         .bindings()
         .try_register_type("compare", kt, BindingIndex::BUILTIN)

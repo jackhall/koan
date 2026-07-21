@@ -30,12 +30,12 @@ pub enum ReturnContract<'a> {
     /// An FN / builtin call: check against `signature.return_type`, label via `summarize()`.
     Function(&'a KFunction<'a>),
     /// A MATCH / TRY arm's `-> :T`: check the lifted value against `ret`, label with `kind`.
-    /// `scope` is the arm's declaring scope — the call-site (outer) scope `ret` is allocated in, a
-    /// strict ancestor of the arm frame — so a coarsened re-tag re-homes there with no step-scope
-    /// walk. `scope` is `&'a`, so the contract stays `Copy`; [`Self::home_owner`] resolves the owning
-    /// `Rc<FrameStorage>` off it for the contract's carried witness.
+    /// `scope` is the arm's declaring scope — the call-site (outer) scope, a strict ancestor of the
+    /// arm frame — so a coarsened re-tag re-homes there with no step-scope walk. `ret` is a `Copy`
+    /// handle, so the contract stays `Copy`; [`Self::home_owner`] resolves the owning
+    /// `Rc<FrameStorage>` off `scope` for the contract's carried witness.
     Arm {
-        ret: &'a KType,
+        ret: KType,
         kind: &'static str,
         scope: &'a Scope<'a>,
     },
@@ -43,11 +43,8 @@ pub enum ReturnContract<'a> {
     /// chain shape (a `Function`/`PerCall` contract) so a tail-replaced deferred body assembles its
     /// lexical chain like any FN — preserving TCO — while `finalize_terminal` checks the
     /// lifted value against the resolved `ret` (labelled "per-call return type", `func` names
-    /// the frame). `ret` is region-borrowed like `Arm`'s, so the contract stays `Copy`.
-    PerCall {
-        func: &'a KFunction<'a>,
-        ret: &'a KType,
-    },
+    /// the frame). `ret` is a `Copy` handle like `Arm`'s, so the contract stays `Copy`.
+    PerCall { func: &'a KFunction<'a>, ret: KType },
 }
 
 impl<'a> ReturnContract<'a> {
@@ -78,8 +75,8 @@ impl<'a> ReturnContract<'a> {
 }
 
 /// `Reattachable` family for [`ReturnContract`] — the return-contract erasure carried on a node's
-/// `TraceFrame`. Layout-invariant: the contract's arms are `&'a` references (and a `&'static str`),
-/// whose representation does not depend on `'a`.
+/// `TraceFrame`. Layout-invariant: the contract's arms are `&'a` references, a `&'static str`, and
+/// a lifetime-free `KType` handle, whose representation does not depend on `'a`.
 pub struct ContractFamily;
 
 // `ReturnContract<'r>` is one type generic only in `'r` (every arm is a reference), layout identical

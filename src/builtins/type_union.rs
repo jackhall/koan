@@ -33,7 +33,7 @@ fn body_binary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
     let right = crate::try_action!(require_ktype(ctx.args, "right", ctx.types));
     Action::Done(Ok(ctx
         .ctx
-        .alloc_type(ctx.types.union_of(vec![left, right]))))
+        .type_carried(ctx.types.union_of(vec![left, right]))))
 }
 
 /// The reduced `Unary` form `[Keyword("|"), ListLiteral([members...])]`: the list literal arrives
@@ -76,7 +76,7 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
             ));
             members.push(kt);
         }
-        Action::Done(Ok(fctx.ctx.alloc_type(fctx.types.union_of(members))))
+        Action::Done(Ok(fctx.ctx.type_carried(fctx.types.union_of(members))))
     });
     Action::AwaitDeps { deps, finish }
 }

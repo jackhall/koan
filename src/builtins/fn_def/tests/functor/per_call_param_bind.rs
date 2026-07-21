@@ -58,7 +58,7 @@ fn functor_body_dotted_type_member_via_per_call_bind() {
     let result = test_run.run_one_type(parse_one("USE_TYPE int_ord_view"));
     // Opaque ascription mints a fresh abstract `Carrier` member; the body must return
     // that identity, not the underlying concrete `Number`.
-    match test_run.types.node(*result) {
+    match test_run.types.node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(
                 name, "Carrier",
@@ -91,7 +91,7 @@ fn functor_closure_escape_pins_type_class_bind() {
         test_run.run_one(parse_one("PRINT 1"));
     }
     let result = test_run.run_one_type(parse_one("LOOKUP"));
-    match test_run.types.node(*result) {
+    match test_run.types.node(result) {
         TypeNode::AbstractType { name, .. } => {
             assert_eq!(name, "Carrier");
         }
