@@ -20,7 +20,7 @@ pub(crate) use core::{
     split_body_statements, Action, ActionFn, AwaitContinue, BinderBucketFn, BinderNameFn,
     BlockEntry, BodyCtx, CatchContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx,
     FoldingBrand, FramePlacement, FrameStorageExt, KoanRegionExt, KoanStorageProfile,
-    ReturnContract, StepAllocator, StoredReach, TailContract,
+    OwnedDispatch, ReturnContract, StepAllocator, StoredReach, TailContract,
 };
 pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,

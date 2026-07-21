@@ -18,6 +18,7 @@ use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
 use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
 use crate::scheduler::DepResults;
+use crate::scheduler::Deps;
 #[cfg(test)]
 use crate::witnessed::Witnessed;
 
@@ -384,7 +385,7 @@ pub enum Action<'a> {
     },
     /// Dispatch `deps`, then `finish` over their resolved values yields the next `Action`.
     AwaitDeps {
-        deps: Vec<DepRequest<'a>>,
+        deps: Deps<OwnedDispatch<'a>>,
         finish: AwaitContinue<'a>,
     },
     /// Watch `watched`, recover via `finish`.
@@ -406,20 +407,40 @@ impl<'a> Action<'a> {
     }
 }
 
-/// The dependency currency both an [`Action`] (`AwaitDeps` / `Catch`) and a dispatch
-/// [`Outcome::ParkThenContinue`](crate::machine::execute) declare — the one dep type, defined here in
-/// core so `Action` can carry it without core depending on the execute layer.
+/// The one owned-dep shape a builtin declares in an [`Action::AwaitDeps`]:
+/// a sub-expression the harness dispatches and the consumer owns
+/// (cascade-freed when it succeeds). Parks are `NodeId`s the `Deps` builder
+/// holds structurally, so a builtin cannot install an Owned edge on a
+/// producer it does not own — that shape is unrepresentable here.
+pub struct OwnedDispatch<'a> {
+    pub expr: KExpression<'a>,
+    pub placement: DepPlacement<'a>,
+}
+
+impl<'a> OwnedDispatch<'a> {
+    /// Lower into the library dep currency — the crossing the harness (and
+    /// the field-list bundle's Outcome finish) makes right before `Await::on`.
+    pub fn into_request(self) -> DepRequest<'a> {
+        DepRequest::Dispatch {
+            expr: self.expr,
+            placement: self.placement,
+        }
+    }
+}
+
+/// The dependency currency a dispatch [`Outcome::ParkThenContinue`](crate::machine::execute) declares
+/// and a [`Action::Catch`] carries for its single watched dep — defined here in core so `Action` can
+/// carry it without core depending on the execute layer.
 ///
-/// `Dispatch` → an owned sub-slot the harness dispatches; `Existing` → a producer NodeId already in
-/// scope (a forward-ref / pending type) the builder parks on. These two arms are the whole
-/// builtin-`Action` currency. The remaining arms are dispatcher-only lowerings a builtin never
-/// constructs: `ListLit` / `DictLit` / `RecordLit` schedule an aggregate literal as one owned
-/// producer, and `BodyBlock` fans a non-tail statement block out to one owned producer per statement
-/// (see [`BodyPlacement`] for where they bind). The harness assembles the realized deps into a
-/// [`Deps`](crate::scheduler::Deps) builder — parks first, owned in declaration order — and a finish
-/// addresses their results through a [`DepResults`] view (`park` / `owned`), where an
-/// `InScope`-placed `Dispatch` and a `BodyBlock` each fan their multi-statement body out to one owned
-/// result per statement.
+/// The builtin `AwaitDeps` currency does not flow through `DepRequest`: parks are structural in the
+/// [`Deps`](crate::scheduler::Deps) builder and owned entries are [`OwnedDispatch`]. `DepRequest`'s
+/// roles are `Catch`'s single `watched` dep (`Existing` for a producer already in scope,
+/// `Dispatch` for a watched sub-expression) and the dispatcher-side `Outcome` currency: `Dispatch`
+/// staged subs, the `ListLit` / `DictLit` / `RecordLit` literal lowerings that schedule an aggregate
+/// literal as one owned producer, and `BodyBlock` fanning a non-tail statement block out to one owned
+/// producer per statement (see [`BodyPlacement`] for where they bind). A finish addresses the realized
+/// deps through a [`DepResults`] view (`park` / `owned`), where an `InScope`-placed `Dispatch` and a
+/// `BodyBlock` each fan their multi-statement body out to one owned result per statement.
 pub enum DepRequest<'a> {
     Dispatch {
         expr: KExpression<'a>,

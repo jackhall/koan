@@ -274,6 +274,7 @@ digraph {
     "koan::builtins::attr" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::attr" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::await_body" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::await_body" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::builtins::block_tail" -> "koan::machine" [label="uses", style="dashed"];
@@ -405,6 +406,7 @@ digraph {
     "koan::builtins::type_ops::with" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine" [label="uses", style="dashed"];
     "koan::builtins::type_ops::with" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::builtins::type_union" -> "koan" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::builtins" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::builtins::op_def" [label="uses", style="dashed"];
     "koan::builtins::type_union" -> "koan::builtins::resolve_or_await" [label="uses", style="dashed"];

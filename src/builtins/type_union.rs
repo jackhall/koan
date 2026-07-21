@@ -15,8 +15,11 @@ use crate::machine::model::KKind;
 use crate::machine::model::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
-use crate::machine::{arg_object, require_ktype, Action, AwaitContinue, DepPlacement, DepRequest};
+use crate::machine::{
+    arg_object, require_ktype, Action, AwaitContinue, DepPlacement, OwnedDispatch,
+};
 use crate::machine::{BindingIndex, Body, KError, KErrorKind, Scope};
+use crate::scheduler::Deps;
 
 use super::op_def::OperatorForm;
 use super::resolve_or_await::expect_type_terminal;
@@ -57,14 +60,10 @@ fn body_nary<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> Action<'a> {
         )))));
     }
     let count = members.parts.len();
-    let deps: Vec<DepRequest<'a>> = members
-        .parts
-        .into_iter()
-        .map(|part| DepRequest::Dispatch {
-            expr: KExpression::new(vec![part]),
-            placement: DepPlacement::OwnScope,
-        })
-        .collect();
+    let deps = Deps::from_owned(members.parts.into_iter().map(|part| OwnedDispatch {
+        expr: KExpression::new(vec![part]),
+        placement: DepPlacement::OwnScope,
+    }));
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let mut members: Vec<KType> = Vec::with_capacity(count);
         for position in 0..count {

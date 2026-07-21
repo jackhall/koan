@@ -134,7 +134,7 @@ fn defer_to_lifts_slot_terminal_off_dep_finish_id() {
             Action::done_resident(Carried::Object(v))
         });
         Action::AwaitDeps {
-            deps: Vec::new(),
+            deps: crate::scheduler::Deps::new(),
             finish,
         }
     }

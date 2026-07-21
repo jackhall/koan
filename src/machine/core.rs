@@ -34,7 +34,7 @@ pub(crate) use kfunction::action::{
     arg_held, arg_object, arg_type, arg_unresolved_type, require_bare_type_name,
     require_identifier_name, require_kexpression, require_ktype, scope_frame, Action,
     AwaitContinue, BlockEntry, BodyCtx, BodyPlacement, CatchContinue, DepPlacement, DepRequest,
-    DepTerminal, FinishCtx, FramePlacement, TailContract,
+    DepTerminal, FinishCtx, FramePlacement, OwnedDispatch, TailContract,
 };
 pub(crate) use kfunction::body::{
     body_statement_refs, split_body_statements, ReturnContract, SealedContract,

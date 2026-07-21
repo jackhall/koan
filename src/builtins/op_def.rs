@@ -34,12 +34,13 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
 use crate::machine::{
-    arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepRequest,
-    DepTerminal, FinishCtx,
+    arg_held, require_kexpression, Action, AwaitContinue, BodyCtx, DepPlacement, DepTerminal,
+    FinishCtx, OwnedDispatch,
 };
 use crate::machine::{BindingIndex, StoredReach};
 use crate::machine::{Body, CarrierWitness, KError, KErrorKind, NodeId, Scope};
 use crate::scheduler::DepResults;
+use crate::scheduler::Deps;
 use crate::source::Spanned;
 use crate::witnessed::Witnessed;
 
@@ -304,13 +305,15 @@ fn build<'a>(ctx: &BodyCtx<'a, '_>, kind: OpKind) -> Action<'a> {
         };
         return op_action(plan.finalize(ctx.scope, operand, result, ctx.types));
     }
-    // Dep order is `[park… ++ sub…]` — the harness owns the subs in declaration order, the order
-    // `capture_type_slot` recorded their positions in.
-    let mut deps: Vec<DepRequest<'a>> = parks.into_iter().map(DepRequest::Existing).collect();
-    deps.extend(subs.into_iter().map(|expr| DepRequest::Dispatch {
-        expr,
-        placement: DepPlacement::OwnScope,
-    }));
+    // Builds the structural `[park… ++ sub…]` split directly: parks first, then the subs owned in
+    // declaration order — the order `capture_type_slot` recorded their positions in.
+    let mut deps = Deps::from_parks(parks);
+    for expr in subs {
+        deps.own(OwnedDispatch {
+            expr,
+            placement: DepPlacement::OwnScope,
+        });
+    }
     let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
         let operand = crate::try_action!(resolve_capture(
             operand_capture,

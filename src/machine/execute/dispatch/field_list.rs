@@ -33,6 +33,7 @@ use super::super::outcome::{dep_error_frame, Await, Outcome};
 use super::super::StepCarried;
 use super::super::TerminalDepFinish;
 use super::DepRequest;
+use super::OwnedDispatch;
 use super::SchedulerView;
 use crate::machine::DeliveredCarried;
 
@@ -56,22 +57,22 @@ pub(crate) type FieldListFinalizeAction<'a> = Box<
         + 'a,
 >;
 
-/// The `[park_producers (Existing) ..., sigil subs (Dispatch/OwnScope) ...]` dep vector the
-/// `Action` deferral twin declares — `run_action` parks the `Existing` prefix and owns the
-/// `Dispatch` suffix, so the re-walk consumes the owned suffix in DFS order. The scheduler twin
-/// builds its `Deps` directly.
+/// The structural `[park_producers ..., sigil subs (OwnScope) ...]` dep split every field-list
+/// deferral shares: parks the forward-ref producers, owns each sigil sub-Dispatch in DFS order, so a
+/// finish's re-walk consumes the owned suffix in DFS order. The two `Action` twins hand this straight
+/// to `Action::AwaitDeps`; the scheduler twin lowers each owned entry into the library dep currency
+/// for `Await::on`.
 fn field_list_deps<'step>(
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<KExpression<'step>>,
-) -> Vec<DepRequest<'step>> {
-    let mut deps: Vec<DepRequest<'step>> = park_producers
-        .into_iter()
-        .map(DepRequest::Existing)
-        .collect();
-    deps.extend(sub_dispatches.into_iter().map(|sub| DepRequest::Dispatch {
-        expr: sub,
-        placement: DepPlacement::OwnScope,
-    }));
+) -> Deps<OwnedDispatch<'step>> {
+    let mut deps = Deps::from_parks(park_producers);
+    for sub in sub_dispatches {
+        deps.own(OwnedDispatch {
+            expr: sub,
+            placement: DepPlacement::OwnScope,
+        });
+    }
     deps
 }
 
@@ -203,21 +204,20 @@ pub(crate) fn defer_field_list<'step>(
             Err(e) => Outcome::Done(Err(e)),
         }
     });
-    // Parks the forward-ref producers; owns each sigil sub-Dispatch (in DFS order). The finish reads
-    // only the owned suffix through the view.
-    let mut deps = Deps::from_parks(park_producers);
-    for sub in sub_dispatches {
-        deps.own(DepRequest::Dispatch {
-            expr: sub,
-            placement: DepPlacement::OwnScope,
-        });
+    // Shares the structural `[park..., owned...]` split with the `Action` twins, then lowers each
+    // owned sub-Dispatch into the library dep currency `Await::on` consumes. The finish reads only
+    // the owned suffix through the view.
+    let (parks, owned) = field_list_deps(park_producers, sub_dispatches).into_parts();
+    let mut lowered: Deps<DepRequest<'step>> = Deps::from_parks(parks);
+    for sub in owned {
+        lowered.own(sub.into_request());
     }
-    Await::on(deps)
+    Await::on(lowered)
         .error_frame(dep_error_frame())
         .finish_terminal(finish)
 }
 
-/// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] vector
+/// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] split
 /// but wraps the dep-finish as an [`Action`](crate::machine::core::Action) — its
 /// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
 #[allow(clippy::too_many_arguments)]
@@ -235,9 +235,9 @@ pub(crate) fn defer_field_list_action<'a>(
     finalize: FieldListFinalizeAction<'a>,
 ) -> crate::machine::core::Action<'a> {
     use crate::machine::core::{Action, AwaitContinue};
-    // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
-    // park_producers; the scheduler feeds results as [park.. , owned..] — so the re-walk consumes
-    // the owned suffix, exactly as the scheduler-side twin does.
+    // The shared structural split: parks = park_producers, owned = subs (DFS order); the scheduler
+    // feeds results as [park.., owned..] — so the re-walk consumes the owned suffix, exactly as the
+    // scheduler-side twin does.
     let deps = field_list_deps(park_producers, sub_dispatches);
     let rewalk = FieldListRewalk {
         expr,
@@ -266,7 +266,7 @@ pub(crate) fn defer_field_list_action<'a>(
     Action::AwaitDeps { deps, finish }
 }
 
-/// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] vector,
+/// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] split,
 /// but its finish runs the re-walk through [`compose_field_list`] rather than a caller-supplied
 /// `finalize` over the dep carriers. `compose` assembles the elaborated pairs — plus whatever owned
 /// type content it closed over, such as the FN return type — into the result `KType`. Used by
@@ -287,8 +287,8 @@ pub(crate) fn defer_field_list_action_composed<'a>(
     compose: BrandCompose<'a>,
 ) -> crate::machine::core::Action<'a> {
     use crate::machine::core::{Action, AwaitContinue};
-    // `deps` order [park ++ subs] makes the harness split owned = subs (DFS order), park =
-    // park_producers; the scheduler feeds results as [park.. , owned..].
+    // The shared structural split: parks = park_producers, owned = subs (DFS order); the scheduler
+    // feeds results as [park.., owned..].
     let deps = field_list_deps(park_producers, sub_dispatches);
     let rewalk = FieldListRewalk {
         expr,

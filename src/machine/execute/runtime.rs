@@ -358,21 +358,15 @@ pub(in crate::machine::execute) fn run_action<'step>(
         }
 
         Action::AwaitDeps { deps, finish } => {
-            // An `Existing` dep is a park-producer the combine reads but doesn't own; every other
-            // arm is an owned sub-slot (a builtin only ever declares `Dispatch` — an `InScope` body
-            // fans out one per statement at apply time). Parks keep first-occurrence order, owned
-            // insertion order; the builder delivers results `[park..., owned...]`. The wrapped
-            // finish recurses `run_action` on the `AwaitContinue`.
-            let mut built: Deps<DepRequest<'step>> = Deps::new();
-            for dep in deps {
-                match dep {
-                    DepRequest::Existing(id) => {
-                        built.park_on(id);
-                    }
-                    _ => {
-                        built.own(dep);
-                    }
-                }
+            // The builtin assembled the structural `[park..., owned...]` split itself: parks keep
+            // first-occurrence order, owned insertion order, and the builder delivers results
+            // `[park..., owned...]`. This arm maps each owned sub-dispatch into the library dep
+            // currency and rebuilds the `Deps` envelope `Await::on` consumes; the wrapped finish
+            // recurses `run_action` on the `AwaitContinue`.
+            let (parks, owned) = deps.into_parts();
+            let mut lowered: Deps<DepRequest<'step>> = Deps::from_parks(parks);
+            for sub in owned {
+                lowered.own(sub.into_request());
             }
             let wrapped: TerminalDepFinish<'step> = Box::new(move |view, results| {
                 let fctx = FinishCtx {
@@ -382,7 +376,7 @@ pub(in crate::machine::execute) fn run_action<'step>(
                 };
                 run_action(view, finish(&fctx, results))
             });
-            Await::on(built)
+            Await::on(lowered)
                 .error_frame(dep_error_frame())
                 .finish_terminal(wrapped)
         }

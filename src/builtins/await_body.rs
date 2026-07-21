@@ -8,7 +8,8 @@
 
 use crate::machine::model::KExpression;
 use crate::machine::Scope;
-use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, FinishCtx};
+use crate::machine::{Action, AwaitContinue, DepPlacement, FinishCtx, OwnedDispatch};
+use crate::scheduler::Deps;
 
 /// Whether the combinator seals the child scope's reach-set before running the finish.
 ///
@@ -38,10 +39,10 @@ pub(crate) fn await_body_in_scope<'a>(
         finish(fctx)
     });
     Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
+        deps: Deps::from_owned([OwnedDispatch {
             expr: body,
             placement: DepPlacement::InScope(child),
-        }],
+        }]),
         finish: continuation,
     }
 }

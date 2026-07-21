@@ -35,7 +35,7 @@ use crate::scheduler::{Deps, ResolvedDeps, Scheduler};
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
 pub(in crate::machine::execute) use crate::machine::core::{
-    BodyPlacement, DepPlacement, DepRequest,
+    BodyPlacement, DepPlacement, DepRequest, OwnedDispatch,
 };
 
 pub(in crate::machine::execute) mod apply_callable;

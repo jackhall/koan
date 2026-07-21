@@ -7,9 +7,9 @@ use crate::machine::model::KExpression;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KType};
-use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest, DepTerminal, FinishCtx};
+use crate::machine::{Action, AwaitContinue, DepPlacement, DepTerminal, FinishCtx, OwnedDispatch};
 use crate::machine::{KError, KErrorKind, NameLookup, Scope};
-use crate::scheduler::DepResults;
+use crate::scheduler::{DepResults, Deps};
 
 /// `{slot}: {detail}` — the unbound / hard-miss shape.
 pub(crate) fn unbound_error(slot: &str, detail: &str) -> KError {
@@ -77,7 +77,7 @@ pub(crate) fn resolve_or_await<'a>(
                 on_resolved(fctx, kt)
             });
             Action::AwaitDeps {
-                deps: producers.into_iter().map(DepRequest::Existing).collect(),
+                deps: Deps::from_parks(producers),
                 finish,
             }
         }
@@ -114,10 +114,10 @@ pub(crate) fn dispatch_type_then<'a>(
         on_resolved(fctx, kt)
     });
     Action::AwaitDeps {
-        deps: vec![DepRequest::Dispatch {
+        deps: Deps::from_owned([OwnedDispatch {
             expr,
             placement: DepPlacement::OwnScope,
-        }],
+        }]),
         finish,
     }
 }

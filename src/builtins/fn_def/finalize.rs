@@ -301,7 +301,8 @@ pub(crate) fn defer<'a>(
     kind: FnKind,
     bind_index: BindingIndex,
 ) -> crate::machine::Action<'a> {
-    use crate::machine::{Action, AwaitContinue, DepPlacement, DepRequest};
+    use crate::machine::{Action, AwaitContinue, DepPlacement, OwnedDispatch};
+    use crate::scheduler::Deps;
     let DeferredInputs {
         capture,
         park_producers,
@@ -309,17 +310,13 @@ pub(crate) fn defer<'a>(
         sub_dispatches,
         prebuilt_elements,
     } = inputs;
-    // `deps` is `[Existing parks..., Dispatch rt?, Dispatch subs...]`; the harness partitions it into
-    // a `Deps` builder (parks first, owned in this order), so the return-type sub is owned index 0 and
-    // the signature subs follow. `splice_layout` records each sub's owned index for the finish.
-    let mut deps: Vec<DepRequest<'a>> = park_producers
-        .iter()
-        .copied()
-        .map(DepRequest::Existing)
-        .collect();
+    // Builds the structural split directly: parks first, then owned `[rt?, subs...]`, so the
+    // return-type sub is owned index 0 and the signature subs follow. `splice_layout` records each
+    // sub's owned index for the finish.
+    let mut deps = Deps::from_parks(park_producers.iter().copied());
     let mut owned_count = 0usize;
     if let Some(rt_expr) = return_type_sub {
-        deps.push(DepRequest::Dispatch {
+        deps.own(OwnedDispatch {
             expr: rt_expr,
             placement: DepPlacement::OwnScope,
         });
@@ -327,7 +324,7 @@ pub(crate) fn defer<'a>(
     }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
-        deps.push(DepRequest::Dispatch {
+        deps.own(OwnedDispatch {
             expr: sub_expr,
             placement: DepPlacement::OwnScope,
         });
