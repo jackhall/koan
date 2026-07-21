@@ -65,6 +65,11 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
             ExpressionPart::Spliced { .. } => "future".to_string(),
+            // Parse output never contains a `StagedSlot` — it's a scheduler-internal marker the
+            // dispatcher introduces after parsing, never produced by `parse`/`build_tree`.
+            ExpressionPart::StagedSlot => {
+                unreachable!("StagedSlot is scheduler-internal; parse output never contains one")
+            }
         }
     }
     let parts: Vec<String> = e.parts.iter().map(|p| describe_part(&p.value)).collect();

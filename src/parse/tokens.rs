@@ -256,6 +256,11 @@ mod tests {
                     .collect();
                 format!("R{{{}}}", inner.join(", "))
             }
+            // Token classification never produces a `StagedSlot` — it's a scheduler-internal
+            // marker the dispatcher introduces after parsing, never a token.
+            ExpressionPart::StagedSlot => {
+                unreachable!("StagedSlot is scheduler-internal; classify_token never produces one")
+            }
         }
     }
 

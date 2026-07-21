@@ -223,11 +223,11 @@ pub(in crate::machine::execute) fn stage_eager_part<'a>(
     }
 }
 
-/// The empty-`Identifier` hole a staged slot leaves in `new_parts`. Names the
-/// stringly placeholder convention; the sentinel is not yet a typed staged-slot
-/// representation.
+/// The [`ExpressionPart::StagedSlot`] hole a staged slot leaves in `new_parts`, holding the
+/// slot's position/index until `install_eager_subs`'s finish overwrites it with the resolved
+/// `Spliced` cell.
 pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<ExpressionPart<'a>> {
-    Spanned::bare(ExpressionPart::Identifier(String::new()))
+    Spanned::bare(ExpressionPart::StagedSlot)
 }
 
 /// Result of a successful keyworded part walk.
@@ -336,7 +336,7 @@ pub(in crate::machine::execute) fn become_dispatch<'step>(
     }
 }
 
-/// Walk raw parts emitting an `Identifier("")` placeholder at every
+/// Walk raw parts emitting a [`StagedSlot`](ExpressionPart::StagedSlot) marker at every
 /// eager slot and a parallel staged-subs Vec; non-eager parts pass
 /// through unchanged.
 ///

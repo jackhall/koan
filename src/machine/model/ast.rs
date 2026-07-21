@@ -113,6 +113,14 @@ pub enum ExpressionPart<'a> {
     Spliced {
         cell: DeliveredCarried,
     },
+    /// A positional argument slot whose eager value is being produced by a sibling dispatch,
+    /// awaiting its resolved carrier. The keyworded part walk stages an eager part as an owned
+    /// [`DepRequest`](crate::machine::core::DepRequest) and leaves this marker in its slot so the
+    /// part list keeps its length and index alignment; `install_eager_subs`'s finish overwrites
+    /// each marked slot with the resolved [`Spliced`](ExpressionPart::Spliced) cell. It is a
+    /// scheduler-internal hole, never a language-level value — it exists only between staging and
+    /// splice and is never name-resolved.
+    StagedSlot,
 }
 
 /// Registry-free rendering of a spliced cell's carried value, for `Debug` and the registry-free
@@ -154,6 +162,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             ExpressionPart::Spliced { cell, .. } => {
                 write!(f, "Spliced({})", cell.open(spliced_summary))
             }
+            ExpressionPart::StagedSlot => write!(f, "StagedSlot"),
         }
     }
 }
@@ -182,10 +191,13 @@ impl<'a> ExpressionPart<'a> {
                 .iter()
                 .all(|(k, v)| k.is_splice_free() && v.is_splice_free()),
             ExpressionPart::RecordLiteral(pairs) => pairs.iter().all(|(_, v)| v.is_splice_free()),
+            // A staged slot is a bare marker with nothing nested beneath it — not yet a `Spliced`
+            // cell, so it holds no producer reach either.
             ExpressionPart::Keyword(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
-            | ExpressionPart::Literal(_) => true,
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::StagedSlot => true,
         }
     }
 
@@ -224,6 +236,7 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Null => "null".to_string(),
             },
             ExpressionPart::Spliced { cell, .. } => cell.open(spliced_summary),
+            ExpressionPart::StagedSlot => "<staged>".to_string(),
         }
     }
 
@@ -327,6 +340,11 @@ impl<'a> ExpressionPart<'a> {
                 "a spliced cell is adopted at the binding scope before resolve(); \
                  resolve() runs only on region-pure parts"
             ),
+            // A staged slot is a scheduler-internal hole: `install_eager_subs`'s finish splices
+            // every marked slot into a `Spliced` cell before anything binds or resolves it.
+            ExpressionPart::StagedSlot => unreachable!(
+                "StagedSlot is a transient staging hole; install_eager_subs splices it before resolve() runs"
+            ),
         }
     }
 
@@ -357,6 +375,11 @@ impl<'a> ExpressionPart<'a> {
                  (keyword / bare identifier / type name / literal); borrow-bearing parts and \
                  spliced cells are classified to owned sub-dispatches before any static cell"
             ),
+            // A staged slot never reaches a static-cell resolve: `install_eager_subs`'s finish
+            // splices it into a `Spliced` cell before anything binds or resolves it.
+            ExpressionPart::StagedSlot => unreachable!(
+                "StagedSlot is a transient staging hole; install_eager_subs splices it before resolve_region_pure() runs"
+            ),
         }
     }
 }
@@ -380,6 +403,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::Spliced { cell } => ExpressionPart::Spliced {
                 cell: cell.duplicate(),
             },
+            ExpressionPart::StagedSlot => ExpressionPart::StagedSlot,
         }
     }
 }
@@ -476,6 +500,15 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             | ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
+            // A single staged slot is reachable: `install_eager_subs_track` (the post-pick,
+            // no-keyword named-argument tail) calls `KExpression::new` on the freshly staged
+            // parts before any dep resolves, and a one-argument reconstructed call stages that
+            // sole part when it's eager. The cached shape this fills is never re-derived after
+            // the slot splices (`KExpression`'s cache is invariant under splice, per its doc),
+            // and this working expression's shape is never re-consulted either way — the finish
+            // routes straight to `invoke`/`redispatch`, not back through `classify_dispatch`. A
+            // lone hole classifies as a bare identifier — the shape a resolvable single part takes.
+            ExpressionPart::StagedSlot => DispatchShape::BareIdentifier,
             ExpressionPart::Keyword(_) => {
                 unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
             }
@@ -502,6 +535,12 @@ pub fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         | ExpressionPart::RecordLiteral(_)
         | ExpressionPart::RecordType(_)
         | ExpressionPart::QuotedExpression(_) => DispatchShape::NonCallableHead,
+        // A staged slot at the head position is reachable the same way as the single-part
+        // case above: a reconstructed no-keyword named-argument call whose first part is
+        // eager stages it before `KExpression::new` fills this cache, and this working
+        // expression's shape is never re-consulted afterward. A hole head classifies as a
+        // function-value call — the shape a resolvable identifier head takes.
+        ExpressionPart::StagedSlot => DispatchShape::FunctionValueCall,
         ExpressionPart::Keyword(_) => {
             unreachable!("no-keyword precondition: the sweep above caught every Keyword part")
         }
