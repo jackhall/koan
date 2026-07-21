@@ -25,7 +25,7 @@ use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
-use super::{resolve_name_part, Await, DepRequest, Outcome, PendingSub};
+use super::{resolve_name_part, Await, DepRequest, Outcome};
 use crate::scheduler::{Deps, ProducerDisposition, Scheduler};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
@@ -211,41 +211,25 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
             .collect()
     }
 
-    /// Stage each `PendingSub` as a dep and decide the eager-subs outcome. Every sub becomes an
-    /// `AwaitDeps` dep — a `Reuse` an `Existing` edge on its pre-existing producer, a fresh sub an
-    /// owned edge the harness submits (see the loop for why nothing is spliced inline at decide
-    /// time). The finish splices the resolved carriers into `working_expr` and routes on `picked`:
-    /// `Some(f)` folds the committed call into a frame-installing `Continue`, `None` re-resolves via
-    /// [`keyworded::finish`](super::keyworded::finish). With no subs, that routing happens now. The
+    /// Install each staged eager dep and decide the eager-subs outcome. Every dep is already
+    /// `DepRequest` currency — `Existing` parks on its pre-existing producer, every other variant
+    /// is a fresh owned edge the harness submits. Nothing is read and spliced inline here — that
+    /// would embed a producer's frame-local terminal, which its per-call frame frees at Done (it
+    /// never lifts), so it would dangle. The finish splices the resolved carriers into
+    /// `working_expr` and routes on `picked`: `Some(f)` folds the committed call into a
+    /// frame-installing `Continue`, `None` re-resolves via
+    /// [`keyworded::finish`](super::keyworded::finish). With no deps, that routing happens now. The
     /// `<bind>` dep-error frame rides on `dep_error_frame`. Read-only — every write the outcome
     /// implies is the harness's.
     pub(super) fn install_eager_subs(
         &self,
         mut working_expr: KExpression<'step>,
-        staged_subs: Vec<(usize, PendingSub<'step>)>,
+        staged_subs: Vec<(usize, DepRequest<'step>)>,
         picked: Option<&'step KFunction<'step>>,
     ) -> Outcome<'step> {
         use super::super::TerminalDepFinish;
-        let mut deps: Vec<DepRequest<'step>> = Vec::with_capacity(staged_subs.len());
-        let mut part_indices: Vec<usize> = Vec::with_capacity(staged_subs.len());
-        for (i, pending) in staged_subs {
-            // Every sub is pulled through the single consumer path: a `Reuse` parks on its
-            // pre-existing producer as an `Existing` dep, a fresh sub is a dep the harness submits.
-            // Nothing is read and spliced inline here — that would embed a producer's frame-local
-            // terminal, which its per-call frame frees at Done (it never lifts), so it would dangle.
-            let dep = match pending {
-                PendingSub::Reuse(id) => DepRequest::Existing(id),
-                PendingSub::Dispatch(sub_expr) => DepRequest::Dispatch {
-                    expr: sub_expr,
-                    placement: DepPlacement::OwnScope,
-                },
-                PendingSub::ListLit(items) => DepRequest::ListLit(items),
-                PendingSub::DictLit(pairs) => DepRequest::DictLit(pairs),
-                PendingSub::RecordLit(fields) => DepRequest::RecordLit(fields),
-            };
-            deps.push(dep);
-            part_indices.push(i);
-        }
+        let (part_indices, deps): (Vec<usize>, Vec<DepRequest<'step>>) =
+            staged_subs.into_iter().unzip();
         if deps.is_empty() {
             // Nothing to resolve — `working_expr` is already fully spliced, so route now not park.
             return finish_eager_subs(self, working_expr, picked);

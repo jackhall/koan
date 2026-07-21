@@ -36,7 +36,9 @@ use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
-pub(in crate::machine::execute) use crate::machine::core::{BodyPlacement, DepRequest};
+pub(in crate::machine::execute) use crate::machine::core::{
+    BodyPlacement, DepPlacement, DepRequest,
+};
 
 pub(in crate::machine::execute) mod apply_callable;
 mod constructors;
@@ -143,20 +145,96 @@ pub(super) fn bare_name_of<'step>(part: &ExpressionPart<'step>) -> Option<String
     }
 }
 
-/// One staged submission queued by the keyworded part walk.
-pub(in crate::machine::execute) enum PendingSub<'step> {
-    Reuse(NodeId),
-    Dispatch(KExpression<'step>),
-    ListLit(Vec<ExpressionPart<'step>>),
-    DictLit(Vec<(ExpressionPart<'step>, ExpressionPart<'step>)>),
-    RecordLit(Vec<(String, ExpressionPart<'step>)>),
+/// The staged form of one eager part shape. Private plumbing: exists so the
+/// six-shape set is written exactly once (in [`eager_shape`]) while staging
+/// stays by-value. Adding a shape here forces a `stage_eager_part` arm via
+/// match exhaustiveness.
+enum EagerShape {
+    /// `(...)` — the boxed inner expression dispatches directly.
+    Subexpression,
+    /// `:(…)` / `:{…}` — the whole part rewraps as a one-part sub-Dispatch
+    /// to a type-side carrier.
+    TypeExpression,
+    ListLiteral,
+    DictLiteral,
+    RecordLiteral,
+}
+
+/// THE six-shape eager match — the only place the eager part-shape set is
+/// enumerated. `None` means the part is not eager.
+fn eager_shape(part: &ExpressionPart<'_>) -> Option<EagerShape> {
+    match part {
+        ExpressionPart::Expression(_) => Some(EagerShape::Subexpression),
+        ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
+            Some(EagerShape::TypeExpression)
+        }
+        ExpressionPart::ListLiteral(_) => Some(EagerShape::ListLiteral),
+        ExpressionPart::DictLiteral(_) => Some(EagerShape::DictLiteral),
+        ExpressionPart::RecordLiteral(_) => Some(EagerShape::RecordLiteral),
+        _ => None,
+    }
+}
+
+/// True iff this part shape is one the eager loop schedules as a sub-Dispatch.
+pub(in crate::machine::execute) fn is_eager_part(part: &ExpressionPart<'_>) -> bool {
+    eager_shape(part).is_some()
+}
+
+/// Stage one eager part as the [`DepRequest`] the harness realizes; a non-eager
+/// part round-trips back untouched. By-value — no clones on the staging path.
+pub(in crate::machine::execute) fn stage_eager_part<'a>(
+    part: ExpressionPart<'a>,
+) -> Result<DepRequest<'a>, ExpressionPart<'a>> {
+    match eager_shape(&part) {
+        None => Err(part),
+        Some(EagerShape::Subexpression) => {
+            let ExpressionPart::Expression(boxed) = part else {
+                unreachable!("eager_shape matched Subexpression")
+            };
+            Ok(DepRequest::Dispatch {
+                expr: *boxed,
+                placement: DepPlacement::OwnScope,
+            })
+        }
+        Some(EagerShape::TypeExpression) => Ok(DepRequest::Dispatch {
+            // Rewrap the whole part — the same shape `classify_aggregate_part`
+            // builds, equivalent to the destructure-and-rewrap the walks did.
+            expr: KExpression::new(vec![Spanned::bare(part)]),
+            placement: DepPlacement::OwnScope,
+        }),
+        Some(EagerShape::ListLiteral) => {
+            let ExpressionPart::ListLiteral(items) = part else {
+                unreachable!("eager_shape matched ListLiteral")
+            };
+            Ok(DepRequest::ListLit(items))
+        }
+        Some(EagerShape::DictLiteral) => {
+            let ExpressionPart::DictLiteral(pairs) = part else {
+                unreachable!("eager_shape matched DictLiteral")
+            };
+            Ok(DepRequest::DictLit(pairs))
+        }
+        Some(EagerShape::RecordLiteral) => {
+            let ExpressionPart::RecordLiteral(fields) = part else {
+                unreachable!("eager_shape matched RecordLiteral")
+            };
+            Ok(DepRequest::RecordLit(fields))
+        }
+    }
+}
+
+/// The empty-`Identifier` hole a staged slot leaves in `new_parts`. Names the
+/// existing placeholder convention; typing the sentinel as a real staged-slot
+/// representation is a follow-up (see the roadmap item).
+pub(in crate::machine::execute) fn staged_slot_placeholder<'a>() -> Spanned<ExpressionPart<'a>> {
+    Spanned::bare(ExpressionPart::Identifier(String::new()))
 }
 
 /// Result of a successful keyworded part walk.
 pub(in crate::machine::execute) struct PartWalkResult<'step> {
     pub new_parts: Vec<Spanned<ExpressionPart<'step>>>,
     pub producers_to_wait: Vec<NodeId>,
-    pub staged_subs: Vec<(usize, PendingSub<'step>)>,
+    pub staged_subs: Vec<(usize, DepRequest<'step>)>,
 }
 
 /// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
@@ -275,54 +353,38 @@ pub(super) fn stage_all_eager_parts<'step>(
     wrap_indices: &[usize],
 ) -> (
     Vec<Spanned<ExpressionPart<'step>>>,
-    Vec<(usize, PendingSub<'step>)>,
+    Vec<(usize, DepRequest<'step>)>,
 ) {
     let mut new_parts: Vec<Spanned<ExpressionPart<'step>>> = Vec::with_capacity(parts.len());
-    let mut staged: Vec<(usize, PendingSub<'step>)> = Vec::new();
+    let mut staged: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if wrap_indices.contains(&i) {
             // Bare-name value slot: resolve the name through a single-part
             // sub-Dispatch (the `BareIdentifier` / `BareTypeLeaf` fast lane), so
-            // the resolved `Spliced` carrier reaches `accepts_part` at bind.
+            // the resolved `Spliced` carrier reaches `accepts_part` at bind. Not
+            // one of the six eager shapes (it wraps bare Identifier/Type parts),
+            // so this stays a pre-check before the stager.
             let wrapped = KExpression::new(vec![Spanned {
                 value: part.value,
                 span,
             }]);
-            staged.push((i, PendingSub::Dispatch(wrapped)));
-            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            staged.push((
+                i,
+                DepRequest::Dispatch {
+                    expr: wrapped,
+                    placement: DepPlacement::OwnScope,
+                },
+            ));
+            new_parts.push(staged_slot_placeholder());
             continue;
         }
-        match part.value {
-            ExpressionPart::Expression(boxed) => {
-                staged.push((i, PendingSub::Dispatch(*boxed)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+        match stage_eager_part(part.value) {
+            Ok(dep) => {
+                staged.push((i, dep));
+                new_parts.push(staged_slot_placeholder());
             }
-            ExpressionPart::SigiledTypeExpr(boxed) => {
-                let wrapped =
-                    KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(boxed))]);
-                staged.push((i, PendingSub::Dispatch(wrapped)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-            }
-            ExpressionPart::RecordType(boxed) => {
-                let wrapped =
-                    KExpression::new(vec![Spanned::bare(ExpressionPart::RecordType(boxed))]);
-                staged.push((i, PendingSub::Dispatch(wrapped)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-            }
-            ExpressionPart::ListLiteral(items) => {
-                staged.push((i, PendingSub::ListLit(items)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-            }
-            ExpressionPart::DictLiteral(pairs) => {
-                staged.push((i, PendingSub::DictLit(pairs)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-            }
-            ExpressionPart::RecordLiteral(fields) => {
-                staged.push((i, PendingSub::RecordLit(fields)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-            }
-            other => new_parts.push(Spanned { value: other, span }),
+            Err(value) => new_parts.push(Spanned { value, span }),
         }
     }
     (new_parts, staged)

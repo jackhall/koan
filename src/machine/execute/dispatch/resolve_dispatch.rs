@@ -20,6 +20,8 @@ use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::model::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::NodeId;
 
+use super::is_eager_part;
+
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
@@ -491,20 +493,6 @@ fn slot_admits_strict<'e>(
             }
         }
     }
-}
-
-/// True iff this part shape is one the scheduler's eager loop would schedule as a
-/// sub-Dispatch.
-fn is_eager_part(part: &ExpressionPart<'_>) -> bool {
-    matches!(
-        part,
-        ExpressionPart::Expression(_)
-            | ExpressionPart::SigiledTypeExpr(_)
-            | ExpressionPart::RecordType(_)
-            | ExpressionPart::ListLiteral(_)
-            | ExpressionPart::DictLiteral(_)
-            | ExpressionPart::RecordLiteral(_)
-    )
 }
 
 /// True iff `expr` carries any part shape the scheduler's eager loop would

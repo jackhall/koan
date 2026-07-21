@@ -645,6 +645,7 @@ digraph {
     "koan::machine::execute::dispatch::operator_chain" -> "koan::source" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::core" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_dispatch" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::resolve_type_identifier" -> "koan::machine::core" [label="uses", style="dashed"];

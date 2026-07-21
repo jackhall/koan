@@ -14,7 +14,8 @@ use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
 use super::ctx::SchedulerView;
 use super::{
-    bare_name_of, park_resume, propagate_dep_error, Outcome, PartWalkResult, PendingSub, Resolved,
+    bare_name_of, park_resume, propagate_dep_error, stage_eager_part, staged_slot_placeholder,
+    DepRequest, Outcome, PartWalkResult, Resolved,
 };
 use crate::scheduler::{ProducerDisposition, ResolvedDeps};
 
@@ -328,7 +329,7 @@ fn install_bare_name_park<'step>(
 fn install_eager_subs_track<'step>(
     ctx: &SchedulerView<'step, '_>,
     working_expr: KExpression<'step>,
-    staged_subs: Vec<(usize, PendingSub<'step>)>,
+    staged_subs: Vec<(usize, DepRequest<'step>)>,
 ) -> Outcome<'step> {
     // The combine carrier owns its deps directly; the Keyworded eager-subs resume state is
     // never re-entered (a re-Dispatch never lands here — the combine finish runs instead).
@@ -381,11 +382,11 @@ fn part_walk<'step>(
     let eager_filter = slots.eager_indices.as_deref();
     let mut new_parts: Vec<Spanned<ExpressionPart<'step>>> = Vec::with_capacity(parts.len());
     let mut producers_to_wait: Vec<NodeId> = Vec::new();
-    let mut staged_subs: Vec<(usize, PendingSub<'step>)> = Vec::new();
+    let mut staged_subs: Vec<(usize, DepRequest<'step>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
         let span = part.span;
         if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
-            staged_subs.push((i, PendingSub::Reuse(sub_id)));
+            staged_subs.push((i, DepRequest::Existing(sub_id)));
             new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             continue;
         }
@@ -496,43 +497,13 @@ fn part_walk<'step>(
         }
         let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
         if in_eager_filter {
-            match part.value {
-                ExpressionPart::Expression(boxed) => {
-                    staged_subs.push((i, PendingSub::Dispatch(*boxed)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            match stage_eager_part(part.value) {
+                Ok(dep) => {
+                    staged_subs.push((i, dep));
+                    new_parts.push(staged_slot_placeholder());
                     continue;
                 }
-                ExpressionPart::SigiledTypeExpr(boxed) => {
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed),
-                    )]);
-                    staged_subs.push((i, PendingSub::Dispatch(wrapped)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    continue;
-                }
-                ExpressionPart::RecordType(boxed) => {
-                    let wrapped =
-                        KExpression::new(vec![Spanned::bare(ExpressionPart::RecordType(boxed))]);
-                    staged_subs.push((i, PendingSub::Dispatch(wrapped)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    continue;
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    staged_subs.push((i, PendingSub::ListLit(items)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    continue;
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    staged_subs.push((i, PendingSub::DictLit(pairs)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    continue;
-                }
-                ExpressionPart::RecordLiteral(fields) => {
-                    staged_subs.push((i, PendingSub::RecordLit(fields)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    continue;
-                }
-                other => new_parts.push(Spanned { value: other, span }),
+                Err(value) => new_parts.push(Spanned { value, span }),
             }
         } else {
             new_parts.push(Spanned {
