@@ -138,7 +138,7 @@ impl TypeRegistry {
         let any = self.intern(TypeNode::Any);
         self.list(any);
         self.dict(any, any);
-        self.signature(SigSchema::empty(), Vec::new());
+        self.signature(SigSchema::empty());
     }
 
     // --- Content: interning and node reads ---
@@ -214,47 +214,16 @@ impl TypeRegistry {
         })
     }
 
-    /// A module-signature type over `schema`, specialized by `pinned_slots`. Computes the
-    /// schema's content digest once, here, so the node carries it and identity is one compare.
-    /// Canonicalizes `pinned_slots` by name-sorting, so pin-set identity is order-independent.
-    pub fn signature(&self, schema: SigSchema, pinned_slots: Vec<(String, KType)>) -> KType {
+    /// A module-signature type over `schema`. Computes the schema's content digest once, here,
+    /// so the node carries it and identity is one compare. `WITH` specialization folds its pins
+    /// into the schema first ([`SigSchema::fold_pins`]) and interns through this same door —
+    /// there is one signature constructor and one spelling per interface content.
+    pub fn signature(&self, schema: SigSchema) -> KType {
         let schema_digest = schema_content_digest(&schema, self);
         self.intern(TypeNode::Signature {
             schema,
             schema_digest,
-            pinned_slots: canonical_pins(pinned_slots),
         })
-    }
-
-    /// A `Signature` deriving from `handle` with `pinned_slots` **accumulated** onto its existing
-    /// pins — the derived constructor for further specializing an already-interned signature
-    /// (WITH). Reuses the stored schema and its carried digest rather than re-running the content
-    /// walk; the merged pin set is canonicalized by name-sorting, so chained and one-shot
-    /// specialization intern the same type. A non-`Signature` `handle` or a `pinned_slots` name
-    /// colliding with an existing pin is a caller bug — the caller validates shape and re-pins
-    /// first (an equal re-pin normalizes away, an unequal one is the caller's type error).
-    pub fn signature_pinned(&self, handle: KType, pinned_slots: Vec<(String, KType)>) -> KType {
-        match self.node(handle) {
-            TypeNode::Signature {
-                schema,
-                schema_digest,
-                pinned_slots: mut merged,
-            } => {
-                debug_assert!(
-                    pinned_slots
-                        .iter()
-                        .all(|(name, _)| !merged.iter().any(|(m, _)| m == name)),
-                    "signature_pinned: caller passed a pin colliding with an existing pin"
-                );
-                merged.extend(pinned_slots);
-                self.intern(TypeNode::Signature {
-                    schema,
-                    schema_digest,
-                    pinned_slots: canonical_pins(merged),
-                })
-            }
-            _ => panic!("signature_pinned: handle names a non-Signature node"),
-        }
     }
 
     /// Canonicalizing constructor for a union — the single entry point that builds one. Flattens
@@ -425,14 +394,6 @@ impl TypeRegistry {
     pub(crate) fn miss_count(&self) -> usize {
         self.misses.get()
     }
-}
-
-/// Canonical pin-set order: name-sorted. [`signature_digest`](type_digest) feeds pins
-/// positionally, so the constructors establish one order per pin set — `S WITH {A, B}`,
-/// `S WITH {B, A}`, and any chained accumulation of the two intern the same type.
-fn canonical_pins(mut pins: Vec<(String, KType)>) -> Vec<(String, KType)> {
-    pins.sort_by(|(a, _), (b, _)| a.cmp(b));
-    pins
 }
 
 #[cfg(test)]

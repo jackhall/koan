@@ -4,11 +4,11 @@ use crate::builtins::test_support::{lookup_fn, lookup_module, parse_one, spliced
 use crate::machine::model::Carried;
 use crate::machine::{run_root_storage, FrameStorageExt};
 
-/// Pinned-slot admissibility: a `Signature { .. }` slot pinned to `{Elem = Number}` admits a
-/// module iff its self-sig satisfies the signature *and* every pin names a manifest member
-/// fixed equal. The signature's decl scope is empty, so every module bare-satisfies it and pin
-/// agreement alone decides: `Elem = Number` admitted, `Elem = Str` rejected (pin disagrees),
-/// no `Elem` rejected (pin absent). Admission is structural, so ascription is never required.
+/// Pinned-slot admissibility: a `Signature` slot with `{Elem = Number}` folded in admits a
+/// module iff its self-sig satisfies the folded schema — the pin is a manifest member, so
+/// manifest equality decides: `Elem = Number` admitted, `Elem = Str` rejected (manifest
+/// disagrees), no `Elem` rejected (member absent). Admission is structural, so ascription is
+/// never required.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::{KType, SigSchema};
@@ -36,7 +36,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
          MODULE num_bare = ((LET Elem = Number) (LET compare = 0))",
     );
 
-    let slot = types.signature(schema, vec![("Elem".into(), KType::NUMBER)]);
+    let slot = types.signature(schema.fold_pins(&[("Elem".into(), KType::NUMBER)], &types));
 
     // A module binds value-side, so both the overload probe and the built argument cell carry it
     // on the Object channel — its satisfaction of a `Signature` slot goes through
@@ -53,11 +53,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 }
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
-/// FN-construction and land on the FN's stored return type as a
-/// `Signature { .. }` with both pins captured.
+/// FN-construction and land on the FN's stored return type as the folded `Signature` — the
+/// same type the `WITH` expression evaluates to on its own.
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
-    use crate::machine::model::KType;
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -71,34 +70,14 @@ fn functor_with_two_pinned_slots_round_trips() {
         "FN (TWOPIN p :Ordered) -> :(OrderedSet WITH {Elt = Number, Ord = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
+    let expected = test_run.run_one_type(parse_one("OrderedSet WITH {Elt = Number, Ord = Number}"));
     let f = lookup_fn(scope, "TWOPIN");
-    use crate::machine::model::{ReturnType, TypeNode};
-    // The Signature node carries no declaration label (ruling 12); the captured base signature is
-    // identified by its schema content, which must match the declared `OrderedSet`.
-    let ordered_set = scope.resolve_type("OrderedSet");
-    let base_digest = match ordered_set.map(|h| test_run.types.node(h)) {
-        Some(TypeNode::Signature { schema_digest, .. }) => schema_digest,
-        _ => panic!("OrderedSet must bind a Signature KType, got {ordered_set:?}"),
-    };
+    use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(handle) => match test_run.types.node(*handle) {
-            TypeNode::Signature {
-                schema_digest,
-                pinned_slots,
-                ..
-            } => {
-                assert_eq!(
-                    schema_digest, base_digest,
-                    "TWOPIN's return base signature must be `OrderedSet`"
-                );
-                assert_eq!(pinned_slots.len(), 2);
-                assert_eq!(pinned_slots[0].0, "Elt");
-                assert_eq!(pinned_slots[0].1, KType::NUMBER);
-                assert_eq!(pinned_slots[1].0, "Ord");
-                assert_eq!(pinned_slots[1].1, KType::NUMBER);
-            }
-            _ => panic!("expected Resolved(Signature) on TWOPIN's return type, got {handle:?}"),
-        },
+        ReturnType::Resolved(handle) => assert_eq!(
+            *handle, expected,
+            "TWOPIN's captured return type is the folded specialization",
+        ),
         other => panic!(
             "expected Resolved(Signature) on TWOPIN's return type, got {:?}",
             other,
@@ -124,30 +103,24 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "FN (MAKESETN p :Ordered) -> :(Set WITH {Elt = Number}) = \
          (MODULE generated = ((LET Elt = Number) (LET insert = 0)))",
     );
+    let expected = test_run.run_one_type(parse_one("Set WITH {Elt = Number}"));
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::{ReturnType, TypeNode};
-    // The Signature node carries no declaration label (ruling 12); the captured base signature is
-    // identified by its schema content, which must match the declared `Set`.
-    let set = scope.resolve_type("Set");
-    let base_digest = match set.map(|h| test_run.types.node(h)) {
-        Some(TypeNode::Signature { schema_digest, .. }) => schema_digest,
-        _ => panic!("Set must bind a Signature KType, got {set:?}"),
-    };
     match &f.signature.return_type {
-        ReturnType::Resolved(handle) => match test_run.types.node(*handle) {
-            TypeNode::Signature {
-                schema_digest,
-                pinned_slots,
-                ..
-            } => {
-                assert_eq!(
-                    schema_digest, base_digest,
-                    "MAKESETN's return base signature must be `Set`"
-                );
-                assert_eq!(pinned_slots, vec![("Elt".to_string(), KType::NUMBER)]);
+        ReturnType::Resolved(handle) => {
+            assert_eq!(
+                *handle, expected,
+                "MAKESETN's captured return type is the folded specialization",
+            );
+            match test_run.types.node(*handle) {
+                TypeNode::Signature { schema, .. } => {
+                    assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
+                }
+                _ => {
+                    panic!("expected Resolved(Signature) on MAKESETN's return type, got {handle:?}")
+                }
             }
-            _ => panic!("expected Resolved(Signature) on MAKESETN's return type, got {handle:?}"),
-        },
+        }
         other => panic!(
             "expected Resolved(Signature) on MAKESETN's return type, got {:?}",
             other,
@@ -157,7 +130,8 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 
 /// Return-type admissibility rejects a body whose module fails the `Signature { .. }`
 /// constraint check — here the body module bare-satisfies `Set` but its `Elt = Str`
-/// disagrees with the `{Elt = Number}` pin, so `satisfies_pins` rejects it. The positive
+/// disagrees with the folded `{Elt = Number}` manifest member, so the structural check
+/// rejects it. The positive
 /// counterpart is `functor_return_with_matching_sharing_constraint_passes`.
 #[test]
 fn functor_return_with_mismatched_sharing_constraint_errors() {
@@ -256,7 +230,7 @@ fn transparent_view_pin_agreement_reads_source_types() {
         TypeNode::Signature { schema, .. } => schema,
         _ => panic!("Ordered must bind a Signature KType, got {ordered:?}"),
     };
-    let slot = types.signature(schema, vec![("Elem".to_string(), KType::NUMBER)]);
+    let slot = types.signature(schema.fold_pins(&[("Elem".to_string(), KType::NUMBER)], &types));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let num_view = scope.lookup("num_view").expect("num_view bound");
     let str_view = scope.lookup("str_view").expect("str_view bound");
@@ -299,7 +273,8 @@ fn opaque_view_pin_agreement_names_its_abstract_identity() {
         .get("Carrier")
         .cloned()
         .expect("opaque view mints an abstract `Carrier`");
-    let slot = types.signature(schema, vec![("Carrier".to_string(), carrier_abstract)]);
+    let slot =
+        types.signature(schema.fold_pins(&[("Carrier".to_string(), carrier_abstract)], &types));
     // A view binds value-side, so its argument cell carries the module on the Object channel.
     let view_obj = scope.lookup("view").expect("view bound");
     assert!(

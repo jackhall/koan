@@ -175,11 +175,7 @@ pub(crate) fn node_digest(node: &TypeNode) -> TypeDigest {
             constructor,
             arguments,
         } => constructor_apply_digest(constructor.digest(), arguments),
-        TypeNode::Signature {
-            schema_digest,
-            pinned_slots,
-            ..
-        } => signature_digest(*schema_digest, pinned_slots),
+        TypeNode::Signature { schema_digest, .. } => signature_digest(*schema_digest),
         TypeNode::Sibling(index) => sibling_digest(*index),
         TypeNode::SetMember {
             scc_digest, index, ..
@@ -302,16 +298,11 @@ fn constructor_apply_digest(ctor: TypeDigest, args: &Record<KType>) -> TypeDiges
 }
 
 /// A module-signature type's digest: its schema's content digest (identity by interface, not by
-/// mint — see [type-identity.md](../../../../design/typing/type-identity.md)) wrapped with the
-/// `WITH` pins that specialize it. Positional over `pinned_slots`, whose canonical name-sorted
-/// order the registry's signature constructors establish before interning.
-fn signature_digest(content_digest: TypeDigest, pinned_slots: &[(String, KType)]) -> TypeDigest {
+/// mint — see [type-identity.md](../../../../design/typing/type-identity.md)). `WITH` pins fold
+/// into the schema before interning, so the schema content is the whole identity.
+fn signature_digest(content_digest: TypeDigest) -> TypeDigest {
     let mut h = DigestHasher::new(TAG_SIGNATURE);
     h.digest(content_digest);
-    h.count(pinned_slots.len());
-    for (name, kt) in pinned_slots {
-        h.string(name).digest(kt.digest());
-    }
     h.finish()
 }
 

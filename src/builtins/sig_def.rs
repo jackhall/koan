@@ -41,7 +41,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ChildScopeSeal::SealBeforeFinish,
         move |fctx| {
             let schema = SigSchema::project_decl(decl_scope, fctx.types);
-            let identity = fctx.types.signature(schema, Vec::new());
+            let identity = fctx.types.signature(schema);
             match fctx
                 .scope
                 .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
@@ -251,8 +251,8 @@ mod tests {
     }
 
     /// `WITH` pins fold into signature identity: differently-pinned views of one SIG are distinct,
-    /// and a pinned view differs from the bare SIG. (Pin folding is unchanged by content identity —
-    /// this guards it stays a content distinction.)
+    /// and a pinned view differs from the bare SIG. (Pin folding is a content distinction — the
+    /// folded schemas fix `Elem`, and `item`'s reference to it, to different types.)
     #[test]
     fn with_pins_distinguish_signature_identity() {
         use crate::machine::model::{KType, TypeNode};
@@ -262,12 +262,12 @@ mod tests {
         test_run.run("SIG Container = ((TYPE Elem) (VAL item :Elem))");
         let types = test_run.types();
         let handle = scope.resolve_type("Container").expect("Container binds");
-        assert!(
-            matches!(types.node(handle), TypeNode::Signature { .. }),
-            "Container should be a signature"
-        );
-        let pin_num = types.signature_pinned(handle, vec![("Elem".into(), KType::NUMBER)]);
-        let pin_str = types.signature_pinned(handle, vec![("Elem".into(), KType::STR)]);
+        let schema = match types.node(handle) {
+            TypeNode::Signature { schema, .. } => schema,
+            _ => panic!("Container should be a signature"),
+        };
+        let pin_num = types.signature(schema.fold_pins(&[("Elem".into(), KType::NUMBER)], types));
+        let pin_str = types.signature(schema.fold_pins(&[("Elem".into(), KType::STR)], types));
         assert_ne!(pin_num, pin_str, "unequal pins are unequal types");
         assert_ne!(
             pin_num, handle,

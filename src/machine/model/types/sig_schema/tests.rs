@@ -1,6 +1,6 @@
 //! Unit tests for the signature-subtyping relation, its schema, and abstract-member
 //! substitution. Schemas are built both directly (owned `KType` handles) and by projecting parsed
-//! SIG declarations, pinned via [`SigSchema::with_pins`].
+//! SIG declarations, pinned via [`SigSchema::fold_pins`].
 
 use std::collections::HashMap;
 
@@ -406,7 +406,7 @@ fn value_slot_list_of_abstract_ref_substitutes_nested() {
     ));
 }
 
-// --- pins via with_pins ----------------------------------------------------------------
+// --- pins via fold_pins ----------------------------------------------------------------
 
 #[test]
 fn pin_converts_abstract_to_manifest_via_parsed_sig() {
@@ -425,7 +425,7 @@ fn pin_converts_abstract_to_manifest_via_parsed_sig() {
         _ => panic!("Pinnable should resolve to a signature"),
     };
     // `S WITH {Elt = Number}` fixes the abstract member manifest.
-    let pinned = sig_schema.with_pins(&[("Elt".to_string(), KType::NUMBER)]);
+    let pinned = sig_schema.fold_pins(&[("Elt".to_string(), KType::NUMBER)], &test_run.types);
     assert!(pinned.abstract_members.is_empty());
     assert_eq!(pinned.manifest_members.get("Elt"), Some(&KType::NUMBER));
 
@@ -476,8 +476,8 @@ fn sig_to_sig_entailment_over_shared_abstract() {
     };
     // Two SIGs declaring the same abstract member and slot entail each other: the
     // substitution maps each super `Type` ref onto the sub's own abstract identity.
-    assert!(check(&a.with_pins(&[]), &b.with_pins(&[]), &test_run.types).is_ok());
-    assert!(check(&b.with_pins(&[]), &a.with_pins(&[]), &test_run.types).is_ok());
+    assert!(check(&a, &b, &test_run.types).is_ok());
+    assert!(check(&b, &a, &test_run.types).is_ok());
 }
 
 // --- substitute_sig_members units -----------------------------------------------------

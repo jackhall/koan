@@ -52,7 +52,7 @@ fn constants_match_freshly_interned_nodes() {
         "Dict<Any, Any>"
     );
     assert_eq!(
-        types.signature(SigSchema::empty(), Vec::new()),
+        types.signature(SigSchema::empty()),
         KType::EMPTY_SIGNATURE,
         "empty signature"
     );
@@ -163,7 +163,7 @@ fn non_empty_signature_renders_its_members_structurally() {
     let mut schema = SigSchema::empty();
     schema.value_slots.insert("zero".into(), KType::NUMBER);
     schema.value_slots.insert("label".into(), KType::STR);
-    let sig = types.signature(schema, Vec::new());
+    let sig = types.signature(schema);
     assert_eq!(sig.name(&types), "SIG (label: Str, zero: Number)");
 }
 

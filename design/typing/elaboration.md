@@ -222,7 +222,7 @@ type-namespace writes: each installs only its identity-bearing `KType` handle in
 value-language partition is total. There is no value-side schema or signature
 carrier; construction reads the schema straight off the identity, and a
 signature value is synthesized on demand from the type entry. SIG's single
-`KType::Signature { sig, pinned_slots }` variant serves both its constraint
+`KType::Signature { schema, .. }` variant serves both its constraint
 role and its value role, so it installs one type-side identity like every other
 nominal binder. `MODULE` is the one declarator that writes the *value* side: a
 module is a value, so it binds into `bindings.data`

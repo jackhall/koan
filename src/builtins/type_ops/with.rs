@@ -1,11 +1,13 @@
 //! `<sig> WITH {<Slot> = <Type>, …}` — infix signature specialization. Pins a subset of
-//! `sig`'s abstract-type slots, each to the type bound in the record literal, interning a
-//! `Signature` node carrying the same schema plus the `pinned_slots`. Pins **accumulate**
-//! across chained WITH — `(S WITH {A = Number}) WITH {B = Str}` carries both pins — and the
-//! pin set is name-sorted at the registry, so chained and one-shot specialization in any
-//! order intern the same type. A pin naming a slot already fixed — a manifest member or an
-//! earlier WITH's pin — normalizes away when equal to the fixed type (leaving signature
-//! identity unchanged) and is a type error otherwise.
+//! `sig`'s abstract-type slots, each to the type bound in the record literal, and **folds the
+//! pins into the schema** ([`SigSchema::fold_pins`]): each pinned abstract member becomes a
+//! manifest member, slot references to it substitute to the pinned type, and the folded schema
+//! interns through the one signature constructor. Specialization therefore accumulates across
+//! chained WITH, is order-independent, and introduces no second spelling —
+//! `Ordered WITH {Carrier = Number}` is the same type as the SIG declaring
+//! `Carrier = Number` outright. A pin naming a slot already fixed (a manifest member,
+//! including one an earlier WITH folded) normalizes away when equal to the fixed type and is a
+//! type error otherwise.
 //!
 //! The `{Slot = Type}` record literal eager-evaluates to a `KObject::Record` whose field
 //! values are resolved `Held::Type`s — a dotted `er.Carrier` value sub-dispatches in value
@@ -40,12 +42,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             _ => return done_err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
         },
     };
-    let (schema, existing_pins) = match ctx.types.node(sig_handle) {
-        TypeNode::Signature {
-            schema,
-            pinned_slots,
-            ..
-        } => (schema, pinned_slots),
+    let schema = match ctx.types.node(sig_handle) {
+        TypeNode::Signature { schema, .. } => schema,
         _ => return done_err(mismatch(sig_handle.name(ctx.types))),
     };
     let fields = match arg_object(ctx.args, "bindings") {
@@ -66,18 +64,14 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .map(|(n, t)| (n.clone(), *t))
         .collect();
     // Validation only: every pin must name a known slot and hold a type. A slot already fixed —
-    // by a manifest member or by an earlier WITH's pin — admits only an equal re-pin, which
-    // normalizes away (added to `dropped`, never recorded), so `S WITH {Tag = Number}` and
-    // `(S WITH {A = Number}) WITH {A = Number}` keep their source's signature identity; an
-    // unequal re-pin is a type error. `dropped` names the pins the composed `Signature` skips.
+    // a manifest member, which is also what an earlier WITH's fold left behind — admits only an
+    // equal re-pin, which normalizes away (added to `dropped`, never folded), so
+    // `S WITH {Tag = Number}` and `(S WITH {A = Number}) WITH {A = Number}` keep their source's
+    // signature identity; an unequal re-pin is a type error.
     let mut dropped: HashSet<String> = HashSet::new();
     for (name, value) in fields.iter() {
         let is_abstract = abstract_slots.contains(name);
         let manifest = manifest_members.get(name);
-        let pinned = existing_pins
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, t)| *t);
         if !is_abstract && manifest.is_none() {
             return done_err(KError::new(KErrorKind::ShapeError(format!(
                 "{} has no abstract type slot `{name}`",
@@ -108,22 +102,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                     pin_type.render(ctx.types),
                 ))));
             }
-        } else if let Some(prior) = pinned {
-            if *pin_type == prior {
-                dropped.insert(name.clone());
-            } else {
-                return done_err(KError::new(KErrorKind::ShapeError(format!(
-                    "`{}.{name}` is already pinned to `{}`; \
-                     WITH cannot re-pin it to `{}`",
-                    sig_handle.name(ctx.types),
-                    prior.render(ctx.types),
-                    pin_type.render(ctx.types),
-                ))));
-            }
         }
     }
 
-    let pinned: Vec<(String, KType)> = fields
+    let pins: Vec<(String, KType)> = fields
         .iter()
         .filter(|(name, _)| !dropped.contains(name.as_str()))
         .map(|(name, value)| match value {
@@ -133,9 +115,8 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             }
         })
         .collect();
-    Action::Done(Ok(ctx
-        .ctx
-        .type_carried(ctx.types.signature_pinned(sig_handle, pinned))))
+    let folded = schema.fold_pins(&pins, ctx.types);
+    Action::Done(Ok(ctx.ctx.type_carried(ctx.types.signature(folded))))
 }
 
 #[cfg(test)]
@@ -144,57 +125,72 @@ mod tests {
     use crate::machine::model::{KType, TypeNode};
     use crate::machine::run_root_storage;
 
-    /// `WITH` pins the named slot of *this* signature: the pinned result carries the same schema
-    /// (a signature carries no `sig_id`/`path` since ruling 12, so schema-content identity is what
-    /// witnesses "the same signature").
+    /// `WITH` folds the pin into the schema: the abstract member becomes a manifest one fixed to
+    /// the pinned type, so the specialized interface is a fully concrete schema, distinct from
+    /// the bare (still-abstract) source.
     #[test]
-    fn with_one_slot_pins_the_named_slot() {
+    fn with_one_slot_folds_the_pin_into_the_schema() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
         test_run.run("SIG Ordered = ((TYPE Carrier) (VAL compare :Number))");
-        let bare_schema_digest = {
-            let types = test_run.types();
-            let bare = scope.resolve_type("Ordered").expect("Ordered binds");
-            match types.node(bare) {
-                TypeNode::Signature { schema_digest, .. } => schema_digest,
-                _ => panic!("Ordered must bind a Signature KType"),
-            }
-        };
+        let bare = scope.resolve_type("Ordered").expect("Ordered binds");
         let result = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
+        assert_ne!(result, bare, "a pin refines away from the bare signature");
         match test_run.types().node(result) {
-            TypeNode::Signature {
-                schema_digest,
-                pinned_slots,
-                ..
-            } => {
-                assert_eq!(
-                    schema_digest, bare_schema_digest,
-                    "the pin is over the same signature schema",
+            TypeNode::Signature { schema, .. } => {
+                assert!(
+                    schema.abstract_members.is_empty(),
+                    "the pinned member is no longer abstract",
                 );
-                assert_eq!(pinned_slots.len(), 1);
-                assert_eq!(pinned_slots[0].0, "Carrier");
-                assert_eq!(pinned_slots[0].1, KType::NUMBER);
+                assert_eq!(schema.manifest_members.get("Carrier"), Some(&KType::NUMBER));
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
     }
 
-    /// Pins land name-sorted regardless of record-literal order — the canonical order the
-    /// registry establishes, so pin-set identity is order-independent.
+    /// Folding substitutes slot references to the pinned member: `compare :Carrier` becomes
+    /// `compare: Number` under `{Carrier = Number}`, so the specialized interface interns the
+    /// same content as a SIG declaring the member manifest outright.
     #[test]
-    fn with_two_slots_canonicalize_to_name_order() {
+    fn with_fold_substitutes_slot_references_and_unifies_with_concrete_sig() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        test_run.run(
+            "SIG Ordered = ((TYPE Carrier) (VAL compare :Carrier))\n\
+             SIG IntOrdered = ((LET Carrier = Number) (VAL compare :Carrier))",
+        );
+        let pinned = test_run.run_one_type(parse_one("Ordered WITH {Carrier = Number}"));
+        match test_run.types().node(pinned) {
+            TypeNode::Signature { schema, .. } => {
+                assert_eq!(
+                    schema.value_slots.get("compare"),
+                    Some(&KType::NUMBER),
+                    "the slot's reference to Carrier substitutes to the pinned type",
+                );
+            }
+            _ => panic!("expected Signature type, got {pinned:?}"),
+        }
+        let concrete = scope.resolve_type("IntOrdered").expect("IntOrdered binds");
+        assert_eq!(
+            pinned, concrete,
+            "a pinned interface and the equivalent concrete declaration are one type",
+        );
+    }
+
+    /// Pin-set identity is order-independent: both members land as manifest schema entries, so
+    /// either record-literal order interns the same specialized type.
+    #[test]
+    fn with_two_slots_fold_order_independently() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG OrderedSet = ((TYPE Elt) (TYPE Ord) (VAL tag :Number))");
         let result = test_run.run_one_type(parse_one("OrderedSet WITH {Ord = Str, Elt = Number}"));
         match test_run.types().node(result) {
-            TypeNode::Signature { pinned_slots, .. } => {
-                assert_eq!(pinned_slots.len(), 2);
-                assert_eq!(pinned_slots[0].0, "Elt");
-                assert_eq!(pinned_slots[0].1, KType::NUMBER);
-                assert_eq!(pinned_slots[1].0, "Ord");
-                assert_eq!(pinned_slots[1].1, KType::STR);
+            TypeNode::Signature { schema, .. } => {
+                assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::NUMBER));
+                assert_eq!(schema.manifest_members.get("Ord"), Some(&KType::STR));
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }
@@ -246,13 +242,14 @@ mod tests {
         );
         let err = test_run.run_one_err(parse_one("ByElt WITH {Elt = Str}"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("already pinned")),
-            "a conflicting re-pin must be the already-pinned ShapeError, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(m) if m.contains("manifest")),
+            "a conflicting re-pin hits the manifest-fixity rule (the fold made the first pin \
+             manifest), got {err}",
         );
     }
 
     /// A dotted `elem.Carrier` pin value sub-dispatches in value context to the abstract
-    /// `Carrier` and surfaces in `pinned_slots` — a dotted pin value the keyworded record-literal
+    /// `Carrier` and folds into the schema's manifest members — a dotted pin value the keyworded record-literal
     /// handler could not take (was `#[ignore]`d there).
     #[test]
     fn with_inner_module_attr_path_pins_abstract_type() {
@@ -267,15 +264,14 @@ mod tests {
         let result = test_run.run_one_type(parse_one("Set WITH {Elt = elem.Carrier}"));
         let types = test_run.types();
         match types.node(result) {
-            TypeNode::Signature { pinned_slots, .. } => {
-                assert_eq!(pinned_slots.len(), 1);
-                assert_eq!(pinned_slots[0].0, "Elt");
-                match types.node(pinned_slots[0].1) {
+            TypeNode::Signature { schema, .. } => {
+                let elt = schema
+                    .manifest_members
+                    .get("Elt")
+                    .expect("Elt folds to a manifest member");
+                match types.node(*elt) {
                     TypeNode::AbstractType { name, .. } => assert_eq!(name, "Carrier"),
-                    _ => panic!(
-                        "expected pinned Elt = AbstractType(Carrier), got {:?}",
-                        pinned_slots[0].1
-                    ),
+                    _ => panic!("expected Elt = AbstractType(Carrier), got {elt:?}"),
                 }
             }
             _ => panic!("expected Signature type, got {result:?}"),
@@ -302,7 +298,7 @@ mod tests {
         }
     }
 
-    /// A pin equal to a manifest member's fixed type normalizes away: `pinned_slots` stays
+    /// A pin equal to a manifest member's fixed type normalizes away: the schema stays
     /// empty and the resulting signature compares equal to the bare sig.
     #[test]
     fn with_equal_manifest_pin_normalizes_away() {
@@ -314,15 +310,6 @@ mod tests {
             .resolve_type("Tagged")
             .expect("Tagged must bind a Signature KType");
         let result = test_run.run_one_type(parse_one("Tagged WITH {Tag = Number}"));
-        match test_run.types().node(result) {
-            TypeNode::Signature { pinned_slots, .. } => {
-                assert!(
-                    pinned_slots.is_empty(),
-                    "equal manifest pin must not record a pinned slot, got {pinned_slots:?}"
-                );
-            }
-            _ => panic!("expected Signature type, got {result:?}"),
-        }
         assert_eq!(
             result, bare,
             "an equal manifest pin must preserve signature identity"
@@ -353,22 +340,19 @@ mod tests {
         }
     }
 
-    /// A mixed record pins only the abstract slot; the equal manifest pin normalizes away.
+    /// A mixed record folds only the abstract slot; the equal manifest pin normalizes away,
+    /// leaving the member exactly as declared.
     #[test]
-    fn with_mixed_record_records_only_abstract_pin() {
+    fn with_mixed_record_folds_only_abstract_pin() {
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         test_run.run("SIG Mixed = ((TYPE Elt) (LET Tag = Number) (VAL value :Number))");
         let result = test_run.run_one_type(parse_one("Mixed WITH {Elt = Str, Tag = Number}"));
         match test_run.types().node(result) {
-            TypeNode::Signature { pinned_slots, .. } => {
-                assert_eq!(
-                    pinned_slots.len(),
-                    1,
-                    "only the abstract Elt pin is recorded, got {pinned_slots:?}"
-                );
-                assert_eq!(pinned_slots[0].0, "Elt");
-                assert_eq!(pinned_slots[0].1, KType::STR);
+            TypeNode::Signature { schema, .. } => {
+                assert!(schema.abstract_members.is_empty());
+                assert_eq!(schema.manifest_members.get("Elt"), Some(&KType::STR));
+                assert_eq!(schema.manifest_members.get("Tag"), Some(&KType::NUMBER));
             }
             _ => panic!("expected Signature type, got {result:?}"),
         }

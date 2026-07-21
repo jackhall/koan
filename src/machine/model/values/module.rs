@@ -67,9 +67,9 @@ impl<'a> Module<'a> {
 
     /// Install the module's self-sig. Runs exactly once, at the end of construction (after the
     /// `type_members` / `slot_type_tags` writes that feed the derivation) — a double-seal is a
-    /// construction bug. Interns `schema` as an unpinned `Signature` node and stores its handle.
+    /// construction bug. Interns `schema` as a `Signature` node and stores its handle.
     pub fn seal_self_sig(&self, schema: SigSchema, types: &TypeRegistry) {
-        let handle = types.signature(schema, Vec::new());
+        let handle = types.signature(schema);
         if self.self_sig.set(handle).is_err() {
             panic!("self-sig sealed twice on module `{}`", self.path);
         }
@@ -104,22 +104,9 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Pin agreement for a `WITH`-specialized signature slot: every pinned slot names a type
-    /// member the self-sig fixes manifest-equal. Self-sigs carry no abstract members, so a
-    /// manifest-member lookup is the whole rule — the same manifest agreement `sig_subtype`
-    /// applies to a pinned schema's residue.
-    pub fn satisfies_pins(&self, pins: &[(String, KType)], types: &TypeRegistry) -> bool {
-        let sig = self.self_sig(types);
-        pins.iter().all(|(name, expected)| {
-            sig.manifest_members
-                .get(name)
-                .is_some_and(|m| m == expected)
-        })
-    }
-
     /// Whether this module satisfies the interface `schema` — the admission rule a signature
-    /// slot applies to a module value (pins are checked separately by the caller, as they live on
-    /// the signature node, not here; see [`Self::satisfies_pins`]). The single entry point for
+    /// slot applies to a module value (a `WITH` pin is a manifest member of the folded schema,
+    /// checked by the same relation). The single entry point for
     /// module satisfaction: the empty interface admits every module (the lattice top); a
     /// digest-equal schema short-circuits (sound by reflexivity of `sig_subtype`, and broader
     /// than a same-module check — any content-equal pair matches, not just the same module);

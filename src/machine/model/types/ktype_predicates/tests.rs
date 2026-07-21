@@ -332,7 +332,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
             scope,
             "Ordered".into(),
         ));
-    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types), Vec::new());
+    let kt_sig: KType = types.signature(SigSchema::project_decl(sig_scope, &types));
     // A signature is a type value: the `:Type` lattice top admits it; the proper tier does not.
     assert!(t.accepts_part(&spliced_part(Carried::Type(kt_sig)), &types));
     assert!(!KType::of_kind(KKind::ProperType)
@@ -436,9 +436,9 @@ fn user_type_specificity_lattice() {
     assert!(!ctor_kind.is_more_specific_than(point, &types));
 }
 
-/// `Signature` `pinned_slots` specificity rules (constraint role):
-/// - A non-empty `pinned_slots` strictly refines an empty same-schema form when every pin in the
-///   empty side appears (with equal `KType`) in the non-empty side.
+/// Folded-pin `Signature` specificity rules (constraint role):
+/// - A folded pin strictly refines the pin-free form: the extra manifest member satisfies
+///   forward and blocks reverse.
 /// - Different interfaces compare by structural `sig_subtype`: two genuinely distinct interfaces
 ///   (disjoint value slots) are mutually unsatisfying, hence incomparable (neither strictly
 ///   refines).
@@ -464,16 +464,25 @@ fn is_more_specific_for_pinned_signature_bound() {
         value_slots: [("b".to_string(), KType::NUMBER)].into_iter().collect(),
     };
 
-    let bare = types.signature(ordered_schema.clone(), Vec::new());
-    let pinned_number =
-        types.signature(ordered_schema.clone(), vec![("Type".into(), KType::NUMBER)]);
-    let pinned_str = types.signature(ordered_schema.clone(), vec![("Type".into(), KType::STR)]);
-    let pinned_two = types.signature(
-        ordered_schema.clone(),
-        vec![("Type".into(), KType::NUMBER), ("Elt".into(), KType::STR)],
+    let bare = types.signature(ordered_schema.clone());
+    let pinned_number = types.signature(
+        ordered_schema
+            .clone()
+            .fold_pins(&[("Type".into(), KType::NUMBER)], &types),
     );
-    let other_sig = types.signature(hashed_schema, vec![("Type".into(), KType::NUMBER)]);
-    let pinned_elt = types.signature(ordered_schema, vec![("Elt".into(), KType::NUMBER)]);
+    let pinned_str = types.signature(
+        ordered_schema
+            .clone()
+            .fold_pins(&[("Type".into(), KType::STR)], &types),
+    );
+    let pinned_two = types.signature(ordered_schema.clone().fold_pins(
+        &[("Type".into(), KType::NUMBER), ("Elt".into(), KType::STR)],
+        &types,
+    ));
+    let other_sig =
+        types.signature(hashed_schema.fold_pins(&[("Type".into(), KType::NUMBER)], &types));
+    let pinned_elt =
+        types.signature(ordered_schema.fold_pins(&[("Elt".into(), KType::NUMBER)], &types));
 
     assert!(pinned_number.is_more_specific_than(bare, &types));
     assert!(!bare.is_more_specific_than(pinned_number, &types));
@@ -812,14 +821,11 @@ fn module_object_ktype_reports_self_sig() {
         .insert("Elt".into(), KType::NUMBER);
     m.seal_self_sig(SigSchema::raw_self_sig(m), &types);
     let kt = KObject::Module(m).ktype();
-    // Ruling 12: the `Signature` node carries no `sig_id`, so a module's principal type is a
-    // Signature with no `WITH` pins — identity is its self-sig *content*, checked below.
-    assert!(matches!(
-        types.node(kt),
-        TypeNode::Signature { pinned_slots, .. } if pinned_slots.is_empty()
-    ));
+    // Ruling 12: the `Signature` node carries no `sig_id` — identity is its self-sig
+    // *content*, checked below.
+    assert!(matches!(types.node(kt), TypeNode::Signature { .. }));
     // Identity is content: the module's type equals its own re-derived self-sig.
-    assert_eq!(kt, types.signature(SigSchema::raw_self_sig(m), Vec::new()));
+    assert_eq!(kt, types.signature(SigSchema::raw_self_sig(m)));
 
     // A second module with the identical interface shares the type — content, not mint.
     let child2 = region
@@ -878,11 +884,15 @@ fn matches_value_admits_module_object_via_signature_slot() {
         .insert("Type".into(), KType::NUMBER);
     m.seal_self_sig(SigSchema::raw_self_sig(m), &types);
 
-    let declared = types.signature(schema.clone(), Vec::new());
+    let declared = types.signature(schema.clone());
     assert!(declared.matches_value(&KObject::Module(m), &types));
 
-    let pinned_ok = types.signature(schema.clone(), vec![("Type".into(), KType::NUMBER)]);
-    let pinned_bad = types.signature(schema, vec![("Type".into(), KType::STR)]);
+    let pinned_ok = types.signature(
+        schema
+            .clone()
+            .fold_pins(&[("Type".into(), KType::NUMBER)], &types),
+    );
+    let pinned_bad = types.signature(schema.fold_pins(&[("Type".into(), KType::STR)], &types));
     assert!(pinned_ok.matches_value(&KObject::Module(m), &types));
     assert!(!pinned_bad.matches_value(&KObject::Module(m), &types));
 

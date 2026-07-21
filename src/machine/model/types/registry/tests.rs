@@ -170,7 +170,7 @@ fn the_constant_nodes_are_pre_seeded() {
     for handle in [
         seeded.list(any),
         seeded.dict(any, any),
-        seeded.signature(SigSchema::empty(), Vec::new()),
+        seeded.signature(SigSchema::empty()),
     ] {
         assert!(snapshot.contains_key(&handle.digest()));
     }

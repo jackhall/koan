@@ -93,16 +93,33 @@ impl SigSchema {
         }
     }
 
-    /// Apply `WITH` pins to a schema: clone it and convert each pinned abstract member into a
-    /// manifest one fixed to the pin's type (a pin naming an already-manifest member overwrites
-    /// it — unreachable through `WITH`, which normalizes equal pins away and errors on unequal
-    /// ones). A no-op clone when `pins` is empty (a self-sig or `:Module`, which carry no
-    /// abstract members to fold).
-    pub fn with_pins(&self, pins: &[(String, KType)]) -> SigSchema {
+    /// Fold `WITH` pins into a schema, eagerly and completely: each pinned abstract member
+    /// becomes a manifest member fixed to the pin's type, and every reference to it in the
+    /// remaining member and slot types is substituted with the pinned type
+    /// ([`substitute_sig_members`]). The folded schema is fully concrete in the pinned members —
+    /// `Ordered WITH {Carrier = Number}` interns the same content a SIG declaring
+    /// `Carrier = Number` outright (or a structurally identical module self-sig) carries, so
+    /// specialization introduces no second spelling of a concrete interface. A no-op clone when
+    /// `pins` is empty.
+    pub fn fold_pins(&self, pins: &[(String, KType)], types: &TypeRegistry) -> SigSchema {
         let mut schema = self.clone();
+        if pins.is_empty() {
+            return schema;
+        }
+        let substitutions: HashMap<String, KType> =
+            pins.iter().map(|(n, t)| (n.clone(), *t)).collect();
         for (name, kt) in pins {
             schema.abstract_members.remove(name);
             schema.manifest_members.insert(name.clone(), *kt);
+        }
+        if let Some(sig_id) = schema.sig_id {
+            for kt in schema
+                .manifest_members
+                .values_mut()
+                .chain(schema.value_slots.values_mut())
+            {
+                *kt = substitute_sig_members(*kt, sig_id, &substitutions, types);
+            }
         }
         schema
     }

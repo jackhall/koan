@@ -160,8 +160,8 @@ transparent reads stay concrete.
 principal **self-sig** — a [`SigSchema`](../../src/machine/model/types/sig_schema.rs) of its
 abstract members (always none — `TYPE` is SIG-body-only), manifest type members, and
 value-slot types — derived once at creation and sealed immutable (`Module::seal_self_sig`;
-a bare construction derives it lazily via `raw_self_sig`). A signature likewise projects to a
-`SigSchema` (`SigSchema::with_pins`, which folds any `WITH` pins in). Ascription (`check_satisfies`,
+a bare construction derives it lazily via `raw_self_sig`). A signature *is* a
+`SigSchema` (`WITH` pins are already folded into it at intern time). Ascription (`check_satisfies`,
 run for both `:|` and `:!`) holds iff `module.self_sig <: sig-schema` under `sig_subtype`:
 `Sub <: Super` iff `Sub` supplies every member `Super` names (width — extra `Sub` members are
 ignored), with each manifest member *equal*, each abstract member present at the matching
@@ -178,19 +178,20 @@ digests (a pure cache — types are immutable).
 
 Dispatch matching of a `:Sig` slot runs the same structural check ascription asserts
 ([`Module::satisfies_sig_content`](../../src/machine/model/values/module.rs), memoized on the
-pair of schema content digests, with a content-equality fast path that records nothing), plus,
-for a `WITH`-pinned slot, `satisfies_pins` — every pin naming a self-sig
-manifest member fixed equal
-([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs)). Ascription is
+pair of schema content digests, with a content-equality fast path that records nothing). A
+`WITH` pin is a manifest member of the folded schema, so pinned-slot agreement is the
+manifest-equality leg of that one check. Ascription is
 assertion plus view construction, never an admission gate: an unascribed module whose self-sig
 satisfies a signature is admitted by that signature's slot directly.
-`WITH` pins abstract slots, and pins **accumulate** across chained `WITH` —
-`(S WITH {A = Number}) WITH {B = Str}` carries both pins. The pin set is canonicalized
-name-sorted at the registry's signature constructors, so one-shot and chained specialization in
-any order intern the same type. A pin naming a slot already fixed — a manifest member or an
-earlier `WITH` pin — is normalized away when it equals the fixed type (leaving signature
-identity unchanged) and is a type error when it differs
-([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
+`WITH` pins abstract slots by **folding each pin into the schema**
+([`SigSchema::fold_pins`](../../src/machine/model/types/sig_schema.rs)): the pinned abstract
+member becomes a manifest member, and slot references to it substitute to the pinned type.
+Specialization therefore accumulates across chained `WITH`, is order-independent, and admits
+no second spelling — `Ordered WITH {Carrier = Number}` interns the same type as a SIG declaring
+`Carrier = Number` outright (or a structurally identical module self-sig). A pin naming a slot
+already fixed — a manifest member, including one an earlier `WITH` folded — is normalized away
+when it equals the fixed type (leaving signature identity unchanged) and is a type error when
+it differs ([`type_ops/with.rs`](../../src/builtins/type_ops/with.rs)).
 
 ATTR's `access_module_member`
 ([`attr.rs`](../../src/builtins/attr.rs)), on a value-side slot hit with a
@@ -217,7 +218,7 @@ principal signature — `ktype()` reports
 `KType::Signature { content, .. }` sharing the module's sealed self-sig content, so dispatch
 trusts the carried self-sig. A signature value rides the
 [`Carried::Type`](../../src/machine/model/values/carried.rs) arm as
-`KType::Signature { content, pinned_slots }` — the same arm that carries `Number`,
+`KType::Signature { schema, .. }` — the same arm that carries `Number`,
 `Str`, and builtin type values. A module value flows through `LET`, ATTR, and function
 calls like any other value: there is no separate pack/unpack form, no
 `(module M)` construction syntax, and no `(val m)` projection. A module
@@ -252,7 +253,7 @@ parameter door. **No binding door installs a module into `bindings.types`**, and
 `KType` carries no module variant.
 
 `SIG` declarations still bind **type-side**: finalize installs
-`KType::Signature { sig, pinned_slots }` into `bindings.types` via
+`KType::Signature { schema, .. }` into `bindings.types` via
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), and a `LET S2 =
 Ordered` signature alias routes through `register_type` against that entry. A
 signature identity rides the `Type` arm, surfaced from the type entry on demand by
@@ -282,7 +283,7 @@ LET SetType = (TYPE OF int_set)
 as an ordinary type value — `TYPE OF 5` is `Number`, `TYPE OF xs` is
 `LIST OF Number` — so it is general over the value channel, not a module-specific
 form. Applied to a module it yields that module's **principal signature**
-(`KType::Signature { content: <m's self-sig content>, pinned_slots: [] }`), which is how a
+(`KType::Signature { schema: <m's self-sig> }`), which is how a
 module reaches a slot, a return, or a `LET` type alias. Its `value` slot is
 `KType::Any`, which admits both channels, so a *type* argument reaches the body and
 is refused there with a diagnostic rather than falling through dispatch as a miss;
@@ -319,9 +320,9 @@ and [`type_of/tests.rs`](../../src/builtins/type_ops/type_of/tests.rs).
 Each [`Module`](../../src/machine/model/values/module.rs) seals a principal self-sig
 ([`SigSchema`](../../src/machine/model/types/sig_schema.rs)) at creation — the immutable
 structural type the satisfaction relation reads (see §"Satisfaction and `WITH`").
-The `Signature` node `{ schema: SigSchema, schema_digest, pinned_slots }` carries the owned
-schema, its content digest, and any `WITH` abstract-type pins (name-sorted — the canonical
-order pin-set identity digests over) — no binder and no label. There
+The `Signature` node `{ schema: SigSchema, schema_digest }` carries the owned
+schema and its content digest — no binder, no label, and no pin set (`WITH` folds its pins
+into the schema before interning). There
 is one kind of signature type: a `SIG` declaration, a module value's principal self-sig, and the
 empty `:Module` interface differ only in the schema, not in node kind. A `KType` is a `Copy`
 registry handle, so it holds no region pointer.
@@ -330,8 +331,9 @@ The `AbstractType { source, name, param_names, nonce }` node carries an abstract
 textually identical SIG declarations project to one schema), its `param_names` empty for a proper
 type or naming the parameters of a constructor slot, and its `nonce` the generativity mint
 (`None` for a SIG-body declaration, the per-call ascription module for an opaque mint). Module
-identity is by `module.scope_id()`; signature identity is by schema *content* (`schema_digest`) +
-`pinned_slots`, so two textually identical declarations name one type. Abstract-type identity is
+identity is by `module.scope_id()`; signature identity is by schema *content* (`schema_digest`
+alone — `WITH` pins are schema content by folding), so two textually identical declarations
+name one type. Abstract-type identity is
 by all four node fields — `param_names` feeds kind classification and `source` feeds member
 substitution, so both are functional reads, not derivable payload. Satisfaction requires name
 agreement, so two otherwise identical SIG declarations whose constructor slot names its parameter
@@ -359,10 +361,10 @@ value itself, and `:Signature` never admits a satisfying module.
 When a module satisfies two distinct signature slots at once, dispatch orders them by
 **structural subtyping**, not by declaration order. The rule is uniform over every signature
 type — `SIG`-declared, a module's self-sig, or the empty interface — since all three are the
-same owned-schema shape: for two contents with different `sig_id`s, `:A` is more specific than
-`:B` iff `A`'s pin-folded schema is a *strict* `sig_subtype` of `B`'s — the forward
-direction holds and the reverse fails (`WITH` pins fold in via `with_pins` on both
-sides). Contents sharing a `sig_id` instead compare by pin refinement, and any non-empty
+same owned-schema shape: `:A` is more specific than
+`:B` iff `A`'s schema is a *strict* `sig_subtype` of `B`'s — the forward
+direction holds and the reverse fails. A `WITH` specialization refines its source by the same
+rule (its folded manifest member satisfies forward and blocks reverse), and any non-empty
 signature refines the empty interface. A slot whose signature requires strictly more
 (`Wide` = `Base` plus an extra member) wins over the broader one. Two structurally-identical
 signatures are mutually satisfying — forward and reverse both hold — so neither strictly

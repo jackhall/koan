@@ -110,7 +110,7 @@ concrete `KObject` has a `TypeNode` variant:
   nothing on its own; `TYPE OF` is the door that surfaces that self-sig as a type
   value (`m :(TYPE OF int_ord)`, `-> :(TYPE OF er)`) — see
   [modules.md § Modules in type position](../modules.md#modules-in-type-position-type-of).
-  `Signature { schema: SigSchema, schema_digest, pinned_slots: Vec<(String, KType)> }`
+  `Signature { schema: SigSchema, schema_digest }`
   serves both signature roles in one node. The node carries **no binder and no label**:
   a `SIG`-declared interface, a module's self-sig, and the empty `:Module` top are one
   shape differing only in schema, so two textually identical `SIG` declarations are one
@@ -148,9 +148,9 @@ concrete `KObject` has a `TypeNode` variant:
   lowers to in an FN parameter slot, so `:Ordered` means "module
   satisfying Ordered," never "the signature value itself"), while a
   signature *value* (a `Signature` handle flowing in the `Type` arm) is matched only
-  by the `OfKind(Signature)` wildcard. `pinned_slots` (empty for a bare
-  signature) carries `WITH` abstract-type specializations, so a `WITH` result is
-  introspectable too.
+  by the `OfKind(Signature)` wildcard. A `WITH` specialization folds its pins into the
+  schema as manifest members before interning, so a `WITH` result is an ordinary
+  concrete-membered signature, introspectable like any other.
 - Higher-kinded application: `ConstructorApply { constructor, arguments: Record<KType> }`
   — structural identity by `(constructor, arguments)`, mirror of `List` / `Dict`,
   with `Record`'s order-blind identity. `arguments` maps each of the

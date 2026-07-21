@@ -103,12 +103,12 @@ pub enum TypeNode {
     ///
     /// The node carries no binder and no label: two textually identical SIG declarations are one
     /// type. `schema_digest` is [`schema_content_digest`](super::type_digest::schema_content_digest)
-    /// of `schema`, computed once at construction; `pinned_slots` carries `WITH` abstract-type
-    /// specializations, order-preserving so identity is deterministic.
+    /// of `schema`, computed once at construction. `WITH` specialization folds its pins into the
+    /// schema before interning ([`SigSchema::fold_pins`]), so the node stores no pin set — a
+    /// specialized interface and the equivalent concrete declaration are one content.
     Signature {
         schema: SigSchema,
         schema_digest: TypeDigest,
-        pinned_slots: Vec<(String, KType)>,
     },
     /// Confined carrier for a synthesized FN `ret` slot whose source return is deferred — a
     /// per-call-elaborated return like `-> er` or `-> er.Carrier`. Holds only the hashable

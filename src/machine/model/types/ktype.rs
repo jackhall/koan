@@ -62,7 +62,7 @@ impl KType {
     pub const DICT_ANY_ANY: KType = KType(TypeDigest(0xf9b9d64d_aa69edda_e7a59f82_4e0f5015));
     /// The empty signature — top of the module lattice, the type `:Module` lowers to. It
     /// constrains nothing, so every module value satisfies it.
-    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0xaba2f8c7_47c0f5ed_9783abfe_50ce36c0));
+    pub const EMPTY_SIGNATURE: KType = KType(TypeDigest(0x1660d74d_20447364_cde2f1b9_3ed245f6));
 
     /// The type-accepting slot admitting `kind` — one of the five pre-seeded `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
@@ -155,22 +155,11 @@ impl KType {
             TypeNode::Signature {
                 schema,
                 schema_digest,
-                pinned_slots,
             } => {
-                let base = if schema_digest == empty_schema_digest() {
+                if schema_digest == empty_schema_digest() {
                     "Module".to_string()
                 } else {
                     render_sig_schema(&schema, types)
-                };
-                if pinned_slots.is_empty() {
-                    base
-                } else {
-                    // Display-only; does not round-trip through the parser.
-                    let inner: Vec<String> = pinned_slots
-                        .iter()
-                        .map(|(name, kt)| format!("{} = {}", name, kt.name(types)))
-                        .collect();
-                    format!("({} WITH {{{}}})", base, inner.join(", "))
                 }
             }
             // Diagnostic only: a sibling reference is meaningful against its window and never

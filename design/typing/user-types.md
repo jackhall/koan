@@ -47,7 +47,7 @@ for diagnostic rendering only and are not registered as writable surface names (
 in [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
 
 Signatures live in their own KType variant —
-[`KType::Signature { sig, pinned_slots }`](../../src/machine/model/types/ktype.rs)
+[`KType::Signature { schema, .. }`](../../src/machine/model/types/ktype.rs)
 for first-class signature values (and for the satisfies-this-signature slot
 constraint — one variant, disambiguated by position) — with
 `KType::OfKind(KKind::Signature)` as the matching wildcard, alongside
@@ -227,7 +227,7 @@ in the resolver ladder (see
 
 SIG installs the same way, through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs): a single
-`KType::Signature { sig, pinned_slots }` identity in `bindings.types` serves
+`KType::Signature { schema, .. }` identity in `bindings.types` serves
 *both* roles. As a slot annotation (`er :Ordered`) it is the constraint form —
 "any module satisfying Ordered"; as a value
 (`KType::Signature { .. }` in the `Type` arm) it is the identity-bearing signature

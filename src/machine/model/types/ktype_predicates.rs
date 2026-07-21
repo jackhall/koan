@@ -106,51 +106,31 @@ impl KType {
                 TypeNode::Signature {
                     schema: schema_a,
                     schema_digest: digest_a,
-                    pinned_slots: pins_a,
                 },
                 TypeNode::Signature {
                     schema: schema_b,
                     schema_digest: digest_b,
-                    pinned_slots: pins_b,
                 },
             ) => {
                 let empty = empty_schema_digest();
-                let a_is_top = digest_a == empty && pins_a.is_empty();
-                let b_is_top = digest_b == empty && pins_b.is_empty();
                 // Any non-empty signature refines the empty interface (the lattice top). Keyed on
                 // empty *content*, not the mint that produced it, so a zero-member `SIG E = ()` is
-                // the same top as `:Module` — and pins must agree (an empty interface pins
-                // nothing).
-                if b_is_top && !a_is_top {
+                // the same top as `:Module`.
+                if digest_b == empty && digest_a != empty {
                     return true;
                 }
                 if digest_a == digest_b {
-                    // Same interface, differing only in `WITH` pins: strict refinement iff
-                    // `pins_a` covers every `(name, kt)` in `pins_b` with an equal type AND
-                    // carries at least one constraint `pins_b` lacks. Disjoint or
-                    // same-key-different-type pin sets are incomparable.
-                    if pins_a.len() <= pins_b.len() {
-                        return false;
-                    }
-                    return pins_b.iter().all(|(name, expected)| {
-                        pins_a
-                            .iter()
-                            .any(|(n, actual)| n == name && actual == expected)
-                    });
+                    // One content is one handle — equal is not strictly more specific. (A `WITH`
+                    // specialization folds its pins into the schema, so a refinement always
+                    // lands a distinct content and takes the structural compare below —
+                    // `S WITH {A = Number} ≺ S` because the folded manifest strictly
+                    // `sig_subtype`s the abstract original.)
+                    return false;
                 }
-                // Two different interfaces — SIG-declared or self-sig, any combination — compare
-                // by strict structural subtyping over their pin-folded schemas: `a ≺ b` iff `a`'s
-                // schema strictly `sig_subtype`s `b`'s. Two structurally-identical schemas are
-                // one handle and never reach here.
-                sig_schema_more_specific(
-                    &schema_a,
-                    &pins_a,
-                    self.digest(),
-                    &schema_b,
-                    &pins_b,
-                    other.digest(),
-                    types,
-                )
+                // Two different interfaces — SIG-declared, `WITH`-specialized, or self-sig, any
+                // combination — compare by strict structural subtyping: `a ≺ b` iff `a`'s schema
+                // strictly `sig_subtype`s `b`'s.
+                sig_schema_more_specific(&schema_a, self.digest(), &schema_b, other.digest(), types)
             }
             // A nominal-family kind out-specifies `OfKind(ProperType)` — `OfKind(NewType) ≺
             // OfKind(ProperType)`. (Against `Identifier` / `OfKind(ProperType)` the generic rule
@@ -255,16 +235,14 @@ impl KType {
                 _ => false,
             },
             // Constraint role: a signature slot is satisfied by a module value on the Object
-            // channel, via [`Module::satisfies_sig_schema`] plus pinned-slot agreement.
+            // channel, via [`Module::satisfies_sig_schema`]. `WITH` pins are folded into the
+            // schema as manifest members, so pinned-slot agreement is the manifest-equality leg
+            // of the same structural check.
             TypeNode::Signature {
                 schema,
                 schema_digest,
-                pinned_slots,
             } => match obj {
-                KObject::Module(m) => {
-                    m.satisfies_sig_schema(&schema, schema_digest, types)
-                        && (pinned_slots.is_empty() || m.satisfies_pins(&pinned_slots, types))
-                }
+                KObject::Module(m) => m.satisfies_sig_schema(&schema, schema_digest, types),
                 _ => false,
             },
             // A type-accepting slot is **type-channel-only**: no runtime `KObject` is a type
@@ -418,18 +396,17 @@ impl KType {
             TypeNode::Union { members } => members.iter().any(|m| m.accepts_carried(c, types)),
             TypeNode::AbstractType { .. } => c.ktype(types) == self,
             // Constraint role: a `:S` slot admits a *module* whose self-sig satisfies the
-            // signature (+ pinned-slot residue for a `WITH`-pinned slot) — no ascription
-            // required. A module is a value, so both the overload-picker probe and the built
-            // argument cell carry it on the Object channel. A signature *value* is admitted by
-            // the `OfKind(Signature)` wildcard above, never here.
+            // signature — no ascription required. A `WITH` pin is a manifest member of the
+            // folded schema, checked by the same structural relation. A module is a value, so
+            // both the overload-picker probe and the built argument cell carry it on the Object
+            // channel. A signature *value* is admitted by the `OfKind(Signature)` wildcard
+            // above, never here.
             TypeNode::Signature {
                 schema,
                 schema_digest,
-                pinned_slots,
             } => match c {
                 Carried::Object(KObject::Module(m)) => {
                     m.satisfies_sig_schema(&schema, schema_digest, types)
-                        && (pinned_slots.is_empty() || m.satisfies_pins(&pinned_slots, types))
                 }
                 _ => false,
             },
@@ -549,13 +526,10 @@ impl KType {
 /// the reverse must fail, or the two are mutually-satisfying and neither strictly refines. Both
 /// directions record a verdict under `SigSatisfies`, keyed by the two signature handles' digests
 /// (which fold their pins, so the key is exact).
-#[allow(clippy::too_many_arguments)]
 fn sig_schema_more_specific(
     a: &SigSchema,
-    pins_a: &[(String, KType)],
     digest_a: TypeDigest,
     b: &SigSchema,
-    pins_b: &[(String, KType)],
     digest_b: TypeDigest,
     types: &TypeRegistry,
 ) -> bool {
@@ -564,16 +538,13 @@ fn sig_schema_more_specific(
     if let (Some(forward), Some(reverse)) = (forward_hit, reverse_hit) {
         return forward && !reverse;
     }
-    // At least one direction missed: build both schemas once (the walk we're memoizing).
-    let schema_a = a.with_pins(pins_a);
-    let schema_b = b.with_pins(pins_b);
     let forward = forward_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(&schema_a, &schema_b, types).is_ok();
+        let verdict = sig_subtype(a, b, types).is_ok();
         types.record_verdict(digest_a, digest_b, Relation::SigSatisfies, verdict);
         verdict
     });
     let reverse = reverse_hit.unwrap_or_else(|| {
-        let verdict = sig_subtype(&schema_b, &schema_a, types).is_ok();
+        let verdict = sig_subtype(b, a, types).is_ok();
         types.record_verdict(digest_b, digest_a, Relation::SigSatisfies, verdict);
         verdict
     });

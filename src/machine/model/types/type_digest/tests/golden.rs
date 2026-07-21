@@ -279,7 +279,7 @@ fn fixed_composite_digests_are_pinned() {
 }
 
 /// The module-lattice top, both halves: the zero-member schema content digest and the signature
-/// that wraps it with no `WITH` pins.
+/// that wraps it.
 #[test]
 fn empty_signature_digests_are_pinned() {
     let types = TypeRegistry::new();
@@ -290,8 +290,8 @@ fn empty_signature_digests_are_pinned() {
     );
     assert_handle_pinned(
         "empty signature",
-        types.signature(SigSchema::empty(), Vec::new()),
-        0xaba2f8c7_47c0f5ed_9783abfe_50ce36c0,
+        types.signature(SigSchema::empty()),
+        0x1660d74d_20447364_cde2f1b9_3ed245f6,
     );
 }
 

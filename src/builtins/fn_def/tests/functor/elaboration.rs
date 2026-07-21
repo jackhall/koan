@@ -39,7 +39,7 @@ fn elaborator_lowers_ktype_value_binding() {
 }
 
 /// A parameter typed `er :Ordered` lowers via `elaborate_type_identifier` into
-/// `KType::Signature { content, pinned_slots: [] }` with `content.sig_id` matching the
+/// `KType::Signature { schema, .. }` with `schema.sig_id` matching the
 /// declaring SIG's decl-scope id. Also pins that the SIG and FN can land in the
 /// same batch — the FN's signature elaboration parks on the SIG placeholder.
 #[test]
@@ -64,11 +64,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(kw, "USE_ORD");
             assert_eq!(name, "er");
             match test_run.types.node(*ktype) {
-                TypeNode::Signature {
-                    schema,
-                    pinned_slots,
-                    ..
-                } => {
+                TypeNode::Signature { schema, .. } => {
                     assert_eq!(
                         schema.sig_id, sig_id,
                         "sig_id must match the declaring SIG's decl-scope id"
@@ -76,7 +72,6 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                     // The node carries no declaration label (ruling 12); a non-empty interface
                     // renders structurally in member-name order.
                     assert_eq!(ktype.name(&test_run.types), "SIG (compare: Number)");
-                    assert!(pinned_slots.is_empty(), "bare Ordered has no pinned slots");
                 }
                 _ => panic!("expected Signature, got {ktype:?}"),
             }

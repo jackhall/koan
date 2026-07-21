@@ -193,7 +193,7 @@ schema (or signature) in its `KType` identity and writes only
 `bindings.types`, so a reader finds the rule in one place (the identity owns
 the schema) rather than as a dual-write contract restated across the typing
 docs. SIG folds its constraint and value forms into one
-`KType::Signature { sig, pinned_slots }` variant the same way, so no nominal
+`KType::Signature { schema, .. }` variant the same way, so no nominal
 binder dual-writes — the seam is dissolved rather than merely documented.
 
 A **straddle** is a strongly-connected component split across a module
