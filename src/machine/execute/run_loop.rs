@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::machine::core::scope_frame;
 use crate::machine::core::{FrameStorage, KoanRegionExt, KoanStorageProfile};
 use crate::machine::model::CarriedFamily;
-use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeId};
+use crate::machine::{CarrierWitness, FrameSet, KError, KErrorKind, KoanRegion, NodeHandle, NodeId};
 use crate::witnessed::{
     erase_to_static, reattachable, RegionHandleFamily, SealedExtern, Witnessed,
 };
@@ -199,7 +199,16 @@ impl<'run> KoanRuntime<'run> {
                     },
                     |rt| {
                         let outcome = continuation(
-                            &SchedulerView::new(&rt.sched, &rt.ambient, scope, scope_frame(scope)),
+                            &SchedulerView::new(
+                                &rt.sched,
+                                &rt.ambient,
+                                scope,
+                                scope_frame(scope),
+                                NodeHandle {
+                                    run: rt.run,
+                                    node: id,
+                                },
+                            ),
                             deps.results(&dep_sources),
                             idx,
                         );

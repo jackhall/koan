@@ -1,10 +1,10 @@
 use super::*;
-use crate::builtins::test_support::TestRun;
+use crate::builtins::test_support::{mock_declaration_site, TestRun};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::ast::TypeIdentifier;
 use crate::machine::model::Record;
-use crate::machine::BindingIndex;
+use crate::machine::{BindingIndex, DeclarationSite};
 
 fn leaf(n: &str) -> TypeIdentifier {
     TypeIdentifier::leaf(n.into())
@@ -127,24 +127,24 @@ fn block_member_defers_until_the_window_seals() {
         ],
         None,
     );
-    let fill = |name: &str, repr: KType, index: BindingIndex| {
+    let fill = |name: &str, repr: KType, site: DeclarationSite| {
         finalize_nominal_member(
             scope,
             &window,
             name,
             |_| RelativeSchema::NewType(repr),
-            index,
+            site,
             &types,
         )
     };
-    match fill("Node", KType::NUMBER, BindingIndex::value(2)) {
+    match fill("Node", KType::NUMBER, mock_declaration_site(2, 2)) {
         SealOutcome::Deferred => {}
         other => panic!(
             "the first of two members must defer, got {}",
             outcome_tag(&other)
         ),
     }
-    let sealed = match fill("Leaf", KType::STR, BindingIndex::value(3)) {
+    let sealed = match fill("Leaf", KType::STR, mock_declaration_site(3, 3)) {
         SealOutcome::Sealed(kt) => kt,
         other => panic!("the last fill must seal, got {}", outcome_tag(&other)),
     };
@@ -162,7 +162,7 @@ fn block_member_defers_until_the_window_seals() {
         &other_window,
         "Leaf",
         |_| RelativeSchema::NewType(KType::BOOL),
-        BindingIndex::value(4),
+        mock_declaration_site(4, 4),
         &types,
     ) {
         SealOutcome::Rebind(e) => assert!(

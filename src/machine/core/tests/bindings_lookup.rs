@@ -3,7 +3,7 @@
 //! [`crate::machine::core::Bindings::lookup_function`] — the visibility-aware
 //! lookups the index-gated resolver walks.
 
-use crate::builtins::test_support::run_root_bare;
+use crate::builtins::test_support::{mock_declaration_site, run_root_bare};
 use crate::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, BindingIndex, FrameStorageExt, NameLookup};
@@ -93,7 +93,7 @@ fn lookup_value_placeholder_filtered_same_as_value() {
 fn lookup_type_chain_cutoff_none_admits_every_index() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Tee".into(), KType::NUMBER, BindingIndex::value(99));
+    scope.register_type("Tee".into(), KType::NUMBER, mock_declaration_site(1, 99));
     assert!(matches!(
         scope.bindings().lookup_type("Tee", None),
         Some(NameLookup::Bound(kt)) if kt == KType::NUMBER,
@@ -104,7 +104,7 @@ fn lookup_type_chain_cutoff_none_admits_every_index() {
 fn lookup_type_strict_less_than_hides_later_sibling() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("TyLate".into(), KType::NUMBER, BindingIndex::value(5));
+    scope.register_type("TyLate".into(), KType::NUMBER, mock_declaration_site(1, 5));
     assert!(scope.bindings().lookup_type("TyLate", Some(3)).is_none());
     assert!(scope.bindings().lookup_type("TyLate", Some(9)).is_some());
 }

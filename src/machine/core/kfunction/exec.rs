@@ -14,7 +14,7 @@
 use crate::machine::{DeliveredCarried, KErrorKind};
 use std::rc::Rc;
 
-use crate::machine::core::{BindingIndex, CallFrame, KError};
+use crate::machine::core::{BindingIndex, CallFrame, DeclarationSite, KError, NodeHandle, RunId};
 use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
 use crate::machine::model::{
@@ -125,7 +125,18 @@ where
                 // value binding. The arg is already a resolved type; the door clones it into the
                 // frame region. A *module* argument is a value and takes the Object arm above.
                 Carried::Type(kt) => {
-                    child.register_type_delivered(name.clone(), kt, BindingIndex::value(0))?;
+                    // A type-denoting FN parameter is a per-call frame-scope binding, not a
+                    // declaration statement subject to same-declaration checks, so its identity
+                    // node is the off-scheduler sentinel; the `value(0)` index is the parameter
+                    // position the visibility predicate reads.
+                    let site = DeclarationSite {
+                        node: NodeHandle {
+                            run: RunId::OFF_SCHEDULER,
+                            node: crate::machine::core::NodeId(0),
+                        },
+                        index: BindingIndex::value(0),
+                    };
+                    child.register_type_delivered(name.clone(), kt, site)?;
                 }
                 // Dispatch resolves every type-denoting argument before the call, so a name that
                 // is still unlowered here names nothing bindable.

@@ -58,6 +58,7 @@ digraph {
     "koan::machine::core::kfunction::pick" [label="koan::machine::core::kfunction::pick"];
     "koan::machine::core::lexical_frame" [label="koan::machine::core::lexical_frame"];
     "koan::machine::core::pending" [label="koan::machine::core::pending"];
+    "koan::machine::core::run_id" [label="koan::machine::core::run_id"];
     "koan::machine::core::scope" [label="koan::machine::core::scope"];
     "koan::machine::core::scope::reach" [label="koan::machine::core::scope::reach"];
     "koan::machine::core::scope::registry" [label="koan::machine::core::scope::registry"];
@@ -184,6 +185,7 @@ digraph {
     "koan::machine::core" -> "koan::machine::core::kfunction" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::lexical_frame" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::pending" [label="owns", style="solid"];
+    "koan::machine::core" -> "koan::machine::core::run_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_id" [label="owns", style="solid"];
     "koan::machine::core" -> "koan::machine::core::scope_ptr" [label="owns", style="solid"];
@@ -514,6 +516,7 @@ digraph {
     "koan::machine::core::pending" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::core::kfunction" [label="uses", style="dashed"];
     "koan::machine::core::pending" -> "koan::machine::model" [label="uses", style="dashed"];
+    "koan::machine::core::run_id" -> "koan::machine::core" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::arena" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::bindings" [label="uses", style="dashed"];
     "koan::machine::core::scope" -> "koan::machine::core::pending" [label="uses", style="dashed"];

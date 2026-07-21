@@ -17,7 +17,7 @@ use crate::machine::model::TypeRegistry;
 use std::collections::HashMap;
 
 use crate::machine::model::{KType, RecursiveGroupWindow, RelativeSchema};
-use crate::machine::{BindingIndex, Scope};
+use crate::machine::Scope;
 
 pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
@@ -37,7 +37,7 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
     // Type-only: the variant schema rides the sealed member, so construction reads it via a
     // fresh `types["Result"]` lookup — no value-side carrier. Prelude build runs once; a
     // collision would be a programming error.
-    scope.register_builtin_type("Result".into(), identity, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Result".into(), identity);
 }
 
 #[cfg(test)]

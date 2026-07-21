@@ -16,7 +16,9 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{KType, Record, TypeNode};
-use crate::machine::{BindingIndex, DeliveredCarried, KError, KErrorKind, NodeId};
+use crate::machine::{
+    BindingIndex, DeclarationSite, DeliveredCarried, KError, KErrorKind, NodeHandle, NodeId,
+};
 use crate::scheduler::DepResults;
 use crate::scheduler::Deps;
 #[cfg(test)]
@@ -244,6 +246,10 @@ pub struct BodyCtx<'a, 'c> {
     /// no entry — [`arg_carrier`](Self::arg_carrier) reads `None`, i.e. "no foreign reach". Each carrier
     /// is borrowed off the working expression's own splice cells (which outlive the call), never copied.
     pub arg_carriers: &'c Record<&'c DeliveredCarried>,
+    /// The run-qualified slot running this body — its installing declaration's identity. A type
+    /// binder threads it into the `types` entry through [`Self::declaration_site`]; value-side
+    /// binders (LET etc.) read only [`Self::bind_index`].
+    pub node: NodeHandle,
     /// The step construction allocator for this slot's own scope, branded at the step lifetime
     /// `'a`: its doors return a [`StepCarried`] that cannot outlive the step. The same allocator a
     /// wake-time [`FinishCtx`] carries.
@@ -264,6 +270,17 @@ impl<'a, 'c> BodyCtx<'a, 'c> {
             .as_ref()
             .map(|chain| BindingIndex::value(chain.index))
             .unwrap_or(BindingIndex::BUILTIN)
+    }
+
+    /// The installing declaration's identity: this body's run-qualified slot ([`Self::node`])
+    /// paired with its lexical position ([`Self::bind_index`]). A type binder threads this into
+    /// its `types` entry so a same-declaration check compares the installing slot, not a lexical
+    /// position that a detached chain cannot tell apart.
+    pub fn declaration_site(&self) -> DeclarationSite {
+        DeclarationSite {
+            node: self.node,
+            index: self.bind_index(),
+        }
     }
 
     /// The reach carrier of argument `name` — `Some` when it arrived as a resolved value (so a

@@ -78,7 +78,7 @@ fn try_register_type_inserts_into_types_map() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: KType = KType::NUMBER;
     let outcome = bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
     let stored = bindings
@@ -96,9 +96,9 @@ fn try_register_type_rejects_collision_with_rebind() {
     let kt1: KType = KType::NUMBER;
     let kt2: KType = KType::STR;
     bindings
-        .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt1, DeclarationSite::BUILTIN)
         .expect("first register should succeed");
-    let err = match bindings.try_register_type("Foo", kt2, BindingIndex::BUILTIN) {
+    let err = match bindings.try_register_type("Foo", kt2, DeclarationSite::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
@@ -117,7 +117,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
     let kt: KType = KType::NUMBER;
     let _r = bindings.types();
     let outcome = bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
     assert!(_r.get("Foo").is_none());
@@ -137,7 +137,7 @@ fn try_register_type_clears_matching_placeholder() {
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type("Bar", kt, BindingIndex::BUILTIN)
+        .try_register_type("Bar", kt, DeclarationSite::BUILTIN)
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
@@ -147,7 +147,7 @@ fn try_register_type_does_not_touch_data_or_functions() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: KType = KType::NUMBER;
     bindings
-        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .try_register_type("Foo", kt, DeclarationSite::BUILTIN)
         .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
@@ -204,7 +204,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
 fn value_token_may_not_bind_type_side() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: KType = KType::NUMBER;
-    let error = match bindings.try_register_type("int_ord", kt, BindingIndex::BUILTIN) {
+    let error = match bindings.try_register_type("int_ord", kt, DeclarationSite::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("a value token names a value, not a type"),
     };

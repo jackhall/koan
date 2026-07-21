@@ -33,7 +33,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .brand()
         .alloc_scope(Scope::child_under_sig(ctx.scope, name.clone()));
 
-    let bind_index = ctx.bind_index();
+    let site = ctx.declaration_site();
     let name_for_finish = name;
     await_body_in_scope(
         decl_scope,
@@ -44,7 +44,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
             let identity = fctx.types.signature(schema);
             match fctx
                 .scope
-                .register_nominal_upsert(name_for_finish.clone(), identity, bind_index)
+                .register_nominal_upsert(name_for_finish.clone(), identity, site)
             {
                 Ok(kt_ref) => Action::Done(Ok(fctx.ctx.type_carried(kt_ref))),
                 Err(e) => Action::Done(Err(e.with_frame(TraceFrame::bare(

@@ -35,6 +35,7 @@ use std::rc::Rc;
 
 use crate::machine::core::arena::FrameSet;
 use crate::machine::core::kfunction::{KFunction, NodeId};
+use crate::machine::core::RunId;
 use crate::machine::model::KObject;
 use crate::machine::model::OperatorGroup;
 use crate::machine::model::TypeIdentifier;
@@ -208,6 +209,36 @@ impl BindingIndex {
     }
 }
 
+/// The scheduler slot that installed a binding, qualified by its run: [`NodeId`]s are
+/// scheduler-local and restart per runtime, so only the pair identifies a declaration
+/// statement across the lifetime of a persistent scope.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct NodeHandle {
+    pub run: RunId,
+    pub node: NodeId,
+}
+
+/// The identity of the declaration statement that installed a `types` entry: the installing
+/// slot (the identity signal — same-declaration checks compare only this) plus its lexical
+/// position (the visibility signal — `idx < cutoff` reads it; under a detached chain the
+/// index is 0 and deliberately names no statement).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct DeclarationSite {
+    pub node: NodeHandle,
+    pub index: BindingIndex,
+}
+
+impl DeclarationSite {
+    /// Off-scheduler builtin registration: no slot installed it.
+    pub const BUILTIN: DeclarationSite = DeclarationSite {
+        node: NodeHandle {
+            run: RunId::OFF_SCHEDULER,
+            node: NodeId(0),
+        },
+        index: BindingIndex::BUILTIN,
+    };
+}
+
 /// Co-mutating `RefCell` maps backing every lexical binding. `placeholders`
 /// and `pending_overloads` are intentionally separate: the former is consulted
 /// by name (value/type forward references); the latter by full dispatch bucket
@@ -218,10 +249,12 @@ impl BindingIndex {
 /// Borrow discipline: `types → functions → data`. Lifetime `'a` is the region
 /// lifetime of the stored references.
 pub struct Bindings<'a> {
-    /// Each type entry stores its bound type and its lexical [`BindingIndex`]. A `KType` is a `Copy`
-    /// handle into the run frame's registry, so an entry carries no reach: a read copies the handle
-    /// under the home-frame pin alone, and the same handle names the same type in every region.
-    types: RefCell<HashMap<String, (KType, BindingIndex)>>,
+    /// Each type entry stores its bound type and its [`DeclarationSite`] — the installing
+    /// [`NodeHandle`] (declaration identity) plus its lexical [`BindingIndex`] (visibility). A
+    /// `KType` is a `Copy` handle into the run frame's registry, so an entry carries no reach: a
+    /// read copies the handle under the home-frame pin alone, and the same handle names the same
+    /// type in every region.
+    types: RefCell<HashMap<String, (KType, DeclarationSite)>>,
     /// Each value entry stores its bound value, its lexical [`BindingIndex`], and its **reach** —
     /// the home-omitted foreign [`FrameSet`] the value borrows into, captured at bind time from the
     /// delivered carrier. A carrier-oriented read ([`Self::lookup_value_carrier`]) hands the reach
@@ -327,8 +360,8 @@ impl<'a> Bindings<'a> {
         name: &str,
         chain_cutoff: Option<usize>,
     ) -> Option<NameLookup<KType>> {
-        if let Some((kt, idx)) = self.types.borrow().get(name) {
-            if Self::visible(*idx, chain_cutoff) {
+        if let Some((kt, site)) = self.types.borrow().get(name) {
+            if Self::visible(site.index, chain_cutoff) {
                 return Some(NameLookup::Bound(*kt));
             }
         }
@@ -336,11 +369,11 @@ impl<'a> Bindings<'a> {
             .map(NameLookup::Parked)
     }
 
-    /// The committed `types[name]` entry with the [`BindingIndex`] its installing statement
+    /// The committed `types[name]` entry with the [`DeclarationSite`] its installing statement
     /// wrote — the pair the nominal-finalize same-declaration checks and the finalize gate's
     /// identity probe read. Types-map only (no placeholder arm), visibility-unfiltered: this
     /// is declaration-identity tracking, not consumer-visibility enforcement.
-    pub fn committed_type_binding(&self, name: &str) -> Option<(KType, BindingIndex)> {
+    pub fn committed_type_binding(&self, name: &str) -> Option<(KType, DeclarationSite)> {
         self.types.borrow().get(name).copied()
     }
 
@@ -374,8 +407,8 @@ impl<'a> Bindings<'a> {
                 });
             }
         }
-        if let Some((kt, idx)) = self.types.borrow().get(name) {
-            if Self::visible(*idx, chain_cutoff) {
+        if let Some((kt, site)) = self.types.borrow().get(name) {
+            if Self::visible(site.index, chain_cutoff) {
                 return Some(MemberResolution::Type { kt: *kt });
             }
         }
@@ -527,7 +560,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .iter()
-            .map(|(name, (kt, _))| (name.clone(), *kt))
+            .map(|(name, (kt, _site))| (name.clone(), *kt))
             .collect()
     }
 
@@ -549,7 +582,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .get(name)
-            .is_some_and(|(_, idx)| *idx == BindingIndex::BUILTIN)
+            .is_some_and(|(_, site)| site.index == BindingIndex::BUILTIN)
     }
 
     /// True iff `functions[key]` holds an overload registered at
@@ -609,7 +642,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn types(&self) -> Ref<'_, HashMap<String, (KType, BindingIndex)>> {
+    pub fn types(&self) -> Ref<'_, HashMap<String, (KType, DeclarationSite)>> {
         self.types.borrow()
     }
 
@@ -627,7 +660,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .get(name)
-            .map(|(kt, _)| *kt)
+            .map(|(kt, _site)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
     }
 
@@ -691,9 +724,9 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         kt: KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply_type(name, kt, index)
+        self.try_apply_type(name, kt, site)
     }
 
     /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
@@ -709,7 +742,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         kt: KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<ApplyOutcome, KError> {
         self.partition_guard(name, BindKind::Type)?;
         let mut types = match self.types.try_borrow_mut() {
@@ -737,7 +770,7 @@ impl<'a> Bindings<'a> {
             // Absent, or identity-equal (the seal's pre-installed `SetMember`): write the
             // identity, rewriting any pre-install in place.
             _ => {
-                types.insert(name.to_string(), (kt, index));
+                types.insert(name.to_string(), (kt, site));
             }
         }
         drop(types);
@@ -864,7 +897,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         kt: KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<ApplyOutcome, KError> {
         self.partition_guard(name, BindKind::Type)?;
         let mut types = match self.types.try_borrow_mut() {
@@ -888,7 +921,7 @@ impl<'a> Bindings<'a> {
             }
             Err(_) => return Ok(ApplyOutcome::Conflict),
         }
-        types.insert(name.to_string(), (kt, index));
+        types.insert(name.to_string(), (kt, site));
         drop(types);
         self.clear_placeholder_best_effort(name, BindKind::Type);
         Ok(ApplyOutcome::Applied)

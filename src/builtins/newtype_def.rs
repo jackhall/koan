@@ -29,7 +29,7 @@ use crate::machine::model::{
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 use crate::source::Spanned;
 
 use super::{arg, kw, sig};
@@ -45,7 +45,7 @@ fn finalize_newtype<'a>(
     fctx: &FinishCtx<'a, '_>,
     name: String,
     repr: KType,
-    bind_index: BindingIndex,
+    site: DeclarationSite,
 ) -> Result<StepCarried<'a>, KError> {
     // The repr types the values the NEWTYPE wraps, so it must be a proper type; a bare
     // constructor of kind `* -> *` standing unapplied is a kind error.
@@ -63,7 +63,7 @@ fn finalize_newtype<'a>(
         &window,
         &name,
         |_window| RelativeSchema::NewType(repr),
-        bind_index,
+        site,
         fctx.types,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
@@ -80,7 +80,7 @@ fn finalize_record_newtype<'a>(
     name: String,
     window: Rc<RecursiveGroupWindow>,
     fields: Vec<(String, KType)>,
-    bind_index: BindingIndex,
+    site: DeclarationSite,
 ) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -96,7 +96,7 @@ fn finalize_record_newtype<'a>(
             let record = fctx.types.record(Record::from_pairs(fields));
             RelativeSchema::NewType(record)
         },
-        bind_index,
+        site,
         fctx.types,
     );
     seal_outcome_into_carrier(fctx, &name, outcome)
@@ -135,7 +135,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         ctx.args, "name", "NEWTYPE", ctx.types
     ));
     let chain = ctx.chain.clone();
-    let bind_index = ctx.bind_index();
+    let site = ctx.declaration_site();
     if let Some(te) = crate::machine::arg_unresolved_type(ctx.args, "repr") {
         let te = te.clone();
         resolve_or_await(
@@ -148,18 +148,13 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
                 )
             },
             // A bare-leaf name resolved against scope bindings, not a dep terminal.
-            move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, bind_index)),
+            move |fctx, kt| Action::Done(finalize_newtype(fctx, name, kt, site)),
             ctx.types,
         )
     } else if let Some(repr_kt) = arg_type(ctx.args, "repr") {
-        Action::Done(finalize_newtype(
-            &ctx.finish_ctx(),
-            name,
-            repr_kt,
-            bind_index,
-        ))
+        Action::Done(finalize_newtype(&ctx.finish_ctx(), name, repr_kt, site))
     } else if let Some(KObject::KExpression(inner)) = arg_object(ctx.args, "repr") {
-        defer_resolved_sigil(name, inner.clone(), bind_index)
+        defer_resolved_sigil(name, inner.clone(), site)
     } else {
         Action::Done(Err(KError::new(KErrorKind::ShapeError(
             "NEWTYPE repr slot must be a type expression (e.g. `Number`, `Foo`)".to_string(),
@@ -172,7 +167,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
 fn defer_resolved_sigil<'a>(
     name: String,
     inner: KExpression<'a>,
-    bind_index: BindingIndex,
+    site: DeclarationSite,
 ) -> crate::machine::Action<'a> {
     use crate::builtins::resolve_or_await::dispatch_type_then;
     use crate::machine::Action;
@@ -180,7 +175,7 @@ fn defer_resolved_sigil<'a>(
         Box::new(inner),
     ))]);
     dispatch_type_then(wrapped, "NEWTYPE repr slot", move |fctx, kt| {
-        Action::Done(finalize_newtype(fctx, name, kt, bind_index))
+        Action::Done(finalize_newtype(fctx, name, kt, site))
     })
 }
 
@@ -258,10 +253,10 @@ pub fn body_constructor_family<'a>(
     };
     let kt = mint_type_constructor(member_name.clone(), param_names, ctx.types);
     // Bind through the fused alloc + register path, mirroring `type_decl::bind_abstract_member`.
-    let bind_index = ctx.bind_index();
+    let site = ctx.declaration_site();
     let kt_ref = match ctx
         .scope
-        .register_user_type_delivered(member_name, kt, bind_index)
+        .register_user_type_delivered(member_name, kt, site)
     {
         Ok(kt_ref) => kt_ref,
         Err(e) => return Action::Done(Err(e)),
@@ -1111,7 +1106,6 @@ mod tests {
     /// constructing over it is a `ShapeError`, not a `Wrapped` value.
     #[test]
     fn abstract_constructor_slot_rejects_construction() {
-        use crate::machine::BindingIndex;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
@@ -1121,7 +1115,7 @@ mod tests {
             param_names: vec!["Type".into()],
             nonce: None,
         });
-        scope.register_builtin_type("Abstract".into(), kt, BindingIndex::BUILTIN);
+        scope.register_builtin_type("Abstract".into(), kt);
         let err = test_run.run_one_err(parse_one("Abstract (3.0)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)

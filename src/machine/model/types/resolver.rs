@@ -209,7 +209,7 @@ pub fn finalize_nominal_member<'a>(
     window: &Rc<RecursiveGroupWindow>,
     name: &str,
     build_schema: impl FnOnce(&Rc<RecursiveGroupWindow>) -> RelativeSchema,
-    bind_index: crate::machine::core::BindingIndex,
+    site: crate::machine::core::DeclarationSite,
     types: &TypeRegistry,
 ) -> SealOutcome {
     let index = match window.index_of(name) {
@@ -224,7 +224,7 @@ pub fn finalize_nominal_member<'a>(
         None => return SealOutcome::Deferred,
     };
     // A non-equal existing entry (a redeclaration) surfaces as `Rebind`, propagated to the binder.
-    match scope.register_nominal_upsert(name.to_string(), sealed.members[index], bind_index) {
+    match scope.register_nominal_upsert(name.to_string(), sealed.members[index], site) {
         Ok(kt_ref) => SealOutcome::Sealed(kt_ref),
         Err(e) => SealOutcome::Rebind(e),
     }

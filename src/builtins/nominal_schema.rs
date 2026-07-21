@@ -13,7 +13,7 @@ use crate::machine::model::{
     FieldNameKind,
 };
 use crate::machine::{Action, BodyCtx, FinishCtx};
-use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
+use crate::machine::{DeclarationSite, KError, KErrorKind, TraceFrame};
 use crate::machine::{FieldListDeferral, StepCarried};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
@@ -24,7 +24,7 @@ pub(crate) type SchemaFinalize<'a> = fn(
     String,
     std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
     Vec<(String, KType)>,
-    BindingIndex,
+    DeclarationSite,
 ) -> Result<StepCarried<'a>, KError>;
 
 /// Elaborate `schema_expr` as the named declarator's field list and fold or defer it.
@@ -45,7 +45,7 @@ pub(crate) fn nominal_schema_action<'a>(
     error_frame: TraceFrame,
     finalize: SchemaFinalize<'a>,
 ) -> Action<'a> {
-    let bind_index = ctx.bind_index();
+    let site = ctx.declaration_site();
     let chain = ctx.chain.clone();
     // Mark this binder in-flight so a consumer referencing it (an earlier sibling still finalizing)
     // can park on our producer node. The guard's Drop removes the name; the Pending path moves it
@@ -65,13 +65,9 @@ pub(crate) fn nominal_schema_action<'a>(
         None,
         ctx.types,
     ) {
-        FieldListOutcome::Done(fields) => Action::Done(finalize(
-            &ctx.finish_ctx(),
-            name,
-            window,
-            fields,
-            bind_index,
-        )),
+        FieldListOutcome::Done(fields) => {
+            Action::Done(finalize(&ctx.finish_ctx(), name, window, fields, site))
+        }
         FieldListOutcome::Err(msg) => Action::Done(Err(KError::new(KErrorKind::ShapeError(msg)))),
         FieldListOutcome::Pending {
             park_producers,
@@ -92,7 +88,7 @@ pub(crate) fn nominal_schema_action<'a>(
             .with_pending_guard(pending_guard)
             .with_error_frame(error_frame)
             .action(Box::new(move |fctx, fields| {
-                finalize(fctx, finish_name, finish_window, fields, bind_index)
+                finalize(fctx, finish_name, finish_window, fields, site)
             }))
         }
     }

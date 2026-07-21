@@ -7,7 +7,7 @@ use crate::machine::model::{
     constructor_param_names, declarator_window, KKind, KType, RelativeSchema, TypeNode,
 };
 use crate::machine::run_root_storage;
-use crate::machine::{BindingIndex, ScopeId};
+use crate::machine::ScopeId;
 
 /// Resolve a SIG-declared type member's stored `KType` out of the signature's schema —
 /// abstract members (`TYPE`) and manifest members (`LET`) both live there, classified by
@@ -284,7 +284,7 @@ fn fn_return_type_constructor_apply_root_scope() {
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
     let wrap = wrap_type_constructor(scope, test_run.types());
-    scope.register_builtin_type("Wrap".into(), wrap, BindingIndex::BUILTIN);
+    scope.register_builtin_type("Wrap".into(), wrap);
     let runtime = &mut test_run.runtime;
     let id = runtime.dispatch_in_scope(
         parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),

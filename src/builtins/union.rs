@@ -9,7 +9,7 @@ use crate::machine::model::{
 };
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
-use crate::machine::{BindingIndex, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{BindingIndex, DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
 
@@ -42,7 +42,7 @@ fn recover_union(
         Some(entry) => entry,
         None => return UnionRecovery::Fresh,
     };
-    if installed_at != bind_index {
+    if installed_at.index != bind_index {
         return UnionRecovery::Fresh;
     }
     // `union_of` collapses a one-variant union to that member, so a single variant binds the
@@ -75,7 +75,7 @@ fn finalize_union<'a>(
     name: String,
     window: Rc<RecursiveGroupWindow>,
     fields: Vec<(String, KType)>,
-    bind_index: BindingIndex,
+    site: DeclarationSite,
 ) -> Result<StepCarried<'a>, KError> {
     if fields.is_empty() {
         return Err(KError::new(KErrorKind::ShapeError(
@@ -85,7 +85,7 @@ fn finalize_union<'a>(
     let scope = fctx.scope;
     let n = fields.len();
 
-    if let UnionRecovery::Sealed(kt) = recover_union(scope, &name, bind_index, n, fctx.types) {
+    if let UnionRecovery::Sealed(kt) = recover_union(scope, &name, site.index, n, fctx.types) {
         // Idempotent re-finalize: the union is already bound. Cross the recovered union handle as
         // a declared operand, folding the carriers' reach onto the placement — the same coverage
         // the register-success path produces.
@@ -117,7 +117,7 @@ fn finalize_union<'a>(
     };
 
     let union_ty = fctx.types.union_of(sealed.members);
-    match scope.register_nominal_upsert(name.clone(), union_ty, bind_index) {
+    match scope.register_nominal_upsert(name.clone(), union_ty, site) {
         // `register_nominal_upsert` hands back the `Copy` `KType` handle. Cross it as a declared
         // operand and fold the variant carriers' reach onto the placement's witness, rather than
         // capturing the union type into a fold closure.
@@ -190,12 +190,12 @@ pub fn register<'a>(scope: &'a Scope<'a>, types: &TypeRegistry) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, TestRun};
+    use crate::builtins::test_support::{mock_declaration_site, parse_one, TestRun};
     use crate::machine::model::Carried;
     use crate::machine::model::KType;
     use crate::machine::model::{KKind, NodeSchema, RecursiveGroupWindow, TypeNode, TypeRegistry};
     use crate::machine::run_root_storage;
-    use crate::machine::{BindingIndex, KErrorKind, Scope};
+    use crate::machine::{KErrorKind, Scope};
 
     /// The newtype repr of union `name`'s `variant` member — each variant is a per-tag newtype
     /// `SetMember`, and its schema's `NewType` repr is the field type.
@@ -360,15 +360,12 @@ mod tests {
                 Some("Maybe".to_string()),
             )
         };
+        // One declaration's identity: both finalize calls simulate a parallel finalize of the
+        // same statement, so they share one site.
+        let site = mock_declaration_site(1, 0);
         // First finalize: no prior binding, so a fresh set of pending members is minted, sealed,
         // and registered.
-        let first = super::finalize_union(
-            &fctx,
-            "Maybe".into(),
-            make_window(),
-            fields(),
-            BindingIndex::value(0),
-        );
+        let first = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
         assert!(first.is_ok());
         assert_eq!(
             variant_repr(scope, "Maybe", "Some", &test_run.types),
@@ -380,13 +377,7 @@ mod tests {
         );
         // Second finalize: every member is filled, so `recover_union` short-circuits, returning
         // the bound union type unchanged.
-        let second = super::finalize_union(
-            &fctx,
-            "Maybe".into(),
-            make_window(),
-            fields(),
-            BindingIndex::value(0),
-        );
+        let second = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(&crate::machine::FrameSet::empty(), |c| {
                 matches!(c, Carried::Type(kt)

@@ -44,8 +44,8 @@ fn bind_abstract_member<'a>(
     kt: KType,
 ) -> crate::machine::Action<'a> {
     use crate::machine::Action;
-    let bind_index = ctx.bind_index();
-    let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
+    let site = ctx.declaration_site();
+    let kt_ref = match ctx.scope.register_user_type_delivered(name, kt, site) {
         Ok(kt_ref) => kt_ref,
         Err(e) => return Action::Done(Err(e)),
     };

@@ -9,6 +9,7 @@ mod kerror;
 pub(crate) mod kfunction;
 mod lexical_frame;
 mod pending;
+mod run_id;
 mod scope;
 mod scope_id;
 mod scope_ptr;
@@ -24,8 +25,8 @@ pub use arena::{
 };
 pub(crate) use arena::{FrameStorageExt, KoanRegionExt, KoanStorageProfile, Residence};
 pub use bindings::{
-    BindKind, BindingIndex, Bindings, FunctionLookup, MemberResolution, NameLookup,
-    PendingBinderGuard, StoredReach,
+    BindKind, BindingIndex, Bindings, DeclarationSite, FunctionLookup, MemberResolution, NameLookup,
+    NodeHandle, PendingBinderGuard, StoredReach,
 };
 pub use carrier_witness::{CarrierWitness, DeliveredCarried};
 pub(crate) use kerror::kerror_ktype;
@@ -44,6 +45,7 @@ pub(crate) use kfunction::{
     ActionFn, BinderBucketFn, BinderNameFn, Body, ClassifiedSlots, KFunction, NodeId,
 };
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
+pub use run_id::RunId;
 pub use scope::Scope;
 pub use scope_id::ScopeId;
 pub use scope_ptr::ScopeRefFamily;

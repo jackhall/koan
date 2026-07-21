@@ -4,7 +4,9 @@
 //! module.
 
 use super::{Scope, ScopeKind};
-use crate::machine::core::bindings::{ApplyOutcome, BindKind, BindingIndex, NameLookup};
+use crate::machine::core::bindings::{
+    ApplyOutcome, BindKind, BindingIndex, DeclarationSite, NameLookup,
+};
 use crate::machine::core::{KError, KErrorKind, KFunction, NodeId, StoredReach};
 use crate::machine::model::{probe_key, Carried, KObject, OperatorGroup, TypeRegistry};
 use crate::machine::DeliveredCarried;
@@ -214,16 +216,16 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target().register_type(name, ktype, index);
+            self.write_target().register_type(name, ktype, site);
             return;
         }
         self.assert_open(&name);
-        match self.bindings.get().try_register_type(&name, ktype, index) {
+        match self.bindings.get().try_register_type(&name, ktype, site) {
             Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, ktype, index),
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, ktype, site),
             Err(_) => {}
         }
     }
@@ -245,10 +247,10 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().register_type_upsert(name, ktype, index);
+            return self.write_target().register_type_upsert(name, ktype, site);
         }
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -256,7 +258,7 @@ impl<'a> Scope<'a> {
         match self
             .bindings
             .get()
-            .try_register_type_upsert(&name, ktype, index)?
+            .try_register_type_upsert(&name, ktype, site)?
         {
             ApplyOutcome::Applied => Ok(ktype),
             ApplyOutcome::Conflict => panic!(
@@ -273,9 +275,9 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         identity: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<crate::machine::model::KType, KError> {
-        self.register_type_upsert(name, identity, index)
+        self.register_type_upsert(name, identity, site)
     }
 
     /// Delivered type registration: register the RHS type handle (strict insert-if-absent,
@@ -286,18 +288,18 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<crate::machine::model::KType, KError> {
         if self.bindings.is_borrowed() {
             return self
                 .write_target()
-                .register_type_delivered(name, ktype, index);
+                .register_type_delivered(name, ktype, site);
         }
         self.assert_open(&name);
-        match self.bindings.get().try_register_type(&name, ktype, index)? {
+        match self.bindings.get().try_register_type(&name, ktype, site)? {
             ApplyOutcome::Applied => Ok(ktype),
             ApplyOutcome::Conflict => {
-                self.pending.defer_type(name, ktype, index);
+                self.pending.defer_type(name, ktype, site);
                 Ok(ktype)
             }
         }
@@ -350,12 +352,12 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     ) -> Result<crate::machine::model::KType, KError> {
         if self.shadows_builtin_type(&name) {
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        self.register_type_delivered(name, ktype, index)
+        self.register_type_delivered(name, ktype, site)
     }
 
     /// Fused MODULE-finish value bind: derive the module's stored reach off its `child` scope
@@ -379,15 +381,14 @@ impl<'a> Scope<'a> {
         Ok((obj, stored))
     }
 
-    /// Builtin type registration: [`Self::register_type`] at [`BindingIndex::BUILTIN`], same
+    /// Builtin type registration: [`Self::register_type`] at [`DeclarationSite::BUILTIN`], same
     /// infallible contract.
     pub(crate) fn register_builtin_type(
         &self,
         name: String,
         ktype: crate::machine::model::KType,
-        index: BindingIndex,
     ) {
-        self.register_type(name, ktype, index);
+        self.register_type(name, ktype, DeclarationSite::BUILTIN);
     }
 
     /// Apply queued writes between dispatch nodes. Items that still hit a borrow

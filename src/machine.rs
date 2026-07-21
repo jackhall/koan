@@ -26,8 +26,9 @@ pub use core::{
     run_root_storage, Bindings, DeliveredCarried, FrameStorage, KError, KErrorKind, Scope, ScopeId,
 };
 pub(crate) use core::{
-    BindKind, BindingIndex, CallFrame, CarrierWitness, FrameSet, FunctionLookup, KoanRegion,
-    LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, TraceFrame,
+    BindKind, BindingIndex, CallFrame, CarrierWitness, DeclarationSite, FrameSet, FunctionLookup,
+    KoanRegion, LexicalFrame, MemberResolution, NameLookup, NodeHandle, RegionTypeFamily, RunId,
+    TraceFrame,
 };
 pub(crate) use execute::{
     build_type_operand, seal_type_identity, BrandCompose, DispatchOutcome, FieldListDeferral,

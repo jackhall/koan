@@ -9,12 +9,13 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::StoredReach;
 use crate::machine::model::KObject;
 
-use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
+use super::bindings::{ApplyOutcome, BindingIndex, Bindings, DeclarationSite};
 
 /// The variant tag is load-bearing: it routes each retry through the matching
 /// `Bindings::try_*` so per-map collision checks (function-mirror, `types` vs `data`)
-/// stay intact. Each variant carries the original [`BindingIndex`] so the drained
-/// write lands under the same lexical position the conflicted write would have used.
+/// stay intact. A value/function write carries the original [`BindingIndex`] and a type
+/// write its [`DeclarationSite`], so the drained write lands under the same position and
+/// declaration identity the conflicted write would have used.
 enum PendingWrite<'a> {
     Value {
         name: String,
@@ -33,7 +34,7 @@ enum PendingWrite<'a> {
     Type {
         name: String,
         kt: crate::machine::model::KType,
-        index: BindingIndex,
+        site: DeclarationSite,
     },
 }
 
@@ -78,10 +79,10 @@ impl<'a> PendingQueue<'a> {
         });
     }
 
-    pub fn defer_type(&self, name: String, kt: crate::machine::model::KType, index: BindingIndex) {
+    pub fn defer_type(&self, name: String, kt: crate::machine::model::KType, site: DeclarationSite) {
         self.pending
             .borrow_mut()
-            .push(PendingWrite::Type { name, kt, index });
+            .push(PendingWrite::Type { name, kt, site });
     }
 
     /// Items that still hit a borrow conflict re-queue (eventually-consistent, not
@@ -147,11 +148,11 @@ impl<'a> PendingQueue<'a> {
                         debug_assert!(false, "PendingQueue::drain hit invariant violation: {_e}",);
                     }
                 },
-                PendingWrite::Type { name, kt, index } => {
-                    match bindings.try_register_type(&name, kt, index) {
+                PendingWrite::Type { name, kt, site } => {
+                    match bindings.try_register_type(&name, kt, site) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Type { name, kt, index });
+                            still_pending.push(PendingWrite::Type { name, kt, site });
                         }
                         Err(_e) => {
                             debug_assert!(
@@ -185,7 +186,7 @@ mod tests {
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
         let kt = KType::NUMBER;
-        queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
+        queue.defer_type("Foo".to_string(), kt, DeclarationSite::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);
         let stored = bindings

@@ -117,7 +117,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         .brand()
         .alloc_scope(Scope::child_recursive_group(ctx.scope, Rc::clone(&window)));
 
-    let bind_index = ctx.bind_index();
+    let site = ctx.declaration_site();
     await_body_in_scope(child, body_expr, ChildScopeSeal::LeaveOpen, move |fctx| {
         let frame =
             || TraceFrame::bare("<recursive-types>", format!("RECURSIVE TYPES {group_name}"));
@@ -137,7 +137,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         for ((name, _), member) in members.iter().zip(sealed.members.iter()) {
             if let Err(e) = fctx
                 .scope
-                .register_nominal_upsert(name.clone(), *member, bind_index)
+                .register_nominal_upsert(name.clone(), *member, site)
             {
                 return Action::Done(Err(e.with_frame(frame())));
             }
@@ -145,7 +145,7 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
         let handle = sealed.group;
         match fctx
             .scope
-            .register_nominal_upsert(group_name.clone(), handle, bind_index)
+            .register_nominal_upsert(group_name.clone(), handle, site)
         {
             Ok(kt_ref) => Action::Done(Ok(fctx.ctx.type_carried(kt_ref))),
             Err(e) => Action::Done(Err(e.with_frame(frame()))),

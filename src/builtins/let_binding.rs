@@ -118,7 +118,10 @@ pub fn body<'a>(ctx: &crate::machine::BodyCtx<'a, '_>) -> crate::machine::Action
     }
     if let Some(kt) = type_for_types_map {
         // Register the RHS type handle under `name` in this scope's bindings.
-        let registered = match ctx.scope.register_user_type_delivered(name, kt, bind_index) {
+        let registered = match ctx
+            .scope
+            .register_user_type_delivered(name, kt, ctx.declaration_site())
+        {
             Ok(registered) => registered,
             Err(e) => return done_err(e),
         };

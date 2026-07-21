@@ -250,7 +250,6 @@ mod tests {
     #[test]
     fn apply_as_lowers_to_constructor_apply() {
         use crate::machine::model::{declarator_window, RelativeSchema};
-        use crate::machine::BindingIndex;
         let region = run_root_storage();
         let mut test_run = TestRun::silent(&region);
         let scope = test_run.scope;
@@ -267,7 +266,7 @@ mod tests {
                 test_run.types(),
             )
             .expect("a singleton window seals on its sole fill");
-        scope.register_builtin_type("Wrap".into(), sealed.members[0], BindingIndex::BUILTIN);
+        scope.register_builtin_type("Wrap".into(), sealed.members[0]);
         let result = test_run.run_one_type(parse_one(":(Number AS Wrap)"));
         let types = test_run.types();
         match types.node(result) {

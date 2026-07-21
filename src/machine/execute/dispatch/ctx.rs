@@ -18,7 +18,7 @@ use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeHandle, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
@@ -88,6 +88,10 @@ pub(in crate::machine::execute) struct SchedulerView<'step, 'view> {
     /// The `Rc<FrameStorage>` owning the active scope's region — resolved once per step by the run
     /// loop while the step machinery holds it, so step code reads a live frame with no failure path.
     dest_frame: Rc<FrameStorage>,
+    /// The run-qualified slot stepping this view — `NodeHandle { run, node: id }`. A binder body
+    /// reads it through [`Self::node_handle`] to stamp the installing declaration's identity onto
+    /// its `types` entry.
+    node: NodeHandle,
 }
 
 impl<'step, 'view> SchedulerView<'step, 'view> {
@@ -96,13 +100,21 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         ambient: &'view AmbientContext,
         scope: &'step Scope<'step>,
         dest_frame: Rc<FrameStorage>,
+        node: NodeHandle,
     ) -> Self {
         Self {
             sched,
             ambient,
             scope,
             dest_frame,
+            node,
         }
+    }
+
+    /// The run-qualified slot stepping this view — the installing declaration's identity a
+    /// binder body threads into its `types` entry via [`BodyCtx::declaration_site`].
+    pub(in crate::machine::execute) fn node_handle(&self) -> NodeHandle {
+        self.node
     }
 
     /// Run `f` with the active slot's scope. The closure form is for handlers that consume their

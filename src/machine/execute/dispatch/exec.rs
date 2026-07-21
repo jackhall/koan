@@ -273,6 +273,7 @@ fn run_action_builtin<'step>(
             chain,
             args: args_obj,
             arg_carriers: &arg_carriers,
+            node: view.node_handle(),
             ctx: view.step_ctx(),
             types: view.types(),
         };

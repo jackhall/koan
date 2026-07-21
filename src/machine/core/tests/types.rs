@@ -4,17 +4,17 @@
 use std::rc::Rc;
 
 use super::super::Scope;
-use crate::builtins::test_support::{delivered_with_host, run_root_bare};
+use crate::builtins::test_support::{delivered_with_host, mock_declaration_site, run_root_bare};
 use crate::machine::core::{run_root_storage, FrameStorageExt};
 use crate::machine::model::Carried;
 use crate::machine::model::KType;
-use crate::machine::BindingIndex;
+use crate::machine::{BindingIndex, DeclarationSite};
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
     let region = run_root_storage();
     let scope = run_root_bare(&region);
-    scope.register_type("Foo".into(), KType::NUMBER, BindingIndex::BUILTIN);
+    scope.register_type("Foo".into(), KType::NUMBER, DeclarationSite::BUILTIN);
     assert!(scope.bindings().types().get("Foo").is_some());
     assert!(
         scope.bindings().data().get("Foo").is_none(),
@@ -26,7 +26,7 @@ fn register_type_inserts_into_types_map_not_data() {
 fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
     let region = run_root_storage();
     let root = run_root_bare(&region);
-    root.register_type("Foo".into(), KType::NUMBER, BindingIndex::BUILTIN);
+    root.register_type("Foo".into(), KType::NUMBER, DeclarationSite::BUILTIN);
     let child = region.brand().alloc_scope(Scope::child_under(root));
     assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
     assert!(
@@ -41,9 +41,9 @@ fn resolve_type_inner_scope_shadows_outer() {
     let root = run_root_bare(&region);
     // User (non-BUILTIN) types: a builtin is unshadowable and would resolve root-first,
     // so this exercises the user-vs-user innermost-wins walk.
-    root.register_type("Foo".into(), KType::NUMBER, BindingIndex::value(1));
+    root.register_type("Foo".into(), KType::NUMBER, mock_declaration_site(1, 1));
     let child = region.brand().alloc_scope(Scope::child_under(root));
-    child.register_type("Foo".into(), KType::STR, BindingIndex::value(1));
+    child.register_type("Foo".into(), KType::STR, mock_declaration_site(2, 1));
     assert!(matches!(child.resolve_type("Foo"), Some(kt) if kt == KType::STR));
     assert!(matches!(root.resolve_type("Foo"), Some(kt) if kt == KType::NUMBER));
 }

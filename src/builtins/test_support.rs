@@ -25,11 +25,28 @@ use crate::machine::{DeliveredCarried, KFunction};
 use crate::machine::{FrameStorage, KError, Scope};
 use crate::parse::parse;
 #[cfg(test)]
+use crate::machine::{BindingIndex, DeclarationSite, NodeHandle, RunId};
+#[cfg(test)]
 use crate::scheduler::NodeId;
 #[cfg(test)]
 use crate::witnessed::{Delivered, Sealed, Witnessed};
 
 use super::{seed_builtins, unseeded_scopes};
+
+/// Mint a test [`DeclarationSite`] with a fresh run and an explicit installing node and lexical
+/// index — the fixture stand-in for the run-qualified handle a scheduler-driven binder threads. A
+/// distinct `node` simulates a distinct declaration statement; reuse one returned site (not a
+/// second call) to simulate a parallel finalize of a single declaration.
+#[cfg(test)]
+pub(crate) fn mock_declaration_site(node: usize, index: usize) -> DeclarationSite {
+    DeclarationSite {
+        node: NodeHandle {
+            run: RunId::next(),
+            node: NodeId(node),
+        },
+        index: BindingIndex::value(index),
+    }
+}
 
 /// A seeded test run: the run-root child `Scope`, the runtime that owns the run frame, and that
 /// frame's [`TypeRegistry`] — the only registry in the tree.
