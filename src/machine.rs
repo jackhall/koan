@@ -30,7 +30,7 @@ pub(crate) use core::{
     LexicalFrame, MemberResolution, NameLookup, RegionTypeFamily, TraceFrame,
 };
 pub(crate) use execute::{
-    build_type_operand, defer_field_list_action, defer_field_list_action_composed,
-    seal_type_identity, BrandCompose, DispatchOutcome, NameOutcome, StepCarried,
+    build_type_operand, seal_type_identity, BrandCompose, DispatchOutcome, FieldListDeferral,
+    NameOutcome, StepCarried,
 };
 pub use execute::{interpret, interpret_with_writer, interpret_with_writer_path, KoanRuntime};

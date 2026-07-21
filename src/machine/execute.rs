@@ -27,7 +27,6 @@ pub use runtime::{interpret, interpret_with_writer, interpret_with_writer_path, 
 pub use step_carried::{drive_step_allocator, StepCarried};
 
 pub(crate) use dispatch::{
-    build_type_operand, defer_field_list_action, defer_field_list_action_composed,
-    seal_type_identity, BrandCompose,
+    build_type_operand, seal_type_identity, BrandCompose, FieldListDeferral,
 };
 pub(crate) use dispatch::{DispatchOutcome, NameOutcome};

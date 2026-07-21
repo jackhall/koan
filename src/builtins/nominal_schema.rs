@@ -12,9 +12,9 @@ use crate::machine::model::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListContext, FieldListOutcome,
     FieldNameKind,
 };
-use crate::machine::{defer_field_list_action, StepCarried};
 use crate::machine::{Action, BodyCtx, FinishCtx};
 use crate::machine::{BindingIndex, KError, KErrorKind, TraceFrame};
+use crate::machine::{FieldListDeferral, StepCarried};
 
 /// Fold the sealed `(name, KType)` pairs into the declarator's carrier; shared by the synchronous
 /// and dep-finish paths. A plain `fn` pointer (not a closure) so it rides both the eager arm
@@ -79,21 +79,21 @@ pub(crate) fn nominal_schema_action<'a>(
         } => {
             let finish_name = name.clone();
             let finish_window = std::rc::Rc::clone(&window);
-            defer_field_list_action(
+            FieldListDeferral::new(
                 schema_expr,
                 park_producers,
                 sub_dispatches,
                 context,
                 name_kind,
-                vec![name],
-                Some(window),
-                chain,
-                Some(pending_guard),
-                Some(error_frame),
-                Box::new(move |fctx, fields, _carriers| {
-                    finalize(fctx, finish_name, finish_window, fields, bind_index)
-                }),
             )
+            .with_threaded([name])
+            .with_window(window)
+            .with_chain(chain)
+            .with_pending_guard(pending_guard)
+            .with_error_frame(error_frame)
+            .action(Box::new(move |fctx, fields| {
+                finalize(fctx, finish_name, finish_window, fields, bind_index)
+            }))
         }
     }
 }

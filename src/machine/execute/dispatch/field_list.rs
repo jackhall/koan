@@ -2,17 +2,19 @@
 //! scheduled sub-Dispatches for sigil field types — FN parameter lists, the
 //! NEWTYPE record repr, the UNION schema, and the standalone record-type sigil.
 //!
-//! One dep-finish waits on `[park_producers ++ owned_subs]`; its finish re-walks the field
-//! list through [`parse_typed_field_list_via_elaborator`], feeding the resolved
-//! sub-Dispatch carriers back through that walker's `results` channel in DFS order. Two
-//! composition surfaces consume the resulting `(name, KType)` pairs:
+//! [`FieldListDeferral`] bundles the parked producers, the sigil sub-Dispatches, and the elaborator
+//! state a re-walk needs; its three consuming finish methods each declare one dep-finish that waits
+//! on `[park_producers ++ owned_subs]` and re-walks the field list through
+//! [`parse_typed_field_list_via_elaborator`], feeding the resolved sub-Dispatch carriers back through
+//! that walker's `results` channel in DFS order. Two composition surfaces consume the resulting
+//! `(name, KType)` pairs:
 //!
-//! - the record-type sigil and the FN carrier compose through [`compose_field_list`] and a
-//!   [`BrandCompose`] closure, which assembles one owned `KType` and allocates it into the
-//!   consumer's own region;
-//! - the UNION schema and the NEWTYPE record repr hand the pairs to a caller-supplied
-//!   [`FieldListFinalizeAction`], which seals them through the declaration window into interned
-//!   member handles and crosses the nominal identity through
+//! - [`FieldListDeferral::outcome`] (the record-type sigil) and [`FieldListDeferral::action_composed`]
+//!   (the FN carrier) compose through a [`BrandCompose`] closure, which assembles one owned `KType`
+//!   and allocates it into the consumer's own region;
+//! - [`FieldListDeferral::action`] (the UNION schema and the NEWTYPE record repr) hands the pairs to a
+//!   caller-supplied [`FieldListFinalizeAction`], which seals them through the declaration window into
+//!   interned member handles and crosses the nominal identity through
 //!   [`seal_type_identity`](super::constructors::seal_type_identity).
 
 use std::rc::Rc;
@@ -35,7 +37,6 @@ use super::super::TerminalDepFinish;
 use super::DepRequest;
 use super::OwnedDispatch;
 use super::SchedulerView;
-use crate::machine::DeliveredCarried;
 
 /// Composes the final `KType` from the elaborated pairs, plus whatever owned type content the
 /// caller closed over (e.g. the FN return type). Runs in [`compose_field_list`], which allocates
@@ -45,36 +46,13 @@ pub(crate) type BrandCompose<'step> = Box<
 >;
 
 /// `Action`-path finalize, returning a witnessed carrier — used by
-/// [`defer_field_list_action`], whose finish lifts the result straight into
+/// [`FieldListDeferral::action`], whose finish lifts the result straight into
 /// [`Action::Done(Ok)`](crate::machine::core::Action::Done). Takes the
 /// [`FinishCtx`] the `AwaitContinue` wrapper already holds, for the same reason.
 pub(crate) type FieldListFinalizeAction<'a> = Box<
-    dyn for<'r> FnOnce(
-            &FinishCtx<'a, 'r>,
-            Vec<(String, KType)>,
-            &[&DeliveredCarried],
-        ) -> Result<StepCarried<'a>, KError>
+    dyn for<'r> FnOnce(&FinishCtx<'a, 'r>, Vec<(String, KType)>) -> Result<StepCarried<'a>, KError>
         + 'a,
 >;
-
-/// The structural `[park_producers ..., sigil subs (OwnScope) ...]` dep split every field-list
-/// deferral shares: parks the forward-ref producers, owns each sigil sub-Dispatch in DFS order, so a
-/// finish's re-walk consumes the owned suffix in DFS order. The two `Action` twins hand this straight
-/// to `Action::AwaitDeps`; the scheduler twin lowers each owned entry into the library dep currency
-/// for `Await::on`.
-fn field_list_deps<'step>(
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'step>>,
-) -> Deps<OwnedDispatch<'step>> {
-    let mut deps = Deps::from_parks(park_producers);
-    for sub in sub_dispatches {
-        deps.own(OwnedDispatch {
-            expr: sub,
-            placement: DepPlacement::OwnScope,
-        });
-    }
-    deps
-}
 
 /// The deferred re-walk both currencies run once their deps resolve: rebuild the elaborator, feed the
 /// owned sub-Dispatch carriers back through the field walker in DFS order, and produce the
@@ -136,9 +114,11 @@ impl<'step> FieldListRewalk<'step> {
     }
 }
 
-/// The ONE construction site both deferral currencies call: re-walk the field list against the
+/// The construction site the scheduler-currency finish calls: re-walk the field list against the
 /// resolved sub-Dispatch results, compose the result `KType` from the interned pairs, and carry the
-/// handle through [`StepAllocator::type_carried`].
+/// handle through [`StepAllocator::type_carried`]. The `Action`-currency finish composes through the
+/// [`FieldListDeferral::action_composed`] adapter, which wraps this same step around a
+/// [`FinishCtx`]'s allocator.
 ///
 /// `feed` is the owned suffix of the dep terminals in DFS order — the parks are notify-only waits
 /// on a forward reference, so they never reach the walk. Every field type the walk produces is
@@ -155,18 +135,15 @@ fn compose_field_list<'step>(
     Ok(step_ctx.type_carried(compose(fields, types)?))
 }
 
-/// Declare the sigil sub-Dispatches (in DFS order) and the dep-finish that re-walks `expr` once they
-/// and `park_producers` resolve, as a [`Outcome::ParkThenContinue`] — a pure decide, no write.
-/// `threaded` / `window` / `chain` rebuild the elaborator for the re-walk — the window is the
-/// declaration window the first walk minted its sibling handles against, so the re-walk mints the
-/// same indices; `pending_guard` (when present)
-/// rides into the closure so its Drop fires on every finish arm; `error_frame` is attached to the
-/// user-facing `Err` arm.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list<'step>(
-    expr: KExpression<'step>,
+/// One field-list deferral, ready to finish into either dispatch currency. Holds the parked
+/// forward-ref producers, the sigil sub-Dispatches (DFS order), and the elaborator state a re-walk
+/// rebuilds; the required fields are set at [`new`](Self::new) and the optionals thread in through the
+/// `with_*` setters. The three consuming finish methods each assemble the shared
+/// `[park_producers ++ owned_subs]` dep vector once through [`into_parts`](Self::into_parts).
+pub(crate) struct FieldListDeferral<'a> {
+    expr: KExpression<'a>,
     park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'step>>,
+    sub_dispatches: Vec<KExpression<'a>>,
     context: FieldListContext,
     name_kind: FieldNameKind,
     threaded: Vec<String>,
@@ -174,143 +151,168 @@ pub(crate) fn defer_field_list<'step>(
     chain: Option<Rc<LexicalFrame>>,
     pending_guard: Option<PendingBinderGuard>,
     error_frame: Option<TraceFrame>,
-    compose: BrandCompose<'step>,
-) -> Outcome<'step> {
-    let rewalk = FieldListRewalk {
-        expr,
-        context,
-        name_kind,
-        threaded,
-        window,
-        chain,
-        error_frame,
-    };
-    let finish: TerminalDepFinish<'step> = Box::new(move |view, terminals| {
-        // The guard's Drop clears the in-flight `pending_types` entry on every arm.
-        let _pending_guard = pending_guard;
-        // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
-        // walk's feed; the parks are notify-only waits on a forward reference. Each field type the
-        // walk yields is cloned out as owned data, so the composed type needs no operand fold.
-        let owned: Vec<Carried<'step>> = terminals.owned_slice().iter().map(|t| t.value).collect();
-        match compose_field_list(
-            &view.step_ctx(),
-            view.current_scope(),
-            rewalk,
-            &owned,
-            compose,
-            view.types(),
-        ) {
-            Ok(sealed) => Outcome::Done(Ok(sealed)),
-            Err(e) => Outcome::Done(Err(e)),
+}
+
+impl<'a> FieldListDeferral<'a> {
+    /// The five fields every deferral names: the parked field-list `expr`, its forward-ref
+    /// `park_producers`, the sigil `sub_dispatches` (DFS order), and the `context` / `name_kind`
+    /// diagnostic and field-name policy. The elaborator-rebuild optionals default empty/absent.
+    pub(crate) fn new(
+        expr: KExpression<'a>,
+        park_producers: Vec<NodeId>,
+        sub_dispatches: Vec<KExpression<'a>>,
+        context: FieldListContext,
+        name_kind: FieldNameKind,
+    ) -> Self {
+        Self {
+            expr,
+            park_producers,
+            sub_dispatches,
+            context,
+            name_kind,
+            threaded: Vec::new(),
+            window: None,
+            chain: None,
+            pending_guard: None,
+            error_frame: None,
         }
-    });
-    // Shares the structural `[park..., owned...]` split with the `Action` twins, then lowers each
-    // owned sub-Dispatch into the library dep currency `Await::on` consumes. The finish reads only
-    // the owned suffix through the view.
-    let (parks, owned) = field_list_deps(park_producers, sub_dispatches).into_parts();
-    let mut lowered: Deps<DepRequest<'step>> = Deps::from_parks(parks);
-    for sub in owned {
-        lowered.own(sub.into_request());
     }
-    Await::on(lowered)
-        .error_frame(dep_error_frame())
-        .finish_terminal(finish)
-}
 
-/// `Action`-harness twin of [`defer_field_list`]: declares the identical [`field_list_deps`] split
-/// but wraps the dep-finish as an [`Action`](crate::machine::core::Action) — its
-/// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list_action<'a>(
-    expr: KExpression<'a>,
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'a>>,
-    context: FieldListContext,
-    name_kind: FieldNameKind,
-    threaded: Vec<String>,
-    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
-    chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard>,
-    error_frame: Option<TraceFrame>,
-    finalize: FieldListFinalizeAction<'a>,
-) -> crate::machine::core::Action<'a> {
-    use crate::machine::core::{Action, AwaitContinue};
-    // The shared structural split: parks = park_producers, owned = subs (DFS order); the scheduler
-    // feeds results as [park.., owned..] — so the re-walk consumes the owned suffix, exactly as the
-    // scheduler-side twin does.
-    let deps = field_list_deps(park_producers, sub_dispatches);
-    let rewalk = FieldListRewalk {
-        expr,
-        context,
-        name_kind,
-        threaded,
-        window,
-        chain,
-        error_frame,
-    };
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        // The guard's Drop clears the in-flight `pending_types` entry on every arm.
-        let _pending_guard = pending_guard;
-        // Every terminal's carrier — parks then owned — folds into the result so a field type
-        // that embeds a park's forward-referenced type or an owned sub-Dispatch's type carries
-        // that producer's reach forward; the owned values, read live at the step brand
-        // (un-relocated), feed the re-walk, which clones each type into the folded field list.
-        let carriers: Vec<&DeliveredCarried> = results.all().iter().map(|t| &t.delivered).collect();
-        let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
-        Action::Done(
-            rewalk
-                .run(fctx.scope, &owned, fctx.types)
-                .and_then(|fields| finalize(fctx, fields, &carriers)),
-        )
-    });
-    Action::AwaitDeps { deps, finish }
-}
+    /// Seed the re-walk's threaded self-reference set (a declaration threads its own binder name so a
+    /// self-recursive reference resolves through the window rather than parking).
+    pub(crate) fn with_threaded(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.threaded = names.into_iter().collect();
+        self
+    }
 
-/// Composed twin of [`defer_field_list_action`]: declares the identical [`field_list_deps`] split,
-/// but its finish runs the re-walk through [`compose_field_list`] rather than a caller-supplied
-/// `finalize` over the dep carriers. `compose` assembles the elaborated pairs — plus whatever owned
-/// type content it closed over, such as the FN return type — into the result `KType`. Used by
-/// `build_carrier` (`src/builtins/parameterized_types.rs`); `nominal_schema` keeps the
-/// `finalize` twin.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn defer_field_list_action_composed<'a>(
-    expr: KExpression<'a>,
-    park_producers: Vec<NodeId>,
-    sub_dispatches: Vec<KExpression<'a>>,
-    context: FieldListContext,
-    name_kind: FieldNameKind,
-    threaded: Vec<String>,
-    window: Option<std::rc::Rc<crate::machine::model::RecursiveGroupWindow>>,
-    chain: Option<Rc<LexicalFrame>>,
-    pending_guard: Option<PendingBinderGuard>,
-    error_frame: Option<TraceFrame>,
-    compose: BrandCompose<'a>,
-) -> crate::machine::core::Action<'a> {
-    use crate::machine::core::{Action, AwaitContinue};
-    // The shared structural split: parks = park_producers, owned = subs (DFS order); the scheduler
-    // feeds results as [park.., owned..].
-    let deps = field_list_deps(park_producers, sub_dispatches);
-    let rewalk = FieldListRewalk {
-        expr,
-        context,
-        name_kind,
-        threaded,
-        window,
-        chain,
-        error_frame,
-    };
-    let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
-        // The guard's Drop clears the in-flight `pending_types` entry on every arm.
-        let _pending_guard = pending_guard;
-        // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
-        // walk feed; the parks are notify-only waits on a forward reference. Each field type the
-        // walk yields is cloned out as owned data, so the composed type needs no operand fold.
-        let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
-        Action::Done(compose_field_list(
-            &fctx.ctx, fctx.scope, rewalk, &owned, compose, fctx.types,
-        ))
-    });
-    Action::AwaitDeps { deps, finish }
+    /// Set the declaration window the first walk minted its sibling handles against, so the re-walk
+    /// mints the same indices.
+    pub(crate) fn with_window(
+        mut self,
+        window: std::rc::Rc<crate::machine::model::RecursiveGroupWindow>,
+    ) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// Set the lexical chain the re-walk resolves crossed-scope field names against.
+    pub(crate) fn with_chain(mut self, chain: Option<Rc<LexicalFrame>>) -> Self {
+        self.chain = chain;
+        self
+    }
+
+    /// Move the in-flight binder guard into the deferral so its `Drop` fires on every finish arm,
+    /// clearing the `pending_types` entry once the deferred walk resolves.
+    pub(crate) fn with_pending_guard(mut self, guard: PendingBinderGuard) -> Self {
+        self.pending_guard = Some(guard);
+        self
+    }
+
+    /// Attach the trace frame the user-facing `Err` arm labels a shape error with.
+    pub(crate) fn with_error_frame(mut self, frame: TraceFrame) -> Self {
+        self.error_frame = Some(frame);
+        self
+    }
+
+    /// Split the deferral into the deferred re-walk, the shared `[park_producers ++ owned_subs]` dep
+    /// vector (parks first, then each sub-Dispatch owned in DFS order), and the pending guard the
+    /// finish closure carries. The one place the dep vector is assembled.
+    fn into_parts(
+        self,
+    ) -> (
+        FieldListRewalk<'a>,
+        Deps<OwnedDispatch<'a>>,
+        Option<PendingBinderGuard>,
+    ) {
+        let rewalk = FieldListRewalk {
+            expr: self.expr,
+            context: self.context,
+            name_kind: self.name_kind,
+            threaded: self.threaded,
+            window: self.window,
+            chain: self.chain,
+            error_frame: self.error_frame,
+        };
+        let mut deps = Deps::from_parks(self.park_producers);
+        for expr in self.sub_dispatches {
+            deps.own(OwnedDispatch {
+                expr,
+                placement: DepPlacement::OwnScope,
+            });
+        }
+        (rewalk, deps, self.pending_guard)
+    }
+
+    /// Finish into the scheduler currency: a [`Outcome::ParkThenContinue`] whose dep-finish re-walks
+    /// `expr` once the parks and owned sub-Dispatches resolve, then composes the pairs through
+    /// `compose`. A pure decide, no write.
+    pub(in crate::machine::execute) fn outcome(self, compose: BrandCompose<'a>) -> Outcome<'a> {
+        let (rewalk, deps, pending_guard) = self.into_parts();
+        let finish: TerminalDepFinish<'a> = Box::new(move |view, terminals| {
+            // The guard's Drop clears the in-flight `pending_types` entry on every arm.
+            let _pending_guard = pending_guard;
+            // The owned suffix — each sub-Dispatch's terminal read live at the step brand — is the
+            // walk's feed; the parks are notify-only waits on a forward reference. Each field type the
+            // walk yields is cloned out as owned data, so the composed type needs no operand fold.
+            let owned: Vec<Carried<'a>> = terminals.owned_slice().iter().map(|t| t.value).collect();
+            match compose_field_list(
+                &view.step_ctx(),
+                view.current_scope(),
+                rewalk,
+                &owned,
+                compose,
+                view.types(),
+            ) {
+                Ok(sealed) => Outcome::Done(Ok(sealed)),
+                Err(e) => Outcome::Done(Err(e)),
+            }
+        });
+        // Lower each owned sub-Dispatch into the library dep currency `Await::on` consumes; the finish
+        // reads only the owned suffix through the view.
+        let (parks, owned) = deps.into_parts();
+        let mut lowered: Deps<DepRequest<'a>> = Deps::from_parks(parks);
+        for sub in owned {
+            lowered.own(sub.into_request());
+        }
+        Await::on(lowered)
+            .error_frame(dep_error_frame())
+            .finish_terminal(finish)
+    }
+
+    /// Finish into the `Action` currency: an [`Action::AwaitDeps`](crate::machine::core::Action) whose
+    /// re-walk of `expr` lifts the `finalize` result into `Action::Done`.
+    pub(crate) fn action(
+        self,
+        finalize: FieldListFinalizeAction<'a>,
+    ) -> crate::machine::core::Action<'a> {
+        use crate::machine::core::{Action, AwaitContinue};
+        let (rewalk, deps, pending_guard) = self.into_parts();
+        let finish: AwaitContinue<'a> = Box::new(move |fctx, results| {
+            // The guard's Drop clears the in-flight `pending_types` entry on every arm.
+            let _pending_guard = pending_guard;
+            // The owned suffix — each sub-Dispatch's terminal read live at the step brand — feeds the
+            // re-walk; the parks are notify-only waits on a forward reference. Each field type the
+            // walk yields is cloned out as owned data, so the composed type needs no operand fold.
+            let owned: Vec<Carried<'a>> = results.owned_slice().iter().map(|t| t.value).collect();
+            Action::Done(
+                rewalk
+                    .run(fctx.scope, &owned, fctx.types)
+                    .and_then(|fields| finalize(fctx, fields)),
+            )
+        });
+        Action::AwaitDeps { deps, finish }
+    }
+
+    /// Finish into the `Action` currency through a [`BrandCompose`], adapting `compose` into a
+    /// [`FieldListFinalizeAction`] that carries the composed `KType` through the finish's allocator.
+    pub(crate) fn action_composed(
+        self,
+        compose: BrandCompose<'a>,
+    ) -> crate::machine::core::Action<'a> {
+        self.action(Box::new(move |fctx, fields| {
+            Ok(fctx.ctx.type_carried(compose(fields, fctx.types)?))
+        }))
+    }
 }
 
 /// Elaborate a standalone `:{…}` record type to `Carried::Type(KType::Record { .. })`.
@@ -340,18 +342,16 @@ pub(crate) fn elaborate_record_value<'step, 'view>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_field_list(
+        } => FieldListDeferral::new(
             fields,
             park_producers,
             sub_dispatches,
             FieldListContext::RECORD_TYPE,
             FieldNameKind::Identifier,
-            Vec::new(),
-            None,
-            chain,
-            None,
-            None,
-            Box::new(|pairs, types| Ok(types.record(Record::from_pairs(pairs)))),
-        ),
+        )
+        .with_chain(chain)
+        .outcome(Box::new(|pairs, types| {
+            Ok(types.record(Record::from_pairs(pairs)))
+        })),
     }
 }

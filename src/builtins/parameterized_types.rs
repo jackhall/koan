@@ -19,7 +19,7 @@ use crate::machine::model::{KType, Record};
 use crate::machine::{KError, KErrorKind, Scope};
 
 use super::{arg, kw, sig};
-use crate::machine::{defer_field_list_action_composed, BrandCompose};
+use crate::machine::{BrandCompose, FieldListDeferral};
 
 /// Diagnostic nouns for the shared field-list parser when it walks an `:(FN …)` parameter list.
 const FN_PARAMS_CONTEXT: FieldListContext = FieldListContext::FN_TYPE_PARAMETERS;
@@ -51,7 +51,7 @@ fn require_proper_type(
 
 /// `Action`-harness twins of the type-constructor bodies. LIST/MAP/AS compose from resolved type
 /// args directly (`Done`); FN routes the parameter list through [`build_carrier`], which either
-/// resolves synchronously or defers via `defer_field_list_action_composed`.
+/// resolves synchronously or defers via a `FieldListDeferral` finished through `action_composed`.
 mod action_bodies {
     use super::{build_carrier, require_proper_type};
     use crate::machine::model::constructor_param_names;
@@ -123,7 +123,7 @@ fn ret_compose<'a>(ret: KType) -> BrandCompose<'a> {
 /// Walk the parameter list through the shared field-list parser (the same one UNION / NEWTYPE use),
 /// so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch and capitalized
 /// param names like `Ty` are accepted. Resolves synchronously or defers via
-/// [`defer_field_list_action_composed`] (no self-reference binder, no pending guard).
+/// [`FieldListDeferral::action_composed`] (no self-reference binder, no pending guard).
 fn build_carrier<'a>(
     ctx: &crate::machine::BodyCtx<'a, '_>,
     sig_slot: &str,
@@ -154,19 +154,14 @@ fn build_carrier<'a>(
         FieldListOutcome::Pending {
             park_producers,
             sub_dispatches,
-        } => defer_field_list_action_composed(
+        } => FieldListDeferral::new(
             sig_expr,
             park_producers,
             sub_dispatches,
             FN_PARAMS_CONTEXT,
             FN_PARAM_NAME_KIND,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            ret_compose(ret),
-        ),
+        )
+        .action_composed(ret_compose(ret)),
     }
 }
 
