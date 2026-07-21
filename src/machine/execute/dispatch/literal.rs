@@ -6,8 +6,7 @@ use crate::machine::model::CarriedFamily;
 use crate::machine::model::ExpressionPart;
 use crate::machine::model::{Carried, Held, KKey, KObject, Record, TypeRegistry};
 use crate::machine::{
-    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NameLookup, NameOutcome,
-    NodeId, TraceFrame,
+    CarrierWitness, DeliveredCarried, KError, KErrorKind, KoanRegion, NodeId, TraceFrame,
 };
 use crate::source::Spanned;
 use crate::witnessed::{reattachable, Delivered, RegionHandle, Residence, Witnessed};
@@ -16,8 +15,8 @@ use super::super::outcome::DepTerminal;
 use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
-use super::resolve_name_part;
 use super::stage_eager_part;
+use super::{resolve_bare_carrier, BareCarrier};
 use crate::scheduler::{DepResults, ResolvedDeps};
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the partial cell
@@ -246,9 +245,9 @@ impl<'step> KoanRuntime<'step> {
         )
     }
 
-    /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is suppressed
-    /// (`consumer = None` to `resolve_name_part`) because the dep-finish slot does not yet exist;
-    /// cycles are caught post-submission against the dep-finish ID.
+    /// Plan one slot of a list / dict literal. The bare-name ladder does no cycle check — the
+    /// dep-finish slot does not yet exist, so a still-finalizing name parks and cycles are caught
+    /// post-submission against the dep-finish ID.
     fn classify_aggregate_part<'a>(
         &mut self,
         part: ExpressionPart<'a>,
@@ -284,66 +283,34 @@ impl<'step> KoanRuntime<'step> {
         }
     }
 
-    /// Shared eager-resolve for the Identifier and leaf-Type branches. Unbound / ProducerErrored /
-    /// Cycle outcomes fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path (and
-    /// the dep-finish's dep-error short-circuit) handles them uniformly.
+    /// Shared eager-resolve for the Identifier and leaf-Type branches. A bound name seals its
+    /// binding-scope carrier — value and reach as one cell, witnessed by its binding scope's home
+    /// frame — straight into a static slot; a still-finalizing name parks. Unbound / producer-errored
+    /// names fall back to a sub-Dispatch so the `BareIdentifier` fast lane's error path (and the
+    /// dep-finish's dep-error short-circuit) handles them uniformly.
     fn resolve_aggregate_bare_name<'a>(
         &mut self,
         part: &ExpressionPart<'a>,
         deps: &mut ResolvedDeps,
     ) -> Slot {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
-        // A value-bound Identifier element rides into the cell on a carrier witnessed by its binding
-        // scope's home frame, which transitively pins that scope's reach-set — so the cell names the
-        // value's reach by construction, never an asserted co-location bundle. Type leaves and unbound /
-        // pending names fall to the shared `resolve_name_part` path below.
-        if let ExpressionPart::Identifier(name) = part {
-            let resolved = with_current_node_scope(&self.ambient, |s| {
-                s.resolve_value_carrier(name, active_chain.map(|c| &**c))
-            });
-            if let Some(NameLookup::Bound(carrier)) = resolved {
-                let delivered =
-                    with_current_node_scope(&self.ambient, |s| s.seal_resident_delivered(carrier));
-                return Slot::Static(delivered);
-            }
-        }
-        // Resolve + seal inside the brand (the scope and its `NameOutcome` are branded); the rebuilt
-        // owned `part_b` matches the scope's `'b`. The unbound / errored / cycle fallback needs
-        // `&mut self`, so it runs after the read closes — `None` signals it.
+        // `BareCarrier` is lifetime-free, so the whole result escapes the branded-scope closure and
+        // the `&mut self` fallback runs after the read closes.
         let resolved = with_current_node_scope(&self.ambient, |s| {
-            let part_b = match part {
-                ExpressionPart::Identifier(n) => ExpressionPart::Identifier(n.clone()),
-                ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
-                _ => unreachable!("resolve_aggregate_bare_name only sees Identifier / Type parts"),
-            };
-            match resolve_name_part(
+            resolve_bare_carrier(
                 s,
-                &part_b,
-                &self.sched,
+                part,
                 active_chain,
-                None,
+                &self.sched,
                 self.ambient.type_registry(),
-            ) {
-                // A first-class **type** resolved into the cell is witnessed in place: a `KType` is
-                // owned data stored in the resolving scope's own region, so the read travels under
-                // the read scope's home-frame pin alone.
-                NameOutcome::Resolved(Carried::Type(kt)) => Some(Slot::Static(
-                    s.seal_resident_delivered(s.resident_type_carrier(kt)),
-                )),
-                // The value case is handled above via the reach-carrying binding-scope carrier
-                // (`resolve_value_carrier`). A bare `Carried::Object` reaching here carries no reach to
-                // build a correct carrier from, so it falls through to the sub-dispatch fallback rather
-                // than wrapping a reachless value.
-                NameOutcome::Resolved(Carried::Object(_) | Carried::UnresolvedType(_)) => None,
-                NameOutcome::Parked(producer) => Some(Slot::Park(deps.park_on(producer))),
-                NameOutcome::Unbound(_)
-                | NameOutcome::ProducerErrored(_)
-                | NameOutcome::Cycle(_) => None,
-            }
+            )
         });
         match resolved {
-            Some(slot) => slot,
-            None => {
+            Ok(BareCarrier::Sealed(cell)) => Slot::Static(cell),
+            Ok(BareCarrier::Parked(producer)) => Slot::Park(deps.park_on(producer)),
+            // Unbound / producer-errored: fall back to a sub-Dispatch so the `BareIdentifier` fast
+            // lane's error path surfaces them uniformly.
+            Ok(BareCarrier::Unbound(_)) | Err(_) => {
                 let expr =
                     crate::machine::model::KExpression::new(vec![Spanned::bare(part.clone())]);
                 Slot::owned(deps, self.dispatch_in_own_scope(expr))

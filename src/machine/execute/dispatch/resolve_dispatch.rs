@@ -12,7 +12,7 @@
 //! dead lean must not pre-empt an outer scope that could strict-pick the bare
 //! name as an `:Identifier` / `:Any` slot.
 
-use crate::machine::core::{BindKind, FunctionLookup, KError, LexicalFrame, Scope};
+use crate::machine::core::{BindKind, FunctionLookup, LexicalFrame, Scope};
 use crate::machine::core::{ClassifiedSlots, KFunction};
 use crate::machine::model::Carried;
 use crate::machine::model::TypeRegistry;
@@ -25,15 +25,12 @@ use super::is_eager_part;
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
 /// non-bare-name parts) and consumed by strict admission and the relaxed pass.
-/// `Cycle` and `ProducerErrored` are short-circuited upfront and treated as
-/// defensive rejects here.
+/// A producer error absorbs into the builder's `Err` before the cache is built,
+/// so it never appears as an outcome here.
 pub enum NameOutcome<'step> {
     Resolved(Carried<'step>),
     Parked(NodeId),
-    ProducerErrored(KError),
     Unbound(String),
-    /// Parking would close a wake cycle (trivial `LET Ty = Ty` etc.).
-    Cycle(String),
 }
 
 // Test-only entry counter: fast-lane dispatch shapes must route around the
@@ -394,8 +391,8 @@ fn relaxed_admits<'e>(
         match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
             Some(NameOutcome::Parked(p)) => leans.push(Lean::Parked(*p)),
             Some(NameOutcome::Unbound(name)) => leans.push(Lean::Dead(name.clone())),
-            // Resolved / Cycle / ProducerErrored / keyword / literal mismatch:
-            // a hard reject no arriving input or binding can flip.
+            // Resolved / keyword / literal mismatch: a hard reject no arriving
+            // input or binding can flip.
             _ => return None,
         }
     }
@@ -488,7 +485,6 @@ fn slot_admits_strict<'e>(
                 Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
                     arg.matches(part_value, types)
                 }
-                Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => false,
                 None => arg.matches(part_value, types),
             }
         }

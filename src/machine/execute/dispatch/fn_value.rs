@@ -26,15 +26,13 @@ pub(super) fn initial<'step>(
         // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
         Some(NameLookup::Bound(obj)) => dispatch_callable_value(ctx, expr, obj),
         // Head placeholder. `Errored` means the binder failed before binding the head, so the name
-        // never became a value — propagate. `Park` re-runs the fast lane on resume. The `Ready` arm
-        // is unreachable; its message carries the reasoning.
+        // never became a value — propagate. `Ready` means the producer finalized without binding the
+        // head as a value, so the name is unbound. `Park` re-runs the fast lane on resume.
         Some(NameLookup::Parked(producer)) => match ctx.producer_standing(producer) {
             ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
-            ProducerStanding::Ready => unreachable!(
-                "head placeholder `{head}` producer finalized Ok without registering the \
-                 name — a binder's successful finalize always binds its name, so a \
-                 ready-Ok producer must resolve to a Bound, not a Parked",
-            ),
+            ProducerStanding::Ready => {
+                Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head))))
+            }
             ProducerStanding::Park => install_head_park(producer, expr),
         },
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),

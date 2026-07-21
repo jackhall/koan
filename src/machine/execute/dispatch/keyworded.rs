@@ -2,22 +2,20 @@
 //! keyword present, or a head that isn't a fast-lane shape.
 
 use crate::machine::core::{BlockEntry, FramePlacement};
-use crate::machine::model::Carried;
 use crate::machine::model::KExpression;
-use crate::machine::model::TypeResolution;
 use crate::machine::{
-    BindingIndex, DispatchOutcome, KError, KErrorKind, NameLookup, NameOutcome, NodeId, TraceFrame,
+    BindingIndex, DispatchOutcome, KError, KErrorKind, NameOutcome, NodeId, TraceFrame,
 };
 
 use super::super::ignore_results;
 use super::super::nodes::{ChainOp, NodeWork};
 use super::super::obligation::with_obligation;
 use super::ctx::SchedulerView;
+use super::ProducerDisposition;
 use super::{
     bare_name_of, park_resume, propagate_dep_error, stage_eager_part, staged_slot_placeholder,
-    DepRequest, Outcome, PartWalkResult, Resolved,
+    BareCarrier, DepRequest, Outcome, PartWalkResult, Resolved,
 };
-use super::ProducerDisposition;
 use crate::scheduler::ResolvedDeps;
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
@@ -29,10 +27,14 @@ pub(super) fn initial<'step>(
     pre_subs: Vec<(usize, NodeId)>,
     idx: usize,
 ) -> Outcome<'step> {
-    let bare_outcomes = ctx.build_bare_outcomes(&expr.parts);
-    if let Some(e) = producer_error(&bare_outcomes, &expr) {
-        return Outcome::Done(Err(e));
-    }
+    let bare_outcomes = match ctx.build_bare_outcomes(&expr.parts) {
+        Ok(outcomes) => outcomes,
+        Err(e) => {
+            return Outcome::Done(Err(
+                e.with_frame(TraceFrame::from_expr("<wrap-resolve>", &expr))
+            ))
+        }
+    };
     let chain = ctx.chain_deref();
     // Resolve dispatch against the cart scope at `'step`: the `Resolved` carries the picked function
     // already at the cart lifetime, so it rides straight into `invoke_continue` with no re-anchor.
@@ -137,24 +139,6 @@ fn walk_and_invoke<'step>(
     install_eager_subs_track(ctx, new_expr, staged_subs)
 }
 
-/// The short-circuit both resolves lead with: a bare-name arg whose producer already errored can
-/// never resolve, so the propagated error surfaces before dispatch is consulted.
-fn producer_error<'step>(
-    bare_outcomes: &[Option<NameOutcome<'step>>],
-    expr: &KExpression<'step>,
-) -> Option<KError> {
-    bare_outcomes
-        .iter()
-        .flatten()
-        .find_map(|outcome| match outcome {
-            NameOutcome::ProducerErrored(e) => Some(propagate_dep_error(
-                e,
-                Some(TraceFrame::from_expr("<wrap-resolve>", expr)),
-            )),
-            _ => None,
-        })
-}
-
 /// Re-resolve dispatch against `working_expr` once its eager subs have spliced back in.
 ///
 /// The re-resolve runs the same `bare_outcomes` cache + [`walk_and_invoke`] tail [`initial`]
@@ -171,10 +155,14 @@ pub(super) fn finish<'step>(
     working_expr: KExpression<'step>,
     idx: usize,
 ) -> Outcome<'step> {
-    let bare_outcomes = ctx.build_bare_outcomes(&working_expr.parts);
-    if let Some(e) = producer_error(&bare_outcomes, &working_expr) {
-        return Outcome::Done(Err(e));
-    }
+    let bare_outcomes = match ctx.build_bare_outcomes(&working_expr.parts) {
+        Ok(outcomes) => outcomes,
+        Err(e) => {
+            return Outcome::Done(Err(
+                e.with_frame(TraceFrame::from_expr("<wrap-resolve>", &working_expr))
+            ))
+        }
+    };
     let scope = ctx.current_scope();
     match scope.resolve_dispatch(
         &working_expr,
@@ -392,90 +380,35 @@ fn part_walk<'step>(
             continue;
         }
         if wrap_set.contains(&i) {
-            match &bare_outcomes[i] {
-                Some(NameOutcome::Resolved(c)) => {
-                    // A resolved bound name splices inline as its binding-scope carrier — value and
-                    // reach as one cell. An object rides the value channel (`resolve_value_carrier`,
-                    // total over resolvable value names); a first-class type re-consults the memoized
-                    // type-resolution surface, whose hit carries the binding's stored reach.
-                    let cell = match (c, &part.value) {
-                        (Carried::Object(_), _) => {
-                            let name = bare_name_of(&part.value).unwrap_or_default();
-                            match ctx
-                                .current_scope()
-                                .resolve_value_carrier(&name, ctx.chain_deref())
-                            {
-                                Some(NameLookup::Bound(carrier)) => {
-                                    ctx.current_scope().seal_resident_delivered(carrier)
-                                }
-                                _ => {
-                                    return Err(KError::new(KErrorKind::ShapeError(format!(
-                                        "resolved value `{name}` names no binding carrier"
-                                    ))))
-                                }
-                            }
-                        }
-                        (Carried::Type(_), ExpressionPart::Type(t)) => {
-                            // A first-class type re-consults `resolve_type_identifier` — the
-                            // `Carried::Object` arm's `resolve_value_carrier` walks `data` and misses
-                            // a types binding — and is witnessed in place from the hit's stored reach.
-                            // A module is a value and takes the `Carried::Object` arm above.
-                            match ctx.current_scope().resolve_type_identifier(
-                                t,
-                                ctx.active_chain(),
-                                ctx.types(),
-                            ) {
-                                TypeResolution::Done(kt) => {
-                                    let scope = ctx.current_scope();
-                                    scope.seal_resident_delivered(scope.resident_type_carrier(kt))
-                                }
-                                _ => {
-                                    return Err(KError::new(KErrorKind::ShapeError(format!(
-                                        "resolved type `{}` lost its resolution",
-                                        t.render()
-                                    ))))
-                                }
-                            }
-                        }
-                        (Carried::Type(_), _) => {
-                            return Err(KError::new(KErrorKind::ShapeError(
-                                "a type resolved from a non-type part".into(),
-                            )))
-                        }
-                        (Carried::UnresolvedType(ti), _) => {
-                            return Err(KError::new(KErrorKind::UnboundName(ti.render())))
-                        }
-                    };
-                    new_parts.push(Spanned {
-                        // A resident read: the value lives in this scope's region, so the delivery
-                        // envelope's pin is the scope's own region owner (the seal-resident veneer) —
-                        // self-covering, identical in shape to a delivered dep.
-                        value: ExpressionPart::Spliced { cell },
-                        span,
-                    });
-                }
-                Some(NameOutcome::Parked(p)) => {
-                    park_walk_producer(ctx, *p, idx, &part.value, &mut producers_to_wait)?;
+            if !matches!(
+                &part.value,
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+            ) {
+                debug_assert!(false, "wrap_indices implies bare-name part");
+                new_parts.push(Spanned {
+                    value: part.value,
+                    span,
+                });
+                continue;
+            }
+            match ctx.resolve_bare_carrier(&part.value)? {
+                // A resolved bound name splices inline as its binding-scope carrier — value and reach
+                // as one cell. A resident read: the value lives in this scope's region, so the
+                // delivery envelope's pin is the scope's own region owner (the seal-resident veneer) —
+                // self-covering, identical in shape to a delivered dep.
+                BareCarrier::Sealed(cell) => new_parts.push(Spanned {
+                    value: ExpressionPart::Spliced { cell },
+                    span,
+                }),
+                BareCarrier::Parked(p) => {
+                    park_walk_producer(ctx, p, idx, &part.value, &mut producers_to_wait)?;
                     new_parts.push(Spanned {
                         value: part.value,
                         span,
                     });
                 }
-                Some(NameOutcome::Unbound(name)) => {
-                    return Err(KError::new(KErrorKind::UnboundName(name.clone())));
-                }
-                Some(NameOutcome::Cycle(_)) => {
-                    unreachable!("cache built with consumer=None never yields Cycle");
-                }
-                Some(NameOutcome::ProducerErrored(_)) => {
-                    unreachable!("ProducerErrored short-circuited upfront");
-                }
-                None => {
-                    debug_assert!(false, "wrap_indices implies bare-name part");
-                    new_parts.push(Spanned {
-                        value: part.value,
-                        span,
-                    });
+                BareCarrier::Unbound(name) => {
+                    return Err(KError::new(KErrorKind::UnboundName(name)));
                 }
             }
             continue;

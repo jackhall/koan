@@ -18,7 +18,7 @@ use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{CallFrame, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
@@ -26,7 +26,8 @@ use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
 use super::{
-    resolve_name_part, Await, DepRequest, Outcome, ProducerDisposition, ProducerStanding,
+    resolve_bare_carrier, resolve_name_part, Await, BareCarrier, DepRequest, Outcome,
+    ProducerDisposition, ProducerStanding,
 };
 use crate::scheduler::{Deps, Scheduler};
 
@@ -197,26 +198,44 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,
-    /// `None` otherwise. `consumer = None` defers cycle detection to the splice walk.
+    /// `None` otherwise. The first part whose producer already errored short-circuits to `Err`,
+    /// so the propagated error surfaces before `resolve_dispatch` is consulted; cycle detection
+    /// is deferred to the splice walk.
     pub(super) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<ExpressionPart<'step>>],
-    ) -> Vec<Option<NameOutcome<'step>>> {
+    ) -> Result<Vec<Option<NameOutcome<'step>>>, KError> {
         let active_chain = self.ambient.active_payload().map(|p| &p.chain);
         parts
             .iter()
             .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => Some(resolve_name_part(
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => resolve_name_part(
                     self.current_scope(),
                     &p.value,
                     self.sched,
                     active_chain,
-                    None,
                     self.types(),
-                )),
-                _ => None,
+                )
+                .map(Some),
+                _ => Ok(None),
             })
             .collect()
+    }
+
+    /// Reach the bare-name ladder for a single part, supplying the current scope, chain,
+    /// scheduler, and type registry — the wrap-slot resolve `part_walk` runs.
+    pub(super) fn resolve_bare_carrier(
+        &self,
+        part: &ExpressionPart<'step>,
+    ) -> Result<BareCarrier, KError> {
+        let active_chain = self.ambient.active_payload().map(|p| &p.chain);
+        resolve_bare_carrier(
+            self.current_scope(),
+            part,
+            active_chain,
+            self.sched,
+            self.types(),
+        )
     }
 
     /// Install each staged eager dep and decide the eager-subs outcome. Every dep is already

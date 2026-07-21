@@ -8,7 +8,6 @@
 //! closure.
 
 use crate::machine::core::{FoldingBrand, KoanRegion, KoanRegionExt, Scope};
-use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, KObject};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::{KError, KErrorKind, NameLookup};
@@ -21,7 +20,8 @@ use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
 use super::{
-    become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome, ProducerStanding,
+    become_dispatch, forward_to_producer, park_resume, type_channel, Await, DepRequest, Outcome,
+    ProducerStanding, TypeChannel,
 };
 use crate::machine::model::CarriedFamily;
 use crate::scheduler::Deps;
@@ -49,47 +49,37 @@ pub(super) fn bare_type_leaf<'step, 'b>(
     s: &'b Scope<'b>,
     t: &TypeIdentifier,
 ) -> Outcome<'step> {
-    match s.resolve_type_identifier(t, ctx.active_chain(), ctx.types()) {
+    // The leaf wants the raw resident carrier, not the sealed envelope, so it consumes the shared
+    // type-channel + first-producer surface rather than the full sealing ladder.
+    match type_channel(s, t, ctx.active_chain(), ctx.types()) {
         // A resolved type leaf is carried in place under `s` (the scope it was resolved
         // against): a `KType` is a `Copy` registry handle, so the read is a plain handle copy
         // — no reach to name, no re-home, no `child_scope()` walk.
-        TypeResolution::Done(kt) => {
-            Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt))))
-        }
-        TypeResolution::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
-        // A still-finalizing referent. A visible type alias has already resolved its RHS
-        // through the bridge, so a bare leaf parks on exactly one producer; park on it and
-        // re-resolve once it seals. A producer already terminal-with-error short-circuits.
-        TypeResolution::Park(producers) => {
-            let producer = match producers.first() {
-                Some(p) => *p,
-                None => {
-                    return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(t.render()))));
-                }
-            };
-            // A bare leaf has no consumer id in scope, so its standing is read consumer-less — no
-            // cycle arm.
-            match ctx.producer_standing(producer) {
-                ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
-                // Ready-and-bound: the referent finalized between resolve and this check, so
-                // re-resolve directly — the memoized bridge now admits.
-                ProducerStanding::Ready => bare_type_leaf(ctx, s, t),
-                // The producer's terminal is not the type carrier (a finalize-combine returns its own
-                // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
-                // than lifting the producer's value. No spliced expression to render, so carrier is
-                // `None`.
-                ProducerStanding::Park => {
-                    let leaf = t.clone();
-                    park_resume(
-                        vec![producer],
-                        None,
-                        Box::new(move |ctx, _idx| {
-                            ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
-                        }),
-                    )
-                }
+        TypeChannel::Done(kt) => Outcome::Done(Ok(StepCarried::born(s.resident_type_carrier(kt)))),
+        TypeChannel::Unbound(n) => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(n)))),
+        // A still-finalizing referent. A visible type alias has already resolved its RHS through the
+        // bridge, so a bare leaf parks on exactly one producer. A bare leaf has no consumer id in
+        // scope, so its standing is read consumer-less — no cycle arm.
+        TypeChannel::Parked(producer) => match ctx.producer_standing(producer) {
+            ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
+            // Ready-and-bound: the referent finalized between resolve and this check, so
+            // re-resolve directly — the memoized bridge now admits.
+            ProducerStanding::Ready => bare_type_leaf(ctx, s, t),
+            // The producer's terminal is not the type carrier (a finalize-combine returns its own
+            // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
+            // than lifting the producer's value. No spliced expression to render, so carrier is
+            // `None`.
+            ProducerStanding::Park => {
+                let leaf = t.clone();
+                park_resume(
+                    vec![producer],
+                    None,
+                    Box::new(move |ctx, _idx| {
+                        ctx.with_current_scope(|s| bare_type_leaf(ctx, s, &leaf))
+                    }),
+                )
             }
-        }
+        },
     }
 }
 

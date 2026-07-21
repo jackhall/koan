@@ -68,6 +68,7 @@ digraph {
     "koan::machine::execute::ambient" [label="koan::machine::execute::ambient"];
     "koan::machine::execute::dispatch" [label="koan::machine::execute::dispatch"];
     "koan::machine::execute::dispatch::apply_callable" [label="koan::machine::execute::dispatch::apply_callable"];
+    "koan::machine::execute::dispatch::bare_name" [label="koan::machine::execute::dispatch::bare_name"];
     "koan::machine::execute::dispatch::constructors" [label="koan::machine::execute::dispatch::constructors"];
     "koan::machine::execute::dispatch::ctx" [label="koan::machine::execute::dispatch::ctx"];
     "koan::machine::execute::dispatch::exec" [label="koan::machine::execute::dispatch::exec"];
@@ -208,6 +209,7 @@ digraph {
     "koan::machine::execute" -> "koan::machine::execute::runtime" [label="owns", style="solid"];
     "koan::machine::execute" -> "koan::machine::execute::step_carried" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::apply_callable" [label="owns", style="solid"];
+    "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::bare_name" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::constructors" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::ctx" [label="owns", style="solid"];
     "koan::machine::execute::dispatch" -> "koan::machine::execute::dispatch::exec" [label="owns", style="solid"];
@@ -561,6 +563,11 @@ digraph {
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::apply_callable" -> "koan::source" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::bare_name" -> "koan" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::bare_name" -> "koan::machine" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::bare_name" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::bare_name" -> "koan::machine::execute::runtime" [label="uses", style="dashed"];
+    "koan::machine::execute::dispatch::bare_name" -> "koan::machine::model" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::builtins::test_support" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::constructors" -> "koan::machine" [label="uses", style="dashed"];

@@ -1,7 +1,9 @@
 use crate::builtins::test_support::TestRun;
 use crate::machine::core::StoredReach;
 use crate::machine::core::{run_root_storage, FrameStorageExt};
-use crate::machine::execute::dispatch::resolve_name_part;
+use crate::machine::execute::dispatch::{
+    producer_disposition, resolve_name_part, ProducerDisposition,
+};
 use crate::machine::model::{Carried, KObject, KType};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::BindingIndex;
@@ -28,10 +30,9 @@ fn resolve_name_part_identifier_resolved() {
         &part,
         test_run.runtime.scheduler(),
         None,
-        None,
         &test_run.types,
     ) {
-        NameOutcome::Resolved(Carried::Object(KObject::Number(n))) => assert_eq!(*n, 7.0),
+        Ok(NameOutcome::Resolved(Carried::Object(KObject::Number(n)))) => assert_eq!(*n, 7.0),
         _ => panic!("expected NameOutcome::Resolved(Number)"),
     }
 }
@@ -47,17 +48,15 @@ fn resolve_name_part_type_resolved() {
         &part,
         test_run.runtime.scheduler(),
         None,
-        None,
         &test_run.types,
     ) {
-        NameOutcome::Resolved(Carried::Type(KType::NUMBER)) => {}
+        Ok(NameOutcome::Resolved(Carried::Type(KType::NUMBER))) => {}
         other => {
             let kind = match other {
-                NameOutcome::Resolved(_) => "Resolved(other)",
-                NameOutcome::Parked(_) => "Parked",
-                NameOutcome::ProducerErrored(_) => "ProducerErrored",
-                NameOutcome::Unbound(_) => "Unbound",
-                NameOutcome::Cycle(_) => "Cycle",
+                Ok(NameOutcome::Resolved(_)) => "Resolved(other)",
+                Ok(NameOutcome::Parked(_)) => "Parked",
+                Ok(NameOutcome::Unbound(_)) => "Unbound",
+                Err(_) => "Err",
             };
             panic!("expected Resolved(Type(Number)), got {kind}");
         }
@@ -87,10 +86,9 @@ fn resolve_name_part_parked() {
         &part,
         test_run.runtime.scheduler(),
         None,
-        None,
         &test_run.types,
     ) {
-        NameOutcome::Parked(p) => assert_eq!(p, producer),
+        Ok(NameOutcome::Parked(p)) => assert_eq!(p, producer),
         _ => panic!("expected NameOutcome::Parked(producer)"),
     }
 }
@@ -106,17 +104,17 @@ fn resolve_name_part_unbound() {
         &part,
         test_run.runtime.scheduler(),
         None,
-        None,
         &test_run.types,
     ) {
-        NameOutcome::Unbound(name) => assert_eq!(name, "missing"),
+        Ok(NameOutcome::Unbound(name)) => assert_eq!(name, "missing"),
         _ => panic!("expected NameOutcome::Unbound"),
     }
 }
 
-/// A `consumer` argument that matches its own producer returns `Cycle`, not `Parked`.
+/// The consumer-ful dependence check returns `Cycle` when a slot would park on itself — the
+/// cycle arm `resolve_name_part` no longer carries (it screens consumer-less) lives here.
 #[test]
-fn resolve_name_part_self_park_is_cycle() {
+fn producer_disposition_self_park_is_cycle() {
     let region = run_root_storage();
     let mut test_run = TestRun::silent(&region);
     let scope = test_run.scope;
@@ -126,24 +124,8 @@ fn resolve_name_part_self_park_is_cycle() {
         ))]),
         scope,
     );
-    scope
-        .install_placeholder(
-            "self_ref".to_string(),
-            slot,
-            BindingIndex::BUILTIN,
-            crate::machine::BindKind::Value,
-        )
-        .unwrap();
-    let part = ExpressionPart::Identifier("self_ref".to_string());
-    match resolve_name_part(
-        scope,
-        &part,
-        test_run.runtime.scheduler(),
-        None,
-        Some(slot),
-        &test_run.types,
-    ) {
-        NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),
-        _ => panic!("expected NameOutcome::Cycle"),
+    match producer_disposition(test_run.runtime.scheduler(), slot, slot) {
+        ProducerDisposition::Cycle => {}
+        _ => panic!("expected ProducerDisposition::Cycle"),
     }
 }

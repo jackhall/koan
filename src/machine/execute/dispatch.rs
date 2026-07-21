@@ -21,10 +21,8 @@
 //! only `&mut Scheduler`, so the shape modules never mutate the scheduler (nor spell its field
 //! names).
 
-use crate::machine::model::Carried;
-use crate::machine::model::TypeResolution;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{KError, KErrorKind, NameLookup, NodeId, Scope, TraceFrame};
+use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
 use crate::source::Spanned;
 
 use super::ignore_results;
@@ -41,6 +39,7 @@ pub(in crate::machine::execute) use crate::machine::core::{
 };
 
 pub(in crate::machine::execute) mod apply_callable;
+mod bare_name;
 mod constructors;
 mod ctx;
 mod exec;
@@ -59,6 +58,9 @@ mod submit;
 mod tests;
 
 pub(in crate::machine::execute) use super::outcome::{Await, Continuation, Outcome};
+pub(super) use bare_name::{
+    bare_name_of, resolve_bare_carrier, resolve_name_part, type_channel, BareCarrier, TypeChannel,
+};
 pub(crate) use constructors::{build_type_operand, seal_type_identity};
 pub(in crate::machine::execute) use ctx::{with_node_scope, SchedulerView};
 pub(crate) use field_list::{
@@ -138,87 +140,6 @@ pub(super) fn producer_disposition(
                 ProducerDisposition::Park
             }
         }
-    }
-}
-
-/// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
-/// against `scope`. `consumer = Some(idx)` enables the cycle check;
-/// `consumer = None` skips it.
-pub(super) fn resolve_name_part<'step>(
-    scope: &Scope<'step>,
-    part: &ExpressionPart<'step>,
-    scheduler: &Scheduler<KoanWorkload>,
-    active_chain: Option<&std::rc::Rc<crate::machine::LexicalFrame>>,
-    consumer: Option<NodeId>,
-    types: &crate::machine::model::TypeRegistry,
-) -> NameOutcome<'step> {
-    let (name, is_type) = match part {
-        ExpressionPart::Identifier(n) => (n.as_str(), None),
-        ExpressionPart::Type(t) => (t.as_str(), Some(t)),
-        _ => unreachable!("resolve_name_part only called on bare-name parts"),
-    };
-    let chain = active_chain.map(|c| &**c);
-    match scope.resolve_with_chain(name, chain) {
-        Some(NameLookup::Parked(producer)) => {
-            return disposition_for_producer(scheduler, name, producer, consumer);
-        }
-        // An Identifier part reads the value channel; a Type part takes the type ladder below.
-        Some(NameLookup::Bound(obj)) if is_type.is_none() => {
-            return NameOutcome::Resolved(Carried::Object(obj));
-        }
-        Some(NameLookup::Bound(_)) | None => {}
-    }
-    match is_type {
-        // The bare-leaf type token routes through the memoized, park-capable bridge. A
-        // not-yet-sealed referent parks on its single producer (a visible type alias has
-        // already resolved its RHS, so a leaf parks on at most one binder), reusing the
-        // same ready/cycle disposition the value-side placeholder arm applies.
-        Some(t) => match scope.resolve_type_identifier(t, active_chain.cloned(), types) {
-            TypeResolution::Done(kt) => NameOutcome::Resolved(Carried::Type(kt)),
-            TypeResolution::Unbound(n) => NameOutcome::Unbound(n),
-            TypeResolution::Park(producers) => match producers.first() {
-                Some(producer) => disposition_for_producer(scheduler, name, *producer, consumer),
-                None => NameOutcome::Unbound(name.to_string()),
-            },
-        },
-        None => NameOutcome::Unbound(name.to_string()),
-    }
-}
-
-/// Map a still-finalizing producer for a parked name onto a [`NameOutcome`]. A `Ready`
-/// producer means the name finalized to a non-shadowing value, hence `Unbound`.
-fn disposition_for_producer<'step>(
-    scheduler: &Scheduler<KoanWorkload>,
-    name: &str,
-    producer: NodeId,
-    consumer: Option<NodeId>,
-) -> NameOutcome<'step> {
-    match consumer {
-        Some(c) => match producer_disposition(scheduler, producer, c) {
-            ProducerDisposition::Errored(e) => {
-                NameOutcome::ProducerErrored(e.clone_for_propagation())
-            }
-            ProducerDisposition::Ready => NameOutcome::Unbound(name.to_string()),
-            ProducerDisposition::Cycle => NameOutcome::Cycle(name.to_string()),
-            ProducerDisposition::Park => NameOutcome::Parked(producer),
-        },
-        None => match producer_standing(scheduler, producer) {
-            ProducerStanding::Errored(e) => {
-                NameOutcome::ProducerErrored(e.clone_for_propagation())
-            }
-            ProducerStanding::Ready => NameOutcome::Unbound(name.to_string()),
-            ProducerStanding::Park => NameOutcome::Parked(producer),
-        },
-    }
-}
-
-/// Best-effort name extraction for a bare-name `ExpressionPart`,
-/// used to render the `cycle in type alias <name>` deadlock sample.
-pub(super) fn bare_name_of<'step>(part: &ExpressionPart<'step>) -> Option<String> {
-    match part {
-        ExpressionPart::Identifier(n) => Some(n.clone()),
-        ExpressionPart::Type(t) => Some(t.render()),
-        _ => None,
     }
 }
 
