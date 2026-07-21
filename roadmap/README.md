@@ -53,6 +53,7 @@ not edit by hand. Each project subdirectory's README carries its own slice.
 - [Applied constructor types through views](type_language/applied-constructors-through-views.md)
 - [Constructing circular values](type_language/circular-value-construction.md)
 - [Constructors as first-class function values](type_language/constructor-as-first-class-function.md)
+- [Cross-registry type-content transfer](type_language/cross-registry-type-content-transfer.md)
 - [Bare parenthesized return annotations](type_language/function-typed-return-annotations.md)
 - [Module element-type join](type_language/module-element-type-join.md)
 - [USING surfaces module type members](type_language/using-type-members.md)

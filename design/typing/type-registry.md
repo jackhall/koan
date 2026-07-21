@@ -199,8 +199,8 @@ are the content, and the recursive-group window/SCC seal
 turns a co-declared group into interned member nodes. A type crosses a region boundary
 as a handle copy — there is no storage door and no residence audit to run.
 
-- The cross-thread transfer mechanics (whether a value's type nodes are copied by
-  subgraph walk or merged as persistent maps, and whether verdict edges transfer as
-  warm cache) are recorded as unplanned work in the
-  [type language project README](../../roadmap/type_language/README.md) — exercisable only
-  once concurrency ships, and undecided even within this design.
+- [Cross-registry type-content transfer](../../roadmap/type_language/cross-registry-type-content-transfer.md)
+  owns moving a value's type content into a receiving frame's registry — across sequential
+  runs over a persistent scope (reachable today) and across threads once concurrency ships.
+  The transfer mechanism (subgraph copy vs. persistent-map merge) and whether verdict edges
+  ride along as warm cache are undecided even within this design.
