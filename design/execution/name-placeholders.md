@@ -179,7 +179,7 @@ the fused splice / park / eager-sub walk in
 [`dispatch.rs`](../../src/machine/execute/dispatch.rs) consults
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
 a slot already pre-submitted reuses the existing `NodeId` (and replaces
-the part with an empty-`Identifier` placeholder for the eventual expression
+the part with an `ExpressionPart::StagedSlot` marker for the eventual expression
 splice) rather than allocating a fresh sub-Dispatch. The
 `KeywordedState::install_bare_name_park` and `install_overload_park`
 installers carry `pre_subs` into the `KeywordedState.init.pre_subs`
