@@ -17,6 +17,7 @@ use super::super::runtime::KoanRuntime;
 use super::super::{StepCarried, WitnessedDepFinish};
 use super::ctx::{current_dest_frame, with_current_node_scope, SchedulerView};
 use super::resolve_name_part;
+use super::stage_eager_part;
 use crate::scheduler::{DepResults, ResolvedDeps};
 
 /// Build-time accumulator family for an aggregate fold: the destination region plus the partial cell
@@ -253,25 +254,11 @@ impl<'step> KoanRuntime<'step> {
         part: ExpressionPart<'a>,
         deps: &mut ResolvedDeps,
     ) -> Slot {
+        let part = match stage_eager_part(part) {
+            Ok(dep) => return Slot::owned(deps, self.realize_eager_dep(dep)),
+            Err(part) => part,
+        };
         match part {
-            ExpressionPart::ListLiteral(inner) => {
-                Slot::owned(deps, self.schedule_list_literal(inner))
-            }
-            ExpressionPart::DictLiteral(inner) => {
-                Slot::owned(deps, self.schedule_dict_literal(inner))
-            }
-            ExpressionPart::RecordLiteral(inner) => {
-                Slot::owned(deps, self.schedule_record_literal(inner))
-            }
-            ExpressionPart::Expression(boxed) => {
-                Slot::owned(deps, self.dispatch_in_own_scope(*boxed))
-            }
-            ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                // A `:(...)` / `:{…}` type value is a type-context sub-Dispatch to a
-                // `Carried::Type`, like the keyworded eager-subs path — it cannot `resolve()`.
-                let wrapped = crate::machine::model::KExpression::new(vec![Spanned::bare(part)]);
-                Slot::owned(deps, self.dispatch_in_own_scope(wrapped))
-            }
             ExpressionPart::QuotedExpression(_) => {
                 // A quote rides its own one-part sub-dispatch (the `LiteralPassThrough` lane, which
                 // seals it through the checked door) rather than a static cell: a

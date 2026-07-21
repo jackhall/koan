@@ -435,6 +435,24 @@ impl<'run> KoanRuntime<'run> {
         }
     }
 
+    /// Realize one staged eager dep as its producer node — the four shapes
+    /// [`stage_eager_part`](super::dispatch::stage_eager_part) emits. `Existing` / `BodyBlock` never
+    /// reach here (the stager doesn't produce them).
+    pub(in crate::machine::execute) fn realize_eager_dep<'a>(
+        &mut self,
+        dep: DepRequest<'a>,
+    ) -> NodeId {
+        match dep {
+            DepRequest::Dispatch { expr, placement } => self.realize_dispatch(expr, placement),
+            DepRequest::ListLit(items) => self.schedule_list_literal(items),
+            DepRequest::DictLit(pairs) => self.schedule_dict_literal(pairs),
+            DepRequest::RecordLit(fields) => self.schedule_record_literal(fields),
+            DepRequest::Existing(_) | DepRequest::BodyBlock { .. } => {
+                unreachable!("eager staging emits only Dispatch / literal deps")
+            }
+        }
+    }
+
     /// Realize a [`Catch`](Continuation::Catch)'s single watched [`DepRequest`] to a producer
     /// `NodeId`. `Existing` is already a producer the builtin found in scope; a `Dispatch` realizes as
     /// a single statement (an `InScope` watched expr enters a fresh single-statement block — see
@@ -561,17 +579,11 @@ impl<'run> KoanRuntime<'run> {
                                 resolved.own(id);
                             }
                         }
-                        DepRequest::Dispatch { expr, placement } => {
-                            resolved.own(self.realize_dispatch(expr, placement));
-                        }
-                        DepRequest::ListLit(items) => {
-                            resolved.own(self.schedule_list_literal(items));
-                        }
-                        DepRequest::DictLit(pairs) => {
-                            resolved.own(self.schedule_dict_literal(pairs));
-                        }
-                        DepRequest::RecordLit(fields) => {
-                            resolved.own(self.schedule_record_literal(fields));
+                        dep @ (DepRequest::Dispatch { .. }
+                        | DepRequest::ListLit(_)
+                        | DepRequest::DictLit(_)
+                        | DepRequest::RecordLit(_)) => {
+                            resolved.own(self.realize_eager_dep(dep));
                         }
                         // A body block fans out one owned producer per statement: into a fresh
                         // per-call frame's own scope (`dispatch_body`), or — under `Inherit` — into a
