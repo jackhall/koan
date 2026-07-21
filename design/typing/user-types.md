@@ -196,27 +196,28 @@ tag-name dispatch a user union uses. See [error-handling.md](../error-handling.m
 NEWTYPE / UNION-named / Result finalize write **only** `bindings.types`: each builds
 its identity (a member handle into its sealed component) and installs it through
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs), which inserts if
-absent and overwrites a `PartialEq`-equal entry, surfacing `Rebind` on a genuine
-non-equal collision. The schema rides inside the member node, so construction reads
-fields / variant types straight off the member's schema; there is no
-second-namespace write to keep in sync.
+absent, overwrites idempotently when the same declaration re-enters, and surfaces
+`Rebind` on a collision with a different declaration. The schema rides inside the
+member node, so construction reads fields / variant types straight off the member's
+schema; there is no second-namespace write to keep in sync.
 
-**A declaration is identified by its stored `BindingIndex`.** Before installing,
-[`finalize_nominal_member`](../../src/machine/model/types/resolver.rs) (and
-`recover_union` for the union path) reads the committed `types[name]` entry
-*with* the [`BindingIndex`](../../src/machine/core/bindings.rs) its installing
-statement wrote, and decides three ways: an entry whose member is still unfilled
-is this declaration's own seal pre-install, so the schema fills that set; an
-entry installed at *this* statement's index is a parallel finalize of this same
-declaration, short-circuited idempotently; anything else is a genuine prior
-binding of the name, so the seal mints a fresh singleton and the install raises
-`Rebind`. The index is the whole identity signal — a statement's lexical
-position is unique within its scope, and the pre-install sits at index 0 below
-every statement's own index, so the unfilled-member arm is what lets a
-`RECURSIVE TYPES` block member (minted in the enclosing scope, sealed in the
-child) reach its shared set. The single-home invariant —
-Type-classed name lookups go through `Scope::resolve_type` only — holds because
-the identity *is* the only entry.
+**A declaration is identified by the node that installed it.** Each `types` entry
+stores, beside its type, a [`DeclarationSite`](../../src/machine/core/bindings.rs): the
+run-qualified [`NodeHandle`](../../src/machine/core/bindings.rs) of the scheduler slot
+that installed it, paired with its lexical [`BindingIndex`](../../src/machine/core/bindings.rs).
+The handle alone answers the same-declaration question:
+[`finalize_nominal_member`](../../src/machine/model/types/resolver.rs) installs through
+[`register_type_upsert`](../../src/machine/core/scope.rs), which overwrites when the
+installing handle matches the stored entry's — the same scheduler slot in the same run
+re-entering, i.e. a parallel finalize whose re-elaboration cannot differ — and raises
+`Rebind` on any other handle. Content plays no part: a byte-identical redeclaration in
+one scope installs under a distinct node and is a `Rebind`, and so is a re-run of the
+same declaration text over a persistent scope, whose handle carries a fresh
+[`RunId`](../../src/machine/core/run_id.rs). The `BindingIndex` in the entry has one job
+left — the visibility gate `idx < cutoff` reads it — and under a detached submission
+chain it is `0`, naming no statement, because identity no longer rests on it. The
+single-home invariant — Type-classed name lookups go through `Scope::resolve_type` only
+— holds because the identity *is* the only entry.
 
 `MODULE` is the exception that proves the rule: a module is a *value*, so it binds
 into `bindings.data` through

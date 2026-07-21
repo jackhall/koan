@@ -119,12 +119,13 @@ clears an in-flight type producer's placeholder (nor the reverse).
   in-flight type producer even after a seal pre-installs the name's identity
   into `types` reads the placeholder directly through
   [`Bindings::type_placeholder_producer`](../../src/machine/core/bindings.rs),
-  bypassing the `types`-first preference. It pairs that with
-  [`Bindings::committed_type_binding`](../../src/machine/core/bindings.rs) — the
-  raw, visibility-unfiltered `types[name]` entry plus its `BindingIndex` — which
-  is the declaration-identity read, not a consumer lookup: a nominal member named
-  by a relative `Sibling` reference is in flight iff the scope carrying the very
-  group window that reference resolves against holds the name in `pending_types`
+  bypassing the `types`-first preference. Declaration identity itself is not read
+  here: it is decided at the install door by
+  [`Bindings::try_register_type_upsert`](../../src/machine/core/bindings.rs), which
+  compares the installing [`NodeHandle`](../../src/machine/core/bindings.rs) against the
+  stored entry's. What this gate resolves is in-flight status, not identity: a nominal
+  member named by a relative `Sibling` reference is in flight iff the scope carrying the
+  very group window that reference resolves against holds the name in `pending_types`
   ([resolve_type_identifier.rs](../../src/machine/execute/dispatch/resolve_type_identifier.rs)).
   The window match is what stops a same-named in-flight declaration of a
   different type from capturing the reference; a SIG-declared or abstract slot,
