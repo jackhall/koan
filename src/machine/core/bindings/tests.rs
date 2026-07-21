@@ -153,6 +153,59 @@ fn try_register_type_does_not_touch_data_or_functions() {
     assert!(bindings.functions().is_empty());
 }
 
+/// Declaration identity is run-qualified: two `try_register_type_upsert`s of one name whose
+/// [`NodeHandle`]s share a `NodeId` but carry distinct [`RunId`]s are two declarations, because
+/// `NodeId`s are scheduler-local and restart per run — only the pair identifies a declaration
+/// statement across the lifetime of a persistent scope. The same-run re-entry (identical handle) is
+/// an idempotent parallel finalize; the cross-run re-entry (same node, later run) is a `Rebind`.
+/// This pins the accepted persistent-scope consequence directly at the decision door: a regression
+/// that compared only the `NodeId` — dropping the `RunId` from handle equality — would take the
+/// idempotent arm on the cross-run install and this test would fail.
+#[test]
+fn cross_run_redeclare_rebinds_on_run_qualified_handle() {
+    let bindings: Bindings<'_> = Bindings::new();
+    let first_run = RunId::next();
+    let second_run = RunId::next();
+    assert_ne!(first_run, second_run, "two runs must mint distinct RunIds");
+    // One scheduler-local NodeId, reused across both runs — as a per-run scheduler would restart it.
+    let node = NodeId(5);
+    let site = |run| DeclarationSite {
+        node: NodeHandle { run, node },
+        index: BindingIndex::value(0),
+    };
+
+    let first = bindings
+        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+        .expect("the first declaration should install");
+    assert!(matches!(first, ApplyOutcome::Applied));
+
+    // Same handle re-entering (a parallel finalize of the first declaration): idempotent overwrite.
+    let reentry = bindings
+        .try_register_type_upsert("Maybe", KType::NUMBER, site(first_run))
+        .expect("a same-handle parallel finalize should overwrite idempotently");
+    assert!(matches!(reentry, ApplyOutcome::Applied));
+
+    // A later run over the persistent scope reuses the NodeId but carries a fresh RunId, so its
+    // handle differs from the stored entry's and the install is a second declaration: Rebind.
+    let error = match bindings.try_register_type_upsert("Maybe", KType::STR, site(second_run)) {
+        Err(e) => e,
+        Ok(_) => panic!("a cross-run redeclaration of Maybe must Rebind, not overwrite"),
+    };
+    assert!(
+        matches!(&error.kind, KErrorKind::Rebind { name } if name == "Maybe"),
+        "expected Rebind naming Maybe across runs, got {error}",
+    );
+    // The first run's entry survives the rejected cross-run install.
+    assert_eq!(
+        bindings
+            .types()
+            .get("Maybe")
+            .expect("Maybe should still be present")
+            .0,
+        KType::NUMBER,
+    );
+}
+
 // --- Cross-kind exclusion (AC1/AC4) -----------------------------------------
 // Each declarator routes to one of these write primitives (LET-value →
 // `try_bind_value`; LET-type-alias / VAL / NEWTYPE-sigil → `try_register_type`;

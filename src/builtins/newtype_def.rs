@@ -516,9 +516,9 @@ mod tests {
     }
 
     /// Two record-repr `NEWTYPE`s of one name in one scope are two declarations, not one: the
-    /// second statement's own `BindingIndex` differs from the index stored beside the installed
-    /// identity, so the seal mints a fresh singleton and the install raises `Rebind`.
-    /// `enter_block` is what gives the statements their distinct lexical indices.
+    /// second statement installs under a distinct `NodeHandle`, so the seal mints a fresh singleton
+    /// and the install raises `Rebind`. `enter_block` is what gives the statements their distinct
+    /// installing nodes.
     #[test]
     fn same_scope_record_repr_redeclare_rebinds() {
         let region = run_root_storage();
@@ -543,6 +543,37 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
             "expected Rebind naming Foo, got {err}",
+        );
+    }
+
+    /// Byte-identical `NEWTYPE` redeclaration in one scope still raises `Rebind`. The two statements
+    /// seal to the same content digest, so a content-equality gate would unify them silently; node
+    /// identity keys the decision on the installing statement alone, so the second — a distinct
+    /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
+    #[test]
+    fn identical_content_newtype_redeclare_rebinds() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let exprs = crate::parse::parse("NEWTYPE Foo = Number\nNEWTYPE Foo = Number")
+            .expect("parse should succeed");
+        let ids = test_run.runtime.enter_block(scope.id, exprs, scope);
+        test_run
+            .runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        assert!(
+            test_run.runtime.result_error(ids[0]).is_ok(),
+            "the first declaration should succeed, got {:?}",
+            test_run.runtime.result_error(ids[0]).err(),
+        );
+        let err = test_run
+            .runtime
+            .result_error(ids[1])
+            .expect_err("an identical-content redeclaration of Foo should error");
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Foo"),
+            "expected Rebind naming Foo on identical-content redeclare, got {err}",
         );
     }
 

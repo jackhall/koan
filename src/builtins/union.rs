@@ -367,6 +367,75 @@ mod tests {
         );
     }
 
+    /// Two `UNION`s of one name submitted through the DETACHED chain (`dispatch_in_scope`, not
+    /// `enter_block`) at equal arity. Every detached submission inherits no ambient payload and
+    /// falls back to `LexicalFrame::detached`, whose lexical index is `0` for every statement — so
+    /// the two declarations name no position to tell them apart, and their equal arity matched the
+    /// pre-node recovery probe as one declaration, silently returning the first union. Node identity
+    /// gives each `dispatch_in_scope` its own `NodeHandle`, so the second install raises `Rebind`.
+    /// This is the item's headline gap: equal arity through the detached path.
+    #[test]
+    fn detached_chain_union_redeclare_rebinds() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let runtime = &mut test_run.runtime;
+        let first =
+            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Number None :Null)"), scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        assert!(
+            runtime.result_error(first).is_ok(),
+            "the first declaration should succeed, got {:?}",
+            runtime.result_error(first).err(),
+        );
+        let second =
+            runtime.dispatch_in_scope(parse_one("UNION Maybe = (Some :Str None :Null)"), scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        let err = runtime
+            .result_error(second)
+            .expect_err("redeclaring Maybe through the detached chain should error");
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
+            "expected Rebind naming Maybe, got {err}",
+        );
+    }
+
+    /// Byte-identical `UNION` redeclaration in one scope still raises `Rebind`. The two statements
+    /// seal to the same content digest, so a content-equality gate would unify them silently; node
+    /// identity keys the decision on the installing statement alone, so the second — a distinct
+    /// `NodeHandle` under `enter_block` — is a rebind despite identical content.
+    #[test]
+    fn identical_content_union_redeclare_rebinds() {
+        let region = run_root_storage();
+        let mut test_run = TestRun::silent(&region);
+        let scope = test_run.scope;
+        let exprs = crate::parse::parse(
+            "UNION Maybe = (Some :Number None :Null)\nUNION Maybe = (Some :Number None :Null)",
+        )
+        .expect("parse should succeed");
+        let runtime = &mut test_run.runtime;
+        let ids = runtime.enter_block(scope.id, exprs, scope);
+        runtime
+            .execute()
+            .expect("execute does not surface per-slot errors");
+        assert!(
+            runtime.result_error(ids[0]).is_ok(),
+            "the first declaration should succeed, got {:?}",
+            runtime.result_error(ids[0]).err(),
+        );
+        let err = runtime
+            .result_error(ids[1])
+            .expect_err("an identical-content redeclaration of Maybe should error");
+        assert!(
+            matches!(&err.kind, KErrorKind::Rebind { name } if name == "Maybe"),
+            "expected Rebind naming Maybe on identical-content redeclare, got {err}",
+        );
+    }
+
     #[test]
     fn union_rejects_odd_part_count() {
         // Typed variants parse as `[Identifier, Type]` pairs; odd-count parts are

@@ -10,9 +10,12 @@
 //!
 //! Borrow discipline across the maps: `types → functions → data`.
 //!
-//! Every entry is tagged with a [`BindingIndex`] naming its installing statement's
-//! lexical position, gated by the strict cutoff `idx < c`, so a forward reference (a
-//! later-positioned binding) is invisible — type binders included. `idx == 0` is the
+//! Every entry carries a [`BindingIndex`] naming its installing statement's lexical
+//! position, gated by the strict cutoff `idx < c`, so a forward reference (a
+//! later-positioned binding) is invisible — type binders included. A type entry pairs
+//! that index with its installing [`NodeHandle`] in a [`DeclarationSite`]: the handle
+//! alone answers the same-declaration question, and the index there does visibility
+//! only. `idx == 0` is the
 //! first position: FN parameters and MATCH/TRY `it` sit there, and the builtins are
 //! registered there in the immutable run-global root. The builtins stay reachable
 //! because that root is off the lexical chain (its cutoff is `None`, so every entry in
