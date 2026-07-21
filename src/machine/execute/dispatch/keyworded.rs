@@ -17,7 +17,8 @@ use super::{
     bare_name_of, park_resume, propagate_dep_error, stage_eager_part, staged_slot_placeholder,
     DepRequest, Outcome, PartWalkResult, Resolved,
 };
-use crate::scheduler::{ProducerDisposition, ResolvedDeps};
+use super::ProducerDisposition;
+use crate::scheduler::ResolvedDeps;
 
 /// Entry from the dispatch router. Resolved-no-parks-no-subs terminates inline; all other
 /// outcomes install a park (an overload / bare-name producer wait, or eager subs) and re-enter
@@ -264,7 +265,7 @@ pub(in crate::machine::execute::dispatch) fn install_overload_park<'step>(
     // (deduped by `park_on`).
     let mut to_wait = ResolvedDeps::new();
     for p in producers {
-        match ctx.producer_disposition(p, Some(NodeId(idx))) {
+        match ctx.producer_disposition(p, NodeId(idx)) {
             ProducerDisposition::Errored(e) => {
                 let frame = TraceFrame::from_expr("<dispatch-park>", &expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));

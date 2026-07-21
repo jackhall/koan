@@ -10,8 +10,7 @@ use crate::machine::{KError, KErrorKind, NameLookup, NodeId};
 
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{park_resume, Outcome};
-use crate::scheduler::ProducerDisposition;
+use super::{park_resume, Outcome, ProducerStanding};
 
 pub(super) fn initial<'step>(
     ctx: &SchedulerView<'step, '_>,
@@ -27,19 +26,16 @@ pub(super) fn initial<'step>(
         // `'step`, so it rides straight into the `Outcome<'step>` with no re-anchor.
         Some(NameLookup::Bound(obj)) => dispatch_callable_value(ctx, expr, obj),
         // Head placeholder. `Errored` means the binder failed before binding the head, so the name
-        // never became a value — propagate. `Park` re-runs the fast lane on resume. The `Ready` and
-        // `Cycle` arms are unreachable; their messages carry the reasoning.
-        Some(NameLookup::Parked(producer)) => match ctx.producer_disposition(producer, None) {
-            ProducerDisposition::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
-            ProducerDisposition::Ready => unreachable!(
+        // never became a value — propagate. `Park` re-runs the fast lane on resume. The `Ready` arm
+        // is unreachable; its message carries the reasoning.
+        Some(NameLookup::Parked(producer)) => match ctx.producer_standing(producer) {
+            ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
+            ProducerStanding::Ready => unreachable!(
                 "head placeholder `{head}` producer finalized Ok without registering the \
                  name — a binder's successful finalize always binds its name, so a \
                  ready-Ok producer must resolve to a Bound, not a Parked",
             ),
-            ProducerDisposition::Cycle => {
-                unreachable!("fn_value passes consumer=None, so Cycle never classifies")
-            }
-            ProducerDisposition::Park => install_head_park(producer, expr),
+            ProducerStanding::Park => install_head_park(producer, expr),
         },
         None => Outcome::Done(Err(KError::new(KErrorKind::UnboundName(head)))),
     }

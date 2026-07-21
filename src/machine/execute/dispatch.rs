@@ -32,7 +32,7 @@ use super::nodes::{ChainOp, NodeWork};
 use super::obligation::{with_obligation, ReturnObligation};
 use super::runtime::KoanWorkload;
 use crate::machine::core::{BlockEntry, FramePlacement};
-use crate::scheduler::{Deps, ProducerDisposition, ResolvedDeps, Scheduler};
+use crate::scheduler::{Deps, ResolvedDeps, Scheduler};
 
 // The dep currency lives in core (`action.rs`) so an `Action` can carry it; re-exported here as the
 // dispatch-side view `Outcome` consumers reach through `super::dispatch`.
@@ -74,6 +74,72 @@ pub use resolve_dispatch::{DispatchOutcome, NameOutcome, Resolved};
 /// `dispatch::{DispatchShape, classify_dispatch_shape}` path.
 #[allow(unused_imports)]
 pub(crate) use crate::machine::model::{classify_dispatch_shape, DispatchShape};
+
+/// Consumer-less producer standing: ready → errored → park. Read at a leaf-park
+/// site with no consumer id in scope, where a cycle can never be classified —
+/// there is no `Cycle` arm. Each caller keeps its own per-arm policy.
+pub(super) enum ProducerStanding<'a> {
+    /// Ready, and its terminal is an error — the caller propagates a clone.
+    Errored(&'a KError),
+    /// Ready, and its terminal is a value (`Ok`).
+    Ready,
+    /// Still finalizing — park on it.
+    Park,
+}
+
+/// Read a producer's standing consumer-less, folding the workgraph generic
+/// primitives (`is_result_ready` / `result_error`) in ready → errored → park
+/// order.
+pub(super) fn producer_standing(
+    scheduler: &Scheduler<KoanWorkload>,
+    producer: NodeId,
+) -> ProducerStanding<'_> {
+    if scheduler.is_result_ready(producer) {
+        match scheduler.result_error(producer) {
+            Err(e) => ProducerStanding::Errored(e),
+            Ok(()) => ProducerStanding::Ready,
+        }
+    } else {
+        ProducerStanding::Park
+    }
+}
+
+/// Consumer-ful dependence classification: ready → errored → would-cycle → park.
+/// The extra arm over [`ProducerStanding`] is `Cycle` — parking on the producer
+/// would close a wake cycle back to `consumer`. Each caller keeps its own
+/// per-arm policy.
+pub(super) enum ProducerDisposition<'a> {
+    /// Ready, and its terminal is an error — the caller propagates a clone.
+    Errored(&'a KError),
+    /// Ready, and its terminal is a value (`Ok`).
+    Ready,
+    /// Still finalizing, and parking on it would close a wake cycle.
+    Cycle,
+    /// Still finalizing — park on it.
+    Park,
+}
+
+/// Classify whether `consumer` can depend on `producer`: ready → errored →
+/// would-cycle → park. The cycle check runs only when the producer is still
+/// finalizing (the [`ProducerStanding::Park`] branch), so a ready producer is
+/// never cycle-tested — the exact order of the shared park ladder.
+pub(super) fn producer_disposition(
+    scheduler: &Scheduler<KoanWorkload>,
+    producer: NodeId,
+    consumer: NodeId,
+) -> ProducerDisposition<'_> {
+    match producer_standing(scheduler, producer) {
+        ProducerStanding::Errored(e) => ProducerDisposition::Errored(e),
+        ProducerStanding::Ready => ProducerDisposition::Ready,
+        ProducerStanding::Park => {
+            if scheduler.would_create_cycle(producer, consumer) {
+                ProducerDisposition::Cycle
+            } else {
+                ProducerDisposition::Park
+            }
+        }
+    }
+}
 
 /// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
 /// against `scope`. `consumer = Some(idx)` enables the cycle check;
@@ -127,11 +193,22 @@ fn disposition_for_producer<'step>(
     producer: NodeId,
     consumer: Option<NodeId>,
 ) -> NameOutcome<'step> {
-    match scheduler.producer_disposition(producer, consumer) {
-        ProducerDisposition::Errored(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
-        ProducerDisposition::Ready => NameOutcome::Unbound(name.to_string()),
-        ProducerDisposition::Cycle => NameOutcome::Cycle(name.to_string()),
-        ProducerDisposition::Park => NameOutcome::Parked(producer),
+    match consumer {
+        Some(c) => match producer_disposition(scheduler, producer, c) {
+            ProducerDisposition::Errored(e) => {
+                NameOutcome::ProducerErrored(e.clone_for_propagation())
+            }
+            ProducerDisposition::Ready => NameOutcome::Unbound(name.to_string()),
+            ProducerDisposition::Cycle => NameOutcome::Cycle(name.to_string()),
+            ProducerDisposition::Park => NameOutcome::Parked(producer),
+        },
+        None => match producer_standing(scheduler, producer) {
+            ProducerStanding::Errored(e) => {
+                NameOutcome::ProducerErrored(e.clone_for_propagation())
+            }
+            ProducerStanding::Ready => NameOutcome::Unbound(name.to_string()),
+            ProducerStanding::Park => NameOutcome::Parked(producer),
+        },
     }
 }
 

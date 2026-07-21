@@ -41,7 +41,7 @@ mod workload;
 pub use crate::witnessed::{
     Carrier, ComposeWitness, Delivered, Erased, Reattachable, Sealed, Witnessed,
 };
-pub use deps::{Deps, ProducerDisposition, ResolvedDeps};
+pub use deps::{Deps, ResolvedDeps};
 // `pub` (not `pub(crate)`) like [`NodeId`]: it appears in the `pub` `AwaitContinue` builtin-finish
 // type (via the `pub` `Action::AwaitDeps` field), so a narrower visibility would leak.
 pub use deps::DepResults;
@@ -225,28 +225,6 @@ impl<W: Workload> Scheduler<W> {
     /// (`DepGraph::would_create_cycle`).
     pub fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         self.deps.would_create_cycle(producer, consumer)
-    }
-
-    /// Classify "can this consumer depend on `producer`?" — the shared park-ladder check order
-    /// (ready → errored → would-cycle → park), leaving the caller its own policy per arm. `consumer`
-    /// is `None` at a site with no consumer id in scope (a leaf park), where a cycle can never be
-    /// classified. Follows a bare-name-forward alias through the `is_result_ready` / `result_error`
-    /// facades. See [`ProducerDisposition`](self::deps::ProducerDisposition).
-    pub fn producer_disposition(
-        &self,
-        producer: NodeId,
-        consumer: Option<NodeId>,
-    ) -> ProducerDisposition<'_, W::Error> {
-        if self.is_result_ready(producer) {
-            match self.result_error(producer) {
-                Err(e) => ProducerDisposition::Errored(e),
-                Ok(()) => ProducerDisposition::Ready,
-            }
-        } else if consumer.is_some_and(|c| self.would_create_cycle(producer, c)) {
-            ProducerDisposition::Cycle
-        } else {
-            ProducerDisposition::Park
-        }
     }
 
     /// Install a resolved dep list's edges against `consumer`: each park a `Notify` edge (the

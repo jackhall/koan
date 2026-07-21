@@ -1,4 +1,4 @@
-//! The two scheduler-side dep-list currencies and the producer-disposition classifier.
+//! The two scheduler-side dep-list currencies.
 //!
 //! A node's dep list is one logical vector laid out `[park_producers..., owned_subs...]`. *Park*
 //! deps are notify-only edges — the consumer reads the producer's value but does not own it, so a
@@ -16,27 +16,11 @@
 //! - [`DepResults`] is the read side — a `[park..., owned...]` result slice plus its park-prefix
 //!   length, addressed through [`park`](DepResults::park) / [`owned`](DepResults::owned) accessors so
 //!   a finish never re-derives the prefix arithmetic.
-//! - [`ProducerDisposition`] classifies "can I depend on this producer?" — the park-ladder check
-//!   order every consumer site shares, leaving each its own ready-Ok policy.
 //!
-//! Everything here is generic over the [`Workload`](super::Workload)'s error (`E`) or plain
-//! (`NodeId`, `usize`, a type parameter) — it names no Koan value, error, or AST type.
+//! Everything here is plain or type-parameter-generic (`NodeId`, `usize`, `R`, `T`) — it names no
+//! Koan value, error, or AST type.
 
 use super::NodeId;
-
-/// Classification of "can I depend on this producer?" — the shared park-ladder check order. The
-/// caller keeps its own per-site policy for every arm (a ready-Ok producer means different things in
-/// different lanes); this owns only the order in which the checks run.
-pub enum ProducerDisposition<'a, E> {
-    /// Ready, and its terminal is an error — the caller propagates a clone.
-    Errored(&'a E),
-    /// Ready, and its terminal is a value (`Ok`).
-    Ready,
-    /// Still finalizing, and parking on it would close a wake cycle.
-    Cycle,
-    /// Still finalizing — park on it.
-    Park,
-}
 
 /// The dep-list builder: the one way production code assembles a node's dep list. Parks and owned
 /// entries live in separate vecs, so `[park..., owned...]` is structural — there is no `park_count`

@@ -18,15 +18,17 @@ use crate::machine::core::{FrameStorage, StepAllocator};
 use crate::machine::model::types::TypeRegistry;
 use crate::machine::model::FoldDirection;
 use crate::machine::model::{ExpressionPart, KExpression};
-use crate::machine::{CallFrame, KError, LexicalFrame, NameOutcome, NodeId, Scope};
+use crate::machine::{CallFrame, LexicalFrame, NameOutcome, NodeId, Scope};
 use crate::source::{Span, Spanned};
 
 use super::super::ambient::AmbientContext;
 use super::super::nodes::NodeScope;
 use super::super::obligation::ReturnObligation;
 use super::super::runtime::KoanWorkload;
-use super::{resolve_name_part, Await, DepRequest, Outcome};
-use crate::scheduler::{Deps, ProducerDisposition, Scheduler};
+use super::{
+    resolve_name_part, Await, DepRequest, Outcome, ProducerDisposition, ProducerStanding,
+};
+use crate::scheduler::{Deps, Scheduler};
 
 /// Run `f` with a [`NodeScope`] handle's scope opened at a `for<'b>` brand. A `Yoked` slot
 /// re-projects from the active cart through [`CallFrame::with_scope`]; a `YokedChild` slot opens its
@@ -177,15 +179,21 @@ impl<'step, 'view> SchedulerView<'step, 'view> {
         self.sched.would_create_cycle(producer, consumer)
     }
 
-    /// Classify whether this slot can depend on `producer` — the shared park ladder (ready → errored
-    /// → would-cycle → park). `consumer` is `None` at a leaf-park site with no consumer id in scope,
-    /// where a cycle can never be classified. Each caller keeps its own policy per arm.
+    /// Read `producer`'s standing consumer-less (ready → errored → park) at a leaf-park site with no
+    /// consumer id in scope, where a cycle can never be classified. Each caller keeps its own policy
+    /// per arm.
+    pub(super) fn producer_standing(&self, producer: NodeId) -> ProducerStanding<'_> {
+        super::producer_standing(self.sched, producer)
+    }
+
+    /// Classify whether this slot (`consumer`) can depend on `producer` — the shared park ladder
+    /// (ready → errored → would-cycle → park). Each caller keeps its own policy per arm.
     pub(super) fn producer_disposition(
         &self,
         producer: NodeId,
-        consumer: Option<NodeId>,
-    ) -> ProducerDisposition<'_, KError> {
-        self.sched.producer_disposition(producer, consumer)
+        consumer: NodeId,
+    ) -> ProducerDisposition<'_> {
+        super::producer_disposition(self.sched, producer, consumer)
     }
 
     /// Build the per-part `bare_outcomes` cache: one `resolve_name_part` per bare-name part,

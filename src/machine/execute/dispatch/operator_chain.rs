@@ -27,11 +27,11 @@ use crate::machine::core::Scope;
 use crate::machine::model::{binary_key, unary_key, FoldDirection, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression};
 use crate::machine::{KError, KErrorKind, NodeId, TraceFrame};
-use crate::scheduler::{ProducerDisposition, ResolvedDeps};
+use crate::scheduler::ResolvedDeps;
 use crate::source::{Span, Spanned};
 
 use super::ctx::SchedulerView;
-use super::{become_dispatch, park_resume, propagate_dep_error, Outcome};
+use super::{become_dispatch, park_resume, propagate_dep_error, Outcome, ProducerDisposition};
 
 /// The probe is `Some` for every `OperatorChain` (the classifier guarantees it), so a
 /// `None` probe is a classification bug.
@@ -323,7 +323,7 @@ fn park_on_pending_operators<'step, 'b>(
 ) -> Outcome<'step> {
     let mut to_wait = ResolvedDeps::new();
     for producer in pending_operator_producers(ctx, s, expr) {
-        match ctx.producer_disposition(producer, Some(NodeId(idx))) {
+        match ctx.producer_disposition(producer, NodeId(idx)) {
             ProducerDisposition::Errored(e) => {
                 let frame = TraceFrame::from_expr("<operator-chain>", expr);
                 return Outcome::Done(Err(propagate_dep_error(e, Some(frame))));

@@ -602,7 +602,6 @@ digraph {
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::execute::outcome" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::field_list" -> "koan::machine::model" [label="uses", style="dashed"];
-    "koan::machine::execute::dispatch::fn_value" -> "koan" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch" [label="uses", style="dashed"];
     "koan::machine::execute::dispatch::fn_value" -> "koan::machine::execute::dispatch::apply_callable" [label="uses", style="dashed"];

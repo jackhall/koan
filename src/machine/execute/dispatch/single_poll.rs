@@ -20,9 +20,11 @@ use super::super::StepCarried;
 use super::super::WitnessedDepFinish;
 use super::apply_callable::{apply_callable, ResolvedCallable};
 use super::ctx::SchedulerView;
-use super::{become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome};
+use super::{
+    become_dispatch, forward_to_producer, park_resume, Await, DepRequest, Outcome, ProducerStanding,
+};
 use crate::machine::model::CarriedFamily;
-use crate::scheduler::{Deps, ProducerDisposition};
+use crate::scheduler::Deps;
 use crate::witnessed::Residence;
 
 /// Surfaces `UnboundName` directly when the name has no binding and
@@ -65,20 +67,18 @@ pub(super) fn bare_type_leaf<'step, 'b>(
                     return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(t.render()))));
                 }
             };
-            // A bare leaf has no consumer id in scope, so the disposition can never classify `Cycle`.
-            match ctx.producer_disposition(producer, None) {
-                ProducerDisposition::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
+            // A bare leaf has no consumer id in scope, so its standing is read consumer-less — no
+            // cycle arm.
+            match ctx.producer_standing(producer) {
+                ProducerStanding::Errored(e) => Outcome::Done(Err(e.clone_for_propagation())),
                 // Ready-and-bound: the referent finalized between resolve and this check, so
                 // re-resolve directly — the memoized bridge now admits.
-                ProducerDisposition::Ready => bare_type_leaf(ctx, s, t),
-                ProducerDisposition::Cycle => {
-                    unreachable!("bare_type_leaf passes consumer=None, so Cycle never classifies")
-                }
+                ProducerStanding::Ready => bare_type_leaf(ctx, s, t),
                 // The producer's terminal is not the type carrier (a finalize-combine returns its own
                 // value), so on wake `resume` re-resolves the leaf through the now-sealed memo rather
                 // than lifting the producer's value. No spliced expression to render, so carrier is
                 // `None`.
-                ProducerDisposition::Park => {
+                ProducerStanding::Park => {
                     let leaf = t.clone();
                     park_resume(
                         vec![producer],
@@ -225,18 +225,15 @@ pub(super) fn type_call<'step>(
         Some(NameLookup::Parked(producer)) => {
             // A terminal producer has already installed `types[name]`, so the `Bound` arm would win;
             // reaching here with one (Ready or errored) means a mid-write/errored binder, surfaced as
-            // `UnboundName` since the resume re-runs the fast lane. No consumer id in scope, so `Cycle`
-            // never classifies.
-            match ctx.producer_disposition(producer, None) {
-                ProducerDisposition::Errored(_) | ProducerDisposition::Ready => {
+            // `UnboundName` since the resume re-runs the fast lane. No consumer id in scope, so the
+            // standing is read consumer-less — no cycle arm.
+            match ctx.producer_standing(producer) {
+                ProducerStanding::Errored(_) | ProducerStanding::Ready => {
                     return Outcome::Done(Err(KError::new(KErrorKind::UnboundName(
                         head_t.render(),
                     ))));
                 }
-                ProducerDisposition::Cycle => {
-                    unreachable!("type_call passes consumer=None, so Cycle never classifies")
-                }
-                ProducerDisposition::Park => {
+                ProducerStanding::Park => {
                     let carrier = expr.summarize();
                     return park_resume(
                         vec![producer],

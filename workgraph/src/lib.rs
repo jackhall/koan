@@ -27,7 +27,7 @@
 //! [`scheduler`] — the workload-generic DAG scheduler:
 //! - [`scheduler::Scheduler`], generic over an embedder's [`scheduler::Workload`] impl.
 //! - [`scheduler::Live`], [`scheduler::Deps`] / [`scheduler::DepResults`] /
-//!   [`scheduler::ResolvedDeps`], [`scheduler::ProducerDisposition`], [`scheduler::NodeId`].
+//!   [`scheduler::ResolvedDeps`], [`scheduler::NodeId`].
 //! - [`scheduler::nodes`]'s [`scheduler::nodes::NodeWork`] — the generic per-node work the scheduler
 //!   stores, paired with the per-slot memory anchor ([`scheduler::Anchor`]) it holds by `Rc`.
 //! - A `test-hooks` cargo feature widens a white-box surface (slot/edge state pokes: e.g.
