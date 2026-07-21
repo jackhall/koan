@@ -369,14 +369,6 @@ impl<'a> Bindings<'a> {
             .map(NameLookup::Parked)
     }
 
-    /// The committed `types[name]` entry with the [`DeclarationSite`] its installing statement
-    /// wrote — the pair the nominal-finalize same-declaration checks and the finalize gate's
-    /// identity probe read. Types-map only (no placeholder arm), visibility-unfiltered: this
-    /// is declaration-identity tracking, not consumer-visibility enforcement.
-    pub fn committed_type_binding(&self, name: &str) -> Option<(KType, DeclarationSite)> {
-        self.types.borrow().get(name).copied()
-    }
-
     /// The type-side placeholder producer for `name`, or `None` — the placeholder arm
     /// [`Self::lookup_type`] falls through to.
     fn type_placeholder(&self, name: &str, chain_cutoff: Option<usize>) -> Option<NodeId> {
@@ -729,14 +721,15 @@ impl<'a> Bindings<'a> {
         self.try_apply_type(name, kt, site)
     }
 
-    /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
-    /// on a `PartialEq`-equal existing entry **overwrite** the stored `KType` (and
-    /// `index`) so the `SetMember` an SCC seal pre-installed (same set + index) is rewritten
-    /// in place. A non-equal existing entry is a genuine collision — `Err(Rebind)`, as is a
-    /// committed value at `data[name]` (the value/type partition is mutually exclusive).
+    /// Upsert `name` → `kt` in `types` for nominal finalize. Declaration identity is the
+    /// installing [`NodeHandle`]: an existing entry whose handle differs from `site`'s is a
+    /// different declaration of the name — `Err(Rebind)` — as is a committed value at `data[name]`
+    /// (the value/type partition is mutually exclusive). A same-handle hit is the same slot in the
+    /// same run re-entering (a parallel finalize), whose re-elaboration cannot differ, so it
+    /// overwrites idempotently. Content plays no part in the same-declaration decision.
     ///
-    /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
-    /// would `Rebind` on the seal pre-install rather than overwrite it.
+    /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm would `Rebind`
+    /// on a parallel finalize rather than overwrite it.
     /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
     pub fn try_register_type_upsert(
         &self,
@@ -761,14 +754,14 @@ impl<'a> Bindings<'a> {
             }
             Err(_) => return Ok(ApplyOutcome::Conflict),
         }
-        match types.get(name).map(|(t, _)| *t) {
-            Some(existing) if existing != kt => {
+        match types.get(name).map(|(_, s)| *s) {
+            Some(existing) if existing.node != site.node => {
                 return Err(KError::new(KErrorKind::Rebind {
                     name: name.to_string(),
                 }));
             }
-            // Absent, or identity-equal (the seal's pre-installed `SetMember`): write the
-            // identity, rewriting any pre-install in place.
+            // Absent, or the same slot in the same run re-entering (a parallel finalize): write the
+            // identity, an idempotent overwrite.
             _ => {
                 types.insert(name.to_string(), (kt, site));
             }

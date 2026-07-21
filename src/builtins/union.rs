@@ -5,64 +5,13 @@ use crate::machine::model::FieldListContext;
 use crate::machine::model::KType;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::{
-    pair_list_names, FieldNameKind, RecursiveGroupWindow, RelativeSchema, TypeNode,
+    pair_list_names, FieldNameKind, RecursiveGroupWindow, RelativeSchema,
 };
 use crate::machine::FinishCtx;
 use crate::machine::{seal_type_identity, StepCarried};
-use crate::machine::{BindingIndex, DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
+use crate::machine::{DeclarationSite, KError, KErrorKind, Scope, TraceFrame};
 
 use super::{arg, kw, sig};
-
-/// What `finalize_union` recovers from `bindings.types[name]` before sealing.
-enum UnionRecovery {
-    /// A parallel finalize already sealed this union — return the bound union type unchanged (the
-    /// idempotency net).
-    Sealed(KType),
-    /// No matching sealed identity — fill the declaration window and seal it.
-    Fresh,
-}
-
-/// Recover a sealed union identity for `name`, distinguishing an idempotent re-finalize from a
-/// fresh declaration. Declaration identity is the stored [`BindingIndex`]: a binding installed by
-/// this same statement is this declaration's own seal, anything else is a genuine prior binding of
-/// the name.
-///
-/// The structural check reads the *interned nodes*: a bound union every one of whose members is a
-/// sealed group member, `n` of them, is this declaration's finished identity. Nothing pre-seal can
-/// be bound at all — a member has no handle until its window seals — so there is no
-/// partially-sealed state to recognize here.
-fn recover_union(
-    scope: &Scope<'_>,
-    name: &str,
-    bind_index: BindingIndex,
-    n: usize,
-    types: &TypeRegistry,
-) -> UnionRecovery {
-    let (bound, installed_at) = match scope.bindings().committed_type_binding(name) {
-        Some(entry) => entry,
-        None => return UnionRecovery::Fresh,
-    };
-    if installed_at.index != bind_index {
-        return UnionRecovery::Fresh;
-    }
-    // `union_of` collapses a one-variant union to that member, so a single variant binds the
-    // member handle directly rather than a `Union` node.
-    let members: Vec<KType> = match types.node(bound) {
-        TypeNode::Union { members } => members,
-        TypeNode::SetMember { .. } => vec![bound],
-        _ => return UnionRecovery::Fresh,
-    };
-    // A persistent-scope re-run whose source changed arity at the same statement position routes
-    // onto the Fresh → `Rebind` path.
-    if members.len() != n
-        || !members
-            .iter()
-            .all(|m| matches!(types.node(*m), TypeNode::SetMember { .. }))
-    {
-        return UnionRecovery::Fresh;
-    }
-    UnionRecovery::Sealed(bound)
-}
 
 /// Fill the elaborated variant schema into the declaration window and bind the union name to the
 /// anonymous union of its sealed members. One member per variant (name = tag, [`KKind::NewType`],
@@ -83,14 +32,6 @@ fn finalize_union<'a>(
         )));
     }
     let scope = fctx.scope;
-    let n = fields.len();
-
-    if let UnionRecovery::Sealed(kt) = recover_union(scope, &name, site.index, n, fctx.types) {
-        // Idempotent re-finalize: the union is already bound. Cross the recovered union handle as
-        // a declared operand, folding the carriers' reach onto the placement — the same coverage
-        // the register-success path produces.
-        return Ok(seal_type_identity(scope, kt));
-    }
 
     let mut sealed = None;
     for (tag, payload) in fields {
@@ -327,14 +268,13 @@ mod tests {
         );
     }
 
-    /// `finalize_union` mints and seals a fresh union's members on first finalize, then
-    /// short-circuits on a second finalize once every member is filled — the type-only
-    /// (no value-side carrier) idempotency net (`recover_union`'s `Sealed` arm).
+    /// `finalize_union` mints and seals a fresh union's members on first finalize, then a second
+    /// finalize of the same declaration refills the already-sealed window and reaches the upsert
+    /// with the same installing `NodeHandle`, so the overwrite is idempotent — the type-only (no
+    /// value-side carrier) identity net.
     ///
-    /// `recover_union` has no in-place reuse arm: under content-addressed identity a pre-seal
-    /// composite carries a transient digest that no longer stands in for the sealed result, so a
-    /// partially-filled prior binding re-mints Fresh rather than upserting the placeholder. Only a
-    /// fully-sealed match short-circuits. See
+    /// Both calls pass the same `site`, simulating one declaration's parallel finalize: handle
+    /// equality is what makes the second install idempotent rather than a `Rebind`. See
     /// [design/typing/type-identity.md](../../design/typing/type-identity.md).
     #[test]
     fn finalize_union_seals_then_is_idempotent() {
@@ -375,8 +315,8 @@ mod tests {
             variant_repr(scope, "Maybe", "None", &test_run.types),
             KType::NULL
         );
-        // Second finalize: every member is filled, so `recover_union` short-circuits, returning
-        // the bound union type unchanged.
+        // Second finalize: the sealed window refills to the same handles and the upsert sees the
+        // same installing handle, so it overwrites idempotently and returns the bound union type.
         let second = super::finalize_union(&fctx, "Maybe".into(), make_window(), fields(), site);
         let is_union = second.map(|carrier| {
             carrier.inspect_pinned(&crate::machine::FrameSet::empty(), |c| {
@@ -396,9 +336,9 @@ mod tests {
     }
 
     /// Two `UNION`s of one name in one scope are two declarations, not one, even at equal arity:
-    /// `recover_union`'s identity check reads the stored `BindingIndex`, which belongs to the first
-    /// statement, so the second re-mints Fresh and the install raises `Rebind`. `enter_block` is
-    /// what gives the statements their distinct lexical indices.
+    /// each statement installs under its own `NodeHandle`, so the second finalize reaches the upsert
+    /// with a handle that differs from the stored entry's and the install raises `Rebind`.
+    /// `enter_block` is what gives the two statements their distinct nodes.
     #[test]
     fn same_scope_union_redeclare_rebinds() {
         let region = run_root_storage();

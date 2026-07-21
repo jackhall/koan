@@ -202,7 +202,9 @@ pub enum SealOutcome {
 ///    own one-member window (or a fresh one for a declarator that needs no elaboration): filling
 ///    its only member seals it, and a self-reference was already interned as `Sibling(0)`.
 /// 3. **Already sealed** — a parallel finalize of this same declaration ran first; the window
-///    hands back the same handles and the upsert is idempotent.
+///    hands back the same handles, and the upsert recognizes the re-entry by its installing
+///    [`NodeHandle`](crate::machine::core::NodeHandle) matching the stored entry's, so the
+///    overwrite is idempotent.
 #[allow(clippy::result_large_err)]
 pub fn finalize_nominal_member<'a>(
     scope: &Scope<'a>,
