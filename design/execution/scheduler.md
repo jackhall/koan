@@ -126,7 +126,7 @@ data, and a single harness method applies them. The three pieces:
   overlap, and that separation is structurally enforced by the type rather than
   a naming convention. The execute loop, the AST-aware submission wrappers
   (`enter_block`, `dispatch_in_own_scope`, `dispatch_in_active_frame`,
-  `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_dispatch`, and the
+  `dispatch_body`, `submit_dep_finish_in_own_scope`), `submit_expression`, and the
   aggregate-literal lowering are all `&mut self` methods on `KoanRuntime`. The
   unified node handler
   ([`run_step`](../../src/machine/execute/run_loop.rs)) collects the slot's

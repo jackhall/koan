@@ -81,10 +81,16 @@ unevaluated expression as a value, pass it around, and evaluate it on demand.
 
 Once a node's parts vector is final, [`KExpression`](../src/machine/model/ast.rs)
 fills a structural cache: the `untyped_key` (the bucket key dispatch matches on),
-the `DispatchShape`, and an optional operator probe. The shape is a pure function
-of expression structure — no scope, no types — so it is computed once and read by
-the dispatch driver on every call of the enclosing function rather than re-derived
-per call. The cache is filled at the construction chokepoint (`KExpression::build`)
+the `DispatchShape`, an optional operator probe, and the binder cache —
+`binder_plan` (is this node itself a binder, and the name or bucket it declares)
+plus `binder_installs` (everything this node's subtree installs into the enclosing
+scope, per the position rule in
+[execution/name-placeholders.md](execution/name-placeholders.md)). All of it is a
+pure function of expression structure — no scope, no types — so it is computed
+once and read by the dispatch driver on every call of the enclosing function
+rather than re-derived per call. The `binder_installs` aggregate is read once, at
+statement submission, before any splice. The cache is filled at the construction
+chokepoint (`KExpression::build`)
 and refreshed at the two parse-finalization points where parts are pushed
 incrementally (frame finalization in [frame.rs](../src/parse/frame.rs) and the
 redundant-wrapper peel in [expression_tree.rs](../src/parse/expression_tree.rs)).

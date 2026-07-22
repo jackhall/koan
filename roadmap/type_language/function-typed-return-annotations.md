@@ -20,6 +20,11 @@ all panic, while each sigiled counterpart runs. The bare form parallels how ever
 other return type is written (`-> Number`, not `-> :Number`), so it is the natural
 thing to reach for and a likely papercut.
 
+**Note.** The `pre_subs` machinery and the `debug_assert!(pre_subs.is_empty())`
+this Problem describes no longer exist — `binder-discovery-to-parse` made binder
+discovery parse-static and removed them. Re-verify the current symptom and
+re-anchor this section before actioning the item.
+
 **Acceptance criteria.**
 
 - A function declaring a bare parenthesized return type — `-> (LIST OF Str)`,

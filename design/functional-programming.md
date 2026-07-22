@@ -49,6 +49,21 @@ LET inc = (FN :{x :Number} -> Number = (x))
 LET n = (inc {x = 41})
 ```
 
+A **named** `FN` — the keyworded form above — is a binder, so it may stand only
+at a statement position or in another binder's declaration slot, never inline in
+an eagerly evaluated value position such as a call argument or a list / dict
+element (that is a `NestedBinder` error). The two value routes are the anonymous
+`FN :{…}` form, which installs nothing, or binding the named form through a `LET`
+chain and passing the name:
+
+```
+LET g = (FN (SHOW x :Number) -> Str = ("hi"))
+LET greeting = (USE g)
+```
+
+The [position rule](execution/name-placeholders.md#submission-time-binder-install-and-the-position-rule)
+gives the full set of legal binder positions.
+
 Dispatch tells the two forms apart by the signature operand's part kind: a
 parenthesized `(…)` signature is a `KExpression`, while a `:{…}` schema is a
 first-class `RecordType` part that sub-dispatches to a resolved

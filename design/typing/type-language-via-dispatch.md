@@ -277,15 +277,14 @@ deadlocking the scheduler.
 
 ## Binder install: name-keyed vs bucket-keyed
 
-`LET`, `NEWTYPE`, `UNION`, `SIG`, and `MODULE` register a single name
-binding via a `binder_name` extractor and ride the name-keyed
-placeholder channel. `FN` registers an *overload* in a
-function bucket via a `binder_bucket` extractor — and crucially,
-*not* a `binder_name`. The two channels are reflected at the
-submission walk as `BinderKey::Name(String)` and
-`BinderKey::Bucket(UntypedKey)` (see
-[`scheduler/alloc.rs`](../../workgraph/src/scheduler/alloc.rs)),
-mutually exclusive per binder.
+`LET`, `TYPE`, `MODULE`, `GROUP`, `SIG`, `UNION`, `NEWTYPE`, and
+`RECURSIVE TYPES` register a single name binding and ride the name-keyed
+placeholder channel. `FN` and `OP` register *overloads* in a function bucket and
+ride the bucket-keyed channel instead. Which forms are binders — and the name or
+bucket each declares — is read parse-statically from the static
+[`BINDER_SPECS`](../../src/machine/model/binder.rs) table; the two channels are
+reified as [`BinderKey::Name`](../../src/machine/model/binder.rs) and
+`BinderKey::Bucket`, mutually exclusive per binder.
 
 The bucket-keyed channel admits *sibling* overloads under one head
 keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`

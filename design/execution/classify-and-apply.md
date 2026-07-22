@@ -222,22 +222,15 @@ The rails the dispatch driver feeds:
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
-- **Placeholder install** (Step 2.5). If the picked function carries a
-  `binder_name` extractor, the driver installs `name → NodeId(idx)` into
-  `placeholders` on the dispatching scope. If it carries a `binder_bucket`
-  extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
-  into `pending_overloads[bucket]` on the same scope. Each binder uses
-  exactly one of the two channels — the `BinderKey` enum in
-  [`submit.rs`](../../workgraph/src/scheduler/alloc.rs) makes the
-  dichotomy a type-level fact. Both installs are lenient against the
-  matching submission-time install (see [Submission-time binder install
-  and recursive sub-Dispatch](name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch)
-  below) — a `(name, idx)` pair already installed at submission re-applies
-  cleanly here, and a bucket entry already appended at submission is not
-  re-appended. A `Rebind` collision on the name channel against a
-  different producer surfaces as a `Done(Err(_))` step so other slots
-  keep draining; bucket-channel installs never Rebind (sibling appends
-  are the intended shape).
+- **Binder classification** (Step 2.5). The pick reads the picked function's
+  `binder` flag but installs nothing: a binder's `placeholders[name]` or
+  `pending_overloads[bucket]` entry was already stamped at statement submission
+  from the enclosing statement's parse-static aggregate (see [Submission-time
+  binder install and the position
+  rule](name-placeholders.md#submission-time-binder-install-and-the-position-rule)
+  below). The flag serves one purpose here — a binder's literal-name slots are
+  *declarations*, not references, so `classify_for_pick` excludes them from the
+  replay-park `ref_name_indices` set.
 - **Fused splice / park / eager-sub walk** (Step 3). One iteration over
   `expr.parts` co-handles the three per-slot rails the strict pick
   carries: wrap-slot splice (`resolved.slots.wrap_indices`), ref-name-slot
@@ -300,9 +293,6 @@ The rails the dispatch driver feeds:
   sub-Dispatches.
 
   If no producer parked, the driver installs each staged `DepRequest`:
-  `Existing(id)` for slots already pre-submitted recursively at
-  outermost-submission time (see [Submission-time binder install and recursive
-  sub-Dispatch](name-placeholders.md#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch { .. }` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
   function directly: the decide folds the resolved call into a dep-free
@@ -412,14 +402,13 @@ and resume are the same shape, run through the same handler
 switches on dispatch-internal state and `NodeWork` names no `KExpression`.
 
 **Birth** closures are built by the dispatch layer
-([`decide`](../../src/machine/execute/dispatch.rs) / `submit_dispatch`) capturing the
-slot's `expr` (+ `pre_subs`). On first poll the closure runs `classify_dispatch`,
-which classifies `expr` via `classify_dispatch_shape` and decides against a
-`SchedulerView`, returning an `Outcome`. `pre_subs` carries any recursively
-pre-submitted sub-Dispatches keyed by their slot index in `expr.parts`, populated
-at submit time for binder-shaped expressions so a nested binder's placeholders
-install at the outermost submission point; `classify_dispatch` reuses these instead
-of allocating fresh sub-Dispatches.
+([`decide_tail`](../../src/machine/execute/dispatch.rs), called by
+[`submit_expression`](../../src/machine/execute/dispatch/submit.rs)) capturing the
+slot's `expr`. On first poll the closure runs `classify_dispatch`, which
+classifies `expr` via `classify_dispatch_shape` and decides against a
+`SchedulerView`, returning an `Outcome`. A birth decide carries no pre-submitted
+sub-Dispatches: binder discovery is parse-static, so submission does no recursion
+and the aggregate a statement installs is read once from the node's cache.
 
 When a decide must wait — a keyworded resolve that found bare-name or
 overload producers, a `FunctionValueCall` head still resolving to a

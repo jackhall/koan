@@ -83,8 +83,8 @@ GROUP num_compare PAIRWISE FOLD (BOTH) LEFT = (…)   -- combiner slot likewise
 The rule this imposes on the implementation: every reader of a shape slot is
 **kind-blind** across the two literal part kinds. Each shape slot has exactly
 one reader, shared verbatim by every consumer of that slot — the dispatch-time
-slot read, the submission-time binder hook that installs pending-overload park
-edges, and `GROUP`'s member scan. All consumers reach the same verdict on the
+slot read, the parse-static binder-bucket read that seeds the pending-overload
+park edges installed at statement submission, and `GROUP`'s member scan. All consumers reach the same verdict on the
 same declaration; none discards a diagnostic another one surfaces. A
 declaration therefore either fully registers (bodies, registry entry, park
 edges, group membership) or is fully refused — never a partial state whose
@@ -106,9 +106,9 @@ with a diagnostic naming the `EVAL` route.
 The reason is staging, not spelling. Two consumers read a declaration's shape
 *before it evaluates*:
 
-- the **binder hook** installs park edges at submission time, so a sibling
-  expression using the declared name parks until the declaration finalizes
-  instead of racing the scheduler
+- the **parse-static binder install** seeds park edges at statement submission,
+  so a sibling expression using the declared name parks until the declaration
+  finalizes instead of racing the scheduler
   ([operators.md § Visibility](operators.md#visibility));
 - **`GROUP`'s member scan** collects member symbols from the unevaluated body
   and registers the member-set record before a single body expression runs
@@ -130,20 +130,27 @@ value's AST **at the EVAL site**:
 
 - **Same scope.** Free names in the spliced AST resolve against the scope
   enclosing the `EVAL`, with the ordinary lexical rules.
-- **Declarations land.** A `LET`, `FN`, `OP`, or any other binding form inside
-  the spliced AST registers in the enclosing scope exactly as if hand-written
-  at the site — bindings, function-bucket overloads, and operator-registry
-  entries included.
+- **Declarations land at statement positions.** A `LET`, `FN`, `OP`, or any
+  other binding form at a statement position of the spliced AST registers in the
+  enclosing scope exactly as if hand-written at the site — bindings,
+  function-bucket overloads, and operator-registry entries included. A binder in
+  an eagerly evaluated value position of the spliced AST is the same structured
+  `NestedBinder` error as hand-written source in that position (see
+  [execution/name-placeholders.md](execution/name-placeholders.md)): the position
+  rule does not distinguish spliced code from written code.
 - **Same result.** The `EVAL` expression evaluates to whatever the spliced AST
   evaluates to. A non-`KExpression` operand is a structured `TypeMismatch`.
 
 `EVAL` behaves this way **everywhere**. Koan has no statement/expression
-distinction, and `EVAL` has no position-dependent semantics: at the top level
-of a module body, nested inside an argument, inside an `FN` body, inside a
-`GROUP` body — always a splice, always the enclosing scope. `EVAL q` is
-exactly as powerful as writing `q`'s content in place, shadowing included;
-treat an `EVAL` over an AST you didn't assemble with the same care as code you
-didn't write.
+distinction, and `EVAL` itself has no position-dependent semantics: at the top
+level of a module body, inside an `FN` body, inside a `GROUP` body — always a
+splice, always the enclosing scope. The position rule applies to the spliced
+*content*, not to `EVAL`: a splice at a statement position lands its
+declarations, and a splice in an eagerly evaluated value position rejects a
+binder in its content exactly as hand-written source there would. So `EVAL q` is
+exactly as powerful as writing `q`'s content in place, shadowing included — both
+sides accept and reject alike; treat an `EVAL` over an AST you didn't assemble
+with the same care as code you didn't write.
 
 ## The EVAL barrier
 
