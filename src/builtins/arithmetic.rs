@@ -21,7 +21,7 @@
 use std::collections::HashSet;
 
 use crate::machine::model::{FoldDirection, OperatorGroup, ReductionMode};
-use crate::machine::model::{KObject, KType, TypeRegistry};
+use crate::machine::model::{Held, KObject, KType, Record, TypeRegistry};
 use crate::machine::BindingIndex;
 use crate::machine::{arg_object, Action, BodyCtx};
 use crate::machine::{KError, KErrorKind, Scope};
@@ -29,7 +29,7 @@ use crate::machine::{KError, KErrorKind, Scope};
 use super::{arg, kw, sig};
 
 /// Read a `:Number` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn number_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<f64, KError> {
+fn number_arg(args: &Record<Held<'_>>, name: &str, types: &TypeRegistry) -> Result<f64, KError> {
     match arg_object(args, name) {
         Some(KObject::Number(n)) => Ok(*n),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
@@ -42,7 +42,7 @@ fn number_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<f6
 }
 
 /// Read the `left` / `right` `:Number` operands.
-fn number_operands(args: &KObject<'_>, types: &TypeRegistry) -> Result<(f64, f64), KError> {
+fn number_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(f64, f64), KError> {
     Ok((
         number_arg(args, "left", types)?,
         number_arg(args, "right", types)?,
@@ -50,7 +50,7 @@ fn number_operands(args: &KObject<'_>, types: &TypeRegistry) -> Result<(f64, f64
 }
 
 /// Read a `:Bool` operand named `name`, or the canonical missing/mismatch diagnostic.
-fn bool_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<bool, KError> {
+fn bool_arg(args: &Record<Held<'_>>, name: &str, types: &TypeRegistry) -> Result<bool, KError> {
     match arg_object(args, name) {
         Some(KObject::Bool(b)) => Ok(*b),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
@@ -63,7 +63,7 @@ fn bool_arg(args: &KObject<'_>, name: &str, types: &TypeRegistry) -> Result<bool
 }
 
 /// Read the `left` / `right` `:Bool` operands.
-fn bool_operands(args: &KObject<'_>, types: &TypeRegistry) -> Result<(bool, bool), KError> {
+fn bool_operands(args: &Record<Held<'_>>, types: &TypeRegistry) -> Result<(bool, bool), KError> {
     Ok((
         bool_arg(args, "left", types)?,
         bool_arg(args, "right", types)?,

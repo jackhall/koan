@@ -16,7 +16,7 @@ use crate::machine::model::KKind;
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{Carried, Module, WrappedPayload};
-use crate::machine::model::{Held, KObject, KType, TypeNode};
+use crate::machine::model::{Held, KObject, KType, Record, TypeNode};
 use crate::machine::StepAllocator;
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, MemberResolution, NameLookup, Scope};
@@ -36,7 +36,7 @@ fn route<'a>(result: Result<StepCarried<'a>, KError>) -> crate::machine::Action<
 
 /// Read the `field` member name from `BodyCtx::args`: the value-channel `Identifier` cell, else the
 /// type-channel leaf token (resolved or rendered), else a `MissingArg`. Mirrors [`read_field_name`].
-fn read_field_name<'a>(args: &KObject<'a>, types: &TypeRegistry) -> Result<String, KError> {
+fn read_field_name<'a>(args: &Record<Held<'a>>, types: &TypeRegistry) -> Result<String, KError> {
     use crate::machine::{arg_object, arg_type};
     if let Some(obj) = arg_object(args, "field") {
         return match obj {

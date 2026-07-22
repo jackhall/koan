@@ -12,7 +12,7 @@ use crate::machine::model::{
     sig_subtype, substitute_sig_members, KKind, RecursiveGroupWindow, RelativeSchema, SigSchema,
     TypeNode,
 };
-use crate::machine::model::{KObject, Module};
+use crate::machine::model::{Held, KObject, Module, Record};
 use crate::machine::StepCarried;
 use crate::machine::{KError, KErrorKind, Scope, ScopeId};
 use std::collections::HashMap;
@@ -236,13 +236,13 @@ fn signature_schema(
 /// value channel's Object arm, the signature off the type channel, producing a missing / mismatch
 /// diagnostic when an operand is absent or the wrong kind.
 fn resolve_module_and_signature<'a>(
-    args: &crate::machine::model::KObject<'a>,
+    args: &Record<Held<'a>>,
     types: &crate::machine::model::TypeRegistry,
 ) -> Result<(&'a crate::machine::model::Module<'a>, KType), KError> {
     use crate::machine::{arg_held, arg_object, arg_type};
 
     fn type_mismatch_or_missing(
-        args: &crate::machine::model::KObject<'_>,
+        args: &Record<Held<'_>>,
         name: &str,
         expected: &str,
         types: &crate::machine::model::TypeRegistry,

@@ -5,7 +5,7 @@ use crate::builtins::resolve_or_await::{expect_type_terminal, resolve_at_wake, u
 use crate::machine::model::TypeRegistry;
 use crate::machine::model::TypeResolution;
 use crate::machine::model::{DeferredReturn, ReturnType};
-use crate::machine::model::{KExpression, TypeIdentifier};
+use crate::machine::model::{Held, KExpression, Record, TypeIdentifier};
 use crate::machine::model::{KObject, KType};
 use crate::machine::DepTerminal;
 use crate::machine::LexicalFrame;
@@ -52,7 +52,9 @@ pub(crate) enum ReturnTypeCapture<'a> {
 }
 
 /// Read the `return_type` slot from a `BodyCtx::args` record into a `ReturnTypeRaw`.
-pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTypeRaw<'a>, KError> {
+pub(crate) fn extract_return_type_raw<'a>(
+    args: &Record<Held<'a>>,
+) -> Result<ReturnTypeRaw<'a>, KError> {
     extract_type_slot_raw(args, "return_type", "FN return-type slot")
 }
 
@@ -62,7 +64,7 @@ pub(crate) fn extract_return_type_raw<'a>(args: &KObject<'a>) -> Result<ReturnTy
 /// type. `slot` names the args field; `label` names the surface in the shape error. Shared by
 /// `FN`'s return slot and `OP`'s operand / return slots.
 pub(crate) fn extract_type_slot_raw<'a>(
-    args: &KObject<'a>,
+    args: &Record<Held<'a>>,
     slot: &str,
     label: &str,
 ) -> Result<ReturnTypeRaw<'a>, KError> {

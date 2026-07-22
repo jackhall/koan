@@ -1,7 +1,8 @@
 //! The dispatch-side `invoke` — the single entry that runs a resolved call. A builtin runs through
-//! the action harness (its bound args as a `KObject::Record` `BodyCtx`); a user-defined body runs
-//! through [`crate::machine::core::kfunction::exec::run_user_fn`] and its [`ExecOutcome`] is lowered
-//! to an [`Action::Tail`] the shared [`run_action`](super::super::runtime::run_action) interprets.
+//! the action harness (its bound args handed to `BodyCtx` as a transient owned record); a
+//! user-defined body runs through [`crate::machine::core::kfunction::exec::run_user_fn`] and its
+//! [`ExecOutcome`] is lowered to an [`Action::Tail`] the shared
+//! [`run_action`](super::super::runtime::run_action) interprets.
 //! `invoke` is a **pure decide**: it reads a `SchedulerView` and the per-call `frame` the harness
 //! already acquired (frame acquisition is the harness's write), and hands the deferred body dispatch
 //! to `run_action` declaratively. Kept out of `ctx.rs` (the dispatcher facade) so the dispatcher core
@@ -228,10 +229,11 @@ fn map_arg_carriers<'e, 'step>(
     record
 }
 
-/// Lower an action-harness builtin: expose its owned `args` as the `BodyCtx`'s `KObject::Record`,
-/// call the `ActionFn`, then interpret the returned `Action` through the shared `run_action`.
-/// `arg_carriers` are the per-parameter reach carriers (a value-embedding body folds / merges the
-/// one it embeds; an absent entry is region-pure).
+/// Lower an action-harness builtin: hand its owned `args` to the `BodyCtx` by reference — a
+/// transient record, never a `KObject`, never region-allocated — call the `ActionFn`, then
+/// interpret the returned `Action` through the shared `run_action`. `arg_carriers` are the
+/// per-parameter reach carriers (a value-embedding body folds / merges the one it embeds; an
+/// absent entry is region-pure).
 fn run_action_builtin<'step>(
     view: &SchedulerView<'step, '_>,
     f: crate::machine::core::ActionFn,
@@ -239,31 +241,7 @@ fn run_action_builtin<'step>(
     arg_carriers: Record<&DeliveredCarried>,
 ) -> Outcome<'step> {
     use crate::machine::core::BodyCtx;
-    use crate::machine::model::KObject;
 
-    let scope = view.current_scope();
-    // Evidence for the args record's own placement: every object arg carrier's reach, minted into
-    // the call scope's region up front as a deep copy (`Copied`/`adopted_reach_of`) — an object
-    // leaf may still embed a foreign borrow from whichever carrier it came from. A `Type` cell is
-    // owned data and contributes no evidence.
-    let evidence: Vec<crate::machine::core::StoredReach> = args
-        .iter()
-        .filter_map(|(name, cell)| match cell {
-            crate::machine::model::Held::Object(_) => {
-                Some(scope.adopted_reach_of(arg_carriers.get(name)?))
-            }
-            crate::machine::model::Held::Type(_)
-            | crate::machine::model::Held::UnresolvedType(_) => None,
-        })
-        .collect();
-    let args_obj: &'step KObject<'step> = match scope.alloc_object_delivered(
-        KObject::record_of_held(args, view.types()),
-        &evidence,
-        view.types(),
-    ) {
-        Ok(args_obj) => args_obj,
-        Err(e) => return Outcome::Done(Err(e)),
-    };
     let frame = view.current_frame();
     let chain = view.active_chain();
     let action = {
@@ -271,7 +249,7 @@ fn run_action_builtin<'step>(
             scope: view.current_scope(),
             frame: frame.as_ref(),
             chain,
-            args: args_obj,
+            args: &args,
             arg_carriers: &arg_carriers,
             node: view.node_handle(),
             ctx: view.step_ctx(),

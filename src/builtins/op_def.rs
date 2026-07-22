@@ -30,7 +30,7 @@ use crate::machine::model::TypeRegistry;
 use crate::machine::model::{binary_key, unary_key, OperatorGroup, ReductionMode};
 use crate::machine::model::{ExpressionPart, KExpression, TypeIdentifier};
 use crate::machine::model::{ExpressionSignature, KKind};
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{Held, KObject, KType, Record};
 use crate::machine::KFunction;
 use crate::machine::StepCarried;
 use crate::machine::{
@@ -82,7 +82,7 @@ use crate::machine::model::symbol_from_quote_body;
 /// Body-side symbol read: a quoted slot's raw `KObject::KExpression` is the quote body. Shared with
 /// `GROUP`, whose pairwise `combiner` slot names an operator the same way (`super::group_def`).
 pub(super) fn symbol_from_slot(
-    args: &KObject<'_>,
+    args: &Record<Held<'_>>,
     builtin: &str,
     slot: &str,
 ) -> Result<String, KError> {

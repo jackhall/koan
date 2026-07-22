@@ -55,21 +55,15 @@ pub fn scope_frame(scope: &Scope<'_>) -> Rc<FrameStorage> {
     )
 }
 
-/// Read a builtin argument's `KObject` from a `BodyCtx::args` `KObject::Record` by name. `None` if
-/// the args aren't a record or the named field is a type cell.
-pub fn arg_object<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c KObject<'a>> {
-    match args {
-        KObject::Record(fields, _) => fields.get(name).and_then(Held::as_object),
-        _ => None,
-    }
+/// Read a builtin argument's `KObject` from `BodyCtx::args` by name. `None` if the named field is
+/// a type cell.
+pub fn arg_object<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c KObject<'a>> {
+    args.get(name).and_then(Held::as_object)
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg) from `BodyCtx::args` by name.
-pub fn arg_type(args: &KObject<'_>, name: &str) -> Option<KType> {
-    match args {
-        KObject::Record(fields, _) => fields.get(name).and_then(Held::as_type),
-        _ => None,
-    }
+pub fn arg_type(args: &Record<Held<'_>>, name: &str) -> Option<KType> {
+    args.get(name).and_then(Held::as_type)
 }
 
 /// Read a builtin argument's unlowered type name (a [`Held::UnresolvedType`] cell) from
@@ -77,14 +71,11 @@ pub fn arg_type(args: &KObject<'_>, name: &str) -> Option<KType> {
 /// it to a type handle, so a type-slot consumer probes this before [`arg_type`] and resolves the
 /// name against its own scope chain.
 pub fn arg_unresolved_type<'a, 'c>(
-    args: &'c KObject<'a>,
+    args: &'c Record<Held<'a>>,
     name: &str,
 ) -> Option<&'c TypeIdentifier> {
-    match args {
-        KObject::Record(fields, _) => match fields.get(name) {
-            Some(Held::UnresolvedType(ti)) => Some(ti),
-            _ => None,
-        },
+    match args.get(name) {
+        Some(Held::UnresolvedType(ti)) => Some(ti),
         _ => None,
     }
 }
@@ -92,17 +83,14 @@ pub fn arg_unresolved_type<'a, 'c>(
 /// Read a builtin argument's raw cell ([`Held::Object`] / [`Held::Type`] /
 /// [`Held::UnresolvedType`]) from `BodyCtx::args` by
 /// name — for builtins that branch on the value vs type channel (e.g. LET's name/value slots).
-pub fn arg_held<'a, 'c>(args: &'c KObject<'a>, name: &str) -> Option<&'c Held<'a>> {
-    match args {
-        KObject::Record(fields, _) => fields.get(name),
-        _ => None,
-    }
+pub fn arg_held<'a, 'c>(args: &'c Record<Held<'a>>, name: &str) -> Option<&'c Held<'a>> {
+    args.get(name)
 }
 
 /// Read a builtin argument's `KType` (a type-cell arg), or the canonical diagnostic —
 /// `TypeMismatch{expected: "ProperType"}` for an object cell, `MissingArg` when absent.
 pub fn require_ktype<'a>(
-    args: &KObject<'a>,
+    args: &Record<Held<'a>>,
     name: &str,
     types: &TypeRegistry,
 ) -> Result<KType, KError> {
@@ -130,7 +118,7 @@ pub fn require_ktype<'a>(
 /// The value-channel twin of [`require_bare_type_name`]; an `Identifier` name part resolves to a
 /// `KObject::KString` cell.
 pub fn require_identifier_name<'a>(
-    args: &KObject<'a>,
+    args: &Record<Held<'a>>,
     slot: &str,
     surface: &str,
     types: &TypeRegistry,
@@ -151,7 +139,7 @@ pub fn require_identifier_name<'a>(
 /// embedded in the diagnostic. The `Action`-side twin of
 /// [`extract_bare_type_name`](super::argument_bundle::extract_bare_type_name).
 pub fn require_bare_type_name<'a>(
-    args: &KObject<'a>,
+    args: &Record<Held<'a>>,
     slot: &str,
     surface: &str,
     types: &TypeRegistry,
@@ -208,7 +196,7 @@ fn bare_type_name(
 /// `ShapeError` (`"<builtin> <slot> slot must be a parenthesized expression"`), owning that error
 /// text so every `KExpression`-slot builtin reports it identically.
 pub fn require_kexpression<'a>(
-    args: &KObject<'a>,
+    args: &Record<Held<'a>>,
     builtin: &str,
     slot: &str,
 ) -> Result<KExpression<'a>, KError> {
@@ -228,16 +216,16 @@ pub type ActionFn = for<'a> fn(&BodyCtx<'a, '_>) -> Action<'a>;
 /// Read-only-ish context a builtin body receives. `scope` is **interior-mutable**: the builtin
 /// binds / registers / allocs on it directly before returning a `Action`. `frame` is a *reference to
 /// the cart `Rc`* (so a body that seals a type operand can `Rc::clone` it), `None` for def-time
-/// builtins. `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args` is the
-/// builtin's arguments as a `KObject::Record`; unevaluated args ride as `KObject::KExpression`
-/// cells.
+/// builtins. `chain` is `None` for a top-level binder (`bind_index` → `BindingIndex::BUILTIN`). `args`
+/// is the builtin's bound arguments as a transient owned record, borrowed for the call — never a
+/// `KObject`, never region-allocated; unevaluated args ride as `KObject::KExpression` cells.
 pub struct BodyCtx<'a, 'c> {
     pub scope: &'a Scope<'a>,
     pub frame: Option<&'c Rc<CallFrame>>,
     /// The ambient lexical chain (an `Rc`, as `active_chain` hands it out — binders read
     /// its `index` for `BindingIndex`, MATCH passes it to `resolve_type_identifier`). `None` at top level.
     pub chain: Option<Rc<LexicalFrame>>,
-    pub args: &'c KObject<'a>,
+    pub args: &'c Record<Held<'a>>,
     /// Per-parameter reach carriers, keyed by parameter name: the [`Sealed`] carrier of each argument
     /// that arrived as a resolved value (a spliced sub-result or a bound-name read), naming every
     /// region that value reaches. A value-embedding body folds the carrier of the value it deposits (a
