@@ -26,4 +26,4 @@ pub(crate) use types::{
     unsaturated_constructor_message, Elaborator, FieldListContext, FieldListOutcome, FieldNameKind,
     ResultFeed, SealOutcome, SigSchema, TypeDigest, TypeResolution,
 };
-pub(crate) use values::{CarriedFamily, Module, NamedPairs, WrappedPayload};
+pub(crate) use values::{CarriedFamily, Module, NamedPairs, RecordSubstrate, WrappedPayload};

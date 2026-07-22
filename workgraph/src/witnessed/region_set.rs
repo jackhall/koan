@@ -117,6 +117,16 @@ impl<F: PinsRegion> RegionSet<F> {
         self.members.iter().any(|m| m.pins_region(region))
     }
 
+    /// Whether any member's own region satisfies `pred` — a production-safe generalization of
+    /// [`Self::pins_region`] for a caller with no single named target region to test (e.g. an
+    /// address-table membership check against a raw stored pointer, for a value whose own
+    /// representation carries no borrow naming its home region). Unlike [`Self::members`], no
+    /// member reference escapes this call — `pred` runs against each member's region internally —
+    /// so this stays available with no `test-hooks` gate.
+    pub fn any_member_region(&self, pred: impl Fn(&F::Region) -> bool) -> bool {
+        self.members.iter().any(|m| pred(m.region()))
+    }
+
     /// The set union of `left` and `right` under outer-chain subsumption.
     pub fn union(left: &Self, right: &Self) -> Self {
         let mut result = left.clone();

@@ -87,6 +87,13 @@ pub enum Residence {
     /// The value was copied out into the destination. The host materializes only if the value's
     /// borrows genuinely reach it (`borrows_host`).
     Copied,
+    /// The value was copied out into the destination AND the embedder has independently verified
+    /// that no surviving borrow leaf points back into the producer's region (an exact,
+    /// per-value check the embedder runs before choosing this over `Copied`). The host never
+    /// materializes, unconditionally — unlike `Copied`, not even a set `borrows_host` bit
+    /// resurrects it — and the composed `borrows_into_dest` bit drops the host-pin term along
+    /// with it: post-copy, the value does not borrow the host.
+    Released,
 }
 
 /// The reference-only carrier witness: the `borrows_host` bit plus (for a value with foreign
@@ -256,7 +263,9 @@ impl<F: PinsRegion + 'static> Carrier<F> {
             RegionSet::mint(dest, sources, &materialize, omit)
         });
         let borrows_into_dest = self.reach_covers(host, dest.region())
-            || (self.borrows_host && host.is_some_and(|h| h.pins_region(dest.region())));
+            || (mode != Residence::Released
+                && self.borrows_host
+                && host.is_some_and(|h| h.pins_region(dest.region())));
         (minted, borrows_into_dest)
     }
 
@@ -292,7 +301,9 @@ impl<F: PinsRegion + 'static> Carrier<F> {
         });
         let borrows_into_dest = right.borrows_host
             || left.reach_covers(host, dest.region())
-            || (left.borrows_host && host.is_some_and(|h| h.pins_region(dest.region())));
+            || (mode != Residence::Released
+                && left.borrows_host
+                && host.is_some_and(|h| h.pins_region(dest.region())));
         Carrier {
             borrows_host: borrows_into_dest,
             reach: minted.map(Erased::<HostedSetRef<F>>::erase),
@@ -329,11 +340,15 @@ impl<T: Reattachable, F: PinsRegion + 'static> Witnessed<T, Carrier<F>> {
 
 /// The materialization rule (witness-hosting.md § Composition, rule 2, plus the `Kept` residence
 /// pin): a `Kept` re-home always materializes the host — the value still lives there; a `Copied`
-/// re-home materializes it only when the value's borrows genuinely reach it (`borrows_host`).
+/// re-home materializes it only when the value's borrows genuinely reach it (`borrows_host`);
+/// a `Released` re-home never materializes it — the embedder has already verified no borrow
+/// survives into it, regardless of `borrows_host`.
 fn materialize_hosts<F>(host: Option<&Rc<F>>, mode: Residence, borrows_host: bool) -> Vec<Rc<F>> {
     match (mode, host) {
         (Residence::Kept, Some(h)) => vec![Rc::clone(h)],
         (Residence::Copied, Some(h)) if borrows_host => vec![Rc::clone(h)],
+        // `Released` never materializes the host, regardless of `borrows_host` — every other case
+        // (no host, or `Copied`/`Kept` combinations already handled above) is likewise empty.
         _ => Vec::new(),
     }
 }
@@ -505,6 +520,42 @@ mod tests {
         let (minted, _) = c.mint_into(handle, Some(&host), Residence::Copied, |_| false);
         let set = minted.expect("a borrows_host value keeps its old home as a member");
         assert!(set.pins_region(host.region()));
+    }
+
+    #[test]
+    fn mint_released_never_materializes_host_even_when_borrows_host_is_set() {
+        let host = root_frame();
+        let dest = root_frame();
+        // `borrows_host: true` would keep the host alive under `Copied`
+        // (`mint_copied_keeps_borrowing_host`); `Released` asserts the copy pass already verified
+        // no surviving borrow, so the host never materializes regardless.
+        let c: Carrier<TestFrame> = Carrier::new(true, None);
+        let handle = RegionHandle::from_owner(&*dest);
+        let (minted, borrows_into_dest) =
+            c.mint_into(handle, Some(&host), Residence::Released, |_| false);
+        assert!(
+            minted.is_none(),
+            "Released never materializes the host, even when borrows_host is set"
+        );
+        assert!(
+            !borrows_into_dest,
+            "Released drops the host-pin term from borrows_into_dest"
+        );
+    }
+
+    #[test]
+    fn compose_released_drops_the_left_host_pin_term() {
+        let host = root_frame();
+        let dest = root_frame();
+        let left: Carrier<TestFrame> = Carrier::new(true, None);
+        let right: Carrier<TestFrame> = Carrier::default();
+        let handle = RegionHandle::from_owner(&*dest);
+        let composed =
+            Carrier::compose_into(&left, &right, handle, Some(&host), Residence::Released);
+        assert!(
+            !composed.borrows_host(),
+            "left's host-pin term is dropped from the composed bit under Released"
+        );
     }
 
     #[test]

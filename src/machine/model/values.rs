@@ -10,9 +10,11 @@ mod kkey;
 mod kobject;
 mod module;
 mod named_pairs;
+mod record_substrate;
 
 pub use carried::{Carried, CarriedFamily, Held};
 pub use kkey::KKey;
 pub use kobject::{KObject, ValueEqualityError, WrappedPayload};
 pub use module::Module;
 pub use named_pairs::NamedPairs;
+pub use record_substrate::RecordSubstrate;

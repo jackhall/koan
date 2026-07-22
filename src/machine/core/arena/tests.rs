@@ -1257,3 +1257,45 @@ fn spliced_expression_is_rejected_by_the_checked_object_seal() {
         "a spliced quoted expression must be rejected, not silently stored"
     );
 }
+
+/// Test-only family wrapping a stored `&RecordSubstrate` reference. The value channel does not
+/// carry a `RecordSubstrate` yet (the variant flip is a later phase), so the door test below
+/// threads it through this minimal reference family instead of `CarriedFamily`.
+struct RecordRefFamily;
+crate::witnessed::reattachable!(RecordRefFamily => &'r RecordSubstrate<'r>);
+
+/// `FoldingBrand::alloc_record_folded` stores a `RecordSubstrate` into its own brand's region —
+/// the record door's write half. The stored address is a hit for both the bare
+/// `KoanRegionExt::owns_record` query and `Residence::owns_record`'s dest-only case, the read
+/// halves the door's store makes true.
+#[test]
+fn alloc_record_folded_stores_and_owns_a_record_substrate() {
+    let frame = run_root_storage();
+    let acc0: Witnessed<AggBuildFamily, CarrierWitness> =
+        KoanRegion::yoke_branded::<AggBuildFamily, _>(Rc::clone(&frame), |region| {
+            (region.handle(), Vec::new())
+        });
+    let stored: Witnessed<RecordRefFamily, CarrierWitness> =
+        acc0.map_pinned(&frame, |(region, _cells), _token| {
+            let door = FoldingBrand::in_fold_closure(FoldedPlacement::forge_for_test(region));
+            let fields =
+                Record::from_pairs(vec![("x".to_string(), Held::Object(KObject::Number(1.0)))]);
+            door.alloc_record_folded(RecordSubstrate::new(fields, false))
+        });
+    let (owns_bare, owns_via_residence) = stored.with_pinned(&frame, |substrate| {
+        let region = frame.region();
+        let ptr = *substrate as *const RecordSubstrate<'_>;
+        (
+            region.owns_record(ptr),
+            super::Residence::dest_only(region).owns_record(substrate),
+        )
+    });
+    assert!(
+        owns_bare,
+        "alloc_record_folded stores into its own brand's region"
+    );
+    assert!(
+        owns_via_residence,
+        "Residence::owns_record's dest-only case hits the same store"
+    );
+}
